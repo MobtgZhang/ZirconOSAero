@@ -1,152 +1,210 @@
-# ZirconOSAero - Windows Vista/7 Aero 桌面主题
+# ZirconOSAero（NT 6.1 目标）
 
-## 概述
+**ZirconOSAero** 基于 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 路线，以 **NT 6.1（Windows 7）** 体验为默认目标：Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。
 
-ZirconOSAero 是 ZirconOS 操作系统的 **Windows Aero** 风格桌面环境实现。
-Aero（Authentic, Energetic, Reflective, and Open）是 Windows Vista 引入、
-Windows 7 完善的视觉主题，以其标志性的毛玻璃透明效果和精致的动画闻名于世。
+<p align="center">
+  <img src="assets/ZirconOS_logo.svg" alt="ZirconOS logo" width="480" />
+</p>
 
-本模块参考 [ReactOS](https://github.com/reactos/reactos) 的桌面架构设计，
-目标是实现完整的 Aero 风格桌面 Shell、窗口装饰、任务栏和 Flip 3D 窗口切换。
+## Screenshots
 
-## 设计风格
+<p align="center">
+  <img src="assets/screenshot-zbm.png" alt="ZBM boot manager (Windows 7 style)" width="70%" />
+</p>
+<p align="center"><em>ZirconOS Boot Manager (ZBM) — Windows 7–style text menu</em></p>
 
-### Aero 核心视觉特征
+<p align="center">
+  <img src="assets/screenshot-aero.png" alt="Windows 7 Aero desktop" width="70%" />
+</p>
+<p align="center"><em>Shell — Windows 7 Aero（NT 6.1）唯一内置桌面</em></p>
 
-| 特征 | 说明 |
-|------|------|
-| **毛玻璃效果 (Glass)** | 窗口标题栏和边框半透明，背景高斯模糊 + 反光 |
-| **Aero Peek** | 鼠标悬停任务栏预览窗口缩略图（Win7） |
-| **Aero Snap** | 窗口拖拽到屏幕边缘自动半屏/全屏（Win7） |
-| **Flip 3D** | Win+Tab 3D 立体窗口切换动画 |
-| **精致阴影** | 窗口四周细腻的投影阴影 |
-| **Segoe UI 字体** | 系统默认使用 Segoe UI 9pt |
+<p align="center">
+  <img src="assets/screenshot-cmd.png" alt="CMD shell" width="70%" />
+</p>
+<p align="center"><em>CMD shell</em></p>
 
-### 配色方案
+**中文说明**：[README_cn.md](README_cn.md)
 
-| 元素 | Vista 默认 | Windows 7 默认 |
-|------|-----------|---------------|
-| 窗口边框 | 半透明深蓝 `rgba(0,0,0,0.5)` + 模糊 | 半透明蓝 `rgba(116,184,252,0.5)` + 模糊 |
-| 标题栏文字 | 白色 + 发光阴影 | 黑色 / 白色（自适应） |
-| 任务栏 | 深色半透明玻璃 | 蓝色半透明玻璃 |
-| 开始按钮 | 圆形 Windows 标志 (Vista) | 圆形发光球体 (Win7) |
-| 高亮色 | 蓝色 `#0078D4` | 蓝色 `#4580C4` |
+## Design
 
-### 与 Luna 的关键差异
+- **NT-style hybrid microkernel**: scheduling, virtual memory, IPC, interrupts, and syscalls in the kernel
+- **User-mode system services**: Object Manager, Process Manager, I/O Manager, Security, etc.
+- **Win32 compatibility layer**: ntdll, kernel32, kernelbase, and the console subsystem
+- **Win32 subsystem server**: csrss-style management, window stations, and desktops
+- **Win32 execution engine**: PE loading, DLL binding, process creation, API dispatch
+- **Graphics subsystem**: user32 (windows/messages) and gdi32 (drawing/fonts/bitmaps)
+- **WOW64**: PE32 loading, 32→64 syscall thunking, 32-bit PEB/TEB
+- **Dual shell**: CMD and PowerShell-style shells
+- **Dual filesystem**: FAT32 (system volume) and NTFS (data volume)
+- **Multi-architecture**: x86_64 (primary), aarch64, loongarch64, riscv64, mips64el
 
-- **透明度**：Luna 为纯色渐变，Aero 为半透明毛玻璃
-- **窗口边框**：Luna 为蓝色粗边框，Aero 为透明薄边框 + 阴影
-- **控件风格**：Luna 为 3D 凸起按钮，Aero 为扁平化玻璃按钮
-- **任务栏**：Luna 为蓝色渐变实心，Aero 为深色透明玻璃
-- **开始菜单**：Luna 为双栏 XP 风格，Aero 为 Vista/7 圆角搜索菜单
-- **字体**：Luna 用 Tahoma 8pt，Aero 用 Segoe UI 9pt
+**开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
 
-## 模块架构
+Documentation: [`docs/README.md`](docs/README.md) · [`docs/en/Architecture.md`](docs/en/Architecture.md) · [`docs/en/Kernel.md`](docs/en/Kernel.md) · [`docs/en/Boot.md`](docs/en/Boot.md) · [`docs/en/Servers.md`](docs/en/Servers.md) · [`docs/en/Subsystems.md`](docs/en/Subsystems.md) · [`docs/en/BuildSystem.md`](docs/en/BuildSystem.md) · [`docs/en/Roadmap.md`](docs/en/Roadmap.md)
+
+## Repository layout
 
 ```
 ZirconOSAero/
-├── src/
-│   ├── root.zig              # 库入口，导出所有公共模块
-│   ├── main.zig              # 可执行入口 / 集成测试
-│   ├── theme.zig             # Aero 主题定义（颜色、透明度、模糊参数）
-│   ├── winlogon.zig          # 用户登录管理（Vista/7 风格登录界面）
-│   ├── desktop.zig           # 桌面管理器（壁纸、Gadgets 侧边栏）
-│   ├── taskbar.zig           # 任务栏（Aero Peek 预览、跳转列表）
-│   ├── startmenu.zig         # 开始菜单（搜索框、所有程序、电源按钮）
-│   ├── window_decorator.zig  # 窗口装饰器（毛玻璃标题栏、Aero Snap）
-│   ├── shell.zig             # 桌面 Shell 主程序（explorer.exe 风格）
-│   └── controls.zig          # Aero 风格控件（玻璃按钮、进度条动画）
-├── resources/
-│   ├── wallpapers/           # 桌面壁纸
-│   ├── icons/                # 系统图标（拟物化风格）
-│   ├── ui/                   # UI 组件素材
-│   ├── cursors/              # 鼠标光标（Aero 风格）
-│   └── MANIFEST.md           # 资源清单
-├── build.zig
-├── build.zig.zon
-└── README.md
+├── build.zig              # Zig build
+├── build.zig.zon          # Zig dependencies
+├── run.sh                 # Build and run helper
+├── Makefile               # Make entry point
+├── assets/                # Logo and screenshots
+├── scripts/               # Build helpers (see scripts/README.md)
+├── gnu-efi/               # LoongArch GNU-EFI output (gitignored; make fetch-gnu-efi)
+├── boot/
+│   ├── uefi/main.zig      # UEFI ZBM (x86_64 / aarch64; LoongArch 见 main_loongarch64.zig)
+│   └── zbm/               # ZBM：BIOS/MBR、BCD、菜单（Windows 7 风格）
+├── link/                  # Per-architecture linker scripts
+│   └── x86_64.ld / aarch64.ld / loongarch64.ld / riscv64.ld / mips64el.ld
+├── src/                   # Kernel sources
+│   ├── main.zig           # Kernel entry (Phase 0–11 boot path)
+│   ├── config/            # Config parser + embedded defaults (*.conf, defaults.zig)
+│   ├── arch/              # Architecture code
+│   │   ├── x86_64/        #   Multiboot2, paging, IDT, ISR, syscall
+│   │   ├── aarch64/       #   AArch64 boot and paging
+│   │   └── (loongarch64, riscv64, mips64el)
+│   ├── hal/               # Hardware abstraction
+│   │   ├── x86_64/        #   VGA, PIC, PIT, port I/O, serial, GDT, framebuffer
+│   │   └── aarch64/       #   GIC, timer, PL011 UART
+│   ├── drivers/           # Device drivers
+│   │   └── video/         #   VGA, HDMI, framebuffer, display manager
+│   ├── ke/                # Kernel Executive — scheduling, timer, interrupts, sync
+│   ├── mm/                # Memory manager — physical frames, VM, heap
+│   ├── ob/                # Object Manager — objects, handle table, namespace
+│   ├── ps/                # Process subsystem — processes and threads
+│   ├── se/                # Security — token, SID, access checks
+│   ├── io/                # I/O Manager — devices, drivers, IRPs
+│   ├── lpc/               # LPC — IPC ports and messages
+│   ├── rtl/               # Runtime — kernel logging
+│   ├── fs/                # File systems — VFS, FAT32, NTFS
+│   ├── loader/            # Loader — PE32/PE32+/ELF
+│   ├── libs/              # User-mode API libraries
+│   │   ├── ntdll.zig      #   Native API (Nt*/Rtl*/Dbg*)
+│   │   └── kernel32.zig   #   Win32 base API
+│   ├── servers/           # System services
+│   │   ├── server.zig     #   Process Server (PID 1)
+│   │   └── smss.zig       #   Session Manager (SMSS)
+│   └── subsystems/        # Subsystems
+│       └── win32/         #   Win32 subsystem
+│           ├── subsystem.zig  # csrss server
+│           ├── exec.zig       # Win32 execution engine
+│           ├── user32.zig     # Windowing API
+│           ├── gdi32.zig      # GDI API
+│           ├── console.zig    # Console runtime
+│           ├── cmd.zig        # CMD
+│           ├── powershell.zig # PowerShell-style shell
+│           └── wow64.zig      # WOW64 layer
+├── src/desktop/           # Desktop theme Zig projects; each has resources/
+├── src/fonts/             # Shared open fonts (make fonts / scripts/fonts/fetch-fonts.sh)
+└── docs/                  # Design docs (en/ and cn/)
 ```
 
-## 计划实现的组件
+## Desktop（Aero）
 
-### WinLogon（用户登录）
-- Vista 风格：全屏背景模糊 + 中央用户选择面板
-- Win7 风格：用户头像列表 + 密码输入框 + 辅助功能按钮
+本仓库仅内置 **Windows 7 Aero** 壳：Zig 与静态资源在 `src/desktop/aero/`（含 `resources/`）。
 
-### Desktop（桌面管理器）
-- 壁纸管理（默认 Vista 极光 / Win7 蓝色窗口壁纸）
-- Windows Sidebar / Gadgets 侧边栏（Vista）
-- 桌面图标（拟物化风格）
-- 右键菜单（圆角 + 阴影）
+字体：`make fonts` 或 `scripts/fonts/fetch-fonts.sh` 填充 `src/fonts/`。
 
-### Taskbar（任务栏）
-- **Vista 风格**：快速启动栏 + 任务按钮 + 系统托盘
-- **Win7 风格**：大图标固定任务栏 + Aero Peek + 跳转列表
-- 半透明玻璃材质
-- Show Desktop 按钮（右下角竖条）
+LoongArch UEFI 链接 GNU-EFI：`make fetch-gnu-efi`（输出在 `gnu-efi/`；见 `scripts/README.md`）。
 
-### Start Menu（开始菜单）
-- 搜索框（底部即时搜索）
-- 程序列表（左栏可滚动）
-- 系统链接（右栏：文档、图片、计算机、控制面板）
-- 电源按钮（关机/睡眠/重启）
-
-### Window Decorator（窗口装饰器）
-- 毛玻璃标题栏（高斯模糊 + 半透明叠加）
-- 标题栏按钮（最小化/最大化/关闭，悬停发光效果）
-- Aero Snap（拖拽到屏幕边缘自动吸附）
-- 窗口阴影（四周柔和投影）
-
-### Controls（UI 控件）
-- 玻璃风格按钮（悬停发光、按下内凹）
-- 进度条（带动画流光效果）
-- 滚动条（透明薄型）
-- 命令链接按钮（Vista 特色控件）
-
-## 与主系统集成
-
-ZirconOSAero 通过以下内核子系统接口工作：
-
-1. **user32.zig** — 窗口管理 API、消息队列
-2. **gdi32.zig** — 绘图 API（需扩展 alpha 混合和模糊支持）
-3. **subsystem.zig** (csrss) — 窗口站和桌面管理
-4. **framebuffer.zig** — 帧缓冲区显示驱动
-
-### 配置
-
-在 `config/desktop.conf` 中选择 Aero 主题：
+`src/config/desktop.conf`（编译期嵌入）中 `[desktop] theme` 仅 **`aero`** 或 **`none`**（无图形壳）。
 
 ```ini
 [desktop]
 theme = aero
-color_scheme = default    # default | blue | graphite
-shell = explorer
+color_scheme = zircon_blue
 ```
 
-## 构建
+## Dependencies
+
+Ubuntu/Debian:
 
 ```bash
-cd 3rdparty/ZirconOSAero
-zig build
-zig build test
+sudo apt update
+sudo apt install -y xorriso dosfstools mtools \
+    qemu-system-x86 qemu-system-arm ovmf
 ```
 
-## 开发状态
+Install Zig from [ziglang.org](https://ziglang.org/download/) and add it to `PATH`.
 
-当前为项目框架阶段，计划按以下顺序实现：
+## Build and run
 
-1. `theme.zig` — Aero 配色和尺寸常量
-2. `window_decorator.zig` — 毛玻璃标题栏效果
-3. `taskbar.zig` — 透明任务栏
-4. `startmenu.zig` — Vista/7 风格开始菜单
-5. `desktop.zig` — 桌面管理器
-6. `controls.zig` — Aero 风格控件
-7. `winlogon.zig` — 登录界面
-8. `shell.zig` — Shell 集成
+```bash
+# run.sh (recommended)
+./run.sh build              # Kernel (Debug)
+./run.sh build-release      # Kernel (Release)
+./run.sh iso                # UEFI ISO（ZBM，无 GRUB；x86_64）
+./run.sh run                # 按 build.conf 运行 QEMU（默认 UEFI+ZBM）
+./run.sh run-debug          # ZBM MBR 磁盘 + GDB
+./run.sh run-release        # Release 内核运行
+./run.sh run-uefi           # 显式 UEFI+ZBM（x86_64）
+./run.sh run-uefi-aarch64   # UEFI (aarch64)
+./run.sh run-aarch64        # AArch64 bare metal
+./run.sh clean              # Clean
+./run.sh help               # Help
 
-## 参考
+# Make shortcuts
+make run
+make run-debug
+make clean
+make help
 
-- [ReactOS](https://github.com/reactos/reactos) — 开源 Windows 兼容操作系统
-- Windows Vista / Windows 7 Aero 视觉规范
-- [DWM (Desktop Window Manager)](https://learn.microsoft.com/en-us/windows/win32/dwm/dwm-overview) — 桌面窗口管理器文档
-- Microsoft UX Guidelines for Windows Vista/7
+# Zig directly
+zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
+```
+
+## Phase 0–11 feature matrix（继承上游能力）
+
+| Area | Status | Notes |
+|------|--------|--------|
+| ZBM boot | Done | BIOS/MBR + UEFI；Windows 7 风格文本菜单 |
+| UEFI boot | Done | UEFI app, Debug/Release, Phase 0–11 banner |
+| VGA | Done | Text console |
+| Serial | Done | COM1 |
+| Frame allocator | Done | Bitmap allocator |
+| Paging | Done | Four-level tables, identity map |
+| Kernel heap | Done | Bump allocator |
+| IPC (LPC) | Done | Queues, send/receive, ports |
+| Syscall | Done | int 0x80 dispatch |
+| IDT/ISR | Done | 256 vectors |
+| Scheduler | Done | Round-robin |
+| Timer | Done | PIC + PIT ~100Hz |
+| Sync | Done | Event, mutex, semaphore, spinlock |
+| Object Manager | Done | Types, handle table, namespace, waitable |
+| Process Manager | Done | Processes/threads, Process Server |
+| Session Manager | Done | SMSS, sessions, subsystem registration |
+| Security | Done | Token, SID, access checks |
+| I/O Manager | Done | Devices, drivers, IRP dispatch |
+| VFS | Done | Mount points |
+| FAT32 | Done | Files/dirs on `C:\` |
+| NTFS | Done | MFT, files/dirs on `D:\` |
+| PE32+ loader | Done | Headers, DLLs, imports, relocs, PEB/TEB |
+| PE32 loader | Done | 32-bit PE, WOW64 |
+| ELF loader | Done | ELF64 headers, segments, shared objects |
+| ntdll | Done | Native API surface |
+| kernel32 | Done | Win32 base API |
+| user32 | Done | Windows, messages, classes, UI primitives, input |
+| gdi32 | Done | DC, primitives, fonts, bitmaps, BitBlt |
+| Console | Done | Console runtime |
+| CMD | Done | dir, cd, set, ver, systeminfo, tasklist, … |
+| PowerShell | Done | cmdlet-style commands |
+| csrss | Done | Win32 server, stations, desktops, GUI dispatch |
+| Exec engine | Done | PE load, DLL bind, lifecycle |
+| WOW64 | Done | PE32, syscall thunking, 32-bit PEB/TEB |
+
+## Milestones
+
+- **Phase 0** — Toolchain and QEMU debugging  
+- **Phase 1** — Boot and early kernel (GDT/Multiboot2/frame/heap)  
+- **Phase 2** — Traps, timer, scheduler  
+- **Phase 3** — VM and user mode  
+- **Phase 4** — Objects, handles, process core  
+- **Phase 5** — IPC and system services (SMSS/LPC)  
+- **Phase 6** — I/O, filesystems (FAT32/NTFS), drivers  
+- **Phase 7** — Loaders (PE32/PE32+/ELF, DLLs, imports, relocs)  
+- **Phase 8** — Native userland (ntdll/kernel32, CMD, PowerShell)  
+- **Phase 9** — Win32 subsystem (csrss, exec engine, PE/DLL)  
+- **Phase 10** — Graphics (user32, gdi32, message queue, GUI dispatch)  
+- **Phase 11** — WOW64 (PE32, thunking, 32-bit PEB/TEB)  

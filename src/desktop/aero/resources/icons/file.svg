@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="fileBody" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E8F8F8" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#C8ECEC" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#A8F0F0" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="fileFold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2ABFBF" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#1A8A8A" stop-opacity="0.8"/>
+    </linearGradient>
+    <linearGradient id="fileHL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="fileShadow">
+      <feDropShadow dx="0.5" dy="1.5" stdDeviation="1.2" flood-color="#0D5C5C" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <!-- Document body -->
+  <path d="M10 4 L32 4 L38 10 L38 44 L10 44 Z" fill="url(#fileBody)" filter="url(#fileShadow)"/>
+  <!-- Folded corner -->
+  <path d="M32 4 L32 10 L38 10 Z" fill="url(#fileFold)"/>
+  <!-- Corner fold inner shadow -->
+  <path d="M32 4 L32 10 L38 10 Z" fill="none" stroke="#0D5C5C" stroke-opacity="0.15" stroke-width="0.5"/>
+  <!-- Glass highlight on top portion -->
+  <path d="M10 4 L32 4 L32 10 L38 10 L38 18 Q28 12 10 18 Z" fill="url(#fileHL)"/>
+  <!-- Faint grid lines -->
+  <line x1="15" y1="16" x2="33" y2="16" stroke="#2ABFBF" stroke-opacity="0.15" stroke-width="0.4"/>
+  <line x1="15" y1="20" x2="33" y2="20" stroke="#2ABFBF" stroke-opacity="0.15" stroke-width="0.4"/>
+  <line x1="15" y1="24" x2="33" y2="24" stroke="#2ABFBF" stroke-opacity="0.15" stroke-width="0.4"/>
+  <line x1="15" y1="28" x2="33" y2="28" stroke="#2ABFBF" stroke-opacity="0.15" stroke-width="0.4"/>
+  <line x1="15" y1="32" x2="33" y2="32" stroke="#2ABFBF" stroke-opacity="0.15" stroke-width="0.4"/>
+  <line x1="15" y1="36" x2="28" y2="36" stroke="#2ABFBF" stroke-opacity="0.15" stroke-width="0.4"/>
+  <!-- Vertical grid hints -->
+  <line x1="20" y1="16" x2="20" y2="36" stroke="#2ABFBF" stroke-opacity="0.06" stroke-width="0.3"/>
+  <line x1="28" y1="16" x2="28" y2="36" stroke="#2ABFBF" stroke-opacity="0.06" stroke-width="0.3"/>
+  <!-- Border -->
+  <path d="M10 4 L32 4 L38 10 L38 44 L10 44 Z" fill="none" stroke="#1A8A8A" stroke-opacity="0.3" stroke-width="0.5"/>
+</svg>

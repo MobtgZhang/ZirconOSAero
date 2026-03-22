@@ -1,0 +1,165 @@
+; ZirconOS Aero Blue Theme
+; Copyright (C) 2024-2026 ZirconOS Project
+; Licensed under LGPL-2.1
+; Original design - not affiliated with or derived from any third-party OS
+;
+; Blue color scheme variant of the ZirconOS Aero theme.
+; Emphasizes deeper blues with teal glass accents for a cool, focused aesthetic.
+
+[Theme]
+DisplayName=ZirconOS Aero Blue
+ThemeId=zircon_aero_blue
+BaseTheme=zircon_aero
+Version=1.0
+
+[Control Panel\Colors]
+ActiveBorder=56 96 168
+ActiveTitle=48 120 200
+AppWorkspace=160 168 180
+Background=24 56 96
+ButtonAlternateFace=0 0 0
+ButtonDkShadow=80 88 100
+ButtonFace=220 230 242
+ButtonHilight=255 255 255
+ButtonLight=210 220 232
+ButtonShadow=140 160 184
+ButtonText=20 24 32
+GradientActiveTitle=40 96 176
+GradientInactiveTitle=96 120 152
+GrayText=148 152 160
+Hilight=32 140 240
+HilightText=255 255 255
+HotTrackingColor=10 189 198
+InactiveBorder=120 136 160
+InactiveTitle=112 136 168
+InactiveTitleText=88 96 108
+InfoText=20 24 32
+InfoWindow=248 252 255
+Menu=238 242 248
+MenuBar=238 242 248
+MenuHilight=32 140 240
+MenuText=20 24 32
+Scrollbar=192 200 212
+TitleText=255 255 255
+Window=252 254 255
+WindowFrame=56 96 168
+WindowText=20 24 32
+
+[Control Panel\Desktop]
+Wallpaper=resources\wallpapers\zircon_aurora.svg
+TileWallpaper=0
+WallpaperStyle=10
+
+[VisualStyles]
+Path=resources\themes\ZirconAero\zircon-aero.style
+ColorStyle=ZirconBlue
+Size=NormalSize
+ColorizationColor=0x7830A0E0
+Transparency=1
+CompositedWindow=1
+GlassOpacity=60
+GlassReflection=1
+
+[VisualStyles\GlassEffect]
+BlurRadius=12
+TintColor=24 80 160
+TintOpacity=45
+ReflectionIntensity=20
+BorderColor=56 120 200
+BorderOpacity=60
+
+[VisualStyles\TitleBar]
+ActiveGradientStart=40 96 176
+ActiveGradientEnd=24 72 152
+InactiveGradientStart=96 120 152
+InactiveGradientEnd=80 104 136
+Height=30
+ButtonStyle=glass
+CloseButtonHoverColor=232 64 48
+
+[VisualStyles\Taskbar]
+Background=16 32 64
+BackgroundOpacity=75
+BlurEnabled=1
+AccentColor=32 140 240
+StartButtonStyle=orb
+StartButtonImage=resources\start_orb.svg
+Height=40
+
+[VisualStyles\StartMenu]
+Background=20 40 72
+BackgroundOpacity=85
+BlurEnabled=1
+AccentColor=10 189 198
+TextColor=240 244 248
+SearchBarColor=32 56 96
+
+[VisualStyles\Shadows]
+WindowShadowEnabled=1
+WindowShadowColor=0 0 0
+WindowShadowOpacity=35
+WindowShadowBlur=16
+WindowShadowOffset=0 4
+
+[VisualStyles\Animations]
+EnableAnimations=1
+MinimizeAnimation=genie
+MaximizeAnimation=expand
+FadeInDuration=200
+FadeOutDuration=150
+SlideDistance=24
+
+[boot]
+SCRNSAVE.EXE=
+
+[MasterThemeSelector]
+MTSM=RJSPBS
+
+[Sounds]
+SchemeName=ZirconOS Crystal
+
+[Cursors]
+Arrow=resources\cursors\zircon_arrow.cur
+Help=resources\cursors\zircon_help.cur
+AppStarting=resources\cursors\zircon_working.ani
+Wait=resources\cursors\zircon_busy.ani
+NWPen=resources\cursors\zircon_pen.cur
+No=resources\cursors\zircon_unavail.cur
+SizeNS=resources\cursors\zircon_ns.cur
+SizeWE=resources\cursors\zircon_ew.cur
+Crosshair=
+IBeam=
+SizeNWSE=resources\cursors\zircon_nwse.cur
+SizeNESW=resources\cursors\zircon_nesw.cur
+SizeAll=resources\cursors\zircon_move.cur
+UpArrow=resources\cursors\zircon_up.cur
+Hand=resources\cursors\zircon_link.cur
+
+[Fonts]
+DefaultUI=Liberation Sans
+DefaultUISize=9
+MonospaceUI=Liberation Mono
+TitleBarFont=Liberation Sans
+TitleBarFontSize=9
+TitleBarFontWeight=600
+MenuFont=Liberation Sans
+MenuFontSize=9
+MessageFont=Liberation Sans
+MessageFontSize=9
+
+[Icons]
+ThemeDir=resources\icons\zircon-aero-blue
+Size=32
+SmallSize=16
+LargeSize=48
+ExtraLargeSize=256
+
+[Metrics]
+BorderWidth=1
+CaptionWidth=36
+CaptionHeight=30
+ScrollWidth=17
+ScrollHeight=17
+MenuWidth=19
+MenuHeight=19
+PaddedBorderWidth=4

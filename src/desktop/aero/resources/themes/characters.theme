@@ -1,0 +1,129 @@
+; ZirconOS Aero Theme - Characters
+; Copyright (C) 2024-2026 ZirconOS Project
+; Licensed under LGPL-2.1
+; Original design. Not affiliated with any third party.
+;
+; Warm amber/earth tones with calligraphic brush stroke aesthetic.
+
+[Theme]
+DisplayName=ZirconOS Aero - Characters
+ThemeId=zircon_aero_characters
+BaseTheme=zircon_aero
+Version=1.0
+SetLogonBackground=0
+
+[CLSID\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\DefaultIcon]
+DefaultValue=zircon_icons.res,-109
+
+[CLSID\{59031A47-3F72-44A7-89C5-5595FE6B30EE}\DefaultIcon]
+DefaultValue=zircon_icons.res,-123
+
+[CLSID\{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}\DefaultIcon]
+DefaultValue=zircon_icons.res,-25
+
+[CLSID\{645FF040-5081-101B-9F08-00AA002F954E}\DefaultIcon]
+Full=zircon_icons.res,-54
+Empty=zircon_icons.res,-55
+
+[Control Panel\Colors]
+ActiveBorder=152 120 60
+ActiveTitle=168 128 56
+AppWorkspace=160 148 130
+Background=42 30 16
+ButtonFace=230 218 200
+ButtonHilight=255 255 255
+ButtonShadow=160 140 110
+ButtonText=32 24 16
+GradientActiveTitle=152 120 60
+GradientInactiveTitle=140 128 108
+GrayText=148 136 120
+Hilight=200 152 48
+HilightText=255 255 255
+HotTrackingColor=192 136 40
+InactiveBorder=140 128 108
+InactiveTitle=140 128 108
+InactiveTitleText=100 88 72
+InfoText=32 24 16
+InfoWindow=250 244 232
+Menu=242 236 224
+MenuBar=242 236 224
+MenuHilight=200 152 48
+MenuText=32 24 16
+Scrollbar=200 192 176
+TitleText=255 255 255
+Window=252 248 240
+WindowFrame=152 120 60
+WindowText=32 24 16
+
+[Control Panel\Cursors]
+AppStarting=zircon_cursors\aero_working.ani
+Arrow=zircon_cursors\aero_arrow.cur
+Crosshair=
+Hand=zircon_cursors\aero_link.cur
+Help=zircon_cursors\aero_helpsel.cur
+IBeam=
+No=zircon_cursors\aero_unavail.cur
+NWPen=zircon_cursors\aero_pen.cur
+SizeAll=zircon_cursors\aero_move.cur
+SizeNESW=zircon_cursors\aero_nesw.cur
+SizeNS=zircon_cursors\aero_ns.cur
+SizeNWSE=zircon_cursors\aero_nwse.cur
+SizeWE=zircon_cursors\aero_ew.cur
+UpArrow=zircon_cursors\aero_up.cur
+Wait=zircon_cursors\aero_busy.ani
+DefaultValue=ZirconOS Aero
+Link=
+
+[Control Panel\Desktop]
+Wallpaper=resources\wallpapers\zircon_characters.svg
+TileWallpaper=0
+WallpaperStyle=10
+Pattern=
+
+[VisualStyles]
+Path=resources\themes\ZirconAero\zircon-aero.style
+ColorStyle=Characters
+Size=NormalSize
+ColorizationColor=0x6698844C
+Transparency=1
+CompositedWindow=1
+GlassOpacity=55
+
+[VisualStyles\GlassEffect]
+BlurRadius=10
+TintColor=120 90 40
+TintOpacity=40
+ReflectionIntensity=15
+BorderColor=152 120 60
+BorderOpacity=55
+
+[VisualStyles\TitleBar]
+ActiveGradientStart=152 120 60
+ActiveGradientEnd=128 96 40
+InactiveGradientStart=140 128 108
+InactiveGradientEnd=120 108 88
+Height=30
+ButtonStyle=glass
+CloseButtonHoverColor=200 80 40
+
+[VisualStyles\Taskbar]
+Background=42 30 16
+BackgroundOpacity=80
+BlurEnabled=1
+AccentColor=200 152 48
+StartButtonStyle=orb
+StartButtonImage=resources\start_orb.svg
+Height=40
+
+[boot]
+SCRNSAVE.EXE=
+
+[MasterThemeSelector]
+MTSM=DABJDKT
+
+[Sounds]
+SchemeName=ZirconOS Crystal
+
+[Fonts]
+DefaultUI=Liberation Sans
+DefaultUISize=9

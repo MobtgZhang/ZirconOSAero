@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="screenGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#A8F0F0" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#2ABFBF" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#0D5C5C" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="bezelGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D8D8D8"/>
+      <stop offset="50%" stop-color="#B0B0B0"/>
+      <stop offset="100%" stop-color="#888888"/>
+    </linearGradient>
+    <linearGradient id="standGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#C0C0C0"/>
+      <stop offset="100%" stop-color="#909090"/>
+    </linearGradient>
+    <linearGradient id="glassHighlight" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" flood-color="#0D5C5C" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Monitor body -->
+  <rect x="6" y="4" width="36" height="28" rx="2.5" ry="2.5" fill="url(#bezelGrad)" filter="url(#shadow)"/>
+  <!-- Screen area -->
+  <rect x="9" y="7" width="30" height="22" rx="1" ry="1" fill="url(#screenGrad)"/>
+  <!-- Glass highlight on screen -->
+  <rect x="9" y="7" width="30" height="11" rx="1" ry="1" fill="url(#glassHighlight)"/>
+  <!-- Z logo on screen -->
+  <g filter="url(#glow)">
+    <path d="M18 14 L30 14 L20 24 L30 24" fill="none" stroke="#E8F8F8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- Crystal facet accents on screen -->
+  <line x1="9" y1="18" x2="15" y2="12" stroke="#A8F0F0" stroke-opacity="0.2" stroke-width="0.5"/>
+  <line x1="33" y1="24" x2="39" y2="18" stroke="#A8F0F0" stroke-opacity="0.2" stroke-width="0.5"/>
+  <!-- Stand neck -->
+  <rect x="21" y="32" width="6" height="5" rx="0.5" fill="url(#standGrad)"/>
+  <!-- Stand base -->
+  <ellipse cx="24" cy="39" rx="10" ry="2.5" fill="url(#standGrad)"/>
+  <ellipse cx="24" cy="38.5" rx="10" ry="2" fill="#C8C8C8" opacity="0.5"/>
+  <!-- Subtle power LED -->
+  <circle cx="24" cy="30.5" r="0.8" fill="#2ABFBF" opacity="0.8"/>
+</svg>

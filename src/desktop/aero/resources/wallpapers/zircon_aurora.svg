@@ -1,0 +1,233 @@
+<svg viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0A1628"/>
+      <stop offset="45%" stop-color="#0D3040"/>
+      <stop offset="100%" stop-color="#0A2838"/>
+    </linearGradient>
+
+    <radialGradient id="auroraGlow1" cx="40%" cy="35%" r="45%">
+      <stop offset="0%" stop-color="#1AFFD5" stop-opacity="0.12"/>
+      <stop offset="60%" stop-color="#0ABDC6" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#0D3040" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="auroraGlow2" cx="65%" cy="30%" r="40%">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.10"/>
+      <stop offset="70%" stop-color="#1667B0" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#0A1628" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="auroraGlow3" cx="25%" cy="50%" r="35%">
+      <stop offset="0%" stop-color="#50FA7B" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#0D3040" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="auroraRibbon1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0ABDC6" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#0ABDC6" stop-opacity="0.3"/>
+      <stop offset="50%" stop-color="#1AFFD5" stop-opacity="0.45"/>
+      <stop offset="80%" stop-color="#4DEEEA" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#4DEEEA" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="auroraRibbon2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#50FA7B" stop-opacity="0"/>
+      <stop offset="15%" stop-color="#50FA7B" stop-opacity="0.15"/>
+      <stop offset="45%" stop-color="#1AFFD5" stop-opacity="0.30"/>
+      <stop offset="75%" stop-color="#0ABDC6" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#0ABDC6" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="auroraRibbon3" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#4DEEEA" stop-opacity="0.20"/>
+      <stop offset="60%" stop-color="#7CC8F0" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#1667B0" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="auroraRibbon4" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1AFFD5" stop-opacity="0"/>
+      <stop offset="25%" stop-color="#0ABDC6" stop-opacity="0.12"/>
+      <stop offset="55%" stop-color="#50FA7B" stop-opacity="0.22"/>
+      <stop offset="85%" stop-color="#1AFFD5" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#0A2838" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="crystalFacet1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#0ABDC6" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <linearGradient id="crystalFacet2" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7CC8F0" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#1667B0" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <linearGradient id="crystalFacet3" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#1AFFD5" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#0D3040" stop-opacity="0.01"/>
+    </linearGradient>
+
+    <linearGradient id="crystalFacet4" x1="0" y1="0.5" x2="1" y2="0.5">
+      <stop offset="0%" stop-color="#5BC2F0" stop-opacity="0.09"/>
+      <stop offset="100%" stop-color="#0A1628" stop-opacity="0.01"/>
+    </linearGradient>
+
+    <linearGradient id="crystalEdge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#1AFFD5" stop-opacity="0.05"/>
+    </linearGradient>
+
+    <linearGradient id="zBrandGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#0ABDC6" stop-opacity="0.03"/>
+    </linearGradient>
+
+    <filter id="auroraBlur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+
+    <filter id="auroraBlurWide" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="35"/>
+    </filter>
+
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+
+    <filter id="starGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="1.5"/>
+    </filter>
+  </defs>
+
+  <!-- Background sky gradient -->
+  <rect width="1920" height="1080" fill="url(#skyGrad)"/>
+
+  <!-- Ambient glow layers -->
+  <rect width="1920" height="1080" fill="url(#auroraGlow1)"/>
+  <rect width="1920" height="1080" fill="url(#auroraGlow2)"/>
+  <rect width="1920" height="1080" fill="url(#auroraGlow3)"/>
+
+  <!-- Stars - upper portion scattered dots -->
+  <g opacity="0.8" filter="url(#starGlow)">
+    <circle cx="120" cy="45" r="1.2" fill="#E8F4FF"/>
+    <circle cx="310" cy="92" r="0.8" fill="#C8E8FF"/>
+    <circle cx="480" cy="28" r="1.5" fill="#FFFFFF"/>
+    <circle cx="620" cy="118" r="0.7" fill="#D0E8FF"/>
+    <circle cx="785" cy="55" r="1.1" fill="#E8F4FF"/>
+    <circle cx="940" cy="140" r="0.9" fill="#C8E8FF"/>
+    <circle cx="1080" cy="38" r="1.4" fill="#FFFFFF"/>
+    <circle cx="1225" cy="95" r="0.8" fill="#E0F0FF"/>
+    <circle cx="1400" cy="62" r="1.0" fill="#E8F4FF"/>
+    <circle cx="1560" cy="120" r="0.7" fill="#D0E8FF"/>
+    <circle cx="1710" cy="42" r="1.3" fill="#FFFFFF"/>
+    <circle cx="1850" cy="88" r="0.9" fill="#C8E8FF"/>
+    <circle cx="200" cy="175" r="0.6" fill="#D0E8FF"/>
+    <circle cx="405" cy="195" r="1.0" fill="#E8F4FF"/>
+    <circle cx="670" cy="210" r="0.7" fill="#C8E8FF"/>
+    <circle cx="860" cy="185" r="1.2" fill="#FFFFFF"/>
+    <circle cx="1150" cy="200" r="0.6" fill="#E0F0FF"/>
+    <circle cx="1340" cy="168" r="0.9" fill="#E8F4FF"/>
+    <circle cx="1620" cy="195" r="0.8" fill="#D0E8FF"/>
+    <circle cx="1780" cy="155" r="1.1" fill="#FFFFFF"/>
+    <circle cx="55" cy="130" r="0.7" fill="#E0F0FF"/>
+    <circle cx="550" cy="155" r="0.5" fill="#C8E8FF"/>
+    <circle cx="1000" cy="75" r="0.6" fill="#FFFFFF"/>
+    <circle cx="1500" cy="30" r="0.8" fill="#E8F4FF"/>
+    <circle cx="260" cy="250" r="0.5" fill="#D0E8FF"/>
+    <circle cx="730" cy="270" r="0.7" fill="#C8E8FF"/>
+    <circle cx="1100" cy="260" r="0.5" fill="#E0F0FF"/>
+    <circle cx="1450" cy="245" r="0.6" fill="#E8F4FF"/>
+    <circle cx="1700" cy="230" r="0.4" fill="#D0E8FF"/>
+    <circle cx="380" cy="310" r="0.4" fill="#C8E8FF"/>
+    <circle cx="980" cy="290" r="0.5" fill="#E0F0FF"/>
+  </g>
+
+  <!-- Brighter accent stars -->
+  <g opacity="0.95">
+    <circle cx="480" cy="28" r="0.6" fill="#FFFFFF"/>
+    <circle cx="1080" cy="38" r="0.5" fill="#FFFFFF"/>
+    <circle cx="1710" cy="42" r="0.6" fill="#FFFFFF"/>
+    <circle cx="860" cy="185" r="0.5" fill="#FFFFFF"/>
+  </g>
+
+  <!-- Aurora ribbons - layered flowing curves -->
+  <!-- Wide glow base layer -->
+  <g filter="url(#auroraBlurWide)">
+    <path d="M-100,380 C200,280 500,320 800,260 C1100,200 1350,300 1600,250 C1850,200 2020,280 2020,280 L2020,420 C1800,380 1400,440 1100,400 C800,360 500,420 200,380 Z" fill="url(#auroraRibbon1)" opacity="0.6"/>
+    <path d="M-100,440 C250,360 600,400 900,340 C1200,280 1500,370 1750,320 C2000,270 2020,340 2020,340 L2020,500 C1800,460 1350,520 1050,470 C750,420 400,490 100,450 Z" fill="url(#auroraRibbon2)" opacity="0.45"/>
+  </g>
+
+  <!-- Mid-layer aurora -->
+  <g filter="url(#auroraBlur)">
+    <path d="M-50,350 C180,290 420,310 700,260 C980,210 1200,290 1500,240 C1800,190 1970,260 1970,260 L1970,390 C1750,360 1400,400 1100,370 C800,340 500,390 200,360 Z" fill="url(#auroraRibbon1)" opacity="0.55"/>
+    <path d="M-50,420 C220,350 480,380 780,320 C1080,260 1320,350 1620,300 C1920,250 1970,320 1970,320 L1970,460 C1750,430 1350,480 1050,440 C750,400 420,460 120,430 Z" fill="url(#auroraRibbon3)" opacity="0.40"/>
+    <path d="M-50,480 C300,420 550,450 850,390 C1150,330 1400,410 1680,370 C1960,330 1970,380 1970,380 L1970,520 C1720,500 1350,540 1050,510 C750,480 400,530 100,500 Z" fill="url(#auroraRibbon2)" opacity="0.35"/>
+  </g>
+
+  <!-- Sharp aurora detail layer -->
+  <g filter="url(#softGlow)">
+    <path d="M0,340 C160,300 380,316 640,272 C900,228 1120,296 1400,252 C1680,208 1880,268 1920,268 L1920,310 C1700,330 1400,360 1100,340 C800,320 520,352 240,332 Z" fill="url(#auroraRibbon1)" opacity="0.35"/>
+    <path d="M0,400 C200,358 450,374 720,330 C990,286 1250,358 1530,316 C1810,274 1920,330 1920,330 L1920,380 C1720,396 1400,420 1100,400 C800,380 480,408 200,388 Z" fill="url(#auroraRibbon3)" opacity="0.30"/>
+    <path d="M0,460 C280,420 520,440 800,396 C1080,352 1340,420 1600,380 C1860,340 1920,390 1920,390 L1920,430 C1740,445 1380,465 1080,450 C780,435 450,460 170,445 Z" fill="url(#auroraRibbon4)" opacity="0.25"/>
+  </g>
+
+  <!-- Vertical aurora streaks -->
+  <g filter="url(#auroraBlur)" opacity="0.15">
+    <rect x="350" y="200" width="3" height="280" rx="1.5" fill="#1AFFD5"/>
+    <rect x="620" y="160" width="2" height="300" rx="1" fill="#4DEEEA"/>
+    <rect x="880" y="180" width="2.5" height="260" rx="1.25" fill="#0ABDC6"/>
+    <rect x="1150" y="150" width="2" height="320" rx="1" fill="#1AFFD5"/>
+    <rect x="1400" y="190" width="3" height="240" rx="1.5" fill="#4DEEEA"/>
+    <rect x="1650" y="170" width="2" height="280" rx="1" fill="#50FA7B"/>
+  </g>
+
+  <!-- Crystal facet shapes - glass transparency -->
+  <g>
+    <!-- Large crystal left -->
+    <polygon points="280,420 360,340 440,420 400,540 320,540" fill="url(#crystalFacet1)" stroke="url(#crystalEdge)" stroke-width="0.5"/>
+    <polygon points="360,340 440,420 400,540" fill="url(#crystalFacet2)" opacity="0.5"/>
+
+    <!-- Medium crystal upper-center -->
+    <polygon points="820,280 880,220 940,280 920,380 840,380" fill="url(#crystalFacet2)" stroke="url(#crystalEdge)" stroke-width="0.5"/>
+    <polygon points="880,220 940,280 920,380" fill="url(#crystalFacet3)" opacity="0.4"/>
+
+    <!-- Large crystal right -->
+    <polygon points="1380,360 1480,280 1560,370 1520,510 1400,510" fill="url(#crystalFacet3)" stroke="url(#crystalEdge)" stroke-width="0.5"/>
+    <polygon points="1480,280 1560,370 1520,510" fill="url(#crystalFacet1)" opacity="0.4"/>
+
+    <!-- Small crystal far left -->
+    <polygon points="100,560 140,510 180,560 160,620 120,620" fill="url(#crystalFacet4)" stroke="url(#crystalEdge)" stroke-width="0.3"/>
+
+    <!-- Small crystal center-right -->
+    <polygon points="1120,460 1150,420 1180,460 1170,510 1130,510" fill="url(#crystalFacet1)" stroke="url(#crystalEdge)" stroke-width="0.3"/>
+
+    <!-- Tiny crystal upper-left -->
+    <polygon points="540,320 560,298 580,320 570,350 550,350" fill="url(#crystalFacet2)" stroke="url(#crystalEdge)" stroke-width="0.3" opacity="0.6"/>
+
+    <!-- Medium crystal lower-center -->
+    <polygon points="680,620 740,560 800,620 780,730 700,730" fill="url(#crystalFacet4)" stroke="url(#crystalEdge)" stroke-width="0.4"/>
+    <polygon points="740,560 800,620 780,730" fill="url(#crystalFacet2)" opacity="0.3"/>
+
+    <!-- Tiny crystal right -->
+    <polygon points="1680,500 1700,480 1720,500 1710,530 1690,530" fill="url(#crystalFacet3)" stroke="url(#crystalEdge)" stroke-width="0.3" opacity="0.5"/>
+
+    <!-- Crystal lower-right -->
+    <polygon points="1600,700 1650,650 1700,700 1680,780 1620,780" fill="url(#crystalFacet1)" stroke="url(#crystalEdge)" stroke-width="0.4"/>
+
+    <!-- Crystal lower-left -->
+    <polygon points="200,750 240,700 280,750 265,810 215,810" fill="url(#crystalFacet4)" stroke="url(#crystalEdge)" stroke-width="0.3" opacity="0.4"/>
+  </g>
+
+  <!-- Horizon glow -->
+  <ellipse cx="960" cy="700" rx="800" ry="120" fill="#0ABDC6" opacity="0.03" filter="url(#auroraBlurWide)"/>
+
+  <!-- ZirconOS 'Z' crystal watermark - bottom right, very faint -->
+  <g transform="translate(1840, 1020)" opacity="0.06">
+    <polygon points="0,-28 20,-40 40,-28 40,0 20,12 0,0" fill="url(#zBrandGrad)" stroke="#4DEEEA" stroke-width="0.5" stroke-opacity="0.3"/>
+    <line x1="10" y1="-24" x2="30" y2="-24" stroke="#4DEEEA" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+    <line x1="30" y1="-24" x2="10" y2="-4" stroke="#4DEEEA" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+    <line x1="10" y1="-4" x2="30" y2="-4" stroke="#4DEEEA" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  </g>
+</svg>

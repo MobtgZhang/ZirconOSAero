@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <radialGradient id="shutdownBg" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#FF6B6B" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#FF6B6B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="powerGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FF8888" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#E04040" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#A02020" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="powerLine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFC0C0"/>
+      <stop offset="100%" stop-color="#E05050"/>
+    </linearGradient>
+    <linearGradient id="shutHL" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shutShadow">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#800000" flood-opacity="0.3"/>
+    </filter>
+    <filter id="powerGlow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Subtle background glow -->
+  <circle cx="24" cy="24" r="22" fill="url(#shutdownBg)"/>
+  <!-- Power symbol circle (glass) -->
+  <circle cx="24" cy="26" r="14" fill="none" stroke="url(#powerGrad)" stroke-width="3.5" stroke-linecap="round" filter="url(#shutShadow)"/>
+  <!-- Glass highlight on circle stroke -->
+  <path d="M12 20 A14 14 0 0 1 36 20" fill="none" stroke="url(#shutHL)" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Gap at top of circle for line -->
+  <path d="M18.5 15 A10 10 0 0 0 18.5 15" fill="none"/>
+  <!-- Mask out top of circle where line goes -->
+  <rect x="19" y="12" width="10" height="6" fill="white" opacity="0"/>
+  <!-- Redraw circle with gap -->
+  <circle cx="24" cy="26" r="14" fill="none" stroke="white" stroke-width="4.5" stroke-opacity="0" stroke-dasharray="0 11 78"/>
+  <!-- Actual power circle with gap at top -->
+  <path d="M19 15.5 A14 14 0 1 0 29 15.5" fill="none" stroke="url(#powerGrad)" stroke-width="3.5" stroke-linecap="round" filter="url(#shutShadow)"/>
+  <!-- Glass highlight on left arc -->
+  <path d="M14 22 A12 12 0 0 1 22 14" fill="none" stroke="white" stroke-opacity="0.25" stroke-width="2"/>
+  <!-- Power line (vertical bar at top) -->
+  <line x1="24" y1="8" x2="24" y2="22" stroke="url(#powerLine)" stroke-width="3.5" stroke-linecap="round" filter="url(#powerGlow)"/>
+  <!-- Line glass highlight -->
+  <line x1="23" y1="9" x2="23" y2="18" stroke="white" stroke-opacity="0.3" stroke-width="1"/>
+</svg>

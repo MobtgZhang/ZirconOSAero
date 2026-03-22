@@ -1,0 +1,227 @@
+<svg viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0%" stop-color="#1A2440"/>
+      <stop offset="50%" stop-color="#162038"/>
+      <stop offset="100%" stop-color="#121C34"/>
+    </linearGradient>
+
+    <radialGradient id="ambientTeal" cx="35%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#0ABDC6" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#1A2440" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="ambientBlue" cx="70%" cy="40%" r="45%">
+      <stop offset="0%" stop-color="#3478C8" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#1A2440" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Crystal gradient definitions -->
+    <linearGradient id="crystGrad1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.15"/>
+      <stop offset="40%" stop-color="#2A8FD4" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#1A2440" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <linearGradient id="crystGrad2" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7CC8F0" stop-opacity="0.12"/>
+      <stop offset="50%" stop-color="#3878C8" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#1A2440" stop-opacity="0.01"/>
+    </linearGradient>
+
+    <linearGradient id="crystGrad3" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#0ABDC6" stop-opacity="0.18"/>
+      <stop offset="60%" stop-color="#1667B0" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#162038" stop-opacity="0.01"/>
+    </linearGradient>
+
+    <linearGradient id="crystGrad4" x1="0" y1="0.5" x2="1" y2="0.5">
+      <stop offset="0%" stop-color="#5BA8E8" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#1850A0" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <linearGradient id="crystGradBright" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.22"/>
+      <stop offset="30%" stop-color="#0ABDC6" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#1A2440" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <linearGradient id="crystEdge1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#0ABDC6" stop-opacity="0.08"/>
+    </linearGradient>
+
+    <linearGradient id="crystEdge2" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7CC8F0" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#2A8FD4" stop-opacity="0.06"/>
+    </linearGradient>
+
+    <linearGradient id="refractionGrad1" x1="0" y1="0" x2="1" y2="0.5">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.20"/>
+      <stop offset="50%" stop-color="#0ABDC6" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#1A2440" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="refractionGrad2" x1="0.5" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3878C8" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#1A2440" stop-opacity="0"/>
+    </linearGradient>
+
+    <radialGradient id="bokeh1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#4DEEEA" stop-opacity="0.18"/>
+      <stop offset="40%" stop-color="#4DEEEA" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#4DEEEA" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="bokeh2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7CC8F0" stop-opacity="0.15"/>
+      <stop offset="35%" stop-color="#7CC8F0" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#7CC8F0" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="bokeh3" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#5BA8E8" stop-opacity="0.12"/>
+      <stop offset="45%" stop-color="#5BA8E8" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#5BA8E8" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="bokehWarm" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#F7A41D" stop-opacity="0.08"/>
+      <stop offset="50%" stop-color="#F7A41D" stop-opacity="0.02"/>
+      <stop offset="100%" stop-color="#F7A41D" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="crystalBlur" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+
+    <filter id="bokehBlur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+
+    <filter id="wideBlur" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="25"/>
+    </filter>
+
+    <filter id="edgeGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+  </defs>
+
+  <!-- Dark slate background -->
+  <rect width="1920" height="1080" fill="url(#bgGrad)"/>
+
+  <!-- Ambient color washes -->
+  <rect width="1920" height="1080" fill="url(#ambientTeal)"/>
+  <rect width="1920" height="1080" fill="url(#ambientBlue)"/>
+
+  <!-- Large crystal 1 - center-left, dominant -->
+  <g>
+    <polygon points="480,180 720,80 820,280 780,540 600,600 420,480" fill="url(#crystGrad1)" stroke="url(#crystEdge1)" stroke-width="0.8"/>
+    <polygon points="720,80 820,280 780,540" fill="url(#crystGrad2)" opacity="0.6"/>
+    <polygon points="720,80 480,180 420,480 600,600 780,540" fill="url(#crystGrad3)" opacity="0.3"/>
+    <line x1="720" y1="80" x2="780" y2="540" stroke="#4DEEEA" stroke-width="0.5" opacity="0.15"/>
+    <line x1="720" y1="80" x2="600" y2="600" stroke="#4DEEEA" stroke-width="0.4" opacity="0.10"/>
+    <line x1="720" y1="80" x2="420" y2="480" stroke="#7CC8F0" stroke-width="0.4" opacity="0.10"/>
+  </g>
+
+  <!-- Large crystal 2 - center-right -->
+  <g>
+    <polygon points="1200,140 1440,60 1560,240 1520,520 1340,580 1160,440" fill="url(#crystGrad3)" stroke="url(#crystEdge2)" stroke-width="0.8"/>
+    <polygon points="1440,60 1560,240 1520,520" fill="url(#crystGrad4)" opacity="0.5"/>
+    <polygon points="1440,60 1200,140 1160,440 1340,580 1520,520" fill="url(#crystGrad1)" opacity="0.25"/>
+    <line x1="1440" y1="60" x2="1520" y2="520" stroke="#7CC8F0" stroke-width="0.5" opacity="0.15"/>
+    <line x1="1440" y1="60" x2="1340" y2="580" stroke="#0ABDC6" stroke-width="0.4" opacity="0.10"/>
+  </g>
+
+  <!-- Medium crystal 3 - upper left -->
+  <g>
+    <polygon points="140,220 280,140 340,300 300,440 180,460 100,360" fill="url(#crystGrad2)" stroke="url(#crystEdge1)" stroke-width="0.6"/>
+    <polygon points="280,140 340,300 300,440" fill="url(#crystGradBright)" opacity="0.4"/>
+    <line x1="280" y1="140" x2="300" y2="440" stroke="#4DEEEA" stroke-width="0.4" opacity="0.12"/>
+  </g>
+
+  <!-- Medium crystal 4 - right -->
+  <g>
+    <polygon points="1660,280 1800,200 1860,370 1830,520 1700,550 1620,430" fill="url(#crystGrad4)" stroke="url(#crystEdge2)" stroke-width="0.6"/>
+    <polygon points="1800,200 1860,370 1830,520" fill="url(#crystGrad1)" opacity="0.35"/>
+    <line x1="1800" y1="200" x2="1830" y2="520" stroke="#7CC8F0" stroke-width="0.4" opacity="0.10"/>
+  </g>
+
+  <!-- Small crystal 5 - bottom center -->
+  <g>
+    <polygon points="880,640 980,580 1040,680 1010,800 920,820 860,740" fill="url(#crystGrad1)" stroke="url(#crystEdge1)" stroke-width="0.5"/>
+    <polygon points="980,580 1040,680 1010,800" fill="url(#crystGrad3)" opacity="0.4"/>
+  </g>
+
+  <!-- Small crystal 6 - lower left -->
+  <g>
+    <polygon points="320,700 400,650 440,740 410,840 350,850 300,780" fill="url(#crystGrad3)" stroke="url(#crystEdge2)" stroke-width="0.5"/>
+    <polygon points="400,650 440,740 410,840" fill="url(#crystGrad2)" opacity="0.3"/>
+  </g>
+
+  <!-- Small crystal 7 - lower right -->
+  <g>
+    <polygon points="1480,680 1560,630 1600,720 1570,830 1510,840 1460,760" fill="url(#crystGrad2)" stroke="url(#crystEdge1)" stroke-width="0.5"/>
+    <polygon points="1560,630 1600,720 1570,830" fill="url(#crystGrad4)" opacity="0.3"/>
+  </g>
+
+  <!-- Tiny floating crystal fragments -->
+  <g opacity="0.6">
+    <polygon points="960,320 985,300 1010,320 1000,350 970,350" fill="url(#crystGrad1)" stroke="url(#crystEdge1)" stroke-width="0.3"/>
+    <polygon points="600,480 615,468 630,480 625,500 605,500" fill="url(#crystGrad2)" stroke="url(#crystEdge2)" stroke-width="0.3"/>
+    <polygon points="1300,400 1315,388 1330,400 1325,420 1305,420" fill="url(#crystGrad3)" stroke="url(#crystEdge1)" stroke-width="0.3"/>
+    <polygon points="180,560 195,548 210,560 205,580 185,580" fill="url(#crystGrad4)" stroke="url(#crystEdge2)" stroke-width="0.3"/>
+    <polygon points="1750,600 1765,588 1780,600 1775,620 1755,620" fill="url(#crystGrad1)" stroke="url(#crystEdge1)" stroke-width="0.3"/>
+  </g>
+
+  <!-- Refraction light rays through crystals -->
+  <g filter="url(#edgeGlow)" opacity="0.12">
+    <line x1="720" y1="80" x2="200" y2="600" stroke="#4DEEEA" stroke-width="1.5"/>
+    <line x1="720" y1="80" x2="1100" y2="700" stroke="#0ABDC6" stroke-width="1"/>
+    <line x1="1440" y1="60" x2="900" y2="650" stroke="#7CC8F0" stroke-width="1.2"/>
+    <line x1="1440" y1="60" x2="1800" y2="700" stroke="#3878C8" stroke-width="1"/>
+    <line x1="280" y1="140" x2="500" y2="800" stroke="#4DEEEA" stroke-width="0.8"/>
+    <line x1="1800" y1="200" x2="1500" y2="900" stroke="#5BA8E8" stroke-width="0.8"/>
+  </g>
+
+  <!-- Refraction prismatic bands -->
+  <g filter="url(#crystalBlur)" opacity="0.08">
+    <path d="M720,80 L650,400 L670,400 Z" fill="#4DEEEA"/>
+    <path d="M720,80 L680,400 L700,400 Z" fill="#0ABDC6"/>
+    <path d="M1440,60 L1380,380 L1400,380 Z" fill="#7CC8F0"/>
+    <path d="M1440,60 L1410,380 L1430,380 Z" fill="#3878C8"/>
+  </g>
+
+  <!-- Bokeh / light orb effects -->
+  <g filter="url(#bokehBlur)">
+    <circle cx="320" cy="320" r="50" fill="url(#bokeh1)"/>
+    <circle cx="780" cy="450" r="65" fill="url(#bokeh2)"/>
+    <circle cx="1150" cy="280" r="55" fill="url(#bokeh3)"/>
+    <circle cx="1550" cy="420" r="48" fill="url(#bokeh1)"/>
+    <circle cx="480" cy="680" r="40" fill="url(#bokeh2)"/>
+    <circle cx="1320" cy="700" r="52" fill="url(#bokeh3)"/>
+    <circle cx="960" cy="180" r="45" fill="url(#bokeh1)"/>
+    <circle cx="1760" cy="650" r="38" fill="url(#bokeh2)"/>
+    <circle cx="200" cy="800" r="42" fill="url(#bokeh3)"/>
+    <circle cx="1050" cy="550" r="35" fill="url(#bokehWarm)"/>
+    <circle cx="600" cy="250" r="30" fill="url(#bokehWarm)"/>
+  </g>
+
+  <!-- Small sharp bokeh dots -->
+  <g opacity="0.5">
+    <circle cx="400" cy="380" r="3" fill="#4DEEEA" opacity="0.3"/>
+    <circle cx="850" cy="500" r="2.5" fill="#7CC8F0" opacity="0.25"/>
+    <circle cx="1200" cy="340" r="2" fill="#4DEEEA" opacity="0.3"/>
+    <circle cx="1580" cy="480" r="3.5" fill="#0ABDC6" opacity="0.2"/>
+    <circle cx="640" cy="720" r="2" fill="#5BA8E8" opacity="0.25"/>
+    <circle cx="1400" cy="750" r="2.5" fill="#4DEEEA" opacity="0.2"/>
+    <circle cx="280" cy="500" r="2" fill="#7CC8F0" opacity="0.2"/>
+    <circle cx="1700" cy="350" r="1.5" fill="#0ABDC6" opacity="0.25"/>
+    <circle cx="500" cy="150" r="2" fill="#4DEEEA" opacity="0.2"/>
+    <circle cx="1080" cy="820" r="3" fill="#5BA8E8" opacity="0.15"/>
+  </g>
+
+  <!-- Bottom gradient fade -->
+  <rect x="0" y="900" width="1920" height="180" fill="url(#bgGrad)" opacity="0.4"/>
+</svg>

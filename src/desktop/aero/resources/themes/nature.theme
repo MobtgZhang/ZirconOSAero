@@ -1,0 +1,129 @@
+; ZirconOS Aero Theme - Nature
+; Copyright (C) 2024-2026 ZirconOS Project
+; Licensed under LGPL-2.1
+; Original design. Not affiliated with any third party.
+;
+; Purple and green botanical tones with petal/leaf motifs.
+
+[Theme]
+DisplayName=ZirconOS Aero - Nature
+ThemeId=zircon_aero_nature
+BaseTheme=zircon_aero
+Version=1.0
+SetLogonBackground=0
+
+[CLSID\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\DefaultIcon]
+DefaultValue=zircon_icons.res,-109
+
+[CLSID\{59031A47-3F72-44A7-89C5-5595FE6B30EE}\DefaultIcon]
+DefaultValue=zircon_icons.res,-123
+
+[CLSID\{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}\DefaultIcon]
+DefaultValue=zircon_icons.res,-25
+
+[CLSID\{645FF040-5081-101B-9F08-00AA002F954E}\DefaultIcon]
+Full=zircon_icons.res,-54
+Empty=zircon_icons.res,-55
+
+[Control Panel\Colors]
+ActiveBorder=120 72 148
+ActiveTitle=136 88 160
+AppWorkspace=152 140 160
+Background=26 14 40
+ButtonFace=236 228 240
+ButtonHilight=255 255 255
+ButtonShadow=152 136 160
+ButtonText=28 16 40
+GradientActiveTitle=136 88 160
+GradientInactiveTitle=120 108 128
+GrayText=140 128 148
+Hilight=141 90 148
+HilightText=255 255 255
+HotTrackingColor=96 200 128
+InactiveBorder=136 124 144
+InactiveTitle=120 108 128
+InactiveTitleText=96 84 104
+InfoText=28 16 40
+InfoWindow=248 244 252
+Menu=240 236 244
+MenuBar=240 236 244
+MenuHilight=141 90 148
+MenuText=28 16 40
+Scrollbar=200 192 208
+TitleText=255 255 255
+Window=252 248 254
+WindowFrame=120 72 148
+WindowText=28 16 40
+
+[Control Panel\Cursors]
+AppStarting=zircon_cursors\aero_working.ani
+Arrow=zircon_cursors\aero_arrow.cur
+Crosshair=
+Hand=zircon_cursors\aero_link.cur
+Help=zircon_cursors\aero_helpsel.cur
+IBeam=
+No=zircon_cursors\aero_unavail.cur
+NWPen=zircon_cursors\aero_pen.cur
+SizeAll=zircon_cursors\aero_move.cur
+SizeNESW=zircon_cursors\aero_nesw.cur
+SizeNS=zircon_cursors\aero_ns.cur
+SizeNWSE=zircon_cursors\aero_nwse.cur
+SizeWE=zircon_cursors\aero_ew.cur
+UpArrow=zircon_cursors\aero_up.cur
+Wait=zircon_cursors\aero_busy.ani
+DefaultValue=ZirconOS Aero
+Link=
+
+[Control Panel\Desktop]
+Wallpaper=resources\wallpapers\zircon_nature.svg
+TileWallpaper=0
+WallpaperStyle=10
+Pattern=
+
+[VisualStyles]
+Path=resources\themes\ZirconAero\zircon-aero.style
+ColorStyle=Nature
+Size=NormalSize
+ColorizationColor=0x528D5A94
+Transparency=1
+CompositedWindow=1
+GlassOpacity=58
+
+[VisualStyles\GlassEffect]
+BlurRadius=12
+TintColor=100 60 128
+TintOpacity=42
+ReflectionIntensity=18
+BorderColor=120 72 148
+BorderOpacity=58
+
+[VisualStyles\TitleBar]
+ActiveGradientStart=136 88 160
+ActiveGradientEnd=112 64 136
+InactiveGradientStart=120 108 128
+InactiveGradientEnd=100 88 108
+Height=30
+ButtonStyle=glass
+CloseButtonHoverColor=200 64 48
+
+[VisualStyles\Taskbar]
+Background=26 14 40
+BackgroundOpacity=78
+BlurEnabled=1
+AccentColor=96 200 128
+StartButtonStyle=orb
+StartButtonImage=resources\start_orb.svg
+Height=40
+
+[boot]
+SCRNSAVE.EXE=
+
+[MasterThemeSelector]
+MTSM=DABJDKT
+
+[Sounds]
+SchemeName=ZirconOS Crystal
+
+[Fonts]
+DefaultUI=Liberation Sans
+DefaultUISize=9

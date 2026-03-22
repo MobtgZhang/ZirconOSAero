@@ -1,0 +1,145 @@
+; ZirconOS Aero Theme Configuration
+; Copyright (C) 2024-2026 ZirconOS Project
+; Licensed under LGPL-2.1
+; Desktop Window Manager: D3D9 Redirected Surface Compositor (NT 6.1)
+; Visual Style: Glass translucency with Gaussian blur, specular highlights, soft shadows
+
+[Theme]
+DisplayName=ZirconAero (Windows 7 style)
+ThemeId=zircon_aero
+Version=1.2.0
+Author=ZirconOS Project
+Description=ZirconAero — Aero Glass desktop with Harmony-style wallpaper and Win7 shell layout
+CompatibleKernel=NT6.1
+CompositorBackend=D3D9_RedirectedSurface
+WDDMVersion=1.1
+
+[VisualStyles]
+Path=resources\themes\zircon-aero
+ColorStyle=ZirconBlue
+Size=NormalSize
+CompositedWindow=1
+Transparency=1
+
+[Desktop]
+Wallpaper=resources\wallpapers\zircon_harmony_win7.svg
+TileWallpaper=0
+WallpaperStyle=10
+Pattern=
+BackgroundColor=0x123862
+
+[Colors]
+ActiveTitle=65 128 200
+InactiveTitle=153 180 209
+ActiveBorder=80 120 168
+InactiveBorder=200 200 200
+WindowFrame=100 100 100
+WindowBackground=255 255 255
+ButtonFace=240 240 240
+ButtonHighlight=255 255 255
+ButtonShadow=160 160 160
+Menu=255 255 255
+MenuText=0 0 0
+WindowText=0 0 0
+TitleText=0 0 0
+GrayText=109 109 109
+Highlight=51 153 255
+HighlightText=255 255 255
+
+[DWM]
+Composition=1
+ColorizationColor=406890A0
+ColorizationColorBalance=49
+ColorizationBlurBalance=60
+ColorizationGlassReflectionIntensity=35
+ColorizationAfterglow=4068A0
+ColorizationAfterglowBalance=43
+ColorizationOpaqueBlend=0
+EnableAeroPeek=1
+EnableFlip3D=1
+
+[DWM.Glass]
+Enabled=1
+Opacity=188
+BlurRadius=14
+BlurPasses=3
+Saturation=200
+TintColor=4068A0
+TintOpacity=60
+SpecularIntensity=35
+
+[DWM.Shadow]
+Enabled=1
+Layers=4
+Offset=8
+BaseAlpha=25
+AlphaDecay=5
+
+[DWM.Animation]
+Enabled=1
+MinimizeEffect=genie
+MaximizeEffect=zoom
+TransitionDuration=250
+
+[DWM.Cursor]
+SmoothEnabled=1
+LerpFactor=220
+SubpixelPrecision=256
+
+[Taskbar]
+GlassEnabled=1
+GlassTint=0x28 0x3A 0x54
+GlassOpacity=185
+Height=40
+StartButtonStyle=orb
+StartButtonImage=resources\start_orb.svg
+
+[StartMenu]
+Style=aero
+GlassEnabled=1
+Width=380
+Height=420
+
+[Cursor]
+Arrow=resources\cursors\zircon_arrow.svg
+IBeam=resources\cursors\zircon_text.svg
+Wait=resources\cursors\zircon_busy.svg
+Working=resources\cursors\zircon_working.svg
+Hand=resources\cursors\zircon_link.svg
+Help=resources\cursors\zircon_help.svg
+No=resources\cursors\zircon_unavail.svg
+SizeAll=resources\cursors\zircon_move.svg
+SizeNWSE=resources\cursors\zircon_nwse.svg
+SizeNESW=resources\cursors\zircon_nesw.svg
+SizeWE=resources\cursors\zircon_ew.svg
+SizeNS=resources\cursors\zircon_ns.svg
+UpArrow=resources\cursors\zircon_up.svg
+NWPen=resources\cursors\zircon_pen.svg
+DefaultValue=ZirconOS Crystal
+
+[Sounds]
+SchemeFile=resources\sounds\sound_scheme.conf
+SchemeName=ZirconOS Crystal
+Startup=zircon_startup
+Logon=zircon_logon
+Logoff=zircon_logoff
+Shutdown=zircon_shutdown
+
+[Icons]
+DefaultScheme=ZirconAero
+Computer=resources\icons\computer.svg
+Documents=resources\icons\documents.svg
+RecycleBin=resources\icons\recycle_bin.svg
+Network=resources\icons\network.svg
+Terminal=resources\icons\terminal.svg
+Browser=resources\icons\browser.svg
+Settings=resources\icons\settings.svg
+
+[Fonts]
+SystemFont=Liberation Sans
+SystemFontSize=9
+CaptionFont=Liberation Sans
+CaptionFontSize=9
+MenuFont=Liberation Sans
+MenuFontSize=9
+MonospaceFont=Liberation Mono

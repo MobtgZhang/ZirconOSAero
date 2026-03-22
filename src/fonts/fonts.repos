@@ -1,0 +1,23 @@
+# ZirconOSFonts 字体来源清单
+# 格式：字体名称  上游仓库/下载链接  版本  许可证
+
+# === 西文字体（来自 kiwi0fruit/open-fonts）===
+DejaVu              https://github.com/kiwi0fruit/open-fonts              master    Bitstream-Vera
+EmbedSerif          https://github.com/kiwi0fruit/open-fonts              master    SIL-OFL-1.1
+Inconsolata         https://github.com/kiwi0fruit/open-fonts              master    SIL-OFL-1.1
+Lato                https://github.com/kiwi0fruit/open-fonts              master    SIL-OFL-1.1
+LibertinusSerif     https://github.com/kiwi0fruit/open-fonts              master    SIL-OFL-1.1
+NotoSans            https://github.com/kiwi0fruit/open-fonts              master    SIL-OFL-1.1
+NotoSansMono        https://github.com/kiwi0fruit/open-fonts              master    SIL-OFL-1.1
+NotoSerif           https://github.com/kiwi0fruit/open-fonts              master    SIL-OFL-1.1
+RobotizationMono    https://github.com/kiwi0fruit/open-fonts              master    Apache-2.0
+SourceCodePro       https://github.com/adobe-fonts/source-code-pro        master    SIL-OFL-1.1
+SourceSansPro       https://github.com/adobe-fonts/source-sans            master    SIL-OFL-1.1
+STIX/XITS           https://github.com/aliftype/xits                     master    SIL-OFL-1.1
+Symbola             https://dn-works.com/ufas/                            latest    Public-Domain
+
+# === CJK 中文字体 ===
+NotoSansCJK-SC      https://github.com/notofonts/noto-cjk                Sans2.004   SIL-OFL-1.1
+NotoSerifCJK-SC     https://github.com/notofonts/noto-cjk                Serif2.003  SIL-OFL-1.1
+LXGWWenKai          https://github.com/lxgw/LxgwWenKai                   v1.522      SIL-OFL-1.1
+ZhuQueFangSong      https://github.com/TrionesType/zhuque                v0.212      SIL-OFL-1.1

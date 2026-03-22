@@ -1,0 +1,680 @@
+# ZirconOSAero — NT 6.1 (Windows 7) style hybrid microkernel OS (Zig)
+# Build system reads build.conf. Override: make DESKTOP=aero BOOT_METHOD=uefi
+#
+# Requires: zig, qemu-system-* (per ARCH), OVMF/EDK2 firmware, xorriso, mtools, dosfstools
+
+.PHONY: all build build-release iso run run-debug \
+	build-zbm-uefi build-zbm-loongarch-uefi build-zbm-bios build-zbm-disk build-esp \
+	build-desktop build-desktop-all build-desktop-dll \
+	fetch-themes fetch-firmware fetch-gnu-efi fetch-loongarch-boot-efi fonts resources \
+	run-aarch64 run-loongarch64 run-loongarch64-autozbm run-aarch64-debug run-loongarch64-debug \
+	test test-kernel test-config test-boot test-all \
+	clean help show-config configure
+
+# ══════════════════════════════════════════════════════
+#  Configuration: read from build.conf, allow overrides
+# ══════════════════════════════════════════════════════
+
+-include build.conf
+
+VERSION      := 6.1.0
+ARCH         ?= x86_64
+BOOT_METHOD  ?= uefi
+BOOTLOADER   ?= zbm
+DESKTOP      ?= aero
+OPTIMIZE     ?= Debug
+RESOLUTION   ?= 1024x768x32
+QEMU_MEM     ?= 512M
+# qemu-system-loongarch64 -M virt + EDK2: guest RAM must be strictly > 1G (else: ram_size must be greater than 1G).
+QEMU_MEM_LOONGARCH64 ?= 1536M
+ENABLE_IDT   ?= true
+DEBUG_LOG    ?= true
+
+# Validate DESKTOP
+VALID_DESKTOPS := aero none
+ifeq ($(filter $(DESKTOP),$(VALID_DESKTOPS)),)
+$(error Invalid DESKTOP='$(DESKTOP)'. Valid: $(VALID_DESKTOPS))
+endif
+
+# Validate BOOT_METHOD
+VALID_BOOT_METHODS := mbr uefi
+ifeq ($(filter $(BOOT_METHOD),$(VALID_BOOT_METHODS)),)
+$(error Invalid BOOT_METHOD='$(BOOT_METHOD)'. Valid: $(VALID_BOOT_METHODS))
+endif
+
+# Bootloader: ZBM only (no GRUB in this tree)
+VALID_BOOTLOADERS := zbm
+ifeq ($(filter $(BOOTLOADER),$(VALID_BOOTLOADERS)),)
+$(error Invalid BOOTLOADER='$(BOOTLOADER)'. This project uses ZBM only: zbm)
+endif
+
+# LoongArch QEMU：默认由 build.conf 的 BOOT_METHOD 决定（uefi → -bios+ESP；mbr → -kernel 直启）。
+# 仅当未设置 LOONGARCH64_QEMU_MODE 时自动推导（可用环境变量或 build.conf 覆盖）。
+ifeq ($(ARCH),loongarch64)
+ifeq ($(origin LOONGARCH64_QEMU_MODE),undefined)
+LOONGARCH64_QEMU_MODE := $(if $(filter uefi,$(BOOT_METHOD)),uefi,kernel)
+endif
+endif
+
+# ── Derived Paths ──
+
+ROOT_DIR     := $(shell pwd)
+BUILD_DIR    := $(ROOT_DIR)/build
+TMP_DIR      := $(BUILD_DIR)/tmp
+RELEASE_DIR  := $(BUILD_DIR)/release
+
+KERNEL_ELF_DEBUG := $(TMP_DIR)/kernel-prefix/bin/kernel
+KERNEL_ELF       := $(TMP_DIR)/kernel.elf
+ISO              := $(RELEASE_DIR)/zirconos-$(VERSION)-$(ARCH).iso
+TEST_RESULTS_DIR := $(BUILD_DIR)/test-results
+
+# ── Firmware Paths (EDK2 nightly: https://retrage.github.io/edk2-nightly/) ──
+FIRMWARE_DIR     ?= $(ROOT_DIR)/firmware
+
+# x86_64: OVMF from EDK2 nightly (fallback to system OVMF)
+OVMF_CODE    ?= $(if $(wildcard $(FIRMWARE_DIR)/OVMF_CODE-x86_64.fd),$(FIRMWARE_DIR)/OVMF_CODE-x86_64.fd,/usr/share/OVMF/OVMF_CODE_4M.fd)
+OVMF_VARS    ?= $(if $(wildcard $(FIRMWARE_DIR)/OVMF_VARS-x86_64.fd),$(FIRMWARE_DIR)/OVMF_VARS-x86_64.fd,/usr/share/OVMF/OVMF_VARS_4M.fd)
+
+# aarch64: QEMU_EFI from EDK2 nightly
+AARCH64_EFI_CODE ?= $(FIRMWARE_DIR)/QEMU_EFI-aarch64.fd
+AARCH64_EFI_VARS ?= $(FIRMWARE_DIR)/QEMU_VARS-aarch64.fd
+
+# loongarch64: prefer LoongArchVirtMachine bundle (QEMU_EFI.fd / QEMU_VARS.fd); else EDK2 nightly in $(FIRMWARE_DIR).
+# Override: make LOONGARCH64_FIRMWARE_DIR=/path run
+LOONGARCH64_FIRMWARE_DIR ?= $(HOME)/Firmware/LoongArchVirtMachine
+LOONGARCH64_EFI_CODE ?= $(if $(wildcard $(LOONGARCH64_FIRMWARE_DIR)/QEMU_EFI.fd),$(LOONGARCH64_FIRMWARE_DIR)/QEMU_EFI.fd,$(FIRMWARE_DIR)/QEMU_EFI-loongarch64.fd)
+LOONGARCH64_EFI_VARS ?= $(if $(wildcard $(LOONGARCH64_FIRMWARE_DIR)/QEMU_EFI.fd),$(LOONGARCH64_FIRMWARE_DIR)/QEMU_VARS.fd,$(FIRMWARE_DIR)/QEMU_VARS-loongarch64.fd)
+# Optional: 备用 BOOTLOONGARCH64.EFI（如 EDK2 Shell），仅当未使用 ZBM 构建 ESP 时；正常流程为 ZBM。
+LOONGARCH64_BOOT_EFI ?= $(firstword $(wildcard $(LOONGARCH64_FIRMWARE_DIR)/BOOTLOONGARCH64.EFI $(FIRMWARE_DIR)/BOOTLOONGARCH64.EFI))
+# （LoongArch）LOONGARCH64_QEMU_MODE 默认已按 BOOT_METHOD 推导，见上；勿再在此处 ?= kernel。
+
+ZBM_DIR          := $(TMP_DIR)/zbm
+ZBM_SRC_DIR      := $(ROOT_DIR)/boot/zbm/bios
+UEFI_PREFIX      := $(TMP_DIR)/uefi-prefix
+UEFI_CACHE       := $(TMP_DIR)/uefi-cache
+ifeq ($(ARCH),x86_64)
+UEFI_EFI         := $(UEFI_PREFIX)/bin/BOOTX64.efi
+else ifeq ($(ARCH),aarch64)
+UEFI_EFI         := $(UEFI_PREFIX)/bin/BOOTAA64.efi
+else
+UEFI_EFI         := $(UEFI_PREFIX)/bin/BOOTX64.efi
+endif
+ESP_IMG          := $(BUILD_DIR)/esp-$(ARCH).img
+# Fixed path for LoongArch QEMU (avoid := expansion when ARCH defaults to x86_64 but target is run-loongarch64).
+ESP_IMG_LOONGARCH64 := $(BUILD_DIR)/esp-loongarch64.img
+# Zig object + GNU-EFI → BOOTLOONGARCH64.EFI（见 scripts/build/zbm-loongarch64-efi.sh）
+ZBM_LOONGARCH64_O   := $(TMP_DIR)/kernel-prefix/zbm_loongarch64.o
+ZBM_LOONGARCH64_EFI := $(TMP_DIR)/zbm-loongarch64.efi
+ZBM_DISK_MBR     := $(BUILD_DIR)/zirconos-mbr.img
+ZBM_DISK_GPT     := $(BUILD_DIR)/zirconos-gpt.img
+
+THEME_DIR_MAP_classic    := $(ROOT_DIR)/src/desktop/classic
+THEME_DIR_MAP_luna       := $(ROOT_DIR)/src/desktop/luna
+THEME_DIR_MAP_aero       := $(ROOT_DIR)/src/desktop/aero
+THEME_DIR_MAP_modern     := $(ROOT_DIR)/src/desktop/modern
+THEME_DIR_MAP_fluent     := $(ROOT_DIR)/src/desktop/fluent
+THEME_DIR_MAP_sunvalley  := $(ROOT_DIR)/src/desktop/sunvalley
+FONTS_DIR                := $(ROOT_DIR)/src/fonts
+
+THEME_DIR := $(THEME_DIR_MAP_$(DESKTOP))
+
+# Common QEMU flags
+# PS/2 与 usb-mouse 在客户机内均为相对移动；未捕获输入时，宿主机光标与窗口内指针位置通常不一致。
+# 在 QEMU 显示窗口内按 Ctrl+Alt+G 可切换鼠标捕获（Grab），捕获后相对移动更稳定。
+# 若将来内核支持 USB HID 绝对指针，可改用 -device usb-tablet（需对应驱动）。
+# 默认使用 i8042 PS/2 键鼠（IRQ1/IRQ12），与内核 PS/2 驱动一致。
+# 勿默认附加 usb-mouse/usb-kbd：客户机内为 USB HID，当前内核无对应驱动，会导致“无鼠标/键盘”。
+# Per-architecture QEMU flags
+QEMU_COMMON_X86 := -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
+	-display gtk,zoom-to-fit=on,show-cursor=on -vga std
+
+QEMU_COMMON_AARCH64 := -M virt -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
+	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
+
+# LoongArch `virt` 公共参数（是否加 -bios / -kernel 由 LOONGARCH64_QEMU_MODE 决定）
+QEMU_LOONGARCH64_BASE := -M virt -cpu la464 -m $(QEMU_MEM_LOONGARCH64) -serial stdio \
+	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
+# virtio-blk bootindex：便于固件将磁盘列为启动候选（部分环境仍会因 BdsDxe Boot0001 失败而进 Shell）。
+QEMU_LOONGARCH64_DEVICES := \
+	-drive if=none,id=zircon-esp0,file=$(ESP_IMG_LOONGARCH64),format=raw \
+	-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
+	-device virtio-gpu-pci
+
+# Backward compatibility
+QEMU_COMMON := $(QEMU_COMMON_X86)
+
+# ══════════════════════════════════════════════════════
+#  Default target: build & run according to build.conf
+# ══════════════════════════════════════════════════════
+
+all: run
+
+# ══════════════════════════════════════════════════════
+#  show-config: display current build configuration
+# ══════════════════════════════════════════════════════
+
+show-config:
+	@echo "╔══════════════════════════════════════════════╗"
+	@echo "║   ZirconOSAero (NT 6.1 style) v$(VERSION) config   ║"
+	@echo "╠══════════════════════════════════════════════╣"
+	@echo "║  ARCH         = $(ARCH)"
+	@echo "║  BOOT_METHOD  = $(BOOT_METHOD)"
+	@echo "║  BOOTLOADER   = $(BOOTLOADER)"
+	@echo "║  DESKTOP      = $(DESKTOP)"
+	@echo "║  OPTIMIZE     = $(OPTIMIZE)"
+	@echo "║  RESOLUTION   = $(RESOLUTION)"
+	@echo "║  QEMU_MEM     = $(QEMU_MEM)"
+	@if [ "$(ARCH)" = "loongarch64" ]; then echo "║  QEMU_MEM_LOONGARCH64 = $(QEMU_MEM_LOONGARCH64)  (run-loongarch64; QEMU virt requires >1G)"; fi
+	@echo "║  ENABLE_IDT   = $(ENABLE_IDT)"
+	@echo "║  DEBUG_LOG    = $(DEBUG_LOG)"
+	@echo "║  FIRMWARE_DIR = $(FIRMWARE_DIR)"
+	@if [ "$(ARCH)" = "loongarch64" ]; then \
+		echo "║  LOONGARCH64_FIRMWARE_DIR = $(LOONGARCH64_FIRMWARE_DIR)"; \
+		echo "║  LOONGARCH64_EFI_CODE     = $(LOONGARCH64_EFI_CODE)"; \
+		echo "║  LOONGARCH64_BOOT_EFI     = $(LOONGARCH64_BOOT_EFI)"; \
+		echo "║  LOONGARCH64_QEMU_MODE     = $(LOONGARCH64_QEMU_MODE)  (kernel|uefi; ZBM+UEFI only)"; \
+	fi
+	@echo "╚══════════════════════════════════════════════╝"
+	@if [ "$(ARCH)" = "aarch64" ]; then \
+		if [ -d "$(FIRMWARE_DIR)" ]; then \
+			echo "  EDK2 nightly firmware: $(FIRMWARE_DIR)"; \
+		else \
+			echo "  ⚠ EDK2 firmware not found. Run: make fetch-firmware"; \
+		fi; \
+	fi
+	@if [ "$(ARCH)" = "loongarch64" ]; then \
+		if [ -f "$(LOONGARCH64_EFI_CODE)" ]; then \
+			echo "  LoongArch UEFI: $(LOONGARCH64_EFI_CODE) (OK)"; \
+		else \
+			echo "  ⚠ LoongArch UEFI missing: $(LOONGARCH64_EFI_CODE)"; \
+			echo "     Set LOONGARCH64_FIRMWARE_DIR or run: make fetch-firmware"; \
+		fi; \
+	fi
+
+# ══════════════════════════════════════════════════════
+#  configure: interactive helper to edit build.conf
+# ══════════════════════════════════════════════════════
+
+configure:
+	@python3 $(ROOT_DIR)/scripts/configure.py
+
+# ══════════════════════════════════════════════════════
+#  help
+# ══════════════════════════════════════════════════════
+
+help:
+	@echo "ZirconOSAero v$(VERSION) — NT 6.1 (Windows 7) style, ZBM-only boot"
+	@echo ""
+	@echo "Configuration (edit build.conf or override via CLI):"
+	@echo "  make show-config            Show current build.conf settings"
+	@echo "  make configure              Interactive configuration wizard"
+	@echo ""
+	@echo "Build:"
+	@echo "  make                        Build & run (using build.conf)"
+	@echo "  make build                  Build kernel only"
+	@echo "  make build-release          Build kernel (ReleaseSafe)"
+	@echo "  make build-desktop          Build desktop theme (EXE + LIB + DLL)"
+	@echo "  make build-desktop-all      Build all desktop themes"
+	@echo "  make build-desktop-dll      Build desktop theme DLL only"
+	@echo "  make iso                    Build UEFI bootable ISO (ZBM, xorriso; no GRUB)"
+	@echo "  make build-zbm-uefi        Build ZBM UEFI application"
+	@echo "  make build-zbm-bios        Build ZBM BIOS components"
+	@echo "  make build-zbm-disk        Build ZBM bootable disk images"
+	@echo "  make build-esp             Build EFI System Partition image"
+	@echo ""
+	@echo "Run (auto-selects from build.conf):"
+	@echo "  make run                    Build + run per build.conf"
+	@echo "  make run-debug              Run with GDB server on :1234"
+	@echo "  make run-aarch64            UEFI boot on QEMU AArch64 (EDK2 nightly)"
+	@echo "  make run-loongarch64        QEMU LoongArch64（默认: -kernel 直启 ELF，串口日志）"
+	@echo "  make run-loongarch64-autozbm  LoongArch UEFI + expect 自动在 Shell 中启动 ZBM（需 apt install expect）"
+	@echo "  make run-aarch64-debug      AArch64 + GDB on :1234"
+	@echo "  make run-loongarch64-debug  LoongArch64 + GDB on :1234"
+	@echo ""
+	@echo "Override examples:"
+	@echo "  make DESKTOP=aero                        Aero desktop (default)"
+	@echo "  make BOOT_METHOD=mbr BOOTLOADER=zbm      BIOS/MBR + ZBM (raw disk)"
+	@echo "  make BOOT_METHOD=uefi BOOTLOADER=zbm     UEFI + ZBM (ESP)"
+	@echo "  make DESKTOP=none                        Text/CMD mode"
+	@echo ""
+	@echo "Test:"
+	@echo "  make test                   Run all tests"
+	@echo "  make test-kernel            Kernel ELF verification tests"
+	@echo "  make test-config            Build configuration tests"
+	@echo "  make test-boot              Boot combination tests"
+	@echo ""
+	@echo "Firmware:"
+	@echo "  make fetch-firmware         Download EDK2 nightly UEFI firmware"
+	@echo "  make fetch-loongarch-boot-efi  LoongArch: BOOTLOONGARCH64.EFI (EDK2 Shell, 可选备用)"
+	@echo ""
+	@echo "Resources:"
+	@echo "  make fonts                  Fetch fonts"
+	@echo "  make fetch-themes           Clone all theme repos"
+	@echo "  make resources              List theme resources"
+	@echo "  make clean                  Remove build artifacts"
+	@echo ""
+	@echo "Boot Paths (ZBM only):"
+	@echo "  ZBM  (BIOS/MBR): BIOS -> MBR -> VBR -> Stage2 -> ZBM -> kernel"
+	@echo "  ZBM  (UEFI/GPT): UEFI -> ESP -> BOOT*.EFI -> ZBM -> kernel"
+	@echo "  AArch64 (UEFI):  EDK2 nightly -> ESP -> BOOTAA64.EFI -> kernel"
+	@echo "  LoongArch64:     仅 ZBM+UEFI（ESP）；BOOT_METHOD=mbr 时 QEMU -kernel 直启（开发）"
+
+# ══════════════════════════════════════════════════════
+#  Build kernel
+# ══════════════════════════════════════════════════════
+
+build:
+	@echo "[ZirconOS] Building kernel (arch=$(ARCH), optimize=$(OPTIMIZE), desktop=$(DESKTOP))..."
+	@mkdir -p $(TMP_DIR)/kernel-prefix $(TMP_DIR)/zig-cache
+	cd $(ROOT_DIR) && zig build \
+		-Doptimize=$(OPTIMIZE) \
+		-Darch=$(ARCH) \
+		-Ddebug=$(DEBUG_LOG) \
+		-Denable_idt=$(ENABLE_IDT) \
+		-Ddefault_desktop=$(DESKTOP) \
+		--cache-dir $(TMP_DIR)/zig-cache \
+		--prefix $(TMP_DIR)/kernel-prefix
+	@echo "[ZirconOS] Stripping debug sections..."
+ifeq ($(ARCH),loongarch64)
+	@cp -f $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
+	@echo "[ZirconOS] (loongarch64: copied ELF; --strip-debug skipped: host objcopy/zig objcopy lack full support)"
+else
+	objcopy --strip-debug $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
+endif
+	@echo "[ZirconOS] Kernel: $(KERNEL_ELF)"
+
+build-release:
+	@$(MAKE) build OPTIMIZE=ReleaseSafe
+
+# ══════════════════════════════════════════════════════
+#  Build desktop theme
+# ══════════════════════════════════════════════════════
+
+build-desktop:
+	@echo "[ZirconOS] Building desktop theme: $(DESKTOP) (EXE + LIB + DLL)..."
+	@if [ "$(DESKTOP)" = "none" ]; then \
+		echo "[ZirconOS] DESKTOP=none, skipping desktop build"; \
+	elif [ -d "$(THEME_DIR)" ]; then \
+		cd $(THEME_DIR) && zig build -Doptimize=$(OPTIMIZE) && \
+		cd $(THEME_DIR) && zig build dll -Doptimize=$(OPTIMIZE); \
+	else \
+		echo "[ZirconOS] Theme directory not found: $(THEME_DIR)"; \
+	fi
+
+build-desktop-all:
+	@echo "[ZirconOS] Building all desktop themes (EXE + LIB + DLL)..."
+	@for theme in classic luna aero modern fluent sunvalley; do \
+		dir="$(ROOT_DIR)/src/desktop/$$theme"; \
+		if [ -d "$$dir" ]; then \
+			echo "[ZirconOS]   Building $$theme..."; \
+			cd "$$dir" && zig build -Doptimize=$(OPTIMIZE) && \
+			cd "$$dir" && zig build dll -Doptimize=$(OPTIMIZE); \
+		else \
+			echo "[ZirconOS]   Skipping $$theme (not found: $$dir)"; \
+		fi; \
+	done
+
+build-desktop-dll:
+	@echo "[ZirconOS] Building desktop theme DLL: $(DESKTOP)..."
+	@if [ "$(DESKTOP)" = "none" ]; then \
+		echo "[ZirconOS] DESKTOP=none, skipping DLL build"; \
+	elif [ -d "$(THEME_DIR)" ]; then \
+		cd $(THEME_DIR) && zig build dll -Doptimize=$(OPTIMIZE); \
+	else \
+		echo "[ZirconOS] Theme directory not found: $(THEME_DIR)"; \
+	fi
+
+# ══════════════════════════════════════════════════════
+#  ZBM UEFI Boot Application
+# ══════════════════════════════════════════════════════
+
+build-zbm-uefi:
+ifeq ($(ARCH),loongarch64)
+	@$(MAKE) build-zbm-loongarch-uefi
+else
+	@echo "[ZirconOS] Building ZBM UEFI boot application..."
+	@mkdir -p $(UEFI_PREFIX) $(UEFI_CACHE)
+	cd $(ROOT_DIR) && zig build uefi \
+		-Doptimize=$(OPTIMIZE) \
+		-Darch=$(ARCH) \
+		-Ddesktop=$(DESKTOP) \
+		--cache-dir $(UEFI_CACHE) \
+		--prefix $(UEFI_PREFIX)
+	@echo "[ZirconOS] UEFI app: $(UEFI_EFI)"
+endif
+
+# LoongArch ZBM：Zig 源码 boot/zbm/uefi/main_loongarch64.zig → .o，再 GNU-EFI 链接为 PE/COFF .efi
+build-zbm-loongarch-uefi:
+	@echo "[ZirconOS] LoongArch ZBM UEFI: GNU-EFI link $(ZBM_LOONGARCH64_O) → $(ZBM_LOONGARCH64_EFI)"
+	@test -f "$(ZBM_LOONGARCH64_O)" || { echo "[ZirconOS] ERROR: missing $(ZBM_LOONGARCH64_O). Run: make build ARCH=loongarch64" >&2; exit 1; }
+	@if [ ! -f "$(ROOT_DIR)/gnu-efi/loongarch64-built/crt0-efi-loongarch64.o" ]; then \
+		echo "[ZirconOS] 首次需要 GNU-EFI（LoongArch），正在执行 fetch-gnu-efi …"; \
+		$(MAKE) fetch-gnu-efi; \
+	fi
+	@bash $(ROOT_DIR)/scripts/build/zbm-loongarch64-efi.sh "$(ZBM_LOONGARCH64_O)" "$(ZBM_LOONGARCH64_EFI)"
+
+# ══════════════════════════════════════════════════════
+#  ZBM BIOS Boot Components (MBR + VBR + Stage2)
+# ══════════════════════════════════════════════════════
+
+build-zbm-bios:
+	@echo "[ZirconOS] Building ZBM BIOS components..."
+	@mkdir -p $(ZBM_DIR)
+	as --32 -o $(ZBM_DIR)/mbr.o $(ZBM_SRC_DIR)/mbr.s
+	ld -m elf_i386 -T $(ROOT_DIR)/link/mbr.ld -o $(ZBM_DIR)/mbr.elf $(ZBM_DIR)/mbr.o 2>/dev/null || true
+	objcopy -O binary $(ZBM_DIR)/mbr.o $(ZBM_DIR)/mbr.bin
+	truncate -s 512 $(ZBM_DIR)/mbr.bin
+	@echo "[ZirconOS] MBR: $(ZBM_DIR)/mbr.bin"
+	as --32 -o $(ZBM_DIR)/vbr.o $(ZBM_SRC_DIR)/vbr.s
+	ld -m elf_i386 -T $(ROOT_DIR)/link/vbr.ld -o $(ZBM_DIR)/vbr.elf $(ZBM_DIR)/vbr.o 2>/dev/null || true
+	objcopy -O binary $(ZBM_DIR)/vbr.o $(ZBM_DIR)/vbr.bin
+	truncate -s 512 $(ZBM_DIR)/vbr.bin
+	@echo "[ZirconOS] VBR: $(ZBM_DIR)/vbr.bin"
+	as --32 -o $(ZBM_DIR)/stage2.o $(ZBM_SRC_DIR)/stage2.s
+	ld -m elf_i386 -T $(ROOT_DIR)/link/zbm_bios.ld -o $(ZBM_DIR)/stage2.elf $(ZBM_DIR)/stage2.o 2>/dev/null || true
+	objcopy -O binary $(ZBM_DIR)/stage2.o $(ZBM_DIR)/stage2.bin
+	@echo "[ZirconOS] Stage2: $(ZBM_DIR)/stage2.bin"
+	cd $(ROOT_DIR) && zig build zbm \
+		-Doptimize=ReleaseSmall \
+		-Darch=x86_64 \
+		--cache-dir $(TMP_DIR)/zig-cache \
+		--prefix $(TMP_DIR)/kernel-prefix 2>/dev/null || true
+	@echo "[ZirconOS] ZBM BIOS components built"
+
+# ══════════════════════════════════════════════════════
+#  ZBM Disk Images (MBR + GPT)
+# ══════════════════════════════════════════════════════
+
+build-zbm-disk: build-zbm-bios build
+	@echo "[ZirconOS] Building ZBM disk images (128 MB)..."
+	@mkdir -p $(BUILD_DIR)
+	dd if=/dev/zero of=$(ZBM_DISK_MBR) bs=1M count=128 status=none
+	dd if=$(ZBM_DIR)/mbr.bin of=$(ZBM_DISK_MBR) bs=512 count=1 conv=notrunc status=none
+	@python3 -c "\
+	import struct; \
+	entry = struct.pack('<BBBBBBBBII', \
+	    0x80, 0x00, 0x21, 0x00, \
+	    0xFE, 0xFE, 0xFF, 0xFF, \
+	    2048, (128*1024*1024//512)-2048); \
+	f = open('$(ZBM_DISK_MBR)', 'r+b'); \
+	f.seek(446); f.write(entry); f.close()" 2>/dev/null || true
+	dd if=$(ZBM_DIR)/vbr.bin of=$(ZBM_DISK_MBR) bs=512 seek=2048 count=1 conv=notrunc status=none
+	dd if=$(ZBM_DIR)/stage2.bin of=$(ZBM_DISK_MBR) bs=512 seek=2049 conv=notrunc status=none
+	dd if=$(KERNEL_ELF) of=$(ZBM_DISK_MBR) bs=512 seek=2113 conv=notrunc status=none
+	@echo "[ZirconOS] MBR disk: $(ZBM_DISK_MBR)"
+	@if command -v sgdisk >/dev/null 2>&1; then \
+		dd if=/dev/zero of=$(ZBM_DISK_GPT) bs=1M count=128 status=none; \
+		sgdisk --clear $(ZBM_DISK_GPT) >/dev/null 2>&1; \
+		sgdisk -n 1:2048:67583 -t 1:EF00 -c 1:"EFI System" $(ZBM_DISK_GPT) >/dev/null 2>&1; \
+		sgdisk -n 2:67584:0 -t 2:8300 -c 2:"ZirconOS System" $(ZBM_DISK_GPT) >/dev/null 2>&1; \
+		dd if=$(ZBM_DIR)/stage2.bin of=$(ZBM_DISK_GPT) bs=512 seek=34 conv=notrunc status=none; \
+		echo "[ZirconOS] GPT disk: $(ZBM_DISK_GPT)"; \
+	else \
+		echo "[ZirconOS] sgdisk not found, skipping GPT (apt install gdisk)"; \
+	fi
+
+# ══════════════════════════════════════════════════════
+#  ESP (EFI System Partition) Image
+# ══════════════════════════════════════════════════════
+
+build-esp: build
+ifneq ($(ARCH),loongarch64)
+	@$(MAKE) build-zbm-uefi
+else
+	@$(MAKE) build-zbm-loongarch-uefi
+endif
+	@echo "[ZirconOS] Building ESP image (arch=$(ARCH))..."
+ifeq ($(ARCH),loongarch64)
+	@ZIRCON_BUILD_TMP="$(TMP_DIR)" BOOTLOADER=$(BOOTLOADER) \
+		ZBM_LOONGARCH64_EFI="$(ZBM_LOONGARCH64_EFI)" \
+		bash $(ROOT_DIR)/scripts/build/mkesp-loongarch64.sh "$(ESP_IMG)" "$(KERNEL_ELF)" "$(ZBM_LOONGARCH64_EFI)"
+else
+	dd if=/dev/zero of=$(ESP_IMG) bs=1M count=64 status=none
+	mformat -i $(ESP_IMG) ::
+	mmd -i $(ESP_IMG) ::/EFI
+	mmd -i $(ESP_IMG) ::/EFI/BOOT
+ifeq ($(ARCH),aarch64)
+	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTAA64.EFI
+else
+	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTX64.EFI
+endif
+	@if [ -f "$(KERNEL_ELF)" ]; then \
+		mmd -i $(ESP_IMG) ::/boot 2>/dev/null || true; \
+		mcopy -i $(ESP_IMG) $(KERNEL_ELF) ::/boot/kernel.elf 2>/dev/null || true; \
+	fi
+endif
+	@echo "[ZirconOS] ESP image: $(ESP_IMG)"
+
+# ══════════════════════════════════════════════════════
+#  ISO (UEFI only — embedded FAT ESP + xorriso; no GRUB)
+# ══════════════════════════════════════════════════════
+
+iso: build
+ifneq ($(ARCH),x86_64)
+	$(error iso target is implemented for ARCH=x86_64 UEFI ISO only; use build-esp + QEMU for $(ARCH))
+endif
+	@echo "[ZirconOSAero] Building UEFI ISO (ZBM, desktop=$(DESKTOP))..."
+	@$(MAKE) build-zbm-uefi
+	@test -f "$(UEFI_EFI)" || { echo "[ZirconOSAero] missing $(UEFI_EFI) (zig build uefi failed?)" >&2; exit 1; }
+	@mkdir -p $(RELEASE_DIR)
+	bash $(ROOT_DIR)/scripts/build/mkiso-uefi-zbm.sh "$(ISO)" "$(KERNEL_ELF)" "$(UEFI_EFI)"
+	@echo "[ZirconOSAero] ISO: $(ISO)"
+
+# ══════════════════════════════════════════════════════
+#  run: unified entry point driven by build.conf
+# ══════════════════════════════════════════════════════
+
+run:
+ifeq ($(ARCH),aarch64)
+	@$(MAKE) run-aarch64 ARCH=aarch64
+else ifeq ($(ARCH),loongarch64)
+	@$(MAKE) run-loongarch64 ARCH=loongarch64
+else
+ifeq ($(BOOT_METHOD),uefi)
+	@$(MAKE) _run-zbm-uefi
+else
+	@$(MAKE) _run-zbm-bios
+endif
+endif
+
+# ── ZBM + BIOS ──
+_run-zbm-bios: build-zbm-disk
+	@echo "[ZirconOS] BIOS + ZBM → $(DESKTOP) Desktop ($(QEMU_MEM))..."
+	qemu-system-x86_64 \
+		-drive format=raw,file=$(ZBM_DISK_MBR) \
+		$(QEMU_COMMON)
+
+# ── ZBM + UEFI ──
+_run-zbm-uefi: build-esp
+	@echo "[ZirconOS] UEFI + ZBM → $(DESKTOP) Desktop ($(QEMU_MEM))..."
+	@mkdir -p $(TMP_DIR)
+	@cp -f $(OVMF_VARS) $(TMP_DIR)/OVMF_VARS.fd
+	qemu-system-x86_64 \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
+		-drive if=pflash,format=raw,file=$(TMP_DIR)/OVMF_VARS.fd \
+		-drive format=raw,file=$(ESP_IMG) \
+		$(QEMU_COMMON_X86)
+
+# ── Debug mode (GDB) — ZBM MBR disk (same kernel path as build-zbm-disk) ──
+run-debug: build-zbm-disk
+	@echo "[ZirconOSAero] Debug mode (GDB on :1234), ZBM MBR disk..."
+	qemu-system-x86_64 \
+		-drive format=raw,file=$(ZBM_DISK_MBR) \
+		$(QEMU_COMMON) \
+		-s -S
+
+# ══════════════════════════════════════════════════════
+#  AArch64 boot (EDK2 nightly firmware)
+# ══════════════════════════════════════════════════════
+
+run-aarch64: build-esp
+	@echo "[ZirconOS] AArch64 UEFI boot (EDK2 nightly firmware)..."
+	@if [ ! -f "$(AARCH64_EFI_CODE)" ]; then \
+		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		exit 1; \
+	fi
+	@mkdir -p $(TMP_DIR)
+	@cp -f $(AARCH64_EFI_VARS) $(TMP_DIR)/AARCH64_VARS.fd
+	qemu-system-aarch64 \
+		$(QEMU_COMMON_AARCH64) \
+		-drive if=pflash,format=raw,readonly=on,file=$(AARCH64_EFI_CODE) \
+		-drive if=pflash,format=raw,file=$(TMP_DIR)/AARCH64_VARS.fd \
+		-drive format=raw,file=$(BUILD_DIR)/esp-aarch64.img
+
+run-aarch64-debug: build-esp
+	@echo "[ZirconOS] AArch64 debug mode (GDB on :1234)..."
+	@if [ ! -f "$(AARCH64_EFI_CODE)" ]; then \
+		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		exit 1; \
+	fi
+	@mkdir -p $(TMP_DIR)
+	@cp -f $(AARCH64_EFI_VARS) $(TMP_DIR)/AARCH64_VARS.fd
+	qemu-system-aarch64 \
+		$(QEMU_COMMON_AARCH64) \
+		-drive if=pflash,format=raw,readonly=on,file=$(AARCH64_EFI_CODE) \
+		-drive if=pflash,format=raw,file=$(TMP_DIR)/AARCH64_VARS.fd \
+		-drive format=raw,file=$(BUILD_DIR)/esp-aarch64.img \
+		-s -S
+
+# ══════════════════════════════════════════════════════
+#  LoongArch64 boot (EDK2 nightly firmware)
+# ══════════════════════════════════════════════════════
+
+# run-loongarch64：默认 QEMU -kernel 直启 ELF（串口日志）；uefi 模式需固件 + build-esp。
+run-loongarch64:
+ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
+	@$(MAKE) build ARCH=loongarch64
+	@echo "[ZirconOS] LoongArch64 QEMU: -kernel $(KERNEL_ELF) (LOONGARCH64_QEMU_MODE=kernel)"
+	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
+		-kernel $(KERNEL_ELF) \
+		-device virtio-gpu-pci
+else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
+	@$(MAKE) build-esp ARCH=loongarch64
+	@echo "[ZirconOS] LoongArch64 UEFI — $(LOONGARCH64_EFI_CODE)"
+	@if [ ! -f "$(LOONGARCH64_EFI_CODE)" ]; then \
+		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		exit 1; \
+	fi
+	@echo "[ZirconOS] 多数发行版 qemu 无 pflash，BdsDxe 常进 Shell；用 python3 自动输入 ZBM 路径（EFI/BOOT/...）。"
+	ZIRCON_ESP="$(ESP_IMG_LOONGARCH64)" LOONGARCH64_EFI_CODE="$(LOONGARCH64_EFI_CODE)" QEMU_MEM_LOONGARCH64="$(QEMU_MEM_LOONGARCH64)" \
+		python3 -u $(ROOT_DIR)/scripts/qemu/loongarch-uefi-autorun.py
+else
+	$(error LOONGARCH64_QEMU_MODE must be kernel or uefi (got $(LOONGARCH64_QEMU_MODE)))
+endif
+
+# 强制 UEFI 模式并启动（python3 自动输入 ZBM）；与 run-loongarch64 在 BOOT_METHOD=uefi 时等价。
+run-loongarch64-autozbm:
+	@$(MAKE) run-loongarch64 ARCH=loongarch64 LOONGARCH64_QEMU_MODE=uefi
+
+run-loongarch64-debug:
+ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
+	@$(MAKE) build ARCH=loongarch64
+	@echo "[ZirconOS] LoongArch64 debug: -kernel + GDB :1234"
+	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
+		-kernel $(KERNEL_ELF) \
+		-device virtio-gpu-pci \
+		-s -S
+else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
+	@$(MAKE) build-esp ARCH=loongarch64
+	@echo "[ZirconOS] LoongArch64 UEFI debug (GDB on :1234)..."
+	@if [ ! -f "$(LOONGARCH64_EFI_CODE)" ]; then \
+		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		exit 1; \
+	fi
+	@echo "[ZirconOS] 若需手动：fs0: 然后 EFI/BOOT/BOOTLOONGARCH64.EFI（正斜杠）"
+	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
+		-bios $(LOONGARCH64_EFI_CODE) \
+		$(QEMU_LOONGARCH64_DEVICES) \
+		-s -S
+else
+	$(error LOONGARCH64_QEMU_MODE must be kernel or uefi (got $(LOONGARCH64_QEMU_MODE)))
+endif
+
+# ══════════════════════════════════════════════════════
+#  Resources / Fonts / Themes
+# ══════════════════════════════════════════════════════
+
+fonts:
+	@if [ -x $(ROOT_DIR)/scripts/fonts/fetch-fonts.sh ]; then \
+		$(ROOT_DIR)/scripts/fonts/fetch-fonts.sh; \
+	else \
+		echo "[ZirconOS] $(ROOT_DIR)/scripts/fonts/fetch-fonts.sh not found"; \
+	fi
+
+resources:
+	@echo "[ZirconOS] Resources for $(DESKTOP) theme:"
+	@if [ -n "$(THEME_DIR)" ] && [ -d "$(THEME_DIR)/resources" ]; then \
+		echo "  Wallpapers:"; \
+		ls -1 $(THEME_DIR)/resources/wallpapers/*.svg 2>/dev/null | sed 's/.*\//    /' || echo "    (none)"; \
+		echo "  Icons:"; \
+		ls -1 $(THEME_DIR)/resources/icons/*.svg 2>/dev/null | sed 's/.*\//    /' || echo "    (none)"; \
+		echo "  Cursors:"; \
+		ls -1 $(THEME_DIR)/resources/cursors/*.svg 2>/dev/null | sed 's/.*\//    /' || echo "    (none)"; \
+		echo "  Themes:"; \
+		ls -1 $(THEME_DIR)/resources/themes/*.theme 2>/dev/null | sed 's/.*\//    /' || echo "    (none)"; \
+	else \
+		echo "  (theme directory not found)"; \
+	fi
+
+fetch-themes:
+	@echo "[ZirconOS] 桌面主题与资源: src/desktop/<主题>/resources/，共享字体: src/fonts/"
+
+# GNU-EFI（LoongArch ZBM 链接所需 crt0/lds → gnu-efi/loongarch64-built/）
+fetch-gnu-efi:
+	@echo "[ZirconOS] Fetching GNU-EFI (for LoongArch BOOTLOONGARCH64.EFI link)..."
+	@bash $(ROOT_DIR)/scripts/build/fetch-gnu-efi.sh "$(ROOT_DIR)/gnu-efi/loongarch64-built"
+
+# ── Firmware (EDK2 nightly from https://retrage.github.io/edk2-nightly/) ──
+fetch-firmware:
+	@echo "[ZirconOS] Downloading EDK2 nightly firmware..."
+	@bash $(ROOT_DIR)/scripts/build/fetch-firmware.sh $(FIRMWARE_DIR)
+
+# LoongArch 默认可移动介质引导名 \EFI\BOOT\BOOTLOONGARCH64.EFI（无则固件直接进 Shell）
+fetch-loongarch-boot-efi:
+	@echo "[ZirconOS] Downloading BOOTLOONGARCH64.EFI (EDK2 RELEASE Shell → standard boot path)..."
+	@mkdir -p $(FIRMWARE_DIR)
+	curl -fSL -o $(FIRMWARE_DIR)/BOOTLOONGARCH64.EFI \
+		https://retrage.github.io/edk2-nightly/bin/RELEASELOONGARCH64_Shell.efi
+	@echo "[ZirconOS] Installed: $(FIRMWARE_DIR)/BOOTLOONGARCH64.EFI"
+
+# ══════════════════════════════════════════════════════
+#  Tests
+# ══════════════════════════════════════════════════════
+
+test: test-kernel test-config test-boot
+	@echo "[ZirconOS] All tests complete."
+
+test-kernel: build
+	@echo "[ZirconOS] Running kernel verification tests..."
+	@mkdir -p $(TEST_RESULTS_DIR)
+	python3 $(ROOT_DIR)/tests/run_all.py \
+		--kernel $(KERNEL_ELF) \
+		--output-dir $(TEST_RESULTS_DIR)
+
+test-config:
+	@echo "[ZirconOS] Running build configuration tests..."
+	@mkdir -p $(TEST_RESULTS_DIR)
+	python3 $(ROOT_DIR)/tests/test_build_config.py \
+		--project-root $(ROOT_DIR) \
+		--output-dir $(TEST_RESULTS_DIR)
+
+test-boot:
+	@echo "[ZirconOS] Running boot combination tests..."
+	@mkdir -p $(TEST_RESULTS_DIR)
+	python3 $(ROOT_DIR)/tests/test_boot_combinations.py \
+		--project-root $(ROOT_DIR) \
+		--output-dir $(TEST_RESULTS_DIR)
+
+# ══════════════════════════════════════════════════════
+#  Clean
+# ══════════════════════════════════════════════════════
+
+clean:
+	@echo "[ZirconOS] Cleaning..."
+	rm -rf $(BUILD_DIR)
+	rm -rf $(ROOT_DIR)/.zig-cache $(ROOT_DIR)/zig-out
+	@for theme in classic luna aero modern fluent sunvalley; do \
+		dir="$(ROOT_DIR)/src/desktop/$$theme"; \
+		[ -d "$$dir" ] && rm -rf "$$dir/.zig-cache" "$$dir/zig-out" 2>/dev/null; \
+	done || true
+	@echo "[ZirconOS] Clean done"

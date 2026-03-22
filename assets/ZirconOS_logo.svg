@@ -1,0 +1,152 @@
+<svg viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', 'SF Pro Display', system-ui, sans-serif">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0f1b2e"/>
+      <stop offset="100%" stop-color="#060c14"/>
+    </radialGradient>
+    <linearGradient id="crystalMain" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a8d8f0"/>
+      <stop offset="30%" stop-color="#3fa3d8"/>
+      <stop offset="70%" stop-color="#1667b0"/>
+      <stop offset="100%" stop-color="#0a3a6a"/>
+    </linearGradient>
+    <linearGradient id="facetLeft" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0a3a6a"/>
+      <stop offset="100%" stop-color="#1e5fa0"/>
+    </linearGradient>
+    <linearGradient id="facetRight" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#5bc2f0"/>
+      <stop offset="100%" stop-color="#2a8fd4"/>
+    </linearGradient>
+    <linearGradient id="facetTop" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#d0eeff"/>
+      <stop offset="100%" stop-color="#7cc8f0"/>
+    </linearGradient>
+    <linearGradient id="facetBottom" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0d4a80"/>
+      <stop offset="100%" stop-color="#07243d"/>
+    </linearGradient>
+    <radialGradient id="zigGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f7a41d" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#f7a41d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="innerShine" x1="10%" y1="10%" x2="70%" y2="70%">
+      <stop offset="0%" stop-color="white" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glowBlue" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowOrange" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7cc8f0"/>
+      <stop offset="50%" stop-color="#d0eeff"/>
+      <stop offset="100%" stop-color="#7cc8f0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="500" height="500" fill="url(#bg)"/>
+
+  <!-- Star field -->
+  <circle cx="60" cy="50" r="1" fill="white" opacity="0.4"/>
+  <circle cx="120" cy="90" r="1.2" fill="white" opacity="0.3"/>
+  <circle cx="420" cy="60" r="1" fill="white" opacity="0.5"/>
+  <circle cx="460" cy="130" r="0.8" fill="white" opacity="0.3"/>
+  <circle cx="30" cy="200" r="1" fill="white" opacity="0.35"/>
+  <circle cx="480" cy="300" r="1.1" fill="white" opacity="0.4"/>
+  <circle cx="80" cy="380" r="0.9" fill="white" opacity="0.3"/>
+  <circle cx="440" cy="400" r="1" fill="white" opacity="0.35"/>
+  <circle cx="180" cy="30" r="0.8" fill="white" opacity="0.4"/>
+  <circle cx="360" cy="20" r="1" fill="white" opacity="0.3"/>
+  <circle cx="50" cy="330" r="0.7" fill="white" opacity="0.3"/>
+  <circle cx="475" cy="200" r="0.9" fill="white" opacity="0.4"/>
+
+  <!-- Orbital rings (kernel architecture layers) -->
+  <ellipse cx="250" cy="228" rx="185" ry="52" fill="none" stroke="#1e5fa0" stroke-width="0.8" stroke-dasharray="6 4" opacity="0.35" transform="rotate(-20,250,228)"/>
+  <ellipse cx="250" cy="228" rx="170" ry="45" fill="none" stroke="#f7a41d" stroke-width="0.7" stroke-dasharray="4 6" opacity="0.22" transform="rotate(15,250,228)"/>
+  <ellipse cx="250" cy="228" rx="195" ry="36" fill="none" stroke="#5bc2f0" stroke-width="0.6" stroke-dasharray="8 5" opacity="0.18" transform="rotate(40,250,228)"/>
+
+  <!-- Orange glow (Zig language) -->
+  <circle cx="250" cy="220" r="130" fill="url(#zigGlow)" filter="url(#glowOrange)"/>
+
+  <!-- ===== ZIRCON GEM ===== -->
+  <!-- Pavilion (bottom) -->
+  <polygon points="250,328 132,210 192,250" fill="url(#facetLeft)" opacity="0.9"/>
+  <polygon points="250,328 368,210 308,250" fill="url(#facetRight)" opacity="0.9"/>
+  <polygon points="250,328 192,250 308,250" fill="url(#facetBottom)" opacity="0.95"/>
+
+  <!-- Girdle -->
+  <polygon points="132,210 167,194 333,194 368,210 308,250 192,250" fill="url(#crystalMain)" opacity="0.95"/>
+
+  <!-- Crown -->
+  <polygon points="132,210 167,194 202,130 177,148" fill="url(#facetLeft)" opacity="0.9"/>
+  <polygon points="368,210 333,194 298,130 323,148" fill="url(#facetRight)" opacity="0.9"/>
+  <polygon points="167,194 202,130 250,113 250,144" fill="#4aa8d8" opacity="0.92"/>
+  <polygon points="333,194 298,130 250,113 250,144" fill="#5fbce8" opacity="0.92"/>
+
+  <!-- Table (top flat face) -->
+  <polygon points="177,148 202,130 250,113 298,130 323,148 308,170 250,174 192,170" fill="url(#facetTop)" opacity="0.97" filter="url(#glowBlue)"/>
+
+  <!-- Inner shine on table -->
+  <polygon points="192,148 212,134 250,124 285,136 300,154 250,161 206,157" fill="url(#innerShine)" opacity="0.55"/>
+
+  <!-- ===== Z on table ===== -->
+  <g filter="url(#softGlow)">
+    <!-- shadow Z -->
+    <line x1="222" y1="137" x2="278" y2="137" stroke="#0a2a50" stroke-width="6" stroke-linecap="round"/>
+    <line x1="278" y1="137" x2="222" y2="163" stroke="#0a2a50" stroke-width="6" stroke-linecap="round"/>
+    <line x1="222" y1="163" x2="278" y2="163" stroke="#0a2a50" stroke-width="6" stroke-linecap="round"/>
+    <!-- bright Z -->
+    <line x1="220" y1="135" x2="276" y2="135" stroke="white" stroke-width="2.8" stroke-linecap="round" opacity="0.75"/>
+    <line x1="276" y1="135" x2="220" y2="161" stroke="white" stroke-width="2.8" stroke-linecap="round" opacity="0.75"/>
+    <line x1="220" y1="161" x2="276" y2="161" stroke="white" stroke-width="2.8" stroke-linecap="round" opacity="0.75"/>
+  </g>
+
+  <!-- Facet boundary lines -->
+  <g stroke="#89d4f5" stroke-width="0.9" fill="none" opacity="0.55">
+    <line x1="177" y1="148" x2="132" y2="210"/>
+    <line x1="323" y1="148" x2="368" y2="210"/>
+    <line x1="192" y1="170" x2="132" y2="210"/>
+    <line x1="308" y1="170" x2="368" y2="210"/>
+    <line x1="132" y1="210" x2="192" y2="250"/>
+    <line x1="368" y1="210" x2="308" y2="250"/>
+    <line x1="192" y1="250" x2="250" y2="328"/>
+    <line x1="308" y1="250" x2="250" y2="328"/>
+    <line x1="250" y1="174" x2="250" y2="328"/>
+    <line x1="192" y1="170" x2="192" y2="250"/>
+    <line x1="308" y1="170" x2="308" y2="250"/>
+  </g>
+
+  <!-- Sparkle points -->
+  <circle cx="250" cy="113" r="3.5" fill="white" opacity="0.95"/>
+  <circle cx="177" cy="148" r="2.2" fill="white" opacity="0.7"/>
+  <circle cx="323" cy="148" r="2.2" fill="white" opacity="0.7"/>
+  <circle cx="132" cy="210" r="1.8" fill="#89d4f5" opacity="0.6"/>
+  <circle cx="368" cy="210" r="1.8" fill="#89d4f5" opacity="0.6"/>
+
+  <!-- Orange accent sparkles (Zig nod) -->
+  <g fill="#f7a41d" filter="url(#softGlow)">
+    <circle cx="392" cy="175" r="4" opacity="0.85"/>
+    <circle cx="108" cy="272" r="3" opacity="0.7"/>
+    <circle cx="384" cy="258" r="2.5" opacity="0.6"/>
+    <!-- 4-point star top-right -->
+    <path d="M355,105 L358,112 L365,112 L359,117 L361,124 L355,120 L349,124 L351,117 L345,112 L352,112 Z" opacity="0.7" transform="scale(0.75) translate(122,42)"/>
+  </g>
+
+  <!-- ===== Text ===== -->
+  <text x="250" y="382" text-anchor="middle" font-size="40" font-weight="700" letter-spacing="5" fill="url(#textGrad)">ZirconOS</text>
+  <text x="250" y="408" text-anchor="middle" font-size="11" font-weight="400" letter-spacing="3.5" fill="#5bc2f0" opacity="0.65">NT-INSPIRED · ZIG · HYBRID MICROKERNEL</text>
+
+  <!-- Version badge -->
+  <rect x="215" y="424" width="70" height="19" rx="9.5" fill="#1e5fa0" opacity="0.45"/>
+  <text x="250" y="437" text-anchor="middle" font-size="10" font-weight="600" letter-spacing="2.5" fill="#a8d8f0" opacity="0.9">v 1.0</text>
+</svg>

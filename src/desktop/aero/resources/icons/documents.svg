@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="folderBack" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1A8A8A"/>
+      <stop offset="100%" stop-color="#0D5C5C"/>
+    </linearGradient>
+    <linearGradient id="folderFront" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ABFBF" stop-opacity="0.9"/>
+      <stop offset="60%" stop-color="#1A8A8A" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#0D5C5C" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="tabGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3FA3D8"/>
+      <stop offset="100%" stop-color="#2ABFBF"/>
+    </linearGradient>
+    <linearGradient id="paperGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E0E8E8"/>
+    </linearGradient>
+    <linearGradient id="docGlassHL" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="docShadow">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="#0D5C5C" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <!-- Folder back panel -->
+  <path d="M5 14 L5 40 Q5 42 7 42 L41 42 Q43 42 43 40 L43 14 Z" fill="url(#folderBack)" filter="url(#docShadow)"/>
+  <!-- Tab -->
+  <path d="M5 14 L5 10 Q5 8 7 8 L18 8 Q20 8 21 10 L23 14 Z" fill="url(#tabGrad)"/>
+  <!-- Paper documents sticking out -->
+  <rect x="12" y="11" width="18" height="22" rx="1" fill="url(#paperGrad)" transform="rotate(-3 21 22)"/>
+  <line x1="15" y1="16" x2="27" y2="15.5" stroke="#B0D0D0" stroke-width="0.6" transform="rotate(-3 21 22)"/>
+  <line x1="15" y1="19.5" x2="27" y2="19" stroke="#B0D0D0" stroke-width="0.6" transform="rotate(-3 21 22)"/>
+  <line x1="15" y1="23" x2="24" y2="22.6" stroke="#B0D0D0" stroke-width="0.6" transform="rotate(-3 21 22)"/>
+  <rect x="14" y="12" width="18" height="22" rx="1" fill="url(#paperGrad)" transform="rotate(2 23 23)"/>
+  <line x1="17" y1="17" x2="29" y2="17.3" stroke="#B0D0D0" stroke-width="0.6" transform="rotate(2 23 23)"/>
+  <line x1="17" y1="20.5" x2="29" y2="20.8" stroke="#B0D0D0" stroke-width="0.6" transform="rotate(2 23 23)"/>
+  <line x1="17" y1="24" x2="26" y2="24.2" stroke="#B0D0D0" stroke-width="0.6" transform="rotate(2 23 23)"/>
+  <!-- Folder front panel (translucent glass) -->
+  <path d="M5 20 Q5 18 7 18 L41 18 Q43 18 43 20 L43 40 Q43 42 41 42 L7 42 Q5 42 5 40 Z" fill="url(#folderFront)"/>
+  <!-- Glass highlight on front -->
+  <path d="M5 20 Q5 18 7 18 L41 18 Q43 18 43 20 L43 28 Q30 22 5 28 Z" fill="url(#docGlassHL)"/>
+  <!-- Crystal facet line -->
+  <line x1="5" y1="30" x2="43" y2="26" stroke="#A8F0F0" stroke-opacity="0.15" stroke-width="0.5"/>
+</svg>

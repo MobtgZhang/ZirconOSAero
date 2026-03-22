@@ -1,0 +1,54 @@
+; ZirconOS Aero Graphite Theme Configuration
+; Windows 7 Aero Glass Graphite color scheme for ZirconOS
+
+[Theme]
+DisplayName=ZirconOS Aero Graphite
+ThemeId=aero-graphite
+Version=1.0.0
+Author=ZirconOS Project
+Description=Windows 7 Aero Glass graphite color variant
+
+[VisualStyles]
+Path=resources\themes\zircon-aero
+ColorStyle=Graphite
+Size=NormalSize
+
+[Desktop]
+Wallpaper=
+TileWallpaper=0
+WallpaperStyle=10
+Pattern=
+BackgroundColor=0x3A3A44
+
+[Colors]
+ActiveTitle=80 80 100
+InactiveTitle=170 170 180
+ActiveBorder=72 72 88
+InactiveBorder=200 200 200
+WindowFrame=100 100 100
+WindowBackground=255 255 255
+ButtonFace=240 240 240
+ButtonHighlight=255 255 255
+ButtonShadow=160 160 160
+Highlight=96 112 152
+HighlightText=255 255 255
+
+[DWM]
+Composition=1
+ColorizationColor=6B505064
+ColorizationColorBalance=70
+ColorizationBlurBalance=49
+ColorizationGlassReflectionIntensity=40
+ColorizationOpaqueBlend=0
+
+[Taskbar]
+GlassEnabled=1
+GlassTint=0x30 0x30 0x38
+GlassOpacity=190
+Height=40
+
+[StartMenu]
+Style=aero
+GlassEnabled=1
+Width=380
+Height=420

@@ -1,0 +1,98 @@
+<svg viewBox="0 0 1920 1200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="charBg" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0%" stop-color="#2A1E10"/>
+      <stop offset="40%" stop-color="#3A2E18"/>
+      <stop offset="80%" stop-color="#443820"/>
+      <stop offset="100%" stop-color="#2E2214"/>
+    </linearGradient>
+
+    <radialGradient id="warmCenter" cx="50%" cy="45%" r="45%">
+      <stop offset="0%" stop-color="#A07830" stop-opacity="0.12"/>
+      <stop offset="50%" stop-color="#806020" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#2A1E10" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="brushGrad1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#C89848" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#C89848" stop-opacity="0.06"/>
+      <stop offset="50%" stop-color="#E0B060" stop-opacity="0.10"/>
+      <stop offset="80%" stop-color="#C89848" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#C89848" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="brushGrad2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8A6428" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#8A6428" stop-opacity="0.08"/>
+      <stop offset="60%" stop-color="#A07830" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#8A6428" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="inkGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E0B060" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#2A1E10" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="softBlur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="15"/>
+    </filter>
+
+    <filter id="inkBlur" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="1200" fill="url(#charBg)"/>
+  <rect width="1920" height="1200" fill="url(#warmCenter)"/>
+
+  <!-- Calligraphic brush strokes (abstract character forms) -->
+  <g filter="url(#softBlur)" opacity="0.6">
+    <path d="M-100,380 C200,300 500,350 800,280 C1100,210 1400,300 1700,240 C1970,190 1970,250 1970,250 L1970,450 C1700,400 1400,440 1100,400 C800,360 500,420 200,380 Z" fill="url(#brushGrad1)"/>
+    <path d="M-100,520 C250,460 550,490 850,430 C1150,370 1450,450 1750,400 C1970,370 1970,410 1970,410 L1970,580 C1700,550 1350,590 1050,550 C750,510 400,560 100,530 Z" fill="url(#brushGrad2)"/>
+  </g>
+
+  <!-- Abstract figure silhouettes (crystal people) -->
+  <g opacity="0.08" filter="url(#inkBlur)">
+    <!-- Figure 1 - standing form -->
+    <path d="M500,400 C510,350 520,320 530,300 C540,280 550,260 540,240 C530,220 520,220 510,230 C500,250 490,280 485,300 C480,330 478,370 480,400 Z" fill="#E0B060" stroke="#C89848" stroke-width="1"/>
+    <ellipse cx="525" cy="230" rx="18" ry="20" fill="#E0B060"/>
+
+    <!-- Figure 2 -->
+    <path d="M1300,440 C1310,390 1320,360 1330,340 C1340,320 1350,300 1340,280 C1330,260 1320,260 1310,270 C1300,290 1290,320 1285,340 C1280,370 1278,410 1280,440 Z" fill="#C89848" stroke="#A07830" stroke-width="1"/>
+    <ellipse cx="1325" cy="270" rx="16" ry="18" fill="#C89848"/>
+
+    <!-- Figure 3 - smaller, distant -->
+    <path d="M900,480 C905,450 910,430 915,420 C920,410 925,395 920,385 C915,375 910,375 905,380 C900,390 895,410 892,420 C889,440 888,470 890,480 Z" fill="#A07830" stroke="#8A6428" stroke-width="0.8"/>
+    <ellipse cx="912" cy="380" rx="12" ry="14" fill="#A07830"/>
+  </g>
+
+  <!-- Ink wash texture strips -->
+  <g filter="url(#inkBlur)" opacity="0.06">
+    <rect x="300" y="600" width="3" height="300" rx="1.5" fill="#E0B060" transform="rotate(-5 301.5 750)"/>
+    <rect x="700" y="550" width="2.5" height="350" rx="1.25" fill="#C89848" transform="rotate(3 701.25 725)"/>
+    <rect x="1100" y="580" width="2" height="280" rx="1" fill="#A07830" transform="rotate(-2 1101 720)"/>
+    <rect x="1500" y="620" width="3" height="260" rx="1.5" fill="#E0B060" transform="rotate(4 1501.5 750)"/>
+  </g>
+
+  <!-- Scattered seal marks (abstract square stamps) -->
+  <g opacity="0.06">
+    <rect x="1600" y="850" width="40" height="40" rx="2" fill="none" stroke="#C05030" stroke-width="2"/>
+    <line x1="1610" y1="862" x2="1630" y2="862" stroke="#C05030" stroke-width="1.5"/>
+    <line x1="1610" y1="878" x2="1630" y2="878" stroke="#C05030" stroke-width="1.5"/>
+
+    <rect x="250" y="900" width="32" height="32" rx="2" fill="none" stroke="#C05030" stroke-width="1.5" opacity="0.5"/>
+  </g>
+
+  <!-- Ambient warm particles -->
+  <g opacity="0.4">
+    <circle cx="300" cy="300" r="2" fill="#E0B060" opacity="0.3"/>
+    <circle cx="600" cy="250" r="1.5" fill="#C89848" opacity="0.25"/>
+    <circle cx="900" cy="350" r="2.5" fill="#A07830" opacity="0.2"/>
+    <circle cx="1200" cy="280" r="1.8" fill="#E0B060" opacity="0.25"/>
+    <circle cx="1500" cy="330" r="2" fill="#C89848" opacity="0.2"/>
+    <circle cx="1800" cy="300" r="1.5" fill="#A07830" opacity="0.3"/>
+  </g>
+
+  <!-- Bottom warm fade -->
+  <rect x="0" y="1050" width="1920" height="150" fill="#2A1E10" opacity="0.3"/>
+</svg>

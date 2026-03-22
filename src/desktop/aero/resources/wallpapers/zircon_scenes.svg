@@ -1,0 +1,117 @@
+<svg viewBox="0 0 1920 1200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="scnBg" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0%" stop-color="#1A1030"/>
+      <stop offset="40%" stop-color="#281848"/>
+      <stop offset="70%" stop-color="#301858"/>
+      <stop offset="100%" stop-color="#201040"/>
+    </linearGradient>
+
+    <radialGradient id="stageLight" cx="50%" cy="35%" r="40%">
+      <stop offset="0%" stop-color="#6040A0" stop-opacity="0.15"/>
+      <stop offset="50%" stop-color="#402880" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#1A1030" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="magentaGlow" cx="60%" cy="50%" r="30%">
+      <stop offset="0%" stop-color="#A040C0" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#1A1030" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="curtainGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6040A0" stop-opacity="0.12"/>
+      <stop offset="50%" stop-color="#402880" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#1A1030" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <linearGradient id="spotGrad" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#8060C0" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#1A1030" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="ribbonGrad1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6040A0" stop-opacity="0"/>
+      <stop offset="25%" stop-color="#8060C0" stop-opacity="0.10"/>
+      <stop offset="50%" stop-color="#A080E0" stop-opacity="0.16"/>
+      <stop offset="75%" stop-color="#8060C0" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#6040A0" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="ribbonGrad2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#A040C0" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#C060E0" stop-opacity="0.08"/>
+      <stop offset="70%" stop-color="#A040C0" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#A040C0" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="spotBlur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="20"/>
+    </filter>
+
+    <filter id="curtainBlur" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+
+    <filter id="gentleGlow" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="1200" fill="url(#scnBg)"/>
+  <rect width="1920" height="1200" fill="url(#stageLight)"/>
+  <rect width="1920" height="1200" fill="url(#magentaGlow)"/>
+
+  <!-- Spotlight beams -->
+  <g filter="url(#spotBlur)" opacity="0.7">
+    <path d="M960,0 L800,600 L1120,600 Z" fill="url(#spotGrad)" opacity="0.5"/>
+    <path d="M400,0 L280,500 L520,500 Z" fill="url(#spotGrad)" opacity="0.3"/>
+    <path d="M1520,0 L1400,500 L1640,500 Z" fill="url(#spotGrad)" opacity="0.3"/>
+  </g>
+
+  <!-- Curtain drapes (left and right) -->
+  <g filter="url(#curtainBlur)">
+    <path d="M0,0 L0,900 C40,880 80,900 120,860 C160,820 140,750 120,700 C100,600 80,500 100,400 C120,300 60,200 80,100 C100,50 60,0 60,0 Z" fill="url(#curtainGrad)" opacity="0.5"/>
+    <path d="M1920,0 L1920,900 C1880,880 1840,900 1800,860 C1760,820 1780,750 1800,700 C1820,600 1840,500 1820,400 C1800,300 1860,200 1840,100 C1820,50 1860,0 1860,0 Z" fill="url(#curtainGrad)" opacity="0.5"/>
+  </g>
+
+  <!-- Flowing ribbon trails -->
+  <g filter="url(#spotBlur)" opacity="0.5">
+    <path d="M-50,400 C250,320 550,380 850,300 C1150,220 1400,340 1700,280 C1970,230 1970,280 1970,280 L1970,420 C1700,380 1400,420 1100,390 C800,360 500,410 200,380 Z" fill="url(#ribbonGrad1)"/>
+    <path d="M-50,530 C300,470 600,500 900,440 C1200,380 1500,460 1800,410 C1970,390 1970,420 1970,420 L1970,570 C1700,540 1350,580 1050,550 C750,520 400,560 100,540 Z" fill="url(#ribbonGrad2)"/>
+  </g>
+
+  <!-- Stage floor reflection -->
+  <g>
+    <rect x="0" y="750" width="1920" height="450" fill="#1A1030" opacity="0.3"/>
+    <g filter="url(#spotBlur)" opacity="0.08">
+      <ellipse cx="960" cy="850" rx="400" ry="50" fill="#8060C0"/>
+      <ellipse cx="400" cy="880" rx="200" ry="30" fill="#6040A0"/>
+      <ellipse cx="1520" cy="880" rx="200" ry="30" fill="#6040A0"/>
+    </g>
+  </g>
+
+  <!-- Crystal chandelier silhouette -->
+  <g opacity="0.06" filter="url(#gentleGlow)">
+    <line x1="960" y1="0" x2="960" y2="120" stroke="#A080E0" stroke-width="2"/>
+    <polygon points="920,120 960,100 1000,120 990,160 930,160" fill="#8060C0" stroke="#A080E0" stroke-width="0.5"/>
+    <line x1="930" y1="160" x2="920" y2="200" stroke="#A080E0" stroke-width="0.8"/>
+    <line x1="960" y1="160" x2="960" y2="210" stroke="#A080E0" stroke-width="0.8"/>
+    <line x1="990" y1="160" x2="1000" y2="200" stroke="#A080E0" stroke-width="0.8"/>
+    <circle cx="920" cy="204" r="3" fill="#C8A0F0" opacity="0.5"/>
+    <circle cx="960" cy="214" r="3" fill="#C8A0F0" opacity="0.5"/>
+    <circle cx="1000" cy="204" r="3" fill="#C8A0F0" opacity="0.5"/>
+  </g>
+
+  <!-- Sparkle effects -->
+  <g opacity="0.5">
+    <circle cx="350" cy="280" r="2" fill="#C8A0F0" opacity="0.3"/>
+    <circle cx="650" cy="200" r="1.5" fill="#A080E0" opacity="0.25"/>
+    <circle cx="960" cy="250" r="2.5" fill="#C8A0F0" opacity="0.3"/>
+    <circle cx="1280" cy="220" r="1.8" fill="#8060C0" opacity="0.25"/>
+    <circle cx="1580" cy="300" r="2" fill="#A080E0" opacity="0.2"/>
+    <circle cx="200" cy="400" r="1.5" fill="#C060E0" opacity="0.2"/>
+    <circle cx="1750" cy="380" r="1.5" fill="#C060E0" opacity="0.2"/>
+  </g>
+
+  <rect x="0" y="1080" width="1920" height="120" fill="#1A1030" opacity="0.3"/>
+</svg>

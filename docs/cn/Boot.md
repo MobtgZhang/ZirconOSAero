@@ -233,6 +233,7 @@ _start64 (64-bit long mode)
 - QEMU `virt` 首段 RAM 为 **0 .. 0x10000000（256MB）**。内核链接在 **`link/loongarch64.ld`** 的 **`0x00200000`**，整块映像（含大 `.bss`）落在该段内，便于 `load_elf` 映射；**不要**把内核放在 **0x80000000** 起的高物理地址：低 256MB 与高内存（`VIRT_HIGHMEM_BASE`）之间存在**空洞**，BSS 跨越空洞时会出现未映射内存、启动即非法写。
 - 入口 **`crt0.S`** 在调用 `kernel_main` 前设置 **栈指针**（LoongArch LP64D 使用 `$r3` 作栈），否则首条用栈指令会访问无效地址。
 - **`make run-loongarch64`**（`LOONGARCH64_QEMU_MODE=kernel`）使用 **`qemu-system-loongarch64 -kernel build/tmp/kernel.elf`**，**无需** EDK2/GRUB/ESP，**串口** `-serial stdio` 即可看到 `klog` 输出。
+- **显示（kernel 模式）**：ramfb 用于图形 framebuffer。在部分 QEMU 版本中，LoongArch（与 RISC-V 类似）可能出现「Guest has not initialized the display (yet)」持续显示，即使 guest 已报告 ramfb 设置成功——此为已知的 QEMU 行为。**变通**：使用 `LOONGARCH64_QEMU_MODE=uefi`，搭配 `make build-esp` 与固件；UEFI + virtio-gpu-pci 可提供正常显示。
 
 ### 8.2 UEFI + ESP（仅 ZBM）
 

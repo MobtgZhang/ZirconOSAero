@@ -233,6 +233,7 @@ Kernel command-line examples:
 - QEMU `virt` first RAM segment is **0 .. 0x10000000 (256MB)**. The kernel is linked at **`0x00200000`** in `link/loongarch64.ld` so the image (including large `.bss`) fits in that segment. **Do not** place the kernel at **0x80000000**: there is a **hole** between low 256MB and high memory (`VIRT_HIGHMEM_BASE`); BSS spanning the hole causes unmapped writes at boot.  
 - Entry **`crt0.S`** must set the **stack pointer** before `kernel_main` (LoongArch LP64D uses `$r3` for stack).  
 - **`make run-loongarch64`** with `LOONGARCH64_QEMU_MODE=kernel` uses **`qemu-system-loongarch64 -kernel build/tmp/kernel.elf`** — no EDK2/GRUB/ESP; **serial** `-serial stdio` shows `klog`.  
+- **Display (kernel mode)**: ramfb is used for the graphical framebuffer. On some QEMU versions, LoongArch (like RISC-V) may keep showing "Guest has not initialized the display (yet)" even when the guest reports ramfb setup success — a known QEMU behavior. **Workaround**: use `LOONGARCH64_QEMU_MODE=uefi` with `make build-esp` and firmware; UEFI + virtio-gpu-pci provides a working display.
 
 ### 8.2 UEFI + ESP (ZBM only)
 

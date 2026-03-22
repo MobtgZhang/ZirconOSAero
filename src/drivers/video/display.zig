@@ -330,7 +330,6 @@ pub fn getTaskbarHeight() i32 {
 /// shows the pointer at the correct position (typically screen center).
 pub fn syncCursorFromMouse() void {
     if (!use_framebuffer or !fb.isInitialized()) return;
-    if (!is_x86) return;
     const mouse = @import("../input/mouse.zig");
     const mx = mouse.getX();
     const my = mouse.getY();

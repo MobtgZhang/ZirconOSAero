@@ -73,6 +73,19 @@ pub fn serialWrite(s: []const u8) void {
     }
 }
 
+pub fn serialReadByte() ?u8 {
+    if (@hasDecl(impl, "serialReadByte")) {
+        return impl.serialReadByte();
+    }
+    return null;
+}
+
+pub fn stallApproxMs(ms: u32) void {
+    if (@hasDecl(impl, "stallApproxMs")) {
+        impl.stallApproxMs(ms);
+    }
+}
+
 pub fn initGdt(kernel_stack: u64) void {
     if (@hasDecl(impl, "initGdt")) {
         impl.initGdt(kernel_stack);

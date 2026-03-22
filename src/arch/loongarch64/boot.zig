@@ -68,11 +68,19 @@ const static_mmap = [_]MmapEntry{
 /// 与 boot/zbm/uefi/main_loongarch64.zig 中 ZIRCON_LOONGARCH_EFI_MAGIC 一致（小端四字符 `zirc`）
 pub const ZIRCON_LOONGARCH_EFI_MAGIC: u32 = 0x6372697A;
 
+/// 与 boot/stub/efi_stub.c 中 EfiHandoff 布局一致（含 GOP framebuffer）
 pub const EfiHandoff = extern struct {
     magic: u32,
     version: u32,
     boot_mode: u32,
     desktop: u32,
+    /// v2: GOP framebuffer
+    fb_addr: u64 = 0,
+    fb_pitch: u32 = 0,
+    fb_width: u32 = 0,
+    fb_height: u32 = 0,
+    fb_bpp: u8 = 0,
+    _pad: [3]u8 = [_]u8{0} ** 3,
 };
 
 fn desktopFromU32(id: u32) DesktopTheme {
@@ -97,5 +105,15 @@ pub fn parse(magic: u32, info_addr: usize) ?BootInfo {
     var bi = BootInfo{};
     bi.desktop_theme = desktopFromU32(h.desktop);
     bi.boot_mode = bootModeFromU32(h.boot_mode);
+    if (h.fb_addr != 0 and h.fb_width > 0 and h.fb_height > 0 and h.fb_bpp > 0) {
+        bi.fb_info = .{
+            .addr = h.fb_addr,
+            .pitch = if (h.fb_pitch > 0) h.fb_pitch else h.fb_width * @as(u32, h.fb_bpp) / 8,
+            .width = h.fb_width,
+            .height = h.fb_height,
+            .bpp = h.fb_bpp,
+            .fb_type = 2,
+        };
+    }
     return bi;
 }

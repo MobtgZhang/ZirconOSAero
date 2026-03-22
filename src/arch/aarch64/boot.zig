@@ -1,70 +1,42 @@
-//! AArch64 boot info
-//! Provides defaults for QEMU virt machine (RAM at 0x40000000, 256MB)
+//! AArch64：QEMU `-kernel` 默认参数，或 UEFI ZBM 经 Multiboot2 信息块传入。
 
-pub const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0;
+const mb2 = @import("../../boot/multiboot2_parse.zig");
 
-pub const BootMode = enum {
-    normal,
-    cmd,
-    powershell,
-    desktop,
-};
+pub const MULTIBOOT2_BOOTLOADER_MAGIC = mb2.MULTIBOOT2_BOOTLOADER_MAGIC;
+pub const BootInfoHeader = mb2.BootInfoHeader;
+pub const TagHeader = mb2.TagHeader;
+pub const TagType = mb2.TagType;
+pub const BasicMemInfoTag = mb2.BasicMemInfoTag;
+pub const MmapEntryType = mb2.MmapEntryType;
+pub const MmapEntry = mb2.MmapEntry;
+pub const MmapTag = mb2.MmapTag;
+pub const FramebufferInfo = mb2.FramebufferInfo;
+pub const DesktopTheme = mb2.DesktopTheme;
+pub const BootMode = mb2.BootMode;
+pub const BootInfo = mb2.BootInfo;
 
-pub const DesktopTheme = enum {
-    none,
-    aero,
-};
-
-pub const MmapEntryType = enum(u32) {
-    available = 1,
-    reserved = 2,
-    acpi_reclaimable = 3,
-    nvs = 4,
-    bad = 5,
-    _,
-};
-
-pub const MmapEntry = struct {
-    base_addr: u64,
-    length: u64,
-    type: u32,
-    reserved: u32,
-};
-
-pub const FramebufferInfo = struct {
-    addr: u64,
-    pitch: u32,
-    width: u32,
-    height: u32,
-    bpp: u8,
-    fb_type: u8,
-};
-
-pub const BootInfo = struct {
-    mem_lower_kb: u32 = 0,
-    mem_upper_kb: u32 = 262144,
-    mmap_ptr: [*]const u8 = @as([*]const u8, @ptrFromInt(0x1000)),
-    mmap_entry_count: usize = 1,
-    mmap_entry_size: u32 = @sizeOf(MmapEntry),
-    boot_mode: BootMode = .normal,
-    desktop_theme: DesktopTheme = .none,
-    fb_info: ?FramebufferInfo = null,
-
-    pub fn getMmapEntry(_: BootInfo, i: usize) ?MmapEntry {
-        if (i < static_mmap.len) return static_mmap[i];
-        return null;
-    }
-};
-
-const static_mmap = [_]MmapEntry{
+/// QEMU virt：RAM 自 0x4000_0000，内核映像约在 0x4008_0000 之后。
+const default_mmap = [_]mb2.MmapEntry{
     .{
         .base_addr = 0x40000000 + 0x400000,
         .length = 256 * 1024 * 1024 - 0x400000,
-        .type = @intFromEnum(MmapEntryType.available),
+        .type = @intFromEnum(mb2.MmapEntryType.available),
         .reserved = 0,
     },
 };
 
-pub fn parse(_: u32, _: usize) ?BootInfo {
-    return BootInfo{};
+fn qemuVirtDefault() BootInfo {
+    return .{
+        .mem_lower_kb = 0,
+        .mem_upper_kb = 262144,
+        .mmap_ptr = @ptrCast(&default_mmap),
+        .mmap_entry_count = default_mmap.len,
+        .mmap_entry_size = @sizeOf(mb2.MmapEntry),
+    };
+}
+
+pub fn parse(magic: u32, phys_addr: usize) ?BootInfo {
+    if (magic != mb2.MULTIBOOT2_BOOTLOADER_MAGIC) return qemuVirtDefault();
+    if (phys_addr == 0) return qemuVirtDefault();
+    return mb2.parseMultiboot2(phys_addr) orelse qemuVirtDefault();
 }

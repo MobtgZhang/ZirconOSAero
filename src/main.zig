@@ -519,8 +519,94 @@ fn desktopThemeName(theme: @import("arch.zig").impl.boot.DesktopTheme) []const u
     };
 }
 
+// ── ZBM 串口菜单（与 boot/zbm/uefi/main_loongarch64.zig 样式对齐：箭头、边框、描述、ENTER/ESC）──
+fn showZbmStyleBootMenu() void {
+    const COUNTDOWN_SEC: u32 = 10;
+    var countdown: u32 = COUNTDOWN_SEC;
+    var selected: usize = 0;
+    const entries = [_][]const u8{
+        "ZirconOSAero (NT 6.1)",
+        "ZirconOSAero (NT 6.1) [Debug Mode]",
+        "ZirconOSAero [Safe Mode]",
+        "ZirconOSAero [Safe Mode with Networking]",
+        "ZirconOSAero [Recovery Console]",
+        "ZirconOSAero [CMD Shell]",
+    };
+    const descriptions = [_][]const u8{
+        "Start ZirconOS normally.",
+        "Start with debug logging and serial output enabled.",
+        "Start with minimal drivers and services.",
+        "Start in safe mode with network support.",
+        "Start the Recovery Console for system repair.",
+        "Use the last configuration that worked.",
+    };
+    var esc_seq: u32 = 0;
+
+    var need_full_redraw: bool = true;
+    while (true) {
+        if (need_full_redraw) {
+            klog.info("", .{});
+            klog.info("                    ZirconOS Boot Manager                                     ", .{});
+            klog.info("                         Version 6.1                                             ", .{});
+            klog.info("", .{});
+            klog.info("    Choose an operating system to start:", .{});
+            klog.info("    (Use the arrow keys to highlight your choice, then press ENTER.)", .{});
+            klog.info("", .{});
+            for (entries, 0..) |e, i| {
+                if (i == selected) {
+                    klog.info("  > %s", .{e});
+                } else {
+                    klog.info("    %s", .{e});
+                }
+            }
+            klog.info("", .{});
+            klog.info("    ------------------------------------------------------------------------", .{});
+            klog.info("", .{});
+            klog.info("    %s", .{descriptions[selected]});
+            klog.info("", .{});
+            klog.info("  ENTER=Choose  |  ESC=Advanced Options  |  F1=Help                          ", .{});
+            klog.info("", .{});
+            klog.info("    Architecture: loongarch64  |  Boot: kernel direct (-kernel)", .{});
+            need_full_redraw = false;
+        }
+        if (countdown == 0) break;
+        klog.info("    Seconds until the highlighted choice will be started automatically: %u", .{countdown});
+        var tick: u32 = 0;
+        while (tick < 10) : (tick += 1) {
+            arch.stallApproxMs(100);
+            if (arch.serialReadByte()) |c| {
+                if (c == 0x1B) {
+                    esc_seq = 1;
+                } else if (esc_seq == 1 and c == '[') {
+                    esc_seq = 2;
+                } else if (esc_seq == 2) {
+                    esc_seq = 0;
+                    if (c == 'A' and selected > 0) {
+                        selected -= 1;
+                        need_full_redraw = true;
+                    }
+                    if (c == 'B' and selected + 1 < entries.len) {
+                        selected += 1;
+                        need_full_redraw = true;
+                    }
+                } else {
+                    esc_seq = 0;
+                    if (c == '\r' or c == '\n') return;
+                    if (c >= '1' and c <= '6') {
+                        const idx = @as(usize, c - '1');
+                        if (idx < entries.len) return;
+                    }
+                }
+            }
+        }
+        countdown -= 1;
+    }
+}
+
 fn startGeneric(magic: u32, info_addr: usize) noreturn {
     const boot = arch.impl.boot;
+    const drivers = @import("drivers/mod.zig");
+    const display = drivers.video.display;
     const frame = @import("mm/frame.zig");
     const heap = @import("mm/heap.zig");
     const server = @import("servers/server.zig");
@@ -569,7 +655,62 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     klog.info("--- Phase 1: Boot + Early Kernel ---", .{});
 
-    const boot_info = boot.parse(magic, info_addr);
+    var boot_info = boot.parse(magic, info_addr);
+
+    var alloc: frame.FrameAllocator = undefined;
+    // LoongArch：尽早初始化 alloc + VM，map 2GB 以覆盖 GOP framebuffer（可能 >512MB）
+    if (builtin.target.cpu.arch == .loongarch64) {
+        alloc.init(boot_info, 0x400000, 0);
+        const vm = @import("mm/vm.zig");
+        const paging = arch.impl.paging;
+        if (vm.createAddressSpace(&alloc)) |ks| {
+            var kernel_space = ks;
+            const identity_pages: usize = (2 * 1024 * 1024 * 1024) / paging.page_size;
+            var i: usize = 0;
+            while (i < identity_pages) : (i += 1) {
+                const virt = i * paging.page_size;
+                const flags = vm.MapFlags{ .writable = true, .executable = true };
+                _ = kernel_space.mapPage(virt, virt, flags);
+            }
+            kernel_space.activate();
+            klog.info("VM: LoongArch identity map 0-2GB (covers GOP fb)", .{});
+        }
+        const ramfb = @import("hal/loongarch64/ramfb.zig");
+        const has_gop_fb = if (boot_info) |b| (b.fb_info != null and b.fb_info.?.addr != 0) else false;
+        if (!has_gop_fb) {
+            if (ramfb.setup()) |fb_i| {
+                var bi = boot_info orelse boot.BootInfo{};
+                bi.fb_info = .{
+                    .addr = fb_i.addr,
+                    .pitch = fb_i.pitch,
+                    .width = fb_i.width,
+                    .height = fb_i.height,
+                    .bpp = fb_i.bpp,
+                    .fb_type = fb_i.fb_type,
+                };
+                boot_info = bi;
+                klog.info("ramfb: %ux%u@%u addr=0x%x", .{
+                    fb_i.width, fb_i.height, fb_i.bpp,
+                    @as(usize, @truncate(fb_i.addr)),
+                });
+            } else {
+                klog.warn("ramfb: setup failed, no framebuffer", .{});
+            }
+        } else {
+            klog.info("Display: using GOP framebuffer from handoff (same surface as firmware)", .{});
+        }
+    }
+
+    // LoongArch -kernel 直启无 EFI handoff 时显示 ZBM 风格操作系统选择菜单（串口）
+    const zircon_magic: u32 = 0x6372697A;
+    const has_handoff = (magic == zircon_magic and info_addr != 0);
+    if (builtin.target.cpu.arch == .loongarch64 and !has_handoff) {
+        showZbmStyleBootMenu();
+    }
+
+    if (builtin.target.cpu.arch != .loongarch64) {
+        alloc.init(boot_info, 0x400000, 0);
+    }
     if (boot_info) |info| {
         klog.info("Memory: upper=%u KB, mmap_entries=%u", .{
             info.mem_upper_kb, info.mmap_entry_count,
@@ -579,8 +720,6 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         });
     }
 
-    var alloc: frame.FrameAllocator = undefined;
-    alloc.init(boot_info, 0x400000, 0);
     klog.info("Frame allocator: total_frames=%u, frame_size=%u", .{
         alloc.total_frames, frame.FRAME_SIZE,
     });
@@ -650,6 +789,105 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     klog.info("", .{});
 
     audio.playEvent(.startup);
+
+    const boot_mode: boot.BootMode = if (boot_info) |info| info.boot_mode else .normal;
+    var desktop_theme: boot.DesktopTheme = if (boot_info) |info| info.desktop_theme else .none;
+    if (desktop_theme == .none) {
+        desktop_theme = desktopThemeFromBuildDefault(@import("build_options").default_desktop);
+    }
+    var has_gfx_fb = false;
+    if (boot_info) |info| {
+        if (info.fb_info) |fb_i| {
+            if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) has_gfx_fb = true;
+        }
+    }
+    klog.info("Display: has_gfx_fb=%s desktop=%s", .{
+        if (has_gfx_fb) "yes" else "no",
+        desktopThemeName(desktop_theme),
+    });
+
+    if (boot_mode == .desktop or (boot_mode == .normal and has_gfx_fb and desktop_theme != .none)) {
+        klog.info("Desktop: Preparing %s theme...", .{desktopThemeName(desktop_theme)});
+        arch.impl.framebuffer.setConsoleEnabled(false);
+        if (boot_info) |binfo| {
+            if (binfo.fb_info) |fb_i| {
+                if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) {
+                    const fb_addr = @as(usize, @truncate(fb_i.addr));
+                    if (!arch.impl.framebuffer.isReady()) {
+                        arch.initFramebuffer(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp);
+                    }
+                    arch.impl.framebuffer.setConsoleEnabled(false);
+                    drivers.initDesktopMode(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp, builtin.target.cpu.arch != .x86_64);
+                    if (builtin.target.cpu.arch == .loongarch64) {
+                        const mouse = @import("drivers/input/mouse.zig");
+                        mouse.setScreenBounds(@intCast(fb_i.width), @intCast(fb_i.height));
+                        mouse.setPosition(@intCast(fb_i.width / 2), @intCast(fb_i.height / 2));
+                    }
+                    display.syncCursorFromMouse();
+                    display.clearFramebuffer();
+                }
+            }
+        }
+        display.setTheme(.aero);
+        display.initAeroDwm();
+        klog.info("Desktop: DWM Aero compositor initialized", .{});
+        if (drivers.isDesktopReady()) {
+            klog.info("Desktop: Rendering %s theme", .{desktopThemeName(desktop_theme)});
+            const ps_proc = @import("ps/process.zig");
+            if (ps_proc.createSystemProcess(&alloc, "dwm.exe")) |shell| {
+                const ui_tid = ps_proc.allocTid() orelse 0;
+                ps_proc.registerDesktopSession(shell.pid, ui_tid);
+                ps_proc.setCurrentProcess(shell.pid);
+            }
+            display.renderAeroDesktop();
+            display.present();
+            const mouse = @import("drivers/input/mouse.zig");
+            var prev_buttons: u8 = 0;
+            var last_draw_cx: i32 = -32768;
+            var last_draw_cy: i32 = -32768;
+            while (true) {
+                mouse.poll();
+                var needs_ui_paint = false;
+                var hover_changed = false;
+                while (mouse.popEvent()) |event| {
+                    const cur_buttons = event.buttons;
+                    hover_changed = display.handleMouseMove(mouse.getX(), mouse.getY()) or hover_changed;
+                    if (event.scroll != 0) needs_ui_paint = true;
+                    if (cur_buttons != prev_buttons) {
+                        if (cur_buttons & 0x01 != 0 and prev_buttons & 0x01 == 0) {
+                            if (display.handleClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
+                        }
+                        if (cur_buttons & 0x01 == 0 and prev_buttons & 0x01 != 0) {
+                            display.handleMouseRelease();
+                            needs_ui_paint = true;
+                        }
+                        if (cur_buttons & 0x02 != 0 and prev_buttons & 0x02 == 0) {
+                            if (display.handleRightClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
+                        }
+                    }
+                    prev_buttons = cur_buttons;
+                }
+                if (display.handleDesktopHotkeys()) needs_ui_paint = true;
+                const mx = mouse.getX();
+                const my = mouse.getY();
+                const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
+                const need_paint = needs_ui_paint or hover_changed or pixel_moved or
+                    mouse.isInterpolating() or mouse.hasCursorMoved();
+                if (need_paint) {
+                    display.renderDesktopFrame();
+                    display.present();
+                    last_draw_cx = mouse.getX();
+                    last_draw_cy = mouse.getY();
+                } else if (mouse.hasCursorMoved()) {
+                    mouse.clearCursorMoved();
+                }
+                mouse.poll();
+                arch.waitForInterrupt();
+            }
+        } else {
+            klog.err("Desktop: isDesktopReady=false", .{});
+        }
+    }
 
     cmd_mod.runBootSequence();
     ps_mod.runBootSequence();

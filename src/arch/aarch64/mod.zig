@@ -1,5 +1,6 @@
 pub const boot = @import("boot.zig");
 pub const paging = @import("paging.zig");
+pub const framebuffer = @import("../../hal/aarch64/framebuffer.zig");
 const uart = @import("../../hal/aarch64/uart.zig");
 const gic = @import("../../hal/aarch64/gic.zig");
 const arm_timer = @import("../../hal/aarch64/timer.zig");
@@ -7,10 +8,8 @@ const arm_timer = @import("../../hal/aarch64/timer.zig");
 pub const name: []const u8 = "aarch64";
 pub const PAGE_SIZE: usize = 4096;
 
-extern fn kernel_main(magic: u32, info_addr: usize) callconv(.c) noreturn;
-
-pub export fn _start() callconv(.c) noreturn {
-    kernel_main(0, 0);
+pub fn initFramebuffer(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8) void {
+    framebuffer.init(addr, width, height, pitch, bpp);
 }
 
 pub fn consoleWrite(s: []const u8) void {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-在 UEFI 内置 Shell 中自动输入 fs0: 与 \\EFI\\BOOT\\BOOTLOONGARCH64.EFI 以启动 ZBM。
+在 UEFI 内置 Shell 中自动输入 fs0:、cd EFI\\BOOT、再运行 BOOTLOONGARCH64.EFI 以启动 ZBM。
 
 原因：多数发行版自带的 qemu-system-loongarch64 的 virt 机不支持 pflash0/pflash1，
 仅用 -bios QEMU_EFI.fd 时无法挂载可写 NVRAM（QEMU_VARS.fd），BdsDxe 常报 Boot0001 Not Found
@@ -111,11 +111,20 @@ def main() -> None:
     buf = bytearray()
     state = "wait_shell"
     fs0_sent_at: float = 0.0
+    cd_sent_at: float = 0.0
 
     try:
         while True:
+            # 若未收到 FS0:\\>，超时后仍尝试 cd（避免 ANSI 导致匹配失败）。
             if state == "wait_fs0" and fs0_sent_at > 0 and (time.monotonic() - fs0_sent_at) > 1.6:
-                os.write(master_fd, b"EFI/BOOT/BOOTLOONGARCH64.EFI\r")
+                os.write(master_fd, b"cd EFI\\BOOT\r")
+                state = "wait_boot"
+                cd_sent_at = time.monotonic()
+                buf.clear()
+            # cd 后短延迟再输入应用名（Shell 提示符含转义序列时不可靠）。
+            if state == "wait_boot" and cd_sent_at > 0 and (time.monotonic() - cd_sent_at) > 0.9:
+                # PE/COFF 正确时由 Shell 直接启动应用（与 gnu-efi 生成物一致）。
+                os.write(master_fd, b"BOOTLOONGARCH64.EFI\r")
                 state = "forward"
                 buf.clear()
 
@@ -140,15 +149,16 @@ def main() -> None:
                 if len(buf) > 256 * 1024:
                     del buf[:-65536]
 
-                # 必须等 Shell> 出现（内置 Shell）；不要用 \\EFI\\BOOT\\...，固件会报 Unsupported，应用正斜杠。
+                # 必须等 Shell> 出现（内置 Shell）；再 fs0: → cd EFI\\BOOT → BOOTLOONGARCH64.EFI。
                 if state == "wait_shell" and b"Shell>" in buf:
                     os.write(master_fd, b"fs0:\r")
                     state = "wait_fs0"
                     fs0_sent_at = time.monotonic()
                     buf.clear()
                 elif state == "wait_fs0" and b"FS0:\\>" in buf:
-                    os.write(master_fd, b"EFI/BOOT/BOOTLOONGARCH64.EFI\r")
-                    state = "forward"
+                    os.write(master_fd, b"cd EFI\\BOOT\r")
+                    state = "wait_boot"
+                    cd_sent_at = time.monotonic()
                     buf.clear()
 
             if state == "forward" and sys.stdin.isatty() and sys.stdin.fileno() in r:

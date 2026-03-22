@@ -112,7 +112,30 @@ else
 	exit 1
 fi
 
-"${OC[@]}" --target=efi-app-loongarch64 -O binary "$TMP_SO" "$OUT"
+# 参考 AevOS：pei-loongarch64 + --subsystem=efi-app 更兼容部分 QEMU_EFI.fd（否则报 Unsupported）
+# 若 objcopy 不支持 pei-loongarch64 则回退到 efi-app-loongarch64
+EFI_TARGET="efi-app-loongarch64"
+EFI_OBJCOPY_EXTRA=()
+_PEI_TEST="$(mktemp)"
+if "${OC[@]}" -j .text --target=pei-loongarch64 "$TMP_SO" "$_PEI_TEST" 2>/dev/null; then
+	EFI_TARGET="pei-loongarch64"
+	EFI_OBJCOPY_EXTRA=(--subsystem=efi-app -j .got -j .got.plt)
+	echo "[ZirconOS] Using pei-loongarch64 + --subsystem=efi-app (AevOS 兼容)"
+fi
+rm -f "$_PEI_TEST"
+
+"${OC[@]}" \
+	-j .text -j .sdata -j .data -j .dynamic -j .rodata \
+	-j .rel -j .rela -j .rela.dyn -j .rela.plt \
+	-j .reloc -j .dynsym -j .dynstr -j .hash -j .gnu.hash -j .eh_frame \
+	"${EFI_OBJCOPY_EXTRA[@]}" \
+	--target="$EFI_TARGET" \
+	"$TMP_SO" "$OUT"
+
+# 修正 PE Subsystem 为 EFI_APPLICATION，避免固件 LoadImage 返回 Unsupported
+if [ -f "${_REPO_ROOT}/scripts/tools/fix_pe_reloc.py" ]; then
+	python3 "${_REPO_ROOT}/scripts/tools/fix_pe_reloc.py" "$OUT" 2>/dev/null && echo "[ZirconOS] fix_pe_reloc: OK"
+fi
 
 rm -f "$TMP_SO"
 ls -la "$OUT"

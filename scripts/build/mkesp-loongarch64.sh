@@ -128,4 +128,17 @@ if [ -n "${KERNEL}" ] && [ -f "${KERNEL}" ]; then
 	echo "[ZirconOS] ESP: kernel installed"
 fi
 
-# 与 x86 UEFI ESP 一致：不安装 startup.nsh；默认可移动介质路径 \EFI\BOOT\BOOTLOONGARCH64.EFI 由固件直接加载 ZBM。
+# 多数 QEMU LoongArch 固件无法从 Boot0001 直启 virtio 盘上的 PE，会退回内置 Shell。
+# 在 ESP 根目录放置 startup.nsh：Shell 倒计时结束后自动执行 ZBM（勿按 ESC 跳过）。
+# 先 cd 到 EFI\BOOT 再执行 BOOTLOONGARCH64.EFI；直接写路径 EFI/BOOT/xxx 会被 Shell 当作命令名而报错。
+if [ -n "${BOOT_EFI}" ] && [ -f "${BOOT_EFI}" ]; then
+	_STARTUP_NSH="$(mktemp)"
+	{
+		printf '%s\r\n' 'fs0:'
+		printf '%s\r\n' 'cd \EFI\BOOT'
+		printf '%s\r\n' 'BOOTLOONGARCH64.EFI'
+	} > "${_STARTUP_NSH}"
+	mcopy -i "$OUT@@$OFF" "${_STARTUP_NSH}" ::/startup.nsh
+	rm -f "${_STARTUP_NSH}"
+	echo "[ZirconOS] ESP: startup.nsh → ZBM 操作系统选择菜单（Shell 自动执行）"
+fi

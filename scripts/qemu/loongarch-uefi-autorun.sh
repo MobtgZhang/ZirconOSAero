@@ -33,7 +33,11 @@ expect {
 	timeout { exit 1 }
 }
 expect {
-	-re {FS0:.*>} { send "EFI/BOOT/BOOTLOONGARCH64.EFI\r" }
+	-re {FS0:.*>} { send "cd \\EFI\\BOOT\r" }
+	timeout { exit 1 }
+}
+expect {
+	-re {>} { send "BOOTLOONGARCH64.EFI\r" }
 	timeout { exit 1 }
 }
 interact

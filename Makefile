@@ -4,10 +4,10 @@
 # Requires: zig, qemu-system-* (per ARCH), OVMF/EDK2 firmware, xorriso, mtools, dosfstools
 
 .PHONY: all build build-release iso run run-debug \
-	build-zbm-uefi build-zbm-loongarch-uefi build-zbm-bios build-zbm-disk build-esp \
+	build-zbm-uefi build-zbm-loongarch-uefi build-zbm-riscv64-uefi build-zbm-loongarch64-stub build-zbm-bios build-zbm-disk build-esp \
 	build-desktop build-desktop-all build-desktop-dll \
-	fetch-themes fetch-firmware fetch-gnu-efi fetch-loongarch-boot-efi fonts resources \
-	run-aarch64 run-loongarch64 run-loongarch64-autozbm run-aarch64-debug run-loongarch64-debug \
+	fetch-themes fetch-firmware fetch-gnu-efi fetch-gnu-efi-riscv64 fetch-loongarch-boot-efi fonts resources \
+	run-aarch64 run-riscv64 run-loongarch64 run-loongarch64-autozbm run-aarch64-debug run-riscv64-debug run-loongarch64-debug \
 	test test-kernel test-config test-boot test-all \
 	clean help show-config configure
 
@@ -48,11 +48,11 @@ ifeq ($(filter $(BOOTLOADER),$(VALID_BOOTLOADERS)),)
 $(error Invalid BOOTLOADER='$(BOOTLOADER)'. This project uses ZBM only: zbm)
 endif
 
-# LoongArch QEMU：默认由 build.conf 的 BOOT_METHOD 决定（uefi → -bios+ESP；mbr → -kernel 直启）。
-# 仅当未设置 LOONGARCH64_QEMU_MODE 时自动推导（可用环境变量或 build.conf 覆盖）。
+# LoongArch QEMU：勿与 x86 的 BOOT_METHOD 绑定。默认 UEFI+ESP+startup.nsh → ZBM 操作系统选择菜单；
+# 仅内核调试时设 LOONGARCH64_QEMU_MODE=kernel（-kernel 直启，无 ZBM）。
 ifeq ($(ARCH),loongarch64)
 ifeq ($(origin LOONGARCH64_QEMU_MODE),undefined)
-LOONGARCH64_QEMU_MODE := $(if $(filter uefi,$(BOOT_METHOD)),uefi,kernel)
+LOONGARCH64_QEMU_MODE := uefi
 endif
 endif
 
@@ -79,6 +79,9 @@ OVMF_VARS    ?= $(if $(wildcard $(FIRMWARE_DIR)/OVMF_VARS-x86_64.fd),$(FIRMWARE_
 AARCH64_EFI_CODE ?= $(FIRMWARE_DIR)/QEMU_EFI-aarch64.fd
 AARCH64_EFI_VARS ?= $(FIRMWARE_DIR)/QEMU_VARS-aarch64.fd
 
+# riscv64: QEMU virt 固件（fetch-firmware → VIRT-riscv64.fd）
+RISCV64_EFI_CODE ?= $(FIRMWARE_DIR)/VIRT-riscv64.fd
+
 # loongarch64: prefer LoongArchVirtMachine bundle (QEMU_EFI.fd / QEMU_VARS.fd); else EDK2 nightly in $(FIRMWARE_DIR).
 # Override: make LOONGARCH64_FIRMWARE_DIR=/path run
 LOONGARCH64_FIRMWARE_DIR ?= $(HOME)/Firmware/LoongArchVirtMachine
@@ -92,19 +95,23 @@ ZBM_DIR          := $(TMP_DIR)/zbm
 ZBM_SRC_DIR      := $(ROOT_DIR)/boot/zbm/bios
 UEFI_PREFIX      := $(TMP_DIR)/uefi-prefix
 UEFI_CACHE       := $(TMP_DIR)/uefi-cache
+# Zig object + GNU-EFI → BOOT*.EFI（须先于 UEFI_EFI 赋值）
+ZBM_LOONGARCH64_O   := $(TMP_DIR)/kernel-prefix/zbm_loongarch64.o
+ZBM_LOONGARCH64_EFI := $(TMP_DIR)/zbm-loongarch64.efi
+ZBM_RISCV64_O       := $(TMP_DIR)/kernel-prefix/zbm_riscv64.o
+ZBM_RISCV64_EFI     := $(TMP_DIR)/zbm-riscv64.efi
 ifeq ($(ARCH),x86_64)
 UEFI_EFI         := $(UEFI_PREFIX)/bin/BOOTX64.efi
 else ifeq ($(ARCH),aarch64)
 UEFI_EFI         := $(UEFI_PREFIX)/bin/BOOTAA64.efi
+else ifeq ($(ARCH),riscv64)
+UEFI_EFI         := $(ZBM_RISCV64_EFI)
 else
 UEFI_EFI         := $(UEFI_PREFIX)/bin/BOOTX64.efi
 endif
 ESP_IMG          := $(BUILD_DIR)/esp-$(ARCH).img
 # Fixed path for LoongArch QEMU (avoid := expansion when ARCH defaults to x86_64 but target is run-loongarch64).
 ESP_IMG_LOONGARCH64 := $(BUILD_DIR)/esp-loongarch64.img
-# Zig object + GNU-EFI → BOOTLOONGARCH64.EFI（见 scripts/build/zbm-loongarch64-efi.sh）
-ZBM_LOONGARCH64_O   := $(TMP_DIR)/kernel-prefix/zbm_loongarch64.o
-ZBM_LOONGARCH64_EFI := $(TMP_DIR)/zbm-loongarch64.efi
 ZBM_DISK_MBR     := $(BUILD_DIR)/zirconos-mbr.img
 ZBM_DISK_GPT     := $(BUILD_DIR)/zirconos-gpt.img
 
@@ -131,14 +138,22 @@ QEMU_COMMON_X86 := -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
 QEMU_COMMON_AARCH64 := -M virt -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
 
+QEMU_COMMON_RISCV64 := -M virt -cpu rv64 -m $(QEMU_MEM) -serial stdio \
+	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
+
 # LoongArch `virt` 公共参数（是否加 -bios / -kernel 由 LOONGARCH64_QEMU_MODE 决定）
 QEMU_LOONGARCH64_BASE := -M virt -cpu la464 -m $(QEMU_MEM_LOONGARCH64) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
 # virtio-blk bootindex：便于固件将磁盘列为启动候选（部分环境仍会因 BdsDxe Boot0001 失败而进 Shell）。
+# USB 键盘：LoongArch virt 机无默认键鼠，UEFI ConIn 需 usb-kbd 才能接收按键；内核可能无 USB HID 驱动，但不影响 ZBM 菜单。
+# virtio-gpu + ramfb：优先用 GOP（与固件同表面），无 GOP 时退回到 ramfb
 QEMU_LOONGARCH64_DEVICES := \
 	-drive if=none,id=zircon-esp0,file=$(ESP_IMG_LOONGARCH64),format=raw \
 	-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
-	-device virtio-gpu-pci
+	-device virtio-gpu-pci \
+	-device ramfb \
+	-device qemu-xhci,id=xhci \
+	-device usb-kbd,bus=xhci.0
 
 # Backward compatibility
 QEMU_COMMON := $(QEMU_COMMON_X86)
@@ -226,9 +241,11 @@ help:
 	@echo "  make run                    Build + run per build.conf"
 	@echo "  make run-debug              Run with GDB server on :1234"
 	@echo "  make run-aarch64            UEFI boot on QEMU AArch64 (EDK2 nightly)"
-	@echo "  make run-loongarch64        QEMU LoongArch64（默认: -kernel 直启 ELF，串口日志）"
-	@echo "  make run-loongarch64-autozbm  LoongArch UEFI + expect 自动在 Shell 中启动 ZBM（需 apt install expect）"
+	@echo "  make run-riscv64            UEFI boot on QEMU RISC-V64 virt (VIRT.fd + ESP)"
+	@echo "  make run-loongarch64        QEMU LoongArch64（默认: UEFI+ESP+startup.nsh → ZBM 菜单）"
+	@echo "  make run-loongarch64-autozbm  同 run（LOONGARCH64_QEMU_MODE=uefi 别名）"
 	@echo "  make run-aarch64-debug      AArch64 + GDB on :1234"
+	@echo "  make run-riscv64-debug      RISC-V64 UEFI + GDB on :1234"
 	@echo "  make run-loongarch64-debug  LoongArch64 + GDB on :1234"
 	@echo ""
 	@echo "Override examples:"
@@ -243,8 +260,10 @@ help:
 	@echo "  make test-config            Build configuration tests"
 	@echo "  make test-boot              Boot combination tests"
 	@echo ""
-	@echo "Firmware:"
+	@echo "Firmware / toolchain:"
 	@echo "  make fetch-firmware         Download EDK2 nightly UEFI firmware"
+	@echo "  make fetch-gnu-efi          Build GNU-EFI (LoongArch ZBM 链接)"
+	@echo "  make fetch-gnu-efi-riscv64  Build GNU-EFI ncroxon fork（RISC-V64 ZBM 链接，需 gcc-riscv64-linux-gnu）"
 	@echo "  make fetch-loongarch-boot-efi  LoongArch: BOOTLOONGARCH64.EFI (EDK2 Shell, 可选备用)"
 	@echo ""
 	@echo "Resources:"
@@ -257,6 +276,7 @@ help:
 	@echo "  ZBM  (BIOS/MBR): BIOS -> MBR -> VBR -> Stage2 -> ZBM -> kernel"
 	@echo "  ZBM  (UEFI/GPT): UEFI -> ESP -> BOOT*.EFI -> ZBM -> kernel"
 	@echo "  AArch64 (UEFI):  EDK2 nightly -> ESP -> BOOTAA64.EFI -> kernel"
+	@echo "  RISC-V64 (UEFI): VIRT.fd -> virtio ESP -> BOOTRISCV64.EFI -> kernel（GNU-EFI 链接 ZBM）"
 	@echo "  LoongArch64:     仅 ZBM+UEFI（ESP）；BOOT_METHOD=mbr 时 QEMU -kernel 直启（开发）"
 
 # ══════════════════════════════════════════════════════
@@ -279,7 +299,8 @@ ifeq ($(ARCH),loongarch64)
 	@cp -f $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
 	@echo "[ZirconOS] (loongarch64: copied ELF; --strip-debug skipped: host objcopy/zig objcopy lack full support)"
 else
-	objcopy --strip-debug $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
+	@objcopy --strip-debug $(KERNEL_ELF_DEBUG) $(KERNEL_ELF) 2>/dev/null || \
+		cp -f $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
 endif
 	@echo "[ZirconOS] Kernel: $(KERNEL_ELF)"
 
@@ -331,6 +352,8 @@ build-desktop-dll:
 build-zbm-uefi:
 ifeq ($(ARCH),loongarch64)
 	@$(MAKE) build-zbm-loongarch-uefi
+else ifeq ($(ARCH),riscv64)
+	@$(MAKE) build-zbm-riscv64-uefi
 else
 	@echo "[ZirconOS] Building ZBM UEFI boot application..."
 	@mkdir -p $(UEFI_PREFIX) $(UEFI_CACHE)
@@ -343,7 +366,23 @@ else
 	@echo "[ZirconOS] UEFI app: $(UEFI_EFI)"
 endif
 
-# LoongArch ZBM：Zig 源码 boot/zbm/uefi/main_loongarch64.zig → .o，再 GNU-EFI 链接为 PE/COFF .efi
+# LoongArch UEFI：默认 C stub（稳定）；Zig stub 有 INE 异常，LOONGARCH64_USE_C_STUB=0 时用 Zig
+LOONGARCH64_USE_C_STUB ?= 1
+
+# Zig stub：main_loongarch64.zig + linker_stub.lds（与 C stub 同流程），固件可加载
+build-zbm-loongarch64-stub:
+	@echo "[ZirconOS] LoongArch UEFI: Building Zig ZBM stub (AevOS-style)..."
+	@mkdir -p $(TMP_DIR)
+	@$(MAKE) build ARCH=loongarch64
+	@bash $(ROOT_DIR)/scripts/build/build-zbm-loongarch64-stub.sh "$(ZBM_LOONGARCH64_EFI)"
+
+# C stub：无 gnu-efi，与 AevOS 相同构建流程，QEMU_EFI.fd 可加载
+build-stub-loongarch64:
+	@echo "[ZirconOS] LoongArch UEFI: Building C stub (AevOS-style)..."
+	@mkdir -p $(TMP_DIR)
+	@bash $(ROOT_DIR)/scripts/build/build-stub-loongarch64.sh "$(ZBM_LOONGARCH64_EFI)"
+
+# Zig ZBM：GNU-EFI 链接，部分 QEMU_EFI.fd 报 Unsupported
 build-zbm-loongarch-uefi:
 	@echo "[ZirconOS] LoongArch ZBM UEFI: GNU-EFI link $(ZBM_LOONGARCH64_O) → $(ZBM_LOONGARCH64_EFI)"
 	@test -f "$(ZBM_LOONGARCH64_O)" || { echo "[ZirconOS] ERROR: missing $(ZBM_LOONGARCH64_O). Run: make build ARCH=loongarch64" >&2; exit 1; }
@@ -352,6 +391,16 @@ build-zbm-loongarch-uefi:
 		$(MAKE) fetch-gnu-efi; \
 	fi
 	@bash $(ROOT_DIR)/scripts/build/zbm-loongarch64-efi.sh "$(ZBM_LOONGARCH64_O)" "$(ZBM_LOONGARCH64_EFI)"
+
+# RISC-V64：Zig 仅生成 .o，GNU-EFI（ncroxon）链接为 BOOTRISCV64.EFI
+build-zbm-riscv64-uefi:
+	@echo "[ZirconOS] RISC-V64 ZBM: GNU-EFI link $(ZBM_RISCV64_O) → $(ZBM_RISCV64_EFI)"
+	@test -f "$(ZBM_RISCV64_O)" || { echo "[ZirconOS] ERROR: missing $(ZBM_RISCV64_O). Run: make build ARCH=riscv64" >&2; exit 1; }
+	@if [ ! -f "$(ROOT_DIR)/gnu-efi/riscv64-built/crt0-efi-riscv64.o" ]; then \
+		echo "[ZirconOS] 首次需要 GNU-EFI（RISC-V），执行 fetch-gnu-efi-riscv64 …"; \
+		bash $(ROOT_DIR)/scripts/build/fetch-gnu-efi-riscv64.sh || exit 1; \
+	fi
+	@bash $(ROOT_DIR)/scripts/build/zbm-riscv64-efi.sh "$(ZBM_RISCV64_O)" "$(ZBM_RISCV64_EFI)"
 
 # ══════════════════════════════════════════════════════
 #  ZBM BIOS Boot Components (MBR + VBR + Stage2)
@@ -419,9 +468,13 @@ build-zbm-disk: build-zbm-bios build
 
 build-esp: build
 ifneq ($(ARCH),loongarch64)
-	@$(MAKE) build-zbm-uefi
+	@$(MAKE) build-zbm-uefi DESKTOP=$(DESKTOP)
 else
-	@$(MAKE) build-zbm-loongarch-uefi
+	@if [ "$(LOONGARCH64_USE_C_STUB)" = "1" ]; then \
+		$(MAKE) build-stub-loongarch64; \
+	else \
+		$(MAKE) build-zbm-loongarch64-stub; \
+	fi
 endif
 	@echo "[ZirconOS] Building ESP image (arch=$(ARCH))..."
 ifeq ($(ARCH),loongarch64)
@@ -435,6 +488,8 @@ else
 	mmd -i $(ESP_IMG) ::/EFI/BOOT
 ifeq ($(ARCH),aarch64)
 	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTAA64.EFI
+else ifeq ($(ARCH),riscv64)
+	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTRISCV64.EFI
 else
 	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTX64.EFI
 endif
@@ -467,6 +522,8 @@ endif
 run:
 ifeq ($(ARCH),aarch64)
 	@$(MAKE) run-aarch64 ARCH=aarch64
+else ifeq ($(ARCH),riscv64)
+	@$(MAKE) run-riscv64 ARCH=riscv64
 else ifeq ($(ARCH),loongarch64)
 	@$(MAKE) run-loongarch64 ARCH=loongarch64
 else
@@ -537,54 +594,86 @@ run-aarch64-debug: build-esp
 		-s -S
 
 # ══════════════════════════════════════════════════════
+#  RISC-V64 boot (EDK2 VIRT firmware + virtio ESP)
+# ══════════════════════════════════════════════════════
+
+run-riscv64: build-esp
+	@echo "[ZirconOS] RISC-V64 UEFI boot ($(RISCV64_EFI_CODE))..."
+	@if [ ! -f "$(RISCV64_EFI_CODE)" ]; then \
+		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		exit 1; \
+	fi
+	qemu-system-riscv64 \
+		$(QEMU_COMMON_RISCV64) \
+		-bios $(RISCV64_EFI_CODE) \
+		-drive if=none,id=zircon-esp0,file=$(ESP_IMG),format=raw \
+		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0
+
+run-riscv64-debug: build-esp
+	@echo "[ZirconOS] RISC-V64 UEFI debug (GDB on :1234)..."
+	@if [ ! -f "$(RISCV64_EFI_CODE)" ]; then \
+		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		exit 1; \
+	fi
+	qemu-system-riscv64 \
+		$(QEMU_COMMON_RISCV64) \
+		-bios $(RISCV64_EFI_CODE) \
+		-drive if=none,id=zircon-esp0,file=$(ESP_IMG),format=raw \
+		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
+		-s -S
+
+# ══════════════════════════════════════════════════════
 #  LoongArch64 boot (EDK2 nightly firmware)
 # ══════════════════════════════════════════════════════
 
-# run-loongarch64：默认 QEMU -kernel 直启 ELF（串口日志）；uefi 模式需固件 + build-esp。
+# run-loongarch64：默认 UEFI + build/esp-loongarch64.img（含 startup.nsh）→ Shell 倒计时后自动进入 ZBM；kernel 模式为 -kernel 直启。
 run-loongarch64:
 ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
 	@$(MAKE) build ARCH=loongarch64
-	@echo "[ZirconOS] LoongArch64 QEMU: -kernel $(KERNEL_ELF) (LOONGARCH64_QEMU_MODE=kernel)"
+	@echo "[ZirconOS] LoongArch64 QEMU: -kernel $(KERNEL_ELF) + ramfb（Aero 桌面）"
+	@echo "[ZirconOS] 若 QEMU 持续显示 'Guest has not initialized the display'，可尝试: make run-loongarch64 LOONGARCH64_QEMU_MODE=uefi（需固件）"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-kernel $(KERNEL_ELF) \
-		-device virtio-gpu-pci
+		-device ramfb
 else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
-	@$(MAKE) build-esp ARCH=loongarch64
-	@echo "[ZirconOS] LoongArch64 UEFI — $(LOONGARCH64_EFI_CODE)"
+	@$(MAKE) build-esp ARCH=loongarch64 DESKTOP=$(DESKTOP)
+	@echo "[ZirconOS] LoongArch64 UEFI + ZBM — $(LOONGARCH64_EFI_CODE)"
 	@if [ ! -f "$(LOONGARCH64_EFI_CODE)" ]; then \
 		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
-	@echo "[ZirconOS] 多数发行版 qemu 无 pflash，BdsDxe 常进 Shell；用 python3 自动输入 ZBM 路径（EFI/BOOT/...）。"
-	ZIRCON_ESP="$(ESP_IMG_LOONGARCH64)" LOONGARCH64_EFI_CODE="$(LOONGARCH64_EFI_CODE)" QEMU_MEM_LOONGARCH64="$(QEMU_MEM_LOONGARCH64)" \
-		python3 -u $(ROOT_DIR)/scripts/qemu/loongarch-uefi-autorun.py
+	@echo "[ZirconOS] 等待内置 Shell 的 startup.nsh 倒计时结束（勿按 ESC）后将进入 ZBM 菜单；串口与 QEMU 窗口均可查看 ConOut。"
+	@echo "[ZirconOS] 键盘操作：请先点击 QEMU 窗口使其获得焦点，再用方向键/数字键选择启动项。"
+	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
+		-bios $(LOONGARCH64_EFI_CODE) \
+		$(QEMU_LOONGARCH64_DEVICES) \
+		-boot order=d
 else
 	$(error LOONGARCH64_QEMU_MODE must be kernel or uefi (got $(LOONGARCH64_QEMU_MODE)))
 endif
 
-# 强制 UEFI 模式并启动（python3 自动输入 ZBM）；与 run-loongarch64 在 BOOT_METHOD=uefi 时等价。
+# 与 LOONGARCH64_QEMU_MODE=uefi 相同（保留别名）；需 QEMU_EFI.fd、build-esp（含 startup.nsh → ZBM）。
 run-loongarch64-autozbm:
 	@$(MAKE) run-loongarch64 ARCH=loongarch64 LOONGARCH64_QEMU_MODE=uefi
 
 run-loongarch64-debug:
 ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
 	@$(MAKE) build ARCH=loongarch64
-	@echo "[ZirconOS] LoongArch64 debug: -kernel + GDB :1234"
+	@echo "[ZirconOS] LoongArch64 debug: -kernel + ramfb + GDB :1234"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
-		-kernel $(KERNEL_ELF) \
-		-device virtio-gpu-pci \
-		-s -S
+		-kernel $(KERNEL_ELF) -device ramfb -s -S
 else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
-	@$(MAKE) build-esp ARCH=loongarch64
+	@$(MAKE) build-esp ARCH=loongarch64 DESKTOP=$(DESKTOP)
 	@echo "[ZirconOS] LoongArch64 UEFI debug (GDB on :1234)..."
 	@if [ ! -f "$(LOONGARCH64_EFI_CODE)" ]; then \
 		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
-	@echo "[ZirconOS] 若需手动：fs0: 然后 EFI/BOOT/BOOTLOONGARCH64.EFI（正斜杠）"
+	@echo "[ZirconOS] 若需手动：fs0: → cd \\EFI\\BOOT → BOOTLOONGARCH64.EFI"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-bios $(LOONGARCH64_EFI_CODE) \
 		$(QEMU_LOONGARCH64_DEVICES) \
+		-boot order=d \
 		-s -S
 else
 	$(error LOONGARCH64_QEMU_MODE must be kernel or uefi (got $(LOONGARCH64_QEMU_MODE)))
@@ -623,6 +712,10 @@ fetch-themes:
 fetch-gnu-efi:
 	@echo "[ZirconOS] Fetching GNU-EFI (for LoongArch BOOTLOONGARCH64.EFI link)..."
 	@bash $(ROOT_DIR)/scripts/build/fetch-gnu-efi.sh "$(ROOT_DIR)/gnu-efi/loongarch64-built"
+
+fetch-gnu-efi-riscv64:
+	@echo "[ZirconOS] Fetching GNU-EFI (ncroxon, RISC-V64 BOOTRISCV64.EFI link)..."
+	@bash $(ROOT_DIR)/scripts/build/fetch-gnu-efi-riscv64.sh "$(ROOT_DIR)/gnu-efi/riscv64-built"
 
 # ── Firmware (EDK2 nightly from https://retrage.github.io/edk2-nightly/) ──
 fetch-firmware:

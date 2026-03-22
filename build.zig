@@ -101,6 +101,10 @@ pub fn build(b: *std.Build) void {
             kernel.addAssemblyFile(b.path("src/arch/x86_64/isr_common.s"));
             kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_entry.s"));
         }
+    } else if (mem.eql(u8, arch_opt, "aarch64")) {
+        kernel.addAssemblyFile(b.path("src/arch/aarch64/start.S"));
+    } else if (mem.eql(u8, arch_opt, "riscv64")) {
+        kernel.addAssemblyFile(b.path("src/arch/riscv64/start.S"));
     } else if (mem.eql(u8, arch_opt, "loongarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/loongarch64/crt0.S"));
     }
@@ -114,6 +118,9 @@ pub fn build(b: *std.Build) void {
     buildZbm(b, cpu_arch, optimize, debug_mode);
     if (cpu_arch == .loongarch64) {
         buildLoongArchZbmEfiObject(b, optimize, desktop_default, debug_mode);
+    }
+    if (cpu_arch == .riscv64) {
+        buildRiscv64ZbmEfiObject(b, optimize, desktop_default, debug_mode);
     }
     buildDesktop(b, optimize);
 }
@@ -303,8 +310,7 @@ fn buildUefi(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin
     // LoongArch UEFI PE/COFF: Zig's linker does not emit it directly (UnsupportedCoffArchitecture).
     if (cpu_arch == .loongarch64) return;
 
-    // RISC-V UEFI: Zig 0.15 COFF link reports UnsupportedCoffArchitecture — use a future GNU-EFI
-    // or LLVM lld path (see docs/cn/PROCESS_NT61.md Phase Boot).
+    // RISC-V：Zig 无法直接链接 riscv64-uefi PE（UnsupportedCoffArchitecture），见 zbm-riscv64-efi.sh + buildRiscv64ZbmEfiObject。
     const uefi_supported = switch (cpu_arch) {
         .x86_64, .aarch64 => true,
         else => false,
@@ -343,7 +349,7 @@ fn buildUefi(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin
 
     const install_uefi = b.addInstallArtifact(uefi_exe, .{});
 
-    const uefi_step = b.step("uefi", "Build ZBM UEFI boot application (.efi; x86_64 / aarch64)");
+    const uefi_step = b.step("uefi", "Build ZBM UEFI boot application (.efi; x86_64 / aarch64; riscv64 → zbm-riscv64-uefi)");
     uefi_step.dependOn(&install_uefi.step);
 }
 
@@ -353,6 +359,7 @@ fn buildLoongArchZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode,
         .cpu_arch = .loongarch64,
         .os_tag = .freestanding,
         .abi = .none,
+        .cpu_model = .baseline, // 避免 la464 不支持的指令（INE 异常）
     });
     const zbm_opts = b.addOptions();
     zbm_opts.addOption(bool, "debug", debug_mode);
@@ -372,4 +379,31 @@ fn buildLoongArchZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode,
     b.getInstallStep().dependOn(&install_o.step);
     const zbm_la_step = b.step("zbm-loongarch-uefi", "LoongArch ZBM: Zig object (link with scripts/build/zbm-loongarch64-efi.sh → .efi)");
     zbm_la_step.dependOn(&install_o.step);
+}
+
+/// RISC-V64 ZBM：GNU-EFI 链接（与 LoongArch 相同，crt0 + objcopy → `.efi`）。
+fn buildRiscv64ZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode, desktop_default: []const u8, debug_mode: bool) void {
+    const rv_target = b.resolveTargetQuery(.{
+        .cpu_arch = .riscv64,
+        .os_tag = .freestanding,
+        .abi = .none,
+    });
+    const zbm_opts = b.addOptions();
+    zbm_opts.addOption(bool, "debug", debug_mode);
+    zbm_opts.addOption([]const u8, "desktop", desktop_default);
+    const zbm_mod = b.createModule(.{
+        .root_source_file = b.path("boot/zbm/uefi/main.zig"),
+        .target = rv_target,
+        .optimize = optimize,
+        .link_libc = false,
+    });
+    zbm_mod.addOptions("build_options", zbm_opts);
+    const zbm_obj = b.addObject(.{
+        .name = "zbm_riscv64",
+        .root_module = zbm_mod,
+    });
+    const install_o = b.addInstallFile(zbm_obj.getEmittedBin(), "zbm_riscv64.o");
+    b.getInstallStep().dependOn(&install_o.step);
+    const zbm_rv_step = b.step("zbm-riscv64-uefi", "RISC-V64 ZBM: Zig object (link with scripts/build/zbm-riscv64-efi.sh → BOOTRISCV64.EFI)");
+    zbm_rv_step.dependOn(&install_o.step);
 }

@@ -6,6 +6,11 @@ SECTIONS
   . = 0x40080000;
   PROVIDE(_kernel_start = .);
 
+  .uefi_vector : ALIGN(8)
+  {
+    *(.uefi_vector)
+  }
+
   .text : ALIGN(4K)
   {
     *(.text.boot)

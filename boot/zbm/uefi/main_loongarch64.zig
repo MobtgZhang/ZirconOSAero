@@ -1,69 +1,18 @@
-//! ZirconOS Boot Manager — LoongArch64 UEFI（与 `boot/zbm/uefi/main.zig` 同一套文本菜单）
+//! ZirconOS Boot Manager — LoongArch64 UEFI（与 `boot/zbm/uefi/main.zig` 共用 menu_common）
 //!
-//! Zig 无法直接链接出 LoongArch PE/COFF，故以 `zig build-obj` + GNU-EFI + objcopy 生成 BOOTLOONGARCH64.EFI。
-//! 源码路径：`boot/zbm/uefi/main_loongarch64.zig`（与 x86 UEFI ZBM 同目录）。
+//! Zig build-obj + GNU-EFI/ld + objcopy 或 C stub 流程（linker_stub.lds）生成 BOOTLOONGARCH64.EFI。
 const std = @import("std");
 const uefi = std.os.uefi;
 const unicode = std.unicode;
 const elf = std.elf;
 
-const arch_name = "loongarch64";
+const menu = @import("menu_common.zig");
 
+const arch_name = "loongarch64";
 const debug_mode = @import("build_options").debug;
 const desktop_theme_name = @import("build_options").desktop;
-
-// ── ZirconOS Boot Manager Constants（与 x86 UEFI ZBM 一致）──
-
-const ZBM_VERSION = "6.1";
-const DEFAULT_TIMEOUT: u32 = 10;
-const MAX_ENTRIES: usize = 8;
-
-const Attr = struct {
-    const normal: u8 = 0x0F;
-    const dim: u8 = 0x07;
-    const highlight: u8 = 0x70;
-    const border: u8 = 0x08;
-};
-
-const KERNEL_PATH = "\\boot\\kernel.elf";
-
-const BootEntry = struct {
-    description: []const u8,
-    kernel_path: []const u8,
-    cmdline: []const u8,
-    is_default: bool,
-};
-
-var entries: [MAX_ENTRIES]BootEntry = undefined;
-var entry_count: usize = 0;
-var selected: usize = 0;
-var countdown: u32 = DEFAULT_TIMEOUT;
-var timer_active: bool = true;
-
-fn initBootEntries() void {
-    if (comptime std.mem.eql(u8, desktop_theme_name, "none")) {
-        addEntry("ZirconOSAero (NT 6.1)", KERNEL_PATH, "console=serial,vga debug=0 shell=cmd", true);
-        addEntry("ZirconOSAero (NT 6.1) [Debug Mode]", KERNEL_PATH, "console=serial,vga debug=1 verbose=1 shell=cmd", false);
-    } else {
-        addEntry("ZirconOSAero (NT 6.1)", KERNEL_PATH, "console=serial,vga debug=0 desktop=" ++ desktop_theme_name, true);
-        addEntry("ZirconOSAero (NT 6.1) [Debug Mode]", KERNEL_PATH, "console=serial,vga debug=1 verbose=1 desktop=" ++ desktop_theme_name, false);
-    }
-    addEntry("ZirconOSAero [Safe Mode]", KERNEL_PATH, "safe_mode=1 debug=0 minimal=1", false);
-    addEntry("ZirconOSAero [Safe Mode with Networking]", KERNEL_PATH, "safe_mode=1 network=1", false);
-    addEntry("ZirconOSAero [Recovery Console]", KERNEL_PATH, "recovery=1 console=serial,vga debug=1", false);
-    addEntry("ZirconOSAero [CMD Shell]", KERNEL_PATH, "console=serial,vga shell=cmd", false);
-}
-
-fn addEntry(desc: []const u8, path: []const u8, cmdline: []const u8, is_default: bool) void {
-    if (entry_count >= MAX_ENTRIES) return;
-    entries[entry_count] = .{
-        .description = desc,
-        .kernel_path = path,
-        .cmdline = cmdline,
-        .is_default = is_default,
-    };
-    entry_count += 1;
-}
+const KERNEL_PATH = menu.KERNEL_PATH;
+const Attr = menu.Attr;
 
 // ── LoongArch EFI handoff（与 src/arch/loongarch64/boot.zig 一致）──
 
@@ -177,9 +126,7 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
     out.reset(false) catch {};
     _ = out.setMode(0) catch {};
 
-    initBootEntries();
-    displayBootManagerMenu(out);
-    _ = out.enableCursor(false) catch {};
+    menu.initBootEntries(desktop_theme_name, KERNEL_PATH);
 
     const cin = st.con_in orelse {
         displayBootProgress(out);
@@ -189,44 +136,24 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
         haltLa();
     };
 
+    var result: menu.MenuResult = undefined;
     while (true) {
-        if (readKey(cin)) |key| {
-            timer_active = false;
-
-            switch (key.scan_code) {
-                0x01 => {
-                    if (selected > 0) selected -= 1;
-                    displayBootManagerMenu(out);
-                },
-                0x02 => {
-                    if (selected + 1 < entry_count) selected += 1;
-                    displayBootManagerMenu(out);
-                },
-                0x0D => break,
-                0x17 => {
-                    displayAdvancedOptions(out);
-                },
-                else => {
-                    if (key.unicode_char == '\r' or key.unicode_char == '\n') break;
-                    if (key.unicode_char >= '1' and key.unicode_char <= '6') {
-                        const idx: usize = @as(usize, @intCast(key.unicode_char - '1'));
-                        if (idx < entry_count) {
-                            selected = idx;
-                            break;
-                        }
-                    }
-                },
-            }
-        }
-
-        if (timer_active) {
-            waitOneSecond(bs);
-            if (countdown > 0) {
-                countdown -= 1;
-                updateTimerDisplay(out);
-            } else {
-                break;
-            }
+        result = menu.runMenuLoop(out, bs, cin, arch_name, debug_mode);
+        switch (result) {
+            .selected => break,
+            .show_advanced => {
+                menu.displayAdvancedOptions(
+                    out,
+                    bs,
+                    cin,
+                    arch_name,
+                    KERNEL_PATH,
+                    st.firmware_vendor,
+                    st.hdr.revision,
+                    debug_mode,
+                );
+                menu.displayBootManagerMenu(out, arch_name, debug_mode);
+            },
         }
     }
 
@@ -241,196 +168,6 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
     haltLa();
 }
 
-// ── Menu Display（与 x86 一致）──
-
-fn bootMenuTimerRow() usize {
-    return 11 + entry_count;
-}
-
-fn clearTextRow(out: anytype, row: usize) void {
-    _ = out.setCursorPosition(0, row) catch return;
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    var c: usize = 0;
-    while (c < 80) : (c += 1) {
-        puts(out, " ");
-    }
-}
-
-fn refreshTimerLine(out: anytype) void {
-    if (!timer_active or countdown == 0) return;
-    const row = bootMenuTimerRow();
-    _ = out.setCursorPosition(0, row) catch {
-        displayBootManagerMenu(out);
-        return;
-    };
-    _ = out.enableCursor(false) catch {};
-    clearTextRow(out, row);
-    _ = out.setCursorPosition(0, row) catch {
-        displayBootManagerMenu(out);
-        return;
-    };
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    puts(out, "    Seconds until the highlighted choice will be started automatically: ");
-    printDecimal(out, countdown);
-    puts(out, "\r\n");
-}
-
-fn displayBootManagerMenu(out: anytype) void {
-    out.reset(false) catch {};
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-
-    puts(out, "\r\n");
-    puts(out, "                    ZirconOS Boot Manager                                     \r\n");
-    puts(out, "                         Version " ++ ZBM_VERSION ++ "                                             \r\n");
-
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    puts(out, "\r\n");
-    puts(out, "    Choose an operating system to start:\r\n");
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
-    puts(out, "    (Use the arrow keys to highlight your choice, then press ENTER.)\r\n");
-    puts(out, "\r\n");
-
-    for (0..entry_count) |i| {
-        if (i == selected) {
-            _ = out.setAttribute(@bitCast(Attr.highlight)) catch {};
-            puts(out, "  > ");
-        } else {
-            _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-            puts(out, "    ");
-        }
-        putsRuntime(out, entries[i].description);
-        puts(out, "\r\n");
-    }
-
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    puts(out, "\r\n");
-    _ = out.setAttribute(@bitCast(Attr.border)) catch {};
-    puts(out, "    ");
-    for (0..72) |_| puts(out, "-");
-    puts(out, "\r\n\r\n");
-
-    if (timer_active and countdown > 0) {
-        _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-        puts(out, "    Seconds until the highlighted choice will be started automatically: ");
-        printDecimal(out, countdown);
-        puts(out, "\r\n");
-    }
-
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
-    puts(out, "\r\n");
-    puts(out, "    ");
-    displayEntryDescription(out, selected);
-    puts(out, "\r\n");
-
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    puts(out, "\r\n");
-    puts(out, "  ENTER=Choose  |  ESC=Advanced Options  |  F1=Help                          \r\n");
-
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
-    puts(out, "\r\n");
-    puts(out, "    Architecture: " ++ arch_name ++ "  |  Boot: UEFI");
-    if (debug_mode) {
-        puts(out, "  |  Build: DEBUG\r\n");
-    } else {
-        puts(out, "  |  Build: RELEASE\r\n");
-    }
-
-    _ = out.enableCursor(false) catch {};
-}
-
-fn displayEntryDescription(out: anytype, index: usize) void {
-    if (index == 0) {
-        puts(out, "Start ZirconOS normally.");
-    } else if (index == 1) {
-        puts(out, "Start with debug logging and serial output enabled.");
-    } else if (index == 2) {
-        puts(out, "Start with minimal drivers and services.");
-    } else if (index == 3) {
-        puts(out, "Start in safe mode with network support.");
-    } else if (index == 4) {
-        puts(out, "Start the Recovery Console for system repair.");
-    } else if (index == 5) {
-        puts(out, "Use the last configuration that worked.");
-    }
-}
-
-fn updateTimerDisplay(out: anytype) void {
-    refreshTimerLine(out);
-}
-
-fn displayAdvancedOptions(out: anytype) void {
-    out.reset(false) catch {};
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    puts(out, "\r\n");
-    puts(out, "                ZirconOS Advanced Boot Options                                 \r\n");
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
-    puts(out, "\r\n");
-    puts(out, "    Boot Information:\r\n");
-    puts(out, "      Architecture : " ++ arch_name ++ "\r\n");
-    puts(out, "      Boot Method  : UEFI Application\r\n");
-    puts(out, "      Firmware     : ");
-    _ = out.outputString(uefi.system_table.firmware_vendor) catch false;
-    puts(out, "\r\n");
-
-    printUefiVersion(out, uefi.system_table.hdr.revision);
-
-    puts(out, "\r\n");
-    puts(out, "    Partition Information:\r\n");
-    puts(out, "      Scheme       : GPT (GUID Partition Table)\r\n");
-    puts(out, "      Boot Partition: EFI System Partition (ESP)\r\n");
-    puts(out, "      Kernel Path  : " ++ KERNEL_PATH ++ "\r\n");
-    puts(out, "\r\n");
-    puts(out, "    Boot Configuration Data (BCD):\r\n");
-    puts(out, "      Store        : In-memory (default entries)\r\n");
-    puts(out, "      Entries      : ");
-    printDecimal(out, @intCast(entry_count));
-    puts(out, "\r\n");
-    puts(out, "      Default      : ");
-    putsRuntime(out, entries[0].description);
-    puts(out, "\r\n");
-    puts(out, "      Timeout      : ");
-    printDecimal(out, DEFAULT_TIMEOUT);
-    puts(out, " seconds\r\n");
-    puts(out, "\r\n");
-
-    if (debug_mode) {
-        puts(out, "    Debug Features:\r\n");
-        puts(out, "      [*] Verbose kernel log (EMERG..DEBUG)\r\n");
-        puts(out, "      [*] Dual output: VGA + Serial (COM1)\r\n");
-        puts(out, "      [*] GDB remote debugging support\r\n");
-        puts(out, "\r\n");
-    }
-
-    puts(out, "    Supported Boot Paths (ZBM only in this tree):\r\n");
-    puts(out, "      UEFI    : EFI Application -> ZBM -> kernel.elf (GPT)\r\n");
-    puts(out, "      BIOS    : MBR -> VBR -> stage2 -> ZBM -> kernel.elf\r\n");
-    puts(out, "\r\n");
-
-    puts(out, "    Boot Chain:\r\n");
-    puts(out, "      zbmfw.efi -> zbmload -> kernel -> HAL\r\n");
-    puts(out, "        -> Executive Init -> smss -> csrss -> shell\r\n");
-    puts(out, "\r\n");
-
-    puts(out, "    Kernel Phases (0-11):\r\n");
-    puts(out, "      0: Early Init          6: I/O + FS + Drivers\r\n");
-    puts(out, "      1: Boot + Hardware     7: PE/ELF Loader\r\n");
-    puts(out, "      2: Trap/Timer/Sched    8: Native Userland\r\n");
-    puts(out, "      3: VM + User Mode      9: Win32 Subsystem\r\n");
-    puts(out, "      4: Object/Handle      10: GUI (user32/gdi32)\r\n");
-    puts(out, "      5: IPC + Services     11: WOW64 (32-bit)\r\n");
-    puts(out, "\r\n");
-
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    puts(out, "  Press any key to return to boot menu...                                     \r\n");
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
-
-    if (uefi.system_table.con_in) |cin| {
-        waitForKey(cin);
-    }
-
-    timer_active = false;
-    displayBootManagerMenu(out);
-}
 
 fn displayBootProgress(out: anytype) void {
     _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
@@ -439,10 +176,10 @@ fn displayBootProgress(out: anytype) void {
     _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
     puts(out, "\r\n");
     puts(out, "    Booting: ");
-    putsRuntime(out, entries[selected].description);
+    putsRuntime(out, menu.entries[menu.selected].description);
     puts(out, "\r\n\r\n");
     puts(out, "    Command line: ");
-    putsRuntime(out, entries[selected].cmdline);
+    putsRuntime(out, menu.entries[menu.selected].cmdline);
     puts(out, "\r\n\r\n");
 
     puts(out, "    [*] UEFI Console initialized\r\n");
@@ -657,7 +394,7 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
     printHex64(out, ehdr.e_entry);
     puts(out, "\r\n");
 
-    const hand = handoffForSelectedEntry(selected);
+    const hand = handoffForSelectedEntry(menu.selected);
     const ho_ptr: [*]align(4096) uefi.Page = @ptrFromInt(HANDOFF_PHYS);
     _ = bs.allocatePages(.{ .address = ho_ptr }, .loader_data, 1) catch {
         puts(out, "    [!!] Failed to allocate handoff page\r\n");
@@ -680,27 +417,6 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
     };
 
     jumpToKernel(ehdr.e_entry, HANDOFF_PHYS);
-}
-
-const InputKey = uefi.protocol.SimpleTextInput.Key.Input;
-
-fn readKey(cin: anytype) ?InputKey {
-    return cin.readKeyStroke() catch return null;
-}
-
-fn waitForKey(cin: anytype) void {
-    while (true) {
-        if (readKey(cin) != null) return;
-    }
-}
-
-fn waitOneSecond(bs: *uefi.tables.BootServices) void {
-    _ = bs.stall(1_000_000) catch {
-        var i: u64 = 0;
-        while (i < 30_000_000) : (i += 1) {
-            asm volatile ("" ::: .{ .memory = true });
-        }
-    };
 }
 
 fn displayMemoryMap(out: anytype, bs: *uefi.tables.BootServices) void {

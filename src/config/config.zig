@@ -54,7 +54,7 @@ pub fn getHostname() []const u8 {
 }
 
 pub fn getVersion() []const u8 {
-    return system_config.getOr("system", "version", "1.0.0");
+    return system_config.getOr("system", "version", "6.1.7601");
 }
 
 pub fn getArch() []const u8 {

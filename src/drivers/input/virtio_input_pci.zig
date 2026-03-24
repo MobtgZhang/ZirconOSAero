@@ -1,4 +1,4 @@
-//! VirtIO Input PCI（QEMU `-device virtio-mouse-pci` / `virtio-keyboard-pci`）
+//! VirtIO Input PCI（QEMU `virtio-mouse-pci` / `virtio-tablet-pci` / `virtio-keyboard-pci`，均为 1af4:1052）
 //! 现代 VirtIO 1.0 传输 + 事件队列轮询；支持最多 2 个 PCI 实例（键鼠各一）。
 //! 参考：VirtIO 1.2 §5.4 Input、§4.1.4 Virtio PCI。
 
@@ -22,6 +22,9 @@ const VRING_DESC_F_WRITE: u16 = 2;
 const EV_SYN: u16 = 0x0000;
 const EV_KEY: u16 = 0x0001;
 const EV_REL: u16 = 0x0002;
+const EV_ABS: u16 = 0x0003;
+const ABS_X: u16 = 0x0000;
+const ABS_Y: u16 = 0x0001;
 const REL_X: u16 = 0x0000;
 const REL_Y: u16 = 0x0001;
 const REL_WHEEL: u16 = 0x0008;
@@ -45,6 +48,9 @@ const VirtqDesc = extern struct {
 };
 
 const MAX_INST: usize = 2;
+const LINUX_INPUT_EVENT_SZ: u32 = 8;
+/// QEMU virtio_input_send：SYN_REPORT 前对每个排队事件各 virtqueue_pop 一次；仅 1 个 avail 缓冲时第二次 pop 失败则整批丢弃（H6：used 永 0）。
+const RECV_BYTES_PER_DESC: u32 = LINUX_INPUT_EVENT_SZ;
 
 const VirtioInputInst = struct {
     active: bool = false,
@@ -55,7 +61,8 @@ const VirtioInputInst = struct {
     queue_notify_off: u16 = 0,
     queue_size: u16 = 0,
     ring_page: [4096]u8 align(4096) = undefined,
-    event_pkt: [8]u8 align(8) = undefined,
+    /// ring_page 内 recv 小槽起始（每描述符 8B，共 queue_size 槽，与描述符表一一对应）
+    event_slot_off: usize = 0,
     desc_off: usize = 0,
     avail_off: usize = 0,
     used_off: usize = 0,
@@ -65,6 +72,13 @@ const VirtioInputInst = struct {
     acc_dx: i32 = 0,
     acc_dy: i32 = 0,
     acc_scroll: i32 = 0,
+    /// virtio-tablet-pci：QEMU GTK 常发 ABS 而非 REL；与未抓取时的 virtio-mouse 互补。
+    tab_have_x: bool = false,
+    tab_have_y: bool = false,
+    tab_x: i32 = 0,
+    tab_y: i32 = 0,
+    /// 本 PCI 实例是否发过指针类事件（REL/ABS 坐标/鼠标键）；纯键盘实例的空 SYN 不调用 mouse.deliver。
+    has_pointer_ev: bool = false,
 };
 
 var instances: [MAX_INST]VirtioInputInst = .{ .{}, .{} };
@@ -72,6 +86,8 @@ var instances: [MAX_INST]VirtioInputInst = .{ .{}, .{} };
 fn fullMemoryFence() void {
     switch (builtin.target.cpu.arch) {
         .x86_64 => asm volatile ("mfence" ::: .{ .memory = true }),
+        .aarch64 => asm volatile ("dsb sy" ::: .{ .memory = true }),
+        .riscv64 => asm volatile ("fence rw, rw" ::: .{ .memory = true }),
         .loongarch64 => asm volatile ("dbar 0" ::: .{ .memory = true }),
         else => asm volatile ("" ::: .{ .memory = true }),
     }
@@ -101,9 +117,9 @@ fn mmio_r32(base: usize, off: usize) u32 {
     return @as(*volatile u32, @ptrFromInt(base + off)).*;
 }
 
-fn pciReadLe32(loc: pcie.PciLoc, off: u8) u32 {
+fn pciReadLe32(loc: pcie.PciLoc, off: u16) u32 {
     var v: u32 = 0;
-    var i: u8 = 0;
+    var i: u16 = 0;
     while (i < 4) : (i += 1) {
         const sh: u5 = @intCast(i * 8);
         v |= @as(u32, pcie.readConfigByte(loc.bus, loc.dev, loc.func, off + i)) << sh;
@@ -111,16 +127,36 @@ fn pciReadLe32(loc: pcie.PciLoc, off: u8) u32 {
     return v;
 }
 
-fn barPhys32(loc: pcie.PciLoc, idx: u8) ?u64 {
-    const raw = pcie.readConfigDword(loc.bus, loc.dev, loc.func, 0x10 + idx * 4);
+/// VirtIO PCI MMIO BAR（含 64-bit type=0b10）；仅 32-bit 时与旧 `barPhys32` 行为一致。
+fn barMmioPhys(loc: pcie.PciLoc, idx: u8) ?u64 {
+    const raw = pcie.readConfigDword(loc.bus, loc.dev, loc.func, @as(u16, 0x10) + @as(u16, idx) * 4);
     if (raw == 0xFFFFFFFF) return null;
     if ((raw & 1) != 0) return null;
-    return raw & 0xFFFF_FFF0;
+    const typ = (raw >> 1) & 3;
+    if (typ == 2) {
+        const hi = pcie.readConfigDword(loc.bus, loc.dev, loc.func, @as(u16, 0x10) + @as(u16, idx + 1) * 4);
+        return (@as(u64, hi) << 32) | (@as(u64, raw) & 0xFFFF_FFF0);
+    }
+    return @as(u64, raw) & 0xFFFF_FFF0;
 }
 
 fn mapBarIfNeeded(phys: u64) bool {
     if (phys == 0) return false;
-    return vm.mapDeviceMmioIdentity(phys, 0x4000);
+    return vm.mapDeviceMmioIdentity(phys, 0x10000);
+}
+
+/// LoongArch：内核 direct map 上 VA≠GPA（H7）；环须用 GPA 编程 MMIO，且 CPU 写 avail 须经非缓存映射，否则 QEMU 读物理 RAM 看不到 D-cache（H6 used_idx 恒 0）。
+fn remapInstQueueDmaUncached(inst: *VirtioInputInst) void {
+    if (builtin.target.cpu.arch != .loongarch64) return;
+    const ps: usize = @import("../../arch.zig").impl.paging.page_size;
+    const r0 = @intFromPtr(&inst.ring_page);
+    const r1 = r0 + inst.ring_page.len;
+    var v = r0 & ~(ps - 1);
+    while (v < r1) : (v += ps) {
+        if (!vm.remapIdentityVirtPageUncached(v)) {
+            klog.warn("VirtIO-Input: DMA remap uncached failed va=0x%x", .{v});
+        }
+    }
 }
 
 fn readUsedIdx(inst: *VirtioInputInst) u16 {
@@ -131,6 +167,11 @@ fn readUsedIdx(inst: *VirtioInputInst) u16 {
 fn readAvailIdxWrite(inst: *VirtioInputInst, val: u16) void {
     const p = @intFromPtr(&inst.ring_page) + inst.avail_off;
     @as(*volatile u16, @ptrFromInt(p + 2)).* = val;
+}
+
+fn readAvailIdxRead(inst: *VirtioInputInst) u16 {
+    const p = @intFromPtr(&inst.ring_page) + inst.avail_off;
+    return @as(*volatile u16, @ptrFromInt(p + 2)).*;
 }
 
 fn availRingIndex(inst: *VirtioInputInst, i: u16) *volatile u16 {
@@ -151,12 +192,26 @@ fn descTable(inst: *VirtioInputInst) [*]VirtqDesc {
 }
 
 fn kickQueue0(inst: *VirtioInputInst) void {
-    if (inst.notify_base == 0 or inst.notify_mult == 0) return;
-    const port = inst.notify_base + @as(usize, inst.notify_mult) * @as(usize, inst.queue_notify_off);
+    if (inst.notify_base == 0) return;
+    // 部分实现以 common_cfg.queue_select 解释门铃；notify 前固定选中队列 0（evt）。
+    mmio_w16(inst.common_base, 0x16, 0);
+    fullMemoryFence();
+    // VirtIO 1.x PCI：notify_off_multiplier==0 时所有队列共用 notifications 区起始地址（不得乘 queue_notify_off）。
+    const port: usize = if (inst.notify_mult == 0)
+        inst.notify_base
+    else
+        inst.notify_base + @as(usize, inst.notify_mult) * @as(usize, inst.queue_notify_off);
+    // Linux vp_notify：向映射的 notify 端口写入队列索引（队列 0 → 0）。
     @as(*volatile u16, @ptrFromInt(port)).* = 0;
 }
 
 fn syncDeliver(inst: *VirtioInputInst) void {
+    const idle = inst.acc_dx == 0 and inst.acc_dy == 0 and inst.acc_scroll == 0 and inst.hid_buttons == 0;
+    if (idle and !inst.has_pointer_ev) return;
+
+    if (@import("build_options").mouse_debug) {
+        @import("mouse_debug.zig").noteVirtioSyncDeliver();
+    }
     const ev = mouse.MouseEvent{
         .dx = @truncate(std.math.clamp(inst.acc_dx, -32768, 32767)),
         .dy = @truncate(std.math.clamp(inst.acc_dy, -32768, 32767)),
@@ -169,26 +224,53 @@ fn syncDeliver(inst: *VirtioInputInst) void {
     inst.acc_scroll = 0;
 }
 
-fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [8]u8) void {
-    const typ = @as(u16, @intCast(le_pkt[0])) | (@as(u16, @intCast(le_pkt[1])) << 8);
-    const code = @as(u16, @intCast(le_pkt[2])) | (@as(u16, @intCast(le_pkt[3])) << 8);
-    const val: i32 = @as(i32, @intCast(@as(u32, @intCast(le_pkt[4])) |
-        (@as(u32, @intCast(le_pkt[5])) << 8) |
-        (@as(u32, @intCast(le_pkt[6])) << 16) |
-        (@as(u32, @intCast(le_pkt[7])) << 24)));
+fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [LINUX_INPUT_EVENT_SZ]u8) void {
+    const typ = @as(u16, le_pkt[0]) | (@as(u16, le_pkt[1]) << 8);
+    const code = @as(u16, le_pkt[2]) | (@as(u16, le_pkt[3]) << 8);
+    // Linux input_event.value 为 little-endian **有符号** i32；先组 u32 再 @bitCast，禁止 @intCast(u32→i32)（负增量如 REL_X=-1 会 panic）
+    const val_le: u32 = @as(u32, le_pkt[4]) |
+        (@as(u32, le_pkt[5]) << 8) |
+        (@as(u32, le_pkt[6]) << 16) |
+        (@as(u32, le_pkt[7]) << 24);
+    const val: i32 = @bitCast(val_le);
 
     switch (typ) {
         EV_REL => {
+            if (code == REL_X or code == REL_Y or code == REL_WHEEL) {
+                inst.has_pointer_ev = true;
+            }
             if (code == REL_X) inst.acc_dx += val;
             if (code == REL_Y) inst.acc_dy += val;
             if (code == REL_WHEEL) inst.acc_scroll += val;
         },
+        EV_ABS => {
+            if (code == ABS_X) {
+                inst.has_pointer_ev = true;
+                if (inst.tab_have_x) {
+                    const d = val - inst.tab_x;
+                    inst.acc_dx += d;
+                }
+                inst.tab_x = val;
+                inst.tab_have_x = true;
+            } else if (code == ABS_Y) {
+                inst.has_pointer_ev = true;
+                if (inst.tab_have_y) {
+                    const d = val - inst.tab_y;
+                    inst.acc_dy += d;
+                }
+                inst.tab_y = val;
+                inst.tab_have_y = true;
+            }
+        },
         EV_KEY => {
             if (code == BTN_LEFT) {
+                inst.has_pointer_ev = true;
                 if (val != 0) inst.hid_buttons |= 1 else inst.hid_buttons &= ~@as(u8, 1);
             } else if (code == BTN_RIGHT) {
+                inst.has_pointer_ev = true;
                 if (val != 0) inst.hid_buttons |= 2 else inst.hid_buttons &= ~@as(u8, 2);
             } else if (code == BTN_MIDDLE) {
+                inst.has_pointer_ev = true;
                 if (val != 0) inst.hid_buttons |= 4 else inst.hid_buttons &= ~@as(u8, 4);
             } else {
                 evdev.handleEvKey(code, val);
@@ -201,11 +283,12 @@ fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [8]u8) void {
     }
 }
 
-fn submitRecvBuffer(inst: *VirtioInputInst) void {
+/// 将描述符还回 avail 并通知设备。QEMU virtio-input 依赖每次回收后的 queue notify 才会继续填充缓冲区；批量只 kick 一次会导致环停滞、指针无位移。
+fn submitRecvSlot(inst: *VirtioInputInst, desc_idx: u16) void {
     const qs = inst.queue_size;
     if (qs == 0) return;
     const i = inst.local_avail_idx % qs;
-    availRingIndex(inst, i).* = 0;
+    availRingIndex(inst, i).* = desc_idx;
     inst.local_avail_idx +%= 1;
     readAvailIdxWrite(inst, inst.local_avail_idx);
     fullMemoryFence();
@@ -218,30 +301,42 @@ fn failDevice(inst: *VirtioInputInst, st: u8) void {
     klog.warn("VirtIO-Input: init failed (status 0x%x)", .{st});
 }
 
-fn pollOne(inst: *VirtioInputInst) void {
+fn pollOne(inst: *VirtioInputInst, inst_i: u8) void {
     if (!inst.active) return;
 
     if (inst.isr_base != 0) {
         _ = mmio_r8(inst.isr_base, 0);
     }
 
-    const used_idx = readUsedIdx(inst);
-    while (inst.last_used_idx != used_idx) {
+    // 每轮重读 used.idx；勿在热路径写串口（agent_ndjson），否则易与 QEMU 串口背压叠加成假死。
+    const qs: u32 = inst.queue_size;
+    const max_iters: u32 = @max(64, @as(u32, qs) * 64);
+    var iter: u32 = 0;
+    while (iter < max_iters) : (iter += 1) {
+        fullMemoryFence();
+        const used_idx = readUsedIdx(inst);
+        if (@import("build_options").mouse_debug and iter == 0) {
+            @import("mouse_debug.zig").snapshotVirtio(inst_i, true, used_idx, inst.last_used_idx);
+        }
+        if (inst.last_used_idx == used_idx) break;
+
+        fullMemoryFence();
         const elem = usedRingElem(inst, inst.last_used_idx);
-        _ = elem.len;
-        _ = elem.id;
-        if (elem.len >= 8) {
-            parseLinuxInput(inst, @ptrCast(&inst.event_pkt));
+        fullMemoryFence();
+        if (elem.len >= LINUX_INPUT_EVENT_SZ) {
+            const di = @as(usize, @intCast(elem.id % @as(u32, @intCast(inst.queue_size))));
+            const base = inst.event_slot_off + di * @as(usize, @intCast(RECV_BYTES_PER_DESC));
+            parseLinuxInput(inst, inst.ring_page[base..][0..LINUX_INPUT_EVENT_SZ]);
         }
         inst.last_used_idx +%= 1;
-        submitRecvBuffer(inst);
+        submitRecvSlot(inst, @truncate(elem.id));
     }
 }
 
 pub fn poll() void {
     if (!pcie.supports_pci_config) return;
-    for (&instances) |*inst| {
-        pollOne(inst);
+    for (&instances, 0..) |*inst, j| {
+        pollOne(inst, @truncate(j));
     }
 }
 
@@ -259,7 +354,7 @@ fn virtioAttachModern(inst: *VirtioInputInst, loc: pcie.PciLoc) bool {
     const status_hi: u16 = @truncate(st_word >> 16);
     if ((status_hi & 0x10) == 0) return false;
 
-    var cap_ptr = pcie.readConfigByte(loc.bus, loc.dev, loc.func, 0x34);
+    var cap_ptr: u16 = pcie.readConfigByte(loc.bus, loc.dev, loc.func, 0x34);
     while (cap_ptr != 0) {
         const cap_id = pcie.readConfigByte(loc.bus, loc.dev, loc.func, cap_ptr);
         const next = pcie.readConfigByte(loc.bus, loc.dev, loc.func, cap_ptr + 1);
@@ -292,10 +387,10 @@ fn virtioAttachModern(inst: *VirtioInputInst, loc: pcie.PciLoc) bool {
     }
 
     if (common_bar >= 6 or notify_bar >= 6) return false;
-    if (notify_mult_local == 0) notify_mult_local = 4;
+    // 保留 cap 中的 0：与 kickQueue0 中「mult==0 → 仅写 notify_base」一致（勿擅自改成 4，会敲错门铃）。
 
-    const b_phys_c = barPhys32(loc, common_bar) orelse return false;
-    const b_phys_n = barPhys32(loc, notify_bar) orelse return false;
+    const b_phys_c = barMmioPhys(loc, common_bar) orelse return false;
+    const b_phys_n = barMmioPhys(loc, notify_bar) orelse return false;
     if (!mapBarIfNeeded(b_phys_c)) return false;
     if (b_phys_n != b_phys_c) {
         if (!mapBarIfNeeded(b_phys_n)) return false;
@@ -306,7 +401,7 @@ fn virtioAttachModern(inst: *VirtioInputInst, loc: pcie.PciLoc) bool {
     inst.notify_mult = notify_mult_local;
 
     if (isr_bar < 6) {
-        if (barPhys32(loc, isr_bar)) |bp| {
+        if (barMmioPhys(loc, isr_bar)) |bp| {
             if (mapBarIfNeeded(bp)) {
                 inst.isr_base = @intCast(bp + isr_off);
             }
@@ -331,34 +426,57 @@ fn virtioAttachModern(inst: *VirtioInputInst, loc: pcie.PciLoc) bool {
     }
 
     mmio_w16(inst.common_base, 0x16, 0);
+    // 勿向 queue_enable(0x1c) 写 0：QEMU hw/virtio/virtio-pci.c 仅接受写 1，写 0 会 virtio_error
+    //（串口可见 "wrong value for queue_enable 0"），并可能把设备置于错误态。冷启动队列本为未启用，
+    // 与 Linux setup_vq 一致：直接读 max queue_size、写 ring、再 queue_enable=1。若遇残留已启用，
+    // 应协商 VIRTIO_F_RING_RESET 后写 queue_reset(0x3a)，而非写 enable=0。
+    fullMemoryFence();
     const qs = mmio_r16(inst.common_base, 0x18);
     if (qs < 2 or qs > 256) {
         failDevice(inst, mmio_r8(inst.common_base, 0x14));
         return false;
     }
     inst.queue_size = @min(qs, 16);
+    // VirtIO 1.x：须把驱动实际使用的队列深度写回 0x18，否则设备仍按最大深度（如 128）索引环，
+    // 与 ring_page 内按 16 槽布局不一致，表现为 used 环永远对不上、鼠标无事件。
+    mmio_w16(inst.common_base, 0x18, inst.queue_size);
+    // 未启用 MSI-X 时必须写 NO_VECTOR，否则部分固件/模拟器对队列向量 0 的处理会导致设备不投递。
+    mmio_w16(inst.common_base, 0x1a, 0xFFFF);
 
     inst.desc_off = 0;
     inst.avail_off = 16 * @as(usize, @intCast(inst.queue_size));
     var u_tmp = inst.avail_off + 4 + 2 * @as(usize, @intCast(inst.queue_size));
     u_tmp = (u_tmp + 3) & ~@as(usize, 3);
     inst.used_off = u_tmp;
-    if (inst.used_off + 4 + 8 * @as(usize, @intCast(inst.queue_size)) > inst.ring_page.len) {
+    const used_end = inst.used_off + 4 + 8 * @as(usize, @intCast(inst.queue_size));
+    if (used_end > inst.ring_page.len) {
+        failDevice(inst, mmio_r8(inst.common_base, 0x14));
+        return false;
+    }
+    inst.event_slot_off = (used_end + 7) & ~@as(usize, 7);
+    const qs_us = @as(usize, @intCast(inst.queue_size));
+    if (inst.event_slot_off + qs_us * @as(usize, @intCast(RECV_BYTES_PER_DESC)) > inst.ring_page.len) {
         failDevice(inst, mmio_r8(inst.common_base, 0x14));
         return false;
     }
 
+    remapInstQueueDmaUncached(inst);
+    fullMemoryFence();
     @memset(&inst.ring_page, 0);
 
-    const page_phys = @intFromPtr(&inst.ring_page);
-    const ev_phys = @intFromPtr(&inst.event_pkt);
+    const page_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&inst.ring_page)));
+    const ev0_phys: u64 = page_phys + @as(u64, @intCast(inst.event_slot_off));
 
-    descTable(inst)[0] = .{
-        .addr = ev_phys,
-        .len = 8,
-        .flags = VRING_DESC_F_WRITE,
-        .next = 0,
-    };
+    var di: u16 = 0;
+    while (di < inst.queue_size) : (di += 1) {
+        const slot_phys = page_phys + @as(u64, @intCast(inst.event_slot_off + @as(usize, @intCast(di)) * @as(usize, @intCast(RECV_BYTES_PER_DESC))));
+        descTable(inst)[di] = .{
+            .addr = slot_phys,
+            .len = RECV_BYTES_PER_DESC,
+            .flags = VRING_DESC_F_WRITE,
+            .next = 0,
+        };
+    }
 
     mmio_w32(inst.common_base, 0x20, @truncate(page_phys));
     mmio_w32(inst.common_base, 0x24, @truncate(page_phys >> 32));
@@ -370,17 +488,29 @@ fn virtioAttachModern(inst: *VirtioInputInst, loc: pcie.PciLoc) bool {
     inst.queue_notify_off = mmio_r16(inst.common_base, 0x1e);
     mmio_w16(inst.common_base, 0x1c, 1);
 
+    // 须先填满 avail 再 DRIVER_OK：若先置 DRIVER_OK，QEMU 可能在 avail 尚未写入时读队列并认为空（H6：used 永 0）。
     inst.last_used_idx = 0;
     inst.local_avail_idx = 0;
-    readAvailIdxWrite(inst, 0);
-    availRingIndex(inst, 0).* = 0;
-    inst.local_avail_idx = 1;
-    readAvailIdxWrite(inst, 1);
+    di = 0;
+    while (di < inst.queue_size) : (di += 1) {
+        availRingIndex(inst, di).* = di;
+    }
+    inst.local_avail_idx = inst.queue_size;
+    readAvailIdxWrite(inst, inst.queue_size);
+    fullMemoryFence();
+
+    mmio_w8(inst.common_base, 0x14, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
     fullMemoryFence();
     kickQueue0(inst);
 
-    mmio_w8(inst.common_base, 0x14, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
     inst.active = true;
+    // #region agent log
+    if (@import("build_options").agent_ndjson) {
+        const ag = @import("../../debug/agent_ndjson.zig");
+        const st7 = mmio_r8(inst.common_base, 0x14);
+        ag.emit("H7", "virtio_input_pci:attach", "ring_gpa_status", "pre", page_phys, ev0_phys, @intFromPtr(&inst.ring_page), @as(u64, @intCast(inst.event_slot_off)), st7, @as(i64, @intCast(inst.queue_size)));
+    }
+    // #endregion
     klog.info("VirtIO-Input PCI: queue_size=%u notify_off=%u (mouse/keyboard PCI)", .{
         inst.queue_size, inst.queue_notify_off,
     });
@@ -395,6 +525,12 @@ pub fn init() void {
 
     if (n == 0) {
         klog.info("VirtIO-Input PCI: no 1af4:1052 (optional: -device virtio-mouse-pci,virtio-keyboard-pci)", .{});
+        // #region agent log
+        if (@import("build_options").agent_ndjson) {
+            const ag = @import("../../debug/agent_ndjson.zig");
+            ag.emit("H1", "virtio_input_pci:init", "no_pci_devices", "pre", 0, 0, 0, 0, 0, 0);
+        }
+        // #endregion
         return;
     }
 
@@ -413,6 +549,13 @@ pub fn init() void {
     if (slot == 0) {
         klog.warn("VirtIO-Input PCI: attach failed for all devices", .{});
     }
+
+    // #region agent log
+    if (@import("build_options").agent_ndjson) {
+        const ag = @import("../../debug/agent_ndjson.zig");
+        ag.emit("H1", "virtio_input_pci:init", "attach_summary", "pre", @as(u64, @intCast(n)), @as(u64, @intCast(slot)), if (isActive()) @as(u64, 1) else 0, 0, 0, 0);
+    }
+    // #endregion
 }
 
 pub fn isActive() bool {

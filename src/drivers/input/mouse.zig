@@ -3,6 +3,7 @@
 //! Registers `\\Driver\\Mouse` / `\\Device\\Mouse0`. Reference: OSDev PS/2 mouse.
 
 const builtin = @import("builtin");
+const std = @import("std");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 const portio = if (builtin.target.cpu.arch == .x86_64)
@@ -80,6 +81,9 @@ var packet_idx: usize = 0;
 var has_scroll_wheel: bool = false;
 /// 当前半包起始 tick；超时则丢弃半包，避免永远等不到第 2/3/4 字节。
 var partial_packet_base_tick: u64 = 0;
+/// 半包起始时的 `poll_invocations`（tick 不前进时仍能丢弃错位半包）。
+var partial_packet_start_poll: u64 = 0;
+var poll_invocations: u64 = 0;
 
 var mouse_state: MouseState = .{};
 var driver_idx: u32 = 0;
@@ -140,9 +144,8 @@ fn mouseWrite(byte: u8) u8 {
     return 0;
 }
 
-/// 键盘方向键等注入的相对位移（兜底路径，不依赖 PS/2 流）。
+/// 键盘方向键 / VirtIO 键盘等注入的相对位移（兜底路径，不依赖 PS/2 鼠标流）。
 pub fn injectNudge(dx: i32, dy: i32) void {
-    if (builtin.target.cpu.arch != .x86_64) return;
     if (dx == 0 and dy == 0) return;
     mouse_state.x += dx;
     mouse_state.y += dy;
@@ -167,12 +170,26 @@ fn resetPartialIfStale() void {
     // ~50ms @100Hz：足够收齐一包，又能从错位中恢复
     if (now > partial_packet_base_tick + 5) {
         packet_idx = 0;
+        return;
+    }
+    // tick 长期为 0 或定时器未走时，仅靠 tick 无法清半包，主循环仍会 poll → 用调用次数兜底
+    if (poll_invocations > partial_packet_start_poll + 4096) {
+        packet_idx = 0;
     }
 }
 
 /// 空闲时轮询 8042 输出缓冲：按 aux 位、半包续包、首字节 PS/2 同步位路由鼠标/键盘。
 pub fn poll() void {
     if (builtin.target.cpu.arch != .x86_64) return;
+    poll_invocations +%= 1;
+    // #region agent log
+    if (@import("build_options").agent_ndjson) {
+        if (poll_invocations % 4000 == 0) {
+            const ag = @import("../../debug/agent_ndjson.zig");
+            ag.emit("H5", "mouse.zig:poll", "ps2_poll", "pre", poll_invocations, packet_idx, 0, 0, 0, 0);
+        }
+    }
+    // #endregion
     resetPartialIfStale();
     while (true) {
         const status = portio.inb(KB_STATUS_PORT);
@@ -200,6 +217,7 @@ fn processAuxByte(data: u8, allow_first_without_sync_bit: bool) void {
 
     if (packet_idx == 0) {
         partial_packet_base_tick = @import("../../ke/scheduler.zig").getTicks();
+        partial_packet_start_poll = poll_invocations;
     }
 
     packet_buf[packet_idx] = data;
@@ -264,6 +282,9 @@ pub fn deliverMouseEvent(event: MouseEvent) void {
 
     dx_scaled = @divTrunc(dx_scaled * mouse_state.sensitivity, 10);
     dy_scaled = @divTrunc(dy_scaled * mouse_state.sensitivity, 10);
+    // 低灵敏度或 @divTrunc 会把 ±1 打成 0，指针表现为「完全不动」
+    if (dx_scaled == 0 and event.dx != 0) dx_scaled = std.math.sign(event.dx);
+    if (dy_scaled == 0 and event.dy != 0) dy_scaled = std.math.sign(event.dy);
 
     if (mouse_state.smoothing_enabled) {
         dx_scaled = @divTrunc(dx_scaled * 3 + mouse_state.prev_dx, 4);
@@ -294,6 +315,10 @@ pub fn deliverMouseEvent(event: MouseEvent) void {
     }
 
     mouse_state.cursor_moved = true;
+    if (@import("build_options").mouse_debug) {
+        const md = @import("mouse_debug.zig");
+        md.traceAfterDeliver(mouse_state.x, mouse_state.y, event.dx, event.dy, mouse_state.buttons);
+    }
     pushEvent(event);
 }
 
@@ -619,8 +644,8 @@ pub fn initHardware() void {
 }
 
 /// 在 `io.init()` 之后登记 \\Driver\\Mouse（`io.init()` 会清空驱动表，须晚于硬件 init 再注册）。
+/// 非 x86 无 PS/2 包，但 VirtIO-Input 仍通过本驱动的状态与事件队列上报指针运动。
 pub fn registerWithIo() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
     if (driver_initialized) return;
 
     driver_idx = io.registerDriver("\\Driver\\Mouse", mouseDispatch) orelse {

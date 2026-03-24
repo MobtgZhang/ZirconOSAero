@@ -6,6 +6,7 @@ pub fn pollAll() void {
     virtio_input_pci.poll();
     if (builtin.target.cpu.arch == .x86_64) {
         const mouse = @import("mouse.zig");
+        // 始终排空 PS/2：与 VirtIO-Input 并行，QEMU 上常见双路鼠标。
         mouse.poll();
     }
 }

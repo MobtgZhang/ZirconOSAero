@@ -1,10 +1,13 @@
 //! PCI / PCIe configuration space access (NT6-style bus driver)
 //! - x86_64: I/O ports 0xCF8/0xCFC (CONFIG_ADDRESS / CONFIG_DATA)
 //! - loongarch64 QEMU virt: ECAM MMIO at 0x2000_0000（见 `pcie@20000000` DT）
+//! - aarch64 QEMU virt: 低 ECAM 在 0x3f00_0000（Makefile 使用 `highmem-ecam=off` 与 EDK2 固件一致）
+//! - riscv64 QEMU virt: ECAM 在 0x3000_0000（`pci@30000000`）
 
 const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
+const vm = @import("../../mm/vm.zig");
 
 const portio = if (builtin.target.cpu.arch == .x86_64)
     @import("../../hal/x86_64/portio.zig")
@@ -21,9 +24,19 @@ const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 /// QEMU `loongarch64` virt：`pci-host-ecam-generic` 配置空间窗口
 const LOONGARCH_ECAM_BASE: u64 = 0x2000_0000;
+/// 与 aarch64 一致取 16MiB：足够枚举总线 0；内核 identity 映射止于 512MiB，ECAM 起点恰在边界上须单独映射
+const LOONGARCH_ECAM_SIZE: u64 = 0x0100_0000;
+/// QEMU `aarch64` virt，低 ECAM（`highmem-ecam=off`）
+const AARCH64_ECAM_BASE: u64 = 0x3f00_0000;
+const AARCH64_ECAM_SIZE: u64 = 0x0100_0000;
+/// QEMU `riscv64` virt
+const RISCV64_ECAM_BASE: u64 = 0x3000_0000;
+const RISCV64_ECAM_SIZE: u64 = 0x1000_0000;
 
-pub const supports_pci_config: bool =
-    builtin.target.cpu.arch == .x86_64 or builtin.target.cpu.arch == .loongarch64;
+pub const supports_pci_config: bool = builtin.target.cpu.arch == .x86_64 or
+    builtin.target.cpu.arch == .loongarch64 or
+    builtin.target.cpu.arch == .aarch64 or
+    builtin.target.cpu.arch == .riscv64;
 
 pub const IOCTL_PCI_READ_CONFIG_DWORD: u32 = 0x00070000;
 /// buffer_ptr layout: (bus:u8)<<24 | (dev:u8)<<19 | (func:u8)<<16 | (offset:u8) — offset dword-aligned
@@ -32,11 +45,13 @@ var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;
 
-pub fn readConfigDword(bus: u8, dev: u8, func: u8, offset: u8) u32 {
+pub fn readConfigDword(bus: u8, dev: u8, func: u8, offset: u16) u32 {
     if (!supports_pci_config) return 0xFFFFFFFF;
-    const aligned: u8 = offset & 0xFC;
     switch (builtin.target.cpu.arch) {
         .x86_64 => {
+            // I/O CF8/CFC：仅保证 256B 传统配置空间
+            const off = @min(offset, 0xFF);
+            const aligned: u8 = @truncate(off & 0xFC);
             const addr: u32 = 0x80000000 |
                 (@as(u32, bus) << 16) |
                 (@as(u32, dev & 0x1F) << 11) |
@@ -45,23 +60,31 @@ pub fn readConfigDword(bus: u8, dev: u8, func: u8, offset: u8) u32 {
             portio.outl(PCI_CONFIG_ADDR, addr);
             return portio.inl(PCI_CONFIG_DATA);
         },
-        .loongarch64 => {
-            const mmio = LOONGARCH_ECAM_BASE +
+        .loongarch64, .aarch64, .riscv64 => {
+            // PCIe ECAM：每功能 4KiB 配置空间，偏移须用 12 位（勿截成 u8）
+            const aligned = offset & 0xFFF & ~@as(u16, 3);
+            const mmio = switch (builtin.target.cpu.arch) {
+                .loongarch64 => LOONGARCH_ECAM_BASE,
+                .aarch64 => AARCH64_ECAM_BASE,
+                .riscv64 => RISCV64_ECAM_BASE,
+                else => unreachable,
+            } +
                 (@as(u64, bus) << 20) +
                 (@as(u64, dev & 0x1F) << 15) +
                 (@as(u64, func & 7) << 12) +
-                aligned;
+                @as(u64, aligned);
             return @as(*volatile u32, @ptrFromInt(mmio)).*;
         },
         else => return 0xFFFFFFFF,
     }
 }
 
-pub fn writeConfigDword(bus: u8, dev: u8, func: u8, offset: u8, value: u32) void {
+pub fn writeConfigDword(bus: u8, dev: u8, func: u8, offset: u16, value: u32) void {
     if (!supports_pci_config) return;
-    const aligned: u8 = offset & 0xFC;
     switch (builtin.target.cpu.arch) {
         .x86_64 => {
+            const off = @min(offset, 0xFF);
+            const aligned: u8 = @truncate(off & 0xFC);
             const addr: u32 = 0x80000000 |
                 (@as(u32, bus) << 16) |
                 (@as(u32, dev & 0x1F) << 11) |
@@ -70,19 +93,25 @@ pub fn writeConfigDword(bus: u8, dev: u8, func: u8, offset: u8, value: u32) void
             portio.outl(PCI_CONFIG_ADDR, addr);
             portio.outl(PCI_CONFIG_DATA, value);
         },
-        .loongarch64 => {
-            const mmio = LOONGARCH_ECAM_BASE +
+        .loongarch64, .aarch64, .riscv64 => {
+            const aligned = offset & 0xFFF & ~@as(u16, 3);
+            const mmio = switch (builtin.target.cpu.arch) {
+                .loongarch64 => LOONGARCH_ECAM_BASE,
+                .aarch64 => AARCH64_ECAM_BASE,
+                .riscv64 => RISCV64_ECAM_BASE,
+                else => unreachable,
+            } +
                 (@as(u64, bus) << 20) +
                 (@as(u64, dev & 0x1F) << 15) +
                 (@as(u64, func & 7) << 12) +
-                aligned;
+                @as(u64, aligned);
             @as(*volatile u32, @ptrFromInt(mmio)).* = value;
         },
         else => {},
     }
 }
 
-pub fn readConfigByte(bus: u8, dev: u8, func: u8, offset: u8) u8 {
+pub fn readConfigByte(bus: u8, dev: u8, func: u8, offset: u16) u8 {
     const dw = readConfigDword(bus, dev, func, offset);
     const shift: u5 = @intCast((offset & 3) * 8);
     return @truncate(dw >> shift);
@@ -161,6 +190,13 @@ fn pciDispatch(irp: *io.Irp) io.IoStatus {
 
 pub fn init() void {
     if (!supports_pci_config) return;
+
+    switch (builtin.target.cpu.arch) {
+        .aarch64 => _ = vm.mapDeviceMmioIdentity(AARCH64_ECAM_BASE, AARCH64_ECAM_SIZE),
+        .riscv64 => _ = vm.mapDeviceMmioIdentity(RISCV64_ECAM_BASE, RISCV64_ECAM_SIZE),
+        .loongarch64 => _ = vm.mapDeviceMmioIdentity(LOONGARCH_ECAM_BASE, LOONGARCH_ECAM_SIZE),
+        else => {},
+    }
 
     driver_idx = io.registerDriver("\\Driver\\Pci", pciDispatch) orelse {
         klog.err("PCI: Failed to register driver", .{});

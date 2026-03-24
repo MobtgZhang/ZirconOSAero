@@ -141,13 +141,10 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
     video.display.initDesktopMode(fb_addr, width, height, pitch, bpp, pixel_bgr);
     video.hdmi.syncFramebufferMode(width, height, bpp);
 
+    input.mouse.setScreenBounds(@intCast(width), @intCast(height));
+    input.mouse.setPosition(@intCast(width / 2), @intCast(height / 2));
     if (is_x86) {
-        input.mouse.setScreenBounds(@intCast(width), @intCast(height));
-        input.mouse.setPosition(@intCast(width / 2), @intCast(height / 2));
         input.mouse.reassertStreamEnable();
-    } else if (builtin.target.cpu.arch == .loongarch64) {
-        input.mouse.setScreenBounds(@intCast(width), @intCast(height));
-        input.mouse.setPosition(@intCast(width / 2), @intCast(height / 2));
     }
 
     klog.info("Drivers: Desktop display mode enabled (%ux%u@%ubpp)", .{ width, height, bpp });

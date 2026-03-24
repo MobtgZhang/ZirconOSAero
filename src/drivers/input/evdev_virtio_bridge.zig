@@ -1,6 +1,8 @@
 //! Linux evdev 风格键码（VirtIO-Input）→ 字符环与 Ctrl+Shift+Esc 任务管理器热键。
 //! 供 LoongArch（无 PS/2）与 `kbd.zig` / `arch.readInputChar` 使用。
 
+const mouse = @import("mouse.zig");
+
 const RING_CAP: usize = 128;
 
 var ring: [RING_CAP]u8 = undefined;
@@ -10,7 +12,10 @@ var ring_tail: usize = 0;
 var left_ctrl: bool = false;
 var left_shift: bool = false;
 var right_shift: bool = false;
+var left_alt: bool = false;
+var right_alt: bool = false;
 var taskmgr_hotkey_pending: bool = false;
+var wallpaper_cycle_pending: bool = false;
 
 // input-event-codes.h（节选）
 const KEY_ESC: u16 = 1;
@@ -28,7 +33,15 @@ const KEY_Z: u16 = 45;
 const KEY_LEFTSHIFT: u16 = 42;
 const KEY_RIGHTSHIFT: u16 = 54;
 const KEY_LEFTALT: u16 = 56;
+const KEY_RIGHTALT: u16 = 100;
+const KEY_F9: u16 = 67;
 const KEY_SPACE: u16 = 57;
+const KEY_UP: u16 = 103;
+const KEY_LEFT: u16 = 105;
+const KEY_RIGHT: u16 = 106;
+const KEY_DOWN: u16 = 108;
+
+const ARROW_NUDGE: i32 = 12;
 
 fn shiftHeld() bool {
     return left_shift or right_shift;
@@ -58,6 +71,18 @@ pub fn consumeTaskMgrHotkey() bool {
         return true;
     }
     return false;
+}
+
+pub fn consumeWallpaperCycleHotkey() bool {
+    if (wallpaper_cycle_pending) {
+        wallpaper_cycle_pending = false;
+        return true;
+    }
+    return false;
+}
+
+fn altHeldEvdev() bool {
+    return left_alt or right_alt;
 }
 
 fn mapLetter(code: u16, press: bool) void {
@@ -95,9 +120,16 @@ pub fn handleEvKey(code: u16, val: i32) void {
         KEY_LEFTCTRL => left_ctrl = press,
         KEY_LEFTSHIFT => left_shift = press,
         KEY_RIGHTSHIFT => right_shift = press,
+        KEY_LEFTALT => left_alt = press,
+        KEY_RIGHTALT => right_alt = press,
         KEY_ESC => {
             if (press and left_ctrl and shiftHeld()) {
                 taskmgr_hotkey_pending = true;
+            }
+        },
+        KEY_F9 => {
+            if (press and left_ctrl and altHeldEvdev()) {
+                wallpaper_cycle_pending = true;
             }
         },
         KEY_ENTER => {
@@ -111,6 +143,18 @@ pub fn handleEvKey(code: u16, val: i32) void {
         },
         KEY_SPACE => {
             if (press) pushChar(' ');
+        },
+        KEY_UP => {
+            if (press) mouse.injectNudge(0, -ARROW_NUDGE);
+        },
+        KEY_DOWN => {
+            if (press) mouse.injectNudge(0, ARROW_NUDGE);
+        },
+        KEY_LEFT => {
+            if (press) mouse.injectNudge(-ARROW_NUDGE, 0);
+        },
+        KEY_RIGHT => {
+            if (press) mouse.injectNudge(ARROW_NUDGE, 0);
         },
         else => {
             mapLetter(code, press);

@@ -334,8 +334,8 @@ pub fn syncCursorFromMouse() void {
     const mx = mouse.getX();
     const my = mouse.getY();
     const P: i32 = 256;
-    desktop_ctx.smooth_cursor.sub_x = mx * P;
-    desktop_ctx.smooth_cursor.sub_y = my * P;
+    desktop_ctx.smooth_cursor.sub_x = @truncate(@as(i64, mx) * @as(i64, P));
+    desktop_ctx.smooth_cursor.sub_y = @truncate(@as(i64, my) * @as(i64, P));
     desktop_ctx.smooth_cursor.display_x = mx;
     desktop_ctx.smooth_cursor.display_y = my;
     desktop_ctx.smooth_cursor.target_x = mx;
@@ -491,9 +491,8 @@ pub fn hideStartMenu() void {
     startmenu.hide();
 }
 
-/// PS/2 键盘快捷键（如 Ctrl+Shift+Esc → 任务管理器）。返回 true 时需整屏重绘。
+/// 键盘快捷键（如 Ctrl+Shift+Esc → 任务管理器）。返回 true 时需整屏重绘。
 pub fn handleDesktopHotkeys() bool {
-    if (builtin.target.cpu.arch != .x86_64) return false;
     if (!@import("../../arch.zig").consumeTaskMgrHotkey()) return false;
     bringTaskManagerToFront();
     return true;
@@ -599,6 +598,10 @@ pub fn handleClick(x: i32, y: i32) bool {
             .shutdown => {
                 startmenu.hide();
                 @import("../../arch.zig").shutdown();
+            },
+            .restart => {
+                startmenu.hide();
+                @import("../../arch.zig").reset();
             },
             .standby => {
                 startmenu.hide();
@@ -711,6 +714,44 @@ pub fn handleRightClick(x: i32, y: i32) bool {
     return false;
 }
 
+/// 资源管理器窗口拖动：先算理想位置，钳位后若被挡在边缘则重算抓取偏移，避免标题栏与指针「滑脱」。
+fn applyExplorerDrag(x: i32, y: i32, scr_w: i32, scr_h: i32) void {
+    const dim = computeSampleWindowDims(scr_w, scr_h);
+    const pad: i32 = 2;
+    const cap = shellTitlebarH();
+    const tb = getTaskbarHeight();
+
+    const nx = x - drag_offset_x;
+    const ny = y - drag_offset_y;
+    const cx = @max(pad, @min(nx, scr_w - pad - dim.w));
+    const cy = @max(0, @min(ny, scr_h - tb - cap));
+    if (cx != nx or cy != ny) {
+        drag_offset_x = x - cx;
+        drag_offset_y = y - cy;
+    }
+    window_x = cx;
+    window_y = cy;
+}
+
+/// 任务管理器拖动：同上，贴边时保持抓取点与指针一致。
+fn applyTaskMgrDrag(x: i32, y: i32, scr_w: i32, scr_h: i32) void {
+    const tm_w: i32 = 320;
+    const tm_h: i32 = 260;
+    const pad: i32 = 2;
+    const tb = getTaskbarHeight();
+
+    const nx = x - taskmgr_drag_off_x;
+    const ny = y - taskmgr_drag_off_y;
+    const cx = @max(pad, @min(nx, scr_w - pad - tm_w));
+    const cy = @max(pad, @min(ny, scr_h - tb - tm_h - pad));
+    if (cx != nx or cy != ny) {
+        taskmgr_drag_off_x = x - cx;
+        taskmgr_drag_off_y = y - cy;
+    }
+    taskmgr_x = cx;
+    taskmgr_y = cy;
+}
+
 /// 返回 true 表示开始菜单高亮变化，需要整屏重绘（与纯指针移动区分）。
 pub fn handleMouseMove(x: i32, y: i32) bool {
     desktop_ctx.smooth_cursor.target_x = x;
@@ -726,33 +767,13 @@ pub fn handleMouseMove(x: i32, y: i32) bool {
     if (drag_active) {
         const scr_w: i32 = @intCast(fb.getWidth());
         const scr_h: i32 = @intCast(fb.getHeight());
-        window_x = x - drag_offset_x;
-        window_y = y - drag_offset_y;
-        const dim = computeSampleWindowDims(scr_w, scr_h);
-        const pad: i32 = 2;
-        if (window_x < pad) window_x = pad;
-        if (window_x + dim.w > scr_w - pad) window_x = scr_w - dim.w - pad;
-        if (window_y < 0) window_y = 0;
-        {
-            const cap = shellTitlebarH();
-            if (window_y > scr_h - getTaskbarHeight() - cap) window_y = scr_h - getTaskbarHeight() - cap;
-        }
+        applyExplorerDrag(x, y, scr_w, scr_h);
     }
     if (taskmgr_drag_active) {
         const scr_w: i32 = @intCast(fb.getWidth());
         const scr_h: i32 = @intCast(fb.getHeight());
         initTaskMgrPosition(scr_w, scr_h);
-        const tm_w: i32 = 320;
-        const tm_h: i32 = 260;
-        taskmgr_x = x - taskmgr_drag_off_x;
-        taskmgr_y = y - taskmgr_drag_off_y;
-        const pad: i32 = 2;
-        if (taskmgr_x < pad) taskmgr_x = pad;
-        if (taskmgr_y < pad) taskmgr_y = pad;
-        if (taskmgr_x + tm_w > scr_w - pad) taskmgr_x = scr_w - tm_w - pad;
-        if (taskmgr_y + tm_h > scr_h - getTaskbarHeight() - pad) {
-            taskmgr_y = scr_h - getTaskbarHeight() - tm_h - pad;
-        }
+        applyTaskMgrDrag(x, y, scr_w, scr_h);
     }
     return hover_changed;
 }
@@ -833,9 +854,10 @@ fn renderAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, tb_h: i32) v
     const orb_x: i32 = 4;
     const orb_y = tb_y + 2;
     const orb_sz: i32 = 36;
+    fb.fillRoundedRect(orb_x - 1, orb_y - 1, orb_sz + 2, orb_sz + 2, 19, rgb(0x18, 0x38, 0x60));
     fb.fillRoundedRect(orb_x, orb_y, orb_sz, orb_sz, 18, rgb(0x24, 0x4A, 0x80));
-    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x50, 0x82, 0xC0), rgb(0x28, 0x50, 0x88));
-    fb.blendTintRect(orb_x + 6, orb_y + 4, orb_sz - 12, 8, rgb(0xE8, 0xF4, 0xFF), 55, 255);
+    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x58, 0x8C, 0xC8), rgb(0x28, 0x50, 0x88));
+    fb.blendTintRect(orb_x + 5, orb_y + 3, orb_sz - 10, 10, rgb(0xF0, 0xF8, 0xFF), 62, 255);
     renderZirconLogo(orb_x + 11, orb_y + 11);
 
     // Quick launch — ZirconOSAero/resources/icons/*.svg → embedded Aero bitmaps
@@ -907,7 +929,7 @@ pub fn initAeroDwm() void {
             .glass_saturation = 208,
             .glass_tint_color = 0x4068A0,
             .glass_tint_opacity = 62,
-            .glass_taskbar_tint_opacity = 104,
+            .glass_taskbar_tint_opacity = 96,
             .specular_intensity = 42,
             .animation_enabled = true,
             .peek_enabled = true,
@@ -969,24 +991,25 @@ pub fn initAeroDwm() void {
 pub const DwmConfig = struct {
     glass_enabled: bool = true,
     /// Legacy overall strength (some UI paths); tint strength is `glass_tint_opacity`
-    glass_opacity: u8 = 180,
-    glass_blur_radius: u8 = 12,
+    glass_opacity: u8 = 210,
+    /// docs/cn/AeroRendering.md — 与 `initAeroDwm` / `dwm.zig` 默认一致
+    glass_blur_radius: u8 = 6,
     /// Separable box-blur passes (win7Desktop.md: multi-pass ≈ Gaussian)
-    glass_blur_passes: u8 = 4,
-    glass_saturation: u8 = 200,
+    glass_blur_passes: u8 = 2,
+    glass_saturation: u8 = 208,
     /// BGR 0x00BBGGRR style packed color (same as theme colorization)
     glass_tint_color: u32 = 0x4068A0,
     /// Step 3: alpha blend with theme tint (Aero Glass pipeline)
-    glass_tint_opacity: u8 = 58,
+    glass_tint_opacity: u8 = 62,
     /// Taskbar band: stronger tint（与轻量 blur 叠加）
-    glass_taskbar_tint_opacity: u8 = 100,
-    specular_intensity: u8 = 38,
+    glass_taskbar_tint_opacity: u8 = 96,
+    specular_intensity: u8 = 42,
     animation_enabled: bool = true,
     peek_enabled: bool = true,
     shadow_enabled: bool = true,
     vsync_compositor: bool = true,
     smooth_cursor: bool = true,
-    cursor_lerp_factor: i32 = 200,
+    cursor_lerp_factor: i32 = 255,
 };
 
 /// Chrome drawn after blur+tint (taskbar has side rails; caption only divider to client)

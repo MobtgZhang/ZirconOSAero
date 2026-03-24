@@ -35,7 +35,7 @@ pub fn initDwm() void {
         .glass_saturation = 208,
         .glass_tint_color = 0x4068A0,
         .glass_tint_opacity = 62,
-        .glass_taskbar_tint_opacity = 104,
+        .glass_taskbar_tint_opacity = 96,
         .specular_intensity = 42,
         .animation_enabled = true,
         .peek_enabled = true,
@@ -164,11 +164,15 @@ fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors)
 
     fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
     fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
-    fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+    if (dwm.isGlassEnabled()) {
+        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+    } else {
+        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+    }
 
     icons.drawThemedIcon(.computer, win_x + 6, win_y + 8, 1, .aero);
-    fb.drawTextTransparent(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
-    fb.drawTextTransparent(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
+    fb.drawTextTransparentUi(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
+    fb.drawTextTransparentUi(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
 
     display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t);
 
@@ -226,7 +230,8 @@ fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32)
     } else {
         fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
     }
-    fb.drawHLine(0, tb_y, scr_w, rgb(0x58, 0x78, 0xA8));
+    fb.drawHLine(0, tb_y, scr_w, rgb(0x70, 0x90, 0xB8));
+    fb.drawHLine(0, tb_y + 1, scr_w, rgb(0x38, 0x52, 0x70));
 
     const peek_w: i32 = 12;
     const icon_s: u32 = 2;
@@ -237,9 +242,11 @@ fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32)
     const orb_x: i32 = 4;
     const orb_y = tb_y + @divTrunc(tb_h - 36, 2);
     const orb_sz: i32 = 36;
+    // Win7 Start 球体语义：整圆 + 顶缘高光 + 外环微光（MSDN 任务栏/壳资源模型，非 UEFI 方块）
+    fb.fillRoundedRect(orb_x - 1, orb_y - 1, orb_sz + 2, orb_sz + 2, 19, rgb(0x18, 0x38, 0x60));
     fb.fillRoundedRect(orb_x, orb_y, orb_sz, orb_sz, 18, rgb(0x24, 0x4A, 0x80));
-    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x50, 0x82, 0xC0), rgb(0x28, 0x50, 0x88));
-    fb.blendTintRect(orb_x + 6, orb_y + 4, orb_sz - 12, 8, rgb(0xE8, 0xF4, 0xFF), 55, 255);
+    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x58, 0x8C, 0xC8), rgb(0x28, 0x50, 0x88));
+    fb.blendTintRect(orb_x + 5, orb_y + 3, orb_sz - 10, 10, rgb(0xF0, 0xF8, 0xFF), 62, 255);
     display.renderZirconLogo(orb_x + 11, orb_y + 11);
 
     const ql_ids = [_]icons.IconId{ .browser, .terminal, .documents };
@@ -261,15 +268,15 @@ fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32)
     for (app_items) |app| {
         const bw: i32 = 58;
         if (app.active) {
-            fb.fillRoundedRect(ax, ay, bw, pill_h, 3, rgb(0x50, 0x80, 0xB8));
+            fb.fillRoundedRect(ax, ay, bw, pill_h, 7, rgb(0x50, 0x80, 0xB8));
             fb.fillRect(ax + 2, ay + 2, bw - 4, 8, rgb(0x78, 0xA8, 0xD8));
             fb.drawRect(ax, ay, bw, pill_h, rgb(0x90, 0xB8, 0xE8));
         } else {
-            fb.fillRoundedRect(ax, ay, bw, pill_h, 3, rgb(0x30, 0x48, 0x68));
+            fb.fillRoundedRect(ax, ay, bw, pill_h, 7, rgb(0x30, 0x48, 0x68));
             fb.drawRect(ax, ay, bw, pill_h, rgb(0x48, 0x60, 0x80));
         }
         icons.drawThemedIcon(app.id, ax + 3, ay + 3, icon_s_apps, .aero);
-        fb.drawTextTransparent(ax + 17, ay + 5, app.text, rgb(0xFF, 0xFF, 0xFF));
+        fb.drawTextTransparentUi(ax + 17, ay + 5, app.text, rgb(0xFF, 0xFF, 0xFF));
         ax += bw + 4;
     }
 
@@ -282,13 +289,13 @@ fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32)
     icons.drawThemedIcon(.network, tray.net_x, tray.tray_icons_y, tray.icon_s, .aero);
     icons.drawThemedIcon(.browser, tray.vol_x, tray.tray_icons_y, tray.icon_s, .aero);
     icons.drawThemedIcon(.settings, tray.set_x, tray.tray_icons_y, tray.icon_s, .aero);
-    fb.drawTextTransparent(tray.chevron_x, tray.chevron_y, "^", rgb(0xB0, 0xC8, 0xE8));
+    fb.drawTextTransparentUi(tray.chevron_x, tray.chevron_y, "^", rgb(0xB0, 0xC8, 0xE8));
 
     const line_h_clk: i32 = 14;
     const line_time = "12:00 PM";
     const line_date = "3/21/2026";
-    fb.drawTextTransparent(tray.clk_x, tray.clk_y, line_time, t.clock_text);
-    fb.drawTextTransparent(tray.clk_x, tray.clk_y + line_h_clk + 1, line_date, rgb(0xC8, 0xD8, 0xE8));
+    fb.drawTextTransparentUi(tray.clk_x, tray.clk_y, line_time, t.clock_text);
+    fb.drawTextTransparentUi(tray.clk_x, tray.clk_y + line_h_clk + 1, line_date, rgb(0xC8, 0xD8, 0xE8));
 
     display.renderAeroTrayFlyout(scr_w, scr_h);
 
@@ -320,8 +327,8 @@ fn renderExplorerWindow(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) voi
     }
 
     icons.drawThemedIcon(.computer, win_x + 6, win_y + 8, 1, .aero);
-    fb.drawTextTransparent(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
-    fb.drawTextTransparent(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
+    fb.drawTextTransparentUi(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
+    fb.drawTextTransparentUi(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
 
     display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t);
 

@@ -3,6 +3,7 @@
 const builtin = @import("builtin");
 
 const is_x86 = (builtin.target.cpu.arch == .x86_64);
+const use_ps2_style_mouse = is_x86 or (builtin.target.cpu.arch == .loongarch64);
 
 pub fn rgb(r: u32, g: u32, b: u32) u32 {
     return b | (g << 8) | (r << 16);
@@ -42,8 +43,8 @@ pub const ThemeId = enum(u8) {
 
 pub const THEME_AERO = ThemeColors{
     .desktop_bg = rgb(0x12, 0x38, 0x62),
-    .taskbar_top = rgb(0x22, 0x34, 0x4E),
-    .taskbar_bottom = rgb(0x18, 0x26, 0x3A),
+    .taskbar_top = rgb(0x2A, 0x3E, 0x5C),
+    .taskbar_bottom = rgb(0x16, 0x24, 0x38),
     .start_btn_top = rgb(0x3D, 0x79, 0xCB),
     .start_btn_bottom = rgb(0x24, 0x56, 0x9D),
     .start_btn_text = rgb(0xFF, 0xFF, 0xFF),
@@ -77,11 +78,12 @@ pub fn setTheme(id: ThemeId) void {
     active_theme = &THEME_AERO;
     // 内核 PS/2 路径：勿启用插值/平滑。插值步长为 0 时会出现「坐标未变 → 不重绘 →
     // renderDesktopFrame 内 while(isInterpolating) 永不运行」的死锁，指针表现为完全不动。
-    if (is_x86) {
+    if (use_ps2_style_mouse) {
         const mouse = @import("../input/mouse.zig");
         mouse.setInterpolation(false, 1);
         mouse.setSmoothing(false);
         mouse.setSensitivity(10);
+        mouse.setAcceleration(false, 3);
     }
 }
 

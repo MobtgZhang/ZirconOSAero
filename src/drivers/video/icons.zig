@@ -272,11 +272,12 @@ const aero_palettes = [8]IconPalette{
 fn drawAeroIcon(id: IconId, screen_x: i32, screen_y: i32, scale: u32) void {
     const s: i32 = if (scale < 1) 1 else @intCast(scale);
     const sz: i32 = 16 * s;
-    // Aero 玻璃「方块」底：圆角底板 + 顶缘高光 + 细描边，再叠嵌入位图图标。
-    fb.fillRoundedRect(screen_x, screen_y, sz, sz, 3, rgb(0x28, 0x48, 0x68));
-    fb.drawGradientV(screen_x + 1, screen_y + 1, sz - 2, @max(1, @divTrunc(sz, 3)), rgb(0x58, 0x78, 0x98), rgb(0x30, 0x50, 0x70));
-    fb.drawRect(screen_x, screen_y, sz, sz, rgb(0x90, 0xB8, 0xE0));
-    fb.drawHLine(screen_x + 1, screen_y + 1, sz - 2, rgb(0xC8, 0xE0, 0xF8));
+    // Win7 任务栏/桌面图标：较大圆角「药丸」底板 + 玻璃渐变（非直角 UEFI 风贴图）
+    const corner: i32 = @max(5, @min(@divTrunc(sz, 3), 12));
+    fb.fillRoundedRect(screen_x, screen_y, sz, sz, corner, rgb(0x28, 0x48, 0x68));
+    fb.drawGradientV(screen_x + 1, screen_y + 1, sz - 2, @max(2, @divTrunc(sz * 2, 5)), rgb(0x68, 0x90, 0xB8), rgb(0x30, 0x50, 0x70));
+    fb.drawRect(screen_x, screen_y, sz, sz, rgb(0x98, 0xC0, 0xE8));
+    fb.drawHLine(screen_x + 2, screen_y + 1, sz - 4, rgb(0xE0, 0xF0, 0xFF));
     drawPixelIcon(id, screen_x, screen_y, scale, &aero_palettes, &aero_desktop_icon_pixels);
     const hi_h = @divTrunc(sz, 3);
     if (hi_h > 1) {

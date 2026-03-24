@@ -4,6 +4,7 @@ const std = @import("std");
 const fb = @import("framebuffer.zig");
 const icons = @import("icons.zig");
 const klog = @import("../../rtl/klog.zig");
+const dwm = @import("dwm.zig");
 
 fn drawMenuIcon(id: icons.IconId, x: i32, y: i32, scale: u32) void {
     icons.drawThemedIcon(id, x, y, scale, .aero);
@@ -56,6 +57,7 @@ const AERO7_IDX_ALL: i32 = 48;
 pub const MenuAction = enum {
     none,
     shutdown,
+    restart,
     standby,
     logoff,
 };
@@ -138,8 +140,9 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
     if (py >= foot_y and py < inner_y + inner_h) {
         if (py >= foot_y + 6 and py < foot_y + 34) {
             const sd_x = main_x + main_w - 116;
-            if (px >= main_x + 8 and px < main_x + 96) return 200;
-            if (px >= main_x + 100 and px < sd_x - 8) return 202;
+            if (px >= main_x + 8 and px < main_x + 90) return 200;
+            if (px >= main_x + 92 and px < main_x + 152) return 202;
+            if (px >= main_x + 156 and px < sd_x - 8) return 203;
             if (px >= sd_x and px < main_x + main_w - 8) return 201;
         }
         return -1;
@@ -170,6 +173,7 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
 fn handleAero7MenuClick(px: i32, py: i32, scr_w: i32, scr_h: i32) MenuAction {
     const h = aero7HoverIndex(px, py, scr_w, scr_h);
     if (h == 201) return .shutdown;
+    if (h == 203) return .restart;
     if (h == 202) return .standby;
     if (h == 200) return .logoff;
     if (h >= 0 and h < aero7_left.len) {
@@ -207,8 +211,12 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const rail_bg = rgb(0x10, 0x1C, 0x30);
 
     fb.blendTintRect(r.x + 5, r.y + 5, r.w, r.h, rgb(0x00, 0x00, 0x00), 35, 255);
-    fb.fillRoundedRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 6, rgb(0xE8, 0xEE, 0xF6));
-    fb.blendTintRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, rgb(0x88, 0xA8, 0xC8), 22, 200);
+    if (dwm.isGlassEnabled()) {
+        dwm.renderGlassEffect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, rgb(0x28, 0x40, 0x60), .panel);
+    } else {
+        fb.fillRoundedRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 6, rgb(0xE8, 0xEE, 0xF6));
+        fb.blendTintRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, rgb(0x88, 0xA8, 0xC8), 22, 200);
+    }
     fb.draw3DRect(r.x, r.y, r.w, r.h, rgb(0xF5, 0xFA, 0xFF), rgb(0x40, 0x58, 0x70));
     fb.draw3DRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, rgb(0xC8, 0xD8, 0xE8), rgb(0x30, 0x40, 0x55));
 
@@ -226,7 +234,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const orb_y = inner_y + inner_h - rail - 6;
     fb.fillRoundedRect(inner_x + 8, orb_y, 36, 36, 18, rgb(0x28, 0x48, 0x78));
     fb.drawGradientV(inner_x + 9, orb_y + 1, 34, 17, rgb(0x50, 0x78, 0xA8), rgb(0x28, 0x48, 0x78));
-    fb.drawTextTransparent(inner_x + 18, orb_y + 11, "Z", rgb(0xE8, 0xF0, 0xFF));
+    fb.drawTextTransparentUi(inner_x + 18, orb_y + 11, "Z", rgb(0xE8, 0xF0, 0xFF));
 
     const hdr_h = AERO7_HEADER_H;
     fb.drawGradientH(main_x, inner_y, main_w, hdr_h, rgb(0x68, 0x78, 0x88), rgb(0x90, 0xA0, 0xB0));
@@ -238,8 +246,8 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.blendTintRect(main_x + 8, inner_y + 8, 40, 40, rgb(0xFF, 0xFF, 0xFF), 35, 255);
     fb.drawRect(main_x + 8, inner_y + 8, 40, 40, rgb(0xD8, 0xE4, 0xF0));
     drawMenuIcon(.computer, main_x + 12, inner_y + 12, 2);
-    fb.drawTextTransparent(main_x + 54, inner_y + 12, "ZirconOS User", text_white);
-    fb.drawTextTransparent(main_x + 54, inner_y + 30, "Windows 7 · Aero Glass", rgb(0xE8, 0xF0, 0xF8));
+    fb.drawTextTransparentUi(main_x + 54, inner_y + 12, "ZirconOS User", text_white);
+    fb.drawTextTransparentUi(main_x + 54, inner_y + 30, "Windows 7 · Aero Glass", rgb(0xE8, 0xF0, 0xF8));
 
     const content_y = inner_y + hdr_h + 2;
     const mid_h = inner_h - AERO7_HEADER_H - AERO7_SEARCH_H - AERO7_FOOTER_H - 6;
@@ -263,13 +271,13 @@ pub fn render(scr_w: i32, scr_h: i32) void {
             if (item.icon_id) |iid| {
                 drawMenuIcon(iid, main_x + 10, iy + 3, 1);
             }
-            fb.drawTextTransparent(main_x + 36, iy + 5, item.label, text_white);
+            fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, text_white);
         } else {
             if (item.icon_id) |iid| {
                 drawMenuIcon(iid, main_x + 10, iy + 3, 1);
             }
             const tc = if (item.bold) text_dark else text_dim;
-            fb.drawTextTransparent(main_x + 36, iy + 5, item.label, tc);
+            fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, tc);
         }
         iy += AERO7_ROW_H;
         if (item.separator_after) {
@@ -282,11 +290,11 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const ap_hov = hover_index == AERO7_IDX_ALL;
     if (ap_hov) {
         fb.blendTintRect(main_x + 6, all_prog_y - 1, AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
-        fb.drawTextTransparent(main_x + 36, all_prog_y + 5, "All Programs", text_white);
-        fb.drawTextTransparent(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", rgb(0xE8, 0xF4, 0xFF));
+        fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, "All Programs", text_white);
+        fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", rgb(0xE8, 0xF4, 0xFF));
     } else {
-        fb.drawTextTransparent(main_x + 36, all_prog_y + 5, "All Programs", rgb(0x20, 0x50, 0x88));
-        fb.drawTextTransparent(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", text_dim);
+        fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, "All Programs", rgb(0x20, 0x50, 0x88));
+        fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", text_dim);
     }
 
     iy = content_y + 6;
@@ -299,13 +307,13 @@ pub fn render(scr_w: i32, scr_h: i32) void {
             if (item.icon_id) |iid| {
                 drawMenuIcon(iid, split_x + 8, iy + 3, 1);
             }
-            fb.drawTextTransparent(split_x + 34, iy + 5, item.label, text_white);
+            fb.drawTextTransparentUi(split_x + 34, iy + 5, item.label, text_white);
         } else {
             if (item.icon_id) |iid| {
                 drawMenuIcon(iid, split_x + 8, iy + 3, 1);
             }
             const tc = if (item.bold) rgb(0x10, 0x38, 0x68) else text_dim;
-            fb.drawTextTransparent(split_x + 34, iy + 5, item.label, tc);
+            fb.drawTextTransparentUi(split_x + 34, iy + 5, item.label, tc);
         }
         iy += AERO7_ROW_H;
         if (item.separator_after) {
@@ -320,22 +328,25 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.drawHLine(main_x, search_y, main_w, sep);
     fb.drawRect(main_x + 8, search_y + 9, main_w - 16, 26, rgb(0x98, 0xA8, 0xB8));
     fb.fillRect(main_x + 9, search_y + 10, main_w - 18, 24, rgb(0xFF, 0xFF, 0xFF));
-    fb.drawTextTransparent(main_x + 16, search_y + 15, "Search programs and files", rgb(0x98, 0xA0, 0xA8));
+    fb.drawTextTransparentUi(main_x + 16, search_y + 15, "Search programs and files", rgb(0x98, 0xA0, 0xA8));
 
     fb.fillRect(main_x, foot_y, main_w, AERO7_FOOTER_H, rgb(0xD0, 0xDC, 0xE8));
     fb.blendTintRect(main_x, foot_y, main_w, AERO7_FOOTER_H, rgb(0xF0, 0xF6, 0xFC), 20, 255);
     fb.drawHLine(main_x, foot_y, main_w, sep);
 
     const log_h = hover_index == 200;
-    fb.drawTextTransparent(main_x + 10, foot_y + 14, "Log off", if (log_h) rgb(0x30, 0x60, 0x98) else text_dim);
+    fb.drawTextTransparentUi(main_x + 10, foot_y + 14, "Log off", if (log_h) rgb(0x30, 0x60, 0x98) else text_dim);
 
     const sleep_h = hover_index == 202;
-    fb.drawTextTransparent(main_x + 100, foot_y + 14, "Sleep", if (sleep_h) rgb(0x30, 0x60, 0x98) else text_dim);
+    fb.drawTextTransparentUi(main_x + 92, foot_y + 14, "Sleep", if (sleep_h) rgb(0x30, 0x60, 0x98) else text_dim);
+
+    const rst_h = hover_index == 203;
+    fb.drawTextTransparentUi(main_x + 156, foot_y + 14, "Restart", if (rst_h) rgb(0x30, 0x60, 0x98) else text_dim);
 
     const sd_x = main_x + main_w - 116;
     const sd_hov = hover_index == 201;
     fb.fillRoundedRect(sd_x, foot_y + 8, 106, 28, 4, if (sd_hov) rgb(0xD8, 0x50, 0x40) else rgb(0xB8, 0x48, 0x38));
     fb.blendTintRect(sd_x, foot_y + 8, 106, 28, rgb(0xFF, 0xC8, 0xB8), if (sd_hov) 35 else 18, 255);
-    fb.drawTextTransparent(sd_x + 10, foot_y + 14, "Shut down", text_white);
-    fb.drawTextTransparent(sd_x + 90, foot_y + 14, ">", rgb(0xFF, 0xE8, 0xE0));
+    fb.drawTextTransparentUi(sd_x + 10, foot_y + 14, "Shut down", text_white);
+    fb.drawTextTransparentUi(sd_x + 90, foot_y + 14, ">", rgb(0xFF, 0xE8, 0xE0));
 }

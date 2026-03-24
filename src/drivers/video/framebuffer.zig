@@ -547,6 +547,16 @@ pub fn drawTextTransparent(x: i32, y: i32, text: []const u8, fg: u32) void {
     drawTextTransparentClippedInner(x, y, text, fg, @intCast(fb_config.width));
 }
 
+/// Aero / Win7 风格 UI 文本：轻微投影，减轻纯 8×16 点阵「固件控制台」观感（内核自绘，与 UEFI ConOut 无关）。
+pub fn drawTextTransparentUi(x: i32, y: i32, text: []const u8, fg: u32) void {
+    const r = @as(u32, getRed(fg)) * 12 / 40;
+    const g = @as(u32, getGreen(fg)) * 12 / 40;
+    const b = @as(u32, getBlue(fg)) * 12 / 40;
+    const shadow = (r << 16) | (g << 8) | b;
+    drawTextTransparent(x + 1, y + 1, text, shadow);
+    drawTextTransparent(x, y, text, fg);
+}
+
 /// 2× / 3× scaled glyphs for taskbar and status lines (clearer than 8×16 on large panels).
 pub fn drawCharTransparentScaled(x: i32, y: i32, ch: u8, fg: u32, scale: u32) void {
     if (scale < 1) return;
@@ -689,30 +699,32 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
         // Horizontal pass: process each row
         var row: u32 = y0;
         while (row < y1) : (row += 1) {
-            const row_base = row * pitch + x0 * bpp;
+            const row_base: usize = @as(usize, row) * @as(usize, pitch) + @as(usize, x0) * @as(usize, bpp);
             // Read entire row into blur_line as packed XRGB u32
             var i: u32 = 0;
             while (i < rw) : (i += 1) {
-                const off = row_base + i * bpp;
+                const off = row_base + @as(usize, i) * @as(usize, bpp);
                 blur_line[i] = @as(u32, buf[off]) | (@as(u32, buf[off + 1]) << 8) | (@as(u32, buf[off + 2]) << 16);
             }
-            // Running-sum horizontal blur
+            // Running-sum horizontal blur (u64 sums: wide rects × large radius would overflow u32)
             i = 0;
             while (i < rw) : (i += 1) {
-                const lo = if (i >= radius) i - radius else 0;
-                const hi = @min(i + radius + 1, rw);
-                const cnt = hi - lo;
-                var sr: u32 = 0;
-                var sg: u32 = 0;
-                var sb: u32 = 0;
+                const lo: u32 = if (i >= radius) i - radius else 0;
+                const hi_u64 = @as(u64, i) + @as(u64, radius) + 1;
+                const hi: u32 = if (hi_u64 > rw) rw else @intCast(hi_u64);
+                if (hi <= lo) continue;
+                const cnt: u64 = hi - lo;
+                var sr: u64 = 0;
+                var sg: u64 = 0;
+                var sb: u64 = 0;
                 var k: u32 = lo;
                 while (k < hi) : (k += 1) {
                     const px = blur_line[k];
-                    sr += px & 0xFF;
-                    sg += (px >> 8) & 0xFF;
-                    sb += (px >> 16) & 0xFF;
+                    sr += @as(u64, px & 0xFF);
+                    sg += @as(u64, (px >> 8) & 0xFF);
+                    sb += @as(u64, (px >> 16) & 0xFF);
                 }
-                const off = row_base + i * bpp;
+                const off = row_base + @as(usize, i) * @as(usize, bpp);
                 const rb: u8 = @truncate(sr / cnt);
                 const gb: u8 = @truncate(sg / cnt);
                 const bb: u8 = @truncate(sb / cnt);
@@ -725,30 +737,32 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
         // Vertical pass: process each column
         var col: u32 = x0;
         while (col < x1) : (col += 1) {
-            const col_off = col * bpp;
+            const col_off: usize = @as(usize, col) * @as(usize, bpp);
             // Read column pixels into blur_line
             var j: u32 = 0;
             while (j < rh) : (j += 1) {
-                const off = (y0 + j) * pitch + col_off;
+                const off = @as(usize, y0 + j) * @as(usize, pitch) + col_off;
                 blur_line[j] = @as(u32, buf[off]) | (@as(u32, buf[off + 1]) << 8) | (@as(u32, buf[off + 2]) << 16);
             }
             // Running-sum vertical blur
             j = 0;
             while (j < rh) : (j += 1) {
-                const lo = if (j >= radius) j - radius else 0;
-                const hi = @min(j + radius + 1, rh);
-                const cnt = hi - lo;
-                var sr: u32 = 0;
-                var sg: u32 = 0;
-                var sb: u32 = 0;
+                const lo: u32 = if (j >= radius) j - radius else 0;
+                const hi_u64 = @as(u64, j) + @as(u64, radius) + 1;
+                const hi: u32 = if (hi_u64 > rh) rh else @intCast(hi_u64);
+                if (hi <= lo) continue;
+                const cnt: u64 = hi - lo;
+                var sr: u64 = 0;
+                var sg: u64 = 0;
+                var sb: u64 = 0;
                 var k: u32 = lo;
                 while (k < hi) : (k += 1) {
                     const px = blur_line[k];
-                    sr += px & 0xFF;
-                    sg += (px >> 8) & 0xFF;
-                    sb += (px >> 16) & 0xFF;
+                    sr += @as(u64, px & 0xFF);
+                    sg += @as(u64, (px >> 8) & 0xFF);
+                    sb += @as(u64, (px >> 16) & 0xFF);
                 }
-                const off = (y0 + j) * pitch + col_off;
+                const off = @as(usize, y0 + j) * @as(usize, pitch) + col_off;
                 const rb: u8 = @truncate(sr / cnt);
                 const gb: u8 = @truncate(sg / cnt);
                 const bb: u8 = @truncate(sb / cnt);
@@ -786,7 +800,7 @@ pub fn blendTintRect(x: i32, y: i32, w: i32, h: i32, tint: u32, alpha: u8, satur
     while (py < y1) : (py += 1) {
         var px: u32 = x0;
         while (px < x1) : (px += 1) {
-            const off = py * fb_config.pitch + px * bytes_pp;
+            const off = @as(usize, py) * @as(usize, fb_config.pitch) + @as(usize, px) * @as(usize, bytes_pp);
             var r: u32 = undefined;
             var g: u32 = undefined;
             var b: u32 = undefined;
@@ -800,14 +814,15 @@ pub fn blendTintRect(x: i32, y: i32, w: i32, h: i32, tint: u32, alpha: u8, satur
                 b = @as(u32, ptr[off + 2]);
             }
 
-            const lum = (r * 77 + g * 150 + b * 29) >> 8;
-            r = (r * sat + lum * (255 - sat)) / 255;
-            g = (g * sat + lum * (255 - sat)) / 255;
-            b = (b * sat + lum * (255 - sat)) / 255;
+            const lum: u32 = @truncate((@as(u64, r) * 77 + @as(u64, g) * 150 + @as(u64, b) * 29) >> 8);
+            const inv_sat: u32 = 255 - sat;
+            r = @truncate((@as(u64, r) * sat + @as(u64, lum) * inv_sat) / 255);
+            g = @truncate((@as(u64, g) * sat + @as(u64, lum) * inv_sat) / 255);
+            b = @truncate((@as(u64, b) * sat + @as(u64, lum) * inv_sat) / 255);
 
-            const out_r = (t_r * a + r * inv_a) / 255;
-            const out_g = (t_g * a + g * inv_a) / 255;
-            const out_b = (t_b * a + b * inv_a) / 255;
+            const out_r: u32 = @truncate((@as(u64, t_r) * a + @as(u64, r) * inv_a) / 255);
+            const out_g: u32 = @truncate((@as(u64, t_g) * a + @as(u64, g) * inv_a) / 255);
+            const out_b: u32 = @truncate((@as(u64, t_b) * a + @as(u64, b) * inv_a) / 255);
 
             if (fb_config.pixel_bgr) {
                 ptr[off] = @truncate(out_b);

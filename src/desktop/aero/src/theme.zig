@@ -70,9 +70,9 @@ pub const SchemeColors = struct {
 
 pub const scheme_blue = SchemeColors{
     .glass_tint = rgb(0x38, 0x62, 0x98),
-    .glass_opacity = 188,
-    .glass_saturation = 205,
-    .glass_tint_opacity = 58,
+    .glass_opacity = 210,
+    .glass_saturation = 208,
+    .glass_tint_opacity = 62,
     .titlebar_text = rgb(0x00, 0x00, 0x00),
     // Harmony-style deep blue (solid fallback when wallpaper not sampled)
     .desktop_bg = rgb(0x12, 0x38, 0x62),
@@ -281,19 +281,20 @@ pub const selection_bg = rgb(0x33, 0x99, 0xFF);
 
 // ── DWM Configuration Defaults ──
 
+/// 与 docs/cn/AeroRendering.md、`src/drivers/video/dwm.zig` 中 `initAeroDwm` 默认值一致
 pub const DwmDefaults = struct {
     pub const glass_enabled: bool = true;
-    pub const glass_opacity: u8 = 188;
-    pub const blur_radius: u8 = 14;
-    pub const blur_passes: u8 = 3;
-    pub const glass_saturation: u8 = 205;
+    pub const glass_opacity: u8 = 210;
+    pub const blur_radius: u8 = 6;
+    pub const blur_passes: u8 = 2;
+    pub const glass_saturation: u8 = 208;
     pub const glass_tint_color: u32 = rgb(0x38, 0x62, 0x98);
-    pub const glass_tint_opacity: u8 = 58;
+    pub const glass_tint_opacity: u8 = 62;
     pub const animation_enabled: bool = true;
     pub const peek_enabled: bool = true;
     pub const shadow_enabled: bool = true;
-    pub const shadow_size: u8 = 8;
-    pub const shadow_layers: u8 = 4;
+    pub const shadow_size: u8 = 6;
+    pub const shadow_layers: u8 = 3;
     pub const vsync: bool = true;
 };
 

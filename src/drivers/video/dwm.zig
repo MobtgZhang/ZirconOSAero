@@ -13,20 +13,22 @@ const rgb = theme.rgb;
 
 pub const DwmConfig = struct {
     glass_enabled: bool = true,
-    glass_opacity: u8 = 180,
-    glass_blur_radius: u8 = 12,
-    glass_blur_passes: u8 = 4,
-    glass_saturation: u8 = 200,
+    glass_opacity: u8 = 210,
+    /// 与 docs/cn/AeroRendering.md `initAeroDwm` 一致（标题栏/面板盒式模糊）
+    glass_blur_radius: u8 = 6,
+    glass_blur_passes: u8 = 2,
+    glass_saturation: u8 = 208,
     glass_tint_color: u32 = 0x4068A0,
-    glass_tint_opacity: u8 = 58,
+    glass_tint_opacity: u8 = 62,
+    /// 任务栏略低于窗口标题栏的不透明度，更易透出 Harmony 壁纸（Win7 任务栏偏「实」仍保留）
     glass_taskbar_tint_opacity: u8 = 96,
-    specular_intensity: u8 = 38,
+    specular_intensity: u8 = 42,
     animation_enabled: bool = true,
     peek_enabled: bool = true,
     shadow_enabled: bool = true,
     vsync_compositor: bool = true,
     smooth_cursor: bool = true,
-    cursor_lerp_factor: i32 = 200,
+    cursor_lerp_factor: i32 = 255,
 };
 
 pub const GlassChrome = enum { taskbar, caption, panel };
@@ -93,14 +95,15 @@ pub fn renderGlassEffect(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: Glas
         else => config.glass_tint_opacity,
     };
 
-    // win7Desktop.md §4：标题栏/面板用多遍盒式模糊；任务栏薄但宽，双遍小半径 ≈ 单遍大半径的高斯近似，成本可控。
+    // win7Desktop.md §4：标题栏/面板用多遍盒式模糊；任务栏薄但宽，三遍小半径 ≈ 更强磨砂感。
     if (!skip_glass_box_blur and blur_r > 0 and passes > 0) {
         if (chrome == .taskbar) {
-            const tr = @min(blur_r, @as(u32, 5));
+            const tr = @min(blur_r, @as(u32, 6));
             fb.boxBlurRect(x, y, w, h, tr, 1);
             if (tr > 1) {
-                fb.boxBlurRect(x, y, w, h, @max(1, tr / 2), 1);
+                fb.boxBlurRect(x, y, w, h, @max(2, tr * 2 / 3), 1);
             }
+            fb.boxBlurRect(x, y, w, h, 2, 1);
         } else {
             fb.boxBlurRect(x, y, w, h, blur_r, if (passes < 1) 1 else passes);
         }
@@ -115,7 +118,8 @@ pub fn renderGlassEffect(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: Glas
             fb.addSpecularBand(x, y, w, shine_h, spec);
             // Win7 标题栏/面板顶缘高光；任务栏用更柔和的顶线，避免纯白条过曝。
             if (chrome == .taskbar) {
-                fb.blendTintRect(x, y, w, 1, rgb(0xC8, 0xE0, 0xF8), 110, 255);
+                fb.blendTintRect(x, y, w, 1, rgb(0xD8, 0xEC, 0xFF), 118, 255);
+                fb.blendTintRect(x, y + 1, w, 1, rgb(0x88, 0xA8, 0xC8), 45, 255);
             } else {
                 fb.drawHLine(x, y, w, rgb(0xFF, 0xFF, 0xFF));
             }
@@ -124,9 +128,9 @@ pub fn renderGlassEffect(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: Glas
 
     switch (chrome) {
         .taskbar => {
-            fb.drawHLine(x, y + h - 1, w, rgb(0x12, 0x20, 0x38));
-            fb.drawVLine(x, y, h, rgb(0x40, 0x60, 0x88));
-            fb.drawVLine(x + w - 1, y, h, rgb(0x40, 0x60, 0x88));
+            fb.drawHLine(x, y + h - 1, w, rgb(0x08, 0x10, 0x20));
+            fb.drawVLine(x, y, h, rgb(0x42, 0x62, 0x86));
+            fb.drawVLine(x + w - 1, y, h, rgb(0x42, 0x62, 0x86));
         },
         .caption => {
             fb.drawHLine(x, y + h - 1, w, rgb(0x70, 0x90, 0xB8));

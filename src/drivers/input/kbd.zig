@@ -7,6 +7,8 @@ const klog = @import("../../rtl/klog.zig");
 
 const hal_kbd = if (builtin.target.cpu.arch == .x86_64)
     @import("../../hal/x86_64/keyboard.zig")
+else if (builtin.target.cpu.arch == .loongarch64)
+    @import("evdev_virtio_bridge.zig")
 else
     struct {
         pub fn readChar() ?u8 {
@@ -61,7 +63,7 @@ fn kbdDispatch(irp: *io.Irp) io.IoStatus {
 }
 
 pub fn init() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (builtin.target.cpu.arch != .x86_64 and builtin.target.cpu.arch != .loongarch64) return;
 
     driver_idx = io.registerDriver("\\Driver\\Kbdclass", kbdDispatch) orelse {
         klog.err("Kbdclass: Failed to register driver", .{});
@@ -72,7 +74,9 @@ pub fn init() void {
         return;
     };
     driver_initialized = true;
-    klog.info("Keyboard Driver: \\Device\\KeyboardClass0 (PS/2)", .{});
+    klog.info("Keyboard Driver: \\Device\\KeyboardClass0 (%s)", .{
+        if (builtin.target.cpu.arch == .x86_64) "PS/2" else "VirtIO evdev",
+    });
 }
 
 pub fn isInitialized() bool {

@@ -9,7 +9,8 @@
 //!   timer/    - PIT (HAL tick), RTC (CMOS)
 //!   video/    - VGA, HDMI, Framebuffer, display manager
 //!   audio/    - AC’97 (PortCls-style IOCTL surface)
-//!   input/    - PS/2 keyboard class, PS/2 mouse
+//!   input/    - PS/2 8042、VirtIO-Input PCI（`input_hub` 聚合轮询）
+//!   usb/      - USB 主机 + HID 类占位（MMIO/枚举待接）
 //!
 //! Each driver registers a `DriverObject` dispatch routine and one or more `DeviceObject`s.
 
@@ -24,6 +25,7 @@ pub const bus = if (is_x86) struct {
     pub const spi = @import("bus/spi.zig");
     pub const serial_bus = @import("bus/serial_bus.zig");
 } else struct {
+    pub const pcie = @import("bus/pcie.zig");
     pub const i2c = @import("bus/i2c.zig");
     pub const spi = @import("bus/spi.zig");
 };
@@ -55,10 +57,12 @@ pub const audio = struct {
     pub const ac97 = @import("audio/ac97.zig");
 };
 
-pub const input = if (is_x86) struct {
-    pub const kbd = @import("input/kbd.zig");
+pub const input = struct {
     pub const mouse = @import("input/mouse.zig");
-} else struct {};
+    pub const input_hub = @import("input/input_hub.zig");
+    pub const virtio_input_pci = @import("input/virtio_input_pci.zig");
+    pub const kbd = @import("input/kbd.zig");
+};
 
 pub const usb = @import("usb/usb.zig");
 
@@ -71,8 +75,11 @@ var drivers_initialized: bool = false;
 pub fn init() void {
     klog.info("Drivers: Initializing driver stack...", .{});
 
-    if (is_x86) {
+    if (bus.pcie.supports_pci_config) {
         bus.pcie.init();
+    }
+
+    if (is_x86) {
         bus.serial_bus.init();
         storage.ata.init();
         timer.pit_timer.init();
@@ -100,21 +107,26 @@ pub fn init() void {
             if (storage.ata.isInitialized()) "yes" else "no",
             if (usb.isInitialized()) "yes" else "no",
         });
+    } else if (bus.pcie.supports_pci_config) {
+        klog.info("Drivers: PCI=%s, USB=%s", .{
+            if (bus.pcie.isInitialized()) "yes" else "no",
+            if (usb.isInitialized()) "yes" else "no",
+        });
     }
 }
 
 pub fn initInputDrivers() void {
-    if (is_x86) {
+    if (is_x86 or builtin.target.cpu.arch == .loongarch64) {
         input.kbd.init();
-        input.mouse.init();
-
-        klog.info("Drivers: Input ready (Kbd=%s, Mouse=%s)", .{
-            if (input.kbd.isInitialized()) "yes" else "no",
-            if (input.mouse.isInitialized()) "yes" else "no",
-        });
-    } else {
-        klog.info("Drivers: Input skipped (no PS/2 on this arch)", .{});
     }
+    input.mouse.registerWithIo();
+    input.virtio_input_pci.init();
+
+    klog.info("Drivers: Input ready (Kbd=%s, Mouse=%s, VirtIOInput=%s)", .{
+        if (input.kbd.isInitialized()) "yes" else "no",
+        if (input.mouse.isInitialized()) "yes" else "no",
+        if (input.virtio_input_pci.isActive()) "yes" else "no",
+    });
 }
 
 pub fn initAudioDrivers() void {
@@ -130,6 +142,10 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
     video.hdmi.syncFramebufferMode(width, height, bpp);
 
     if (is_x86) {
+        input.mouse.setScreenBounds(@intCast(width), @intCast(height));
+        input.mouse.setPosition(@intCast(width / 2), @intCast(height / 2));
+        input.mouse.reassertStreamEnable();
+    } else if (builtin.target.cpu.arch == .loongarch64) {
         input.mouse.setScreenBounds(@intCast(width), @intCast(height));
         input.mouse.setPosition(@intCast(width / 2), @intCast(height / 2));
     }

@@ -58,8 +58,9 @@ pub const MouseState = struct {
     middle_pressed: bool = false,
     screen_width: i32 = 1280,
     screen_height: i32 = 800,
-    sensitivity: i32 = 36,
-    acceleration_enabled: bool = true,
+    /// 相对运动缩放：数值 N 表示 N/10（10 = 1:1 像素，与 30days/UEFI 式「直接累加 dx/dy」一致）。
+    sensitivity: i32 = 10,
+    acceleration_enabled: bool = false,
     acceleration_threshold: i32 = 3,
     acceleration_curve: i32 = 5,
     interpolation_enabled: bool = false,
@@ -77,11 +78,15 @@ var queue_tail: usize = 0;
 var packet_buf: [4]u8 = [_]u8{0} ** 4;
 var packet_idx: usize = 0;
 var has_scroll_wheel: bool = false;
+/// 当前半包起始 tick；超时则丢弃半包，避免永远等不到第 2/3/4 字节。
+var partial_packet_base_tick: u64 = 0;
 
 var mouse_state: MouseState = .{};
 var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;
+/// 8042 + PS/2 命令序列已完成（与 io 管理器是否已登记驱动无关）
+var hw_initialized: bool = false;
 var total_events: u64 = 0;
 
 pub const IOCTL_MOUSE_GET_STATE: u32 = 0x000B0000;
@@ -89,17 +94,20 @@ pub const IOCTL_MOUSE_SET_BOUNDS: u32 = 0x000B0004;
 pub const IOCTL_MOUSE_GET_EVENTS: u32 = 0x000B0008;
 pub const IOCTL_MOUSE_RESET: u32 = 0x000B000C;
 
-fn waitForInput() void {
-    var timeout: u32 = 100000;
+fn waitForInput() bool {
+    var timeout: u32 = 500_000;
     while (timeout > 0) : (timeout -= 1) {
-        if (portio.inb(KB_STATUS_PORT) & 0x01 != 0) return;
+        if (portio.inb(KB_STATUS_PORT) & 0x01 != 0) return true;
+        if (timeout & 0x3FF == 0) portio.ioWait();
     }
+    return false;
 }
 
 fn waitForOutput() void {
-    var timeout: u32 = 100000;
+    var timeout: u32 = 500_000;
     while (timeout > 0) : (timeout -= 1) {
         if (portio.inb(KB_STATUS_PORT) & 0x02 == 0) return;
+        if (timeout & 0x3FF == 0) portio.ioWait();
     }
 }
 
@@ -114,65 +122,85 @@ fn sendData(data: u8) void {
 }
 
 fn readData() u8 {
-    waitForInput();
+    if (!waitForInput()) return 0;
     return portio.inb(KB_DATA_PORT);
 }
 
 fn mouseWrite(byte: u8) u8 {
-    sendCommand(0xD4);
-    sendData(byte);
-    return readData();
+    var attempt: u32 = 0;
+    while (attempt < 5) : (attempt += 1) {
+        sendCommand(0xD4);
+        sendData(byte);
+        const ack = readData();
+        if (ack == 0xFA) return ack;
+        if (ack == 0xFE) continue;
+        portio.ioWait();
+        flush8042Output();
+    }
+    return 0;
 }
 
-/// IRQ12：尽可能排空辅助端口上的鼠标数据包（部分虚拟机合并中断时单 IRQ 只处理一字节会丢包）。
+/// 键盘方向键等注入的相对位移（兜底路径，不依赖 PS/2 流）。
+pub fn injectNudge(dx: i32, dy: i32) void {
+    if (builtin.target.cpu.arch != .x86_64) return;
+    if (dx == 0 and dy == 0) return;
+    mouse_state.x += dx;
+    mouse_state.y += dy;
+    clampPosition();
+    mouse_state.cursor_moved = true;
+    pushEvent(.{
+        .dx = @truncate(dx),
+        .dy = @truncate(dy),
+        .buttons = mouse_state.buttons,
+    });
+}
+
+/// IRQ1/IRQ12：与主循环相同，排空 8042 并路由（见 ke/interrupt.zig）。
 pub fn handleIrq() void {
-    drainAuxPending();
+    poll();
 }
 
-/// IRQ12：排空 8042 输出缓冲（路由规则与 poll 一致，避免 aux 位恒 0 时丢字节）。
-fn drainAuxPending() void {
-    while (true) {
-        const status = portio.inb(KB_STATUS_PORT);
-        if (status & 0x01 == 0) return;
-        const data = portio.inb(KB_DATA_PORT);
-        const aux = (status & 0x20) != 0;
-        if (aux) {
-            processAuxByte(data);
-        } else if (packet_idx > 0) {
-            processAuxByte(data);
-        } else if ((data & 0x08) != 0) {
-            processAuxByte(data);
-        } else {
-            hal_kbd.handleScancodeByte(data);
-        }
+fn resetPartialIfStale() void {
+    if (packet_idx == 0) return;
+    const sched = @import("../../ke/scheduler.zig");
+    const now = sched.getTicks();
+    // ~50ms @100Hz：足够收齐一包，又能从错位中恢复
+    if (now > partial_packet_base_tick + 5) {
+        packet_idx = 0;
     }
 }
 
 /// 空闲时轮询 8042 输出缓冲：按 aux 位、半包续包、首字节 PS/2 同步位路由鼠标/键盘。
 pub fn poll() void {
     if (builtin.target.cpu.arch != .x86_64) return;
+    resetPartialIfStale();
     while (true) {
         const status = portio.inb(KB_STATUS_PORT);
         if (status & 0x01 == 0) return;
         const data = portio.inb(KB_DATA_PORT);
         const aux = (status & 0x20) != 0;
         if (aux) {
-            processAuxByte(data);
+            // 8042 已标 aux：允许首字节无 bit3（少数固件/虚拟化与规范不一致）
+            processAuxByte(data, true);
         } else if (packet_idx > 0) {
             // 半包已收：后续字节必须进鼠标，否则永远组不齐
-            processAuxByte(data);
+            processAuxByte(data, true);
         } else if ((data & 0x08) != 0) {
             // 部分模拟器 aux 位恒为 0；PS/2 鼠标包首字节 bit3 恒为 1
-            processAuxByte(data);
+            processAuxByte(data, false);
         } else {
             hal_kbd.handleScancodeByte(data);
         }
     }
 }
 
-fn processAuxByte(data: u8) void {
-    // 首字节应含 bit3（PS/2 流模式）；若未置位则丢弃一字节尝试重新对齐（勿静默吞掉所有输入）。
-    if (packet_idx == 0 and (data & 0x08) == 0) return;
+fn processAuxByte(data: u8, allow_first_without_sync_bit: bool) void {
+    resetPartialIfStale();
+    if (packet_idx == 0 and (data & 0x08) == 0 and !allow_first_without_sync_bit) return;
+
+    if (packet_idx == 0) {
+        partial_packet_base_tick = @import("../../ke/scheduler.zig").getTicks();
+    }
 
     packet_buf[packet_idx] = data;
     packet_idx += 1;
@@ -198,6 +226,16 @@ fn processAuxByte(data: u8) void {
     if (has_scroll_wheel and expected_len == 4) {
         const scroll_raw: i8 = @bitCast(packet_buf[3]);
         event.scroll = scroll_raw;
+    }
+
+    deliverMouseEvent(event);
+}
+
+/// VirtIO-Input / 其它 HID 总线汇总的相对运动（dx、dy 为设备原始增量，语义与 PS/2 包内一致）
+pub fn deliverMouseEvent(event: MouseEvent) void {
+    // 丢弃完全重复的报告（常见于 VirtIO SYN），减轻事件队列与主循环负担。
+    if (event.dx == 0 and event.dy == 0 and event.scroll == 0 and event.buttons == mouse_state.buttons) {
+        return;
     }
 
     mouse_state.buttons = event.buttons;
@@ -260,17 +298,23 @@ fn processAuxByte(data: u8) void {
 }
 
 fn clampPosition() void {
+    const sw = mouse_state.screen_width;
+    const sh = mouse_state.screen_height;
+    if (sw < 1 or sh < 1) return;
     if (mouse_state.x < 0) mouse_state.x = 0;
     if (mouse_state.y < 0) mouse_state.y = 0;
-    if (mouse_state.x >= mouse_state.screen_width) mouse_state.x = mouse_state.screen_width - 1;
-    if (mouse_state.y >= mouse_state.screen_height) mouse_state.y = mouse_state.screen_height - 1;
+    if (mouse_state.x >= sw) mouse_state.x = sw - 1;
+    if (mouse_state.y >= sh) mouse_state.y = sh - 1;
 }
 
 fn clampRawPosition() void {
+    const sw = mouse_state.screen_width;
+    const sh = mouse_state.screen_height;
+    if (sw < 1 or sh < 1) return;
     if (mouse_state.raw_x < 0) mouse_state.raw_x = 0;
     if (mouse_state.raw_y < 0) mouse_state.raw_y = 0;
-    if (mouse_state.raw_x >= mouse_state.screen_width) mouse_state.raw_x = mouse_state.screen_width - 1;
-    if (mouse_state.raw_y >= mouse_state.screen_height) mouse_state.raw_y = mouse_state.screen_height - 1;
+    if (mouse_state.raw_x >= sw) mouse_state.raw_x = sw - 1;
+    if (mouse_state.raw_y >= sh) mouse_state.raw_y = sh - 1;
 }
 
 pub fn interpolateStep() void {
@@ -345,15 +389,26 @@ pub fn getState() *const MouseState {
 }
 
 pub fn setScreenBounds(width: i32, height: i32) void {
-    mouse_state.screen_width = width;
-    mouse_state.screen_height = height;
-    if (mouse_state.x >= width) mouse_state.x = width - 1;
-    if (mouse_state.y >= height) mouse_state.y = height - 1;
+    const w = if (width < 1) 1 else width;
+    const h = if (height < 1) 1 else height;
+    mouse_state.screen_width = w;
+    mouse_state.screen_height = h;
+    clampPosition();
 }
 
 pub fn setPosition(x: i32, y: i32) void {
     mouse_state.x = x;
     mouse_state.y = y;
+    mouse_state.raw_x = x;
+    mouse_state.raw_y = y;
+    mouse_state.interpolation_idx = 0;
+    mouse_state.sub_x = 0;
+    mouse_state.sub_y = 0;
+    mouse_state.prev_dx = 0;
+    mouse_state.prev_dy = 0;
+    clampPosition();
+    mouse_state.raw_x = mouse_state.x;
+    mouse_state.raw_y = mouse_state.y;
 }
 
 pub fn getX() i32 {
@@ -441,6 +496,14 @@ pub fn isInitialized() bool {
     return driver_initialized;
 }
 
+/// 图形桌面就绪后再次打开数据流（长时间引导后部分固件/模拟器需重使能）。
+pub fn reassertStreamEnable() void {
+    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hw_initialized) return;
+    packet_idx = 0;
+    _ = mouseWrite(0xF4);
+}
+
 pub fn getTotalEvents() u64 {
     return total_events;
 }
@@ -454,8 +517,37 @@ fn flush8042Output() void {
     }
 }
 
-pub fn init() void {
-    if (driver_initialized) return;
+/// 复位/探测后控制器里可能仍有 BAT、ACK、旧包残留；多读几次避免首包错位。
+fn flush8042OutputDeep() void {
+    var guard: u32 = 0;
+    while (guard < 256) : (guard += 1) {
+        const st = portio.inb(KB_STATUS_PORT);
+        if (st & 0x01 == 0) return;
+        _ = portio.inb(KB_DATA_PORT);
+    }
+}
+
+/// 采样率命令：F3 后紧跟速率字节（OSDev PS/2 mouse）。
+fn setMouseSampleRate(rate: u8) void {
+    _ = mouseWrite(0xF3);
+    _ = mouseWrite(rate);
+    portio.ioWait();
+}
+
+/// IntelliMouse 滚轮探测：200→100→80 后 F2；若 id 为 0x03/0x04 则设备发 4 字节包。
+fn probeIntelliMouseId() u8 {
+    setMouseSampleRate(200);
+    setMouseSampleRate(100);
+    setMouseSampleRate(80);
+    _ = mouseWrite(0xF2);
+    portio.ioWait();
+    return readData();
+}
+
+/// 8042 + PS/2 鼠标硬件初始化（须在 PIC 解掩码 / sti 之前调用）。可早于 `io.init()`。
+pub fn initHardware() void {
+    if (builtin.target.cpu.arch != .x86_64) return;
+    if (hw_initialized) return;
 
     packet_idx = 0;
     flush8042Output();
@@ -466,27 +558,50 @@ pub fn init() void {
     sendCommand(0x20);
     portio.ioWait();
     const config = readData();
-    const new_config = (config | 0x02) & ~@as(u8, 0x20);
+    // OSDev 8042：bit0/1=键鼠中断 bit4/5=键鼠口使能；bit7 保留须为 0。
+    const new_config = (config | 0x03 | 0x10 | 0x20) & 0x7F;
     sendCommand(0x60);
     sendData(new_config);
     portio.ioWait();
     flush8042Output();
 
-    _ = mouseWrite(0xFF);
-    portio.ioWait();
-    _ = readData();
-    _ = readData();
+    // 软复位：若 ACK 异常则跳过复位字节读取，避免卡在半初始化状态
+    const rst_ack = mouseWrite(0xFF);
+    if (rst_ack == 0xFA) {
+        portio.ioWait();
+        _ = readData();
+        _ = readData();
+        flush8042OutputDeep();
+    } else {
+        flush8042OutputDeep();
+    }
 
-    // 默认数据包（3 字节）。勿在此处发送 IntelliMouse 的 F3 采样率魔法序列（200/100/80），
-    // 否则会进入滚轮扩展模式、固件可能发 4 字节/包；若 has_scroll_wheel 与真实流不一致，
-    // 包组装会永远收不齐，表现为指针完全不移动。
     _ = mouseWrite(0xF6);
+    flush8042Output();
 
     _ = mouseWrite(0xF2);
     portio.ioWait();
-    const mouse_id = readData();
+    var mouse_id = readData();
 
     has_scroll_wheel = false;
+    if (mouse_id == 0x03 or mouse_id == 0x04) {
+        // 已是滚轮 ID：再跑一遍魔法序列，使 4 字节流与 ID 一致（见 OSDev IntelliMouse）
+        mouse_id = probeIntelliMouseId();
+        has_scroll_wheel = (mouse_id == 0x03 or mouse_id == 0x04);
+        if (!has_scroll_wheel) {
+            _ = mouseWrite(0xF6);
+            flush8042Output();
+        }
+    } else if (mouse_id == 0x00 or mouse_id == 0xFF) {
+        // 标准鼠标或读失败：尝试升级为滚轮协议
+        const wid = probeIntelliMouseId();
+        mouse_id = wid;
+        has_scroll_wheel = (wid == 0x03 or wid == 0x04);
+        if (!has_scroll_wheel) {
+            _ = mouseWrite(0xF6);
+            flush8042Output();
+        }
+    }
 
     _ = mouseWrite(0xF4);
 
@@ -494,6 +609,19 @@ pub fn init() void {
     mouse_state.y = @divTrunc(mouse_state.screen_height, 2);
     mouse_state.raw_x = mouse_state.x;
     mouse_state.raw_y = mouse_state.y;
+
+    hw_initialized = true;
+    packet_idx = 0;
+
+    klog.info("Mouse: PS/2 ready (id=0x%x, %u-byte packets, relaxed aux sync)", .{
+        mouse_id, if (has_scroll_wheel) @as(u8, 4) else @as(u8, 3),
+    });
+}
+
+/// 在 `io.init()` 之后登记 \\Driver\\Mouse（`io.init()` 会清空驱动表，须晚于硬件 init 再注册）。
+pub fn registerWithIo() void {
+    if (builtin.target.cpu.arch != .x86_64) return;
+    if (driver_initialized) return;
 
     driver_idx = io.registerDriver("\\Driver\\Mouse", mouseDispatch) orelse {
         klog.err("Mouse: Failed to register driver", .{});
@@ -506,8 +634,10 @@ pub fn init() void {
     };
 
     driver_initialized = true;
+    klog.info("Mouse: class driver registered (\\Device\\Mouse0)", .{});
+}
 
-    packet_idx = 0;
-
-    klog.info("Mouse Driver: PS/2 initialized (id=0x%x, 3-byte stream)", .{mouse_id});
+pub fn init() void {
+    initHardware();
+    registerWithIo();
 }

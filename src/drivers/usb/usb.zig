@@ -48,8 +48,12 @@ pub fn init() void {
         return;
     };
 
+    _ = io.createDevice("\\Device\\USB\\HidStub", .usb_hid, driver_idx) orelse {
+        klog.warn("USB: Failed to create \\Device\\USB\\HidStub", .{});
+    };
+
     driver_initialized = true;
-    klog.info("USB: Host driver registered (xHCI/EHCI MMIO + port enumeration stub)", .{});
+    klog.info("USB: Host + HID stub (xHCI/EHCI MMIO 未接；鼠标优先 VirtIO-Input PCI / PS/2)", .{});
 }
 
 pub fn isInitialized() bool {

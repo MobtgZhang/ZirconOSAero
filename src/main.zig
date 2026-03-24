@@ -72,7 +72,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     arch.initSerial();
 
     klog.info("========================================", .{});
-    klog.info("  ZirconOS v1.0 (NT-style Hybrid Microkernel)", .{});
+    klog.info("  ZirconOSAero — NT 6.1 hybrid microkernel (Aero desktop)", .{});
     klog.info("  Architecture: x86_64", .{});
     klog.info("========================================", .{});
 
@@ -249,6 +249,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     }
 
     kernel_space.activate();
+    vm.bindKernelAddressSpace(&kernel_space);
     klog.info("VM: Kernel page tables loaded", .{});
 
     // ═══ Phase 4: Object / Handle / Process Core ═══
@@ -393,13 +394,18 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
             klog.info("Desktop: first frame presented (taskbar+shell+cursor)", .{});
 
             const mouse = @import("drivers/input/mouse.zig");
+            const input_hub = @import("drivers/input/input_hub.zig");
             var prev_buttons: u8 = 0;
-            var last_draw_cx: i32 = -32768;
-            var last_draw_cy: i32 = -32768;
+            // 与当前逻辑坐标对齐，否则 (0,0) 与初值 -32768 比较会误判「指针移动」，
+            // 在首次 present 后立即再画一整帧（第二帧关闭毛玻璃盒式模糊快速路径，易触发重负载路径）。
+            var last_draw_cx: i32 = mouse.getX();
+            var last_draw_cy: i32 = mouse.getY();
 
             while (true) {
-                // 先排空 8042 缓冲，减少「中断已到但队列未更新」的一帧延迟，指针更跟手。
-                mouse.poll();
+                // VirtIO-Input PCI + PS/2 8042 一并排空（QEMU 可加 `-device virtio-mouse-pci`）
+                input_hub.pollAll();
+                const nudge = arch.takeCursorNudge();
+                if (nudge.dx != 0 or nudge.dy != 0) mouse.injectNudge(nudge.dx, nudge.dy);
 
                 var needs_ui_paint = false;
                 var hover_changed = false;
@@ -430,6 +436,10 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                     prev_buttons = cur_buttons;
                 }
 
+                // 再排空一轮：避免 IRQ 在 pop 循环与取样之间写入的包直到下一 tick 才被读。
+                input_hub.pollAll();
+                hover_changed = display.handleMouseMove(mouse.getX(), mouse.getY()) or hover_changed;
+
                 if (display.handleDesktopHotkeys()) needs_ui_paint = true;
 
                 const mx = mouse.getX();
@@ -451,7 +461,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                     mouse.clearCursorMoved();
                 }
 
-                mouse.poll();
+                for (0..4) |_| input_hub.pollAll();
                 arch.waitForInterrupt();
             }
         } else {
@@ -607,6 +617,8 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     const boot = arch.impl.boot;
     const drivers = @import("drivers/mod.zig");
     const display = drivers.video.display;
+    const vm = @import("mm/vm.zig");
+    var loong_kernel_space: ?vm.AddressSpace = null;
     const frame = @import("mm/frame.zig");
     const heap = @import("mm/heap.zig");
     const server = @import("servers/server.zig");
@@ -661,10 +673,10 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     // LoongArch：尽早初始化 alloc + VM，map 2GB 以覆盖 GOP framebuffer（可能 >512MB）
     if (builtin.target.cpu.arch == .loongarch64) {
         alloc.init(boot_info, 0x400000, 0);
-        const vm = @import("mm/vm.zig");
         const paging = arch.impl.paging;
         if (vm.createAddressSpace(&alloc)) |ks| {
-            var kernel_space = ks;
+            loong_kernel_space = ks;
+            const kernel_space = &loong_kernel_space.?;
             const identity_pages: usize = (2 * 1024 * 1024 * 1024) / paging.page_size;
             var i: usize = 0;
             while (i < identity_pages) : (i += 1) {
@@ -673,6 +685,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                 _ = kernel_space.mapPage(virt, virt, flags);
             }
             kernel_space.activate();
+            vm.bindKernelAddressSpace(kernel_space);
             klog.info("VM: LoongArch identity map 0-2GB (covers GOP fb)", .{});
         }
         const ramfb = @import("hal/loongarch64/ramfb.zig");
@@ -747,6 +760,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     klog.info("--- Phase 6: I/O + File + Driver ---", .{});
     const drivers_generic = @import("drivers/mod.zig");
     drivers_generic.init();
+    drivers_generic.initInputDrivers();
     drivers_generic.initAudioDrivers();
     vfs_mod.init();
     fat32_mod.init();
@@ -780,7 +794,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     audio.init();
 
     klog.info("", .{});
-    klog.info("=== ZirconOS v1.0 Kernel Ready (Phase 0-12) ===", .{});
+    klog.info("=== ZirconOSAero NT 6.1 kernel ready (Phase 0–12) ===", .{});
     klog.info("Architecture : %s", .{arch.impl.name});
     klog.info("Processes    : %u", .{@import("ps/process.zig").getProcessCount()});
     klog.info("Sessions     : %u", .{smss.getSessionCount()});
@@ -817,12 +831,8 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                         arch.initFramebuffer(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp);
                     }
                     arch.impl.framebuffer.setConsoleEnabled(false);
+                    // LoongArch ramfb / UEFI GOP：线性缓冲通常为 BGRx（与 x86 GOP 一致）；x86 多来自 Multiboot 元数据
                     drivers.initDesktopMode(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp, builtin.target.cpu.arch != .x86_64);
-                    if (builtin.target.cpu.arch == .loongarch64) {
-                        const mouse = @import("drivers/input/mouse.zig");
-                        mouse.setScreenBounds(@intCast(fb_i.width), @intCast(fb_i.height));
-                        mouse.setPosition(@intCast(fb_i.width / 2), @intCast(fb_i.height / 2));
-                    }
                     display.syncCursorFromMouse();
                     display.clearFramebuffer();
                 }
@@ -842,11 +852,14 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             display.renderAeroDesktop();
             display.present();
             const mouse = @import("drivers/input/mouse.zig");
+            const input_hub = @import("drivers/input/input_hub.zig");
             var prev_buttons: u8 = 0;
-            var last_draw_cx: i32 = -32768;
-            var last_draw_cy: i32 = -32768;
+            var last_draw_cx: i32 = mouse.getX();
+            var last_draw_cy: i32 = mouse.getY();
             while (true) {
-                mouse.poll();
+                input_hub.pollAll();
+                const nudge2 = arch.takeCursorNudge();
+                if (nudge2.dx != 0 or nudge2.dy != 0) mouse.injectNudge(nudge2.dx, nudge2.dy);
                 var needs_ui_paint = false;
                 var hover_changed = false;
                 while (mouse.popEvent()) |event| {
@@ -867,6 +880,8 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                     }
                     prev_buttons = cur_buttons;
                 }
+                input_hub.pollAll();
+                hover_changed = display.handleMouseMove(mouse.getX(), mouse.getY()) or hover_changed;
                 if (display.handleDesktopHotkeys()) needs_ui_paint = true;
                 const mx = mouse.getX();
                 const my = mouse.getY();
@@ -881,7 +896,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                 } else if (mouse.hasCursorMoved()) {
                     mouse.clearCursorMoved();
                 }
-                mouse.poll();
+                for (0..4) |_| input_hub.pollAll();
                 arch.waitForInterrupt();
             }
         } else {

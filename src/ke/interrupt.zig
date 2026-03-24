@@ -2,6 +2,7 @@
 //! Routes exceptions and IRQs to appropriate handlers
 //! Supports unified InterruptFrame for full register context
 
+const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const klog = @import("../rtl/klog.zig");
 const scheduler = @import("scheduler.zig");
@@ -107,12 +108,31 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
 fn handleIrq(frame: *InterruptFrame, irq: u8) void {
     _ = frame;
     switch (irq) {
-        0 => scheduler.tick(),
+        0 => {
+            scheduler.tick();
+            // PS/2 在部分 QEMU/实机组合下 IRQ1/12 与主循环 hlt 竞态会漏包；每 tick 轮询排空 8042。
+            if (builtin.target.cpu.arch == .x86_64) {
+                const hub = @import("../drivers/input/input_hub.zig");
+                hub.pollAll();
+            }
+        },
         1 => {
-            arch.handleKeyboardIrq();
+            if (builtin.target.cpu.arch == .x86_64) {
+                // 旧路径：keyboard.handleIrq 只读 1 字节；8042 常一次积压整包(3–4B)，丢字节即错位。
+                // poll() 会排空缓冲并按 aux/半包/bit3 规则路由键鼠，与主循环一致。
+                const hub = @import("../drivers/input/input_hub.zig");
+                hub.pollAll();
+            } else {
+                arch.handleKeyboardIrq();
+            }
         },
         12 => {
-            arch.handleMouseIrq();
+            if (builtin.target.cpu.arch == .x86_64) {
+                const hub = @import("../drivers/input/input_hub.zig");
+                hub.pollAll();
+            } else {
+                arch.handleMouseIrq();
+            }
         },
         else => {},
     }

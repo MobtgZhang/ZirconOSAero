@@ -3,6 +3,7 @@
 //! Uses a ring buffer to queue keypresses for the shell
 
 const portio = @import("portio.zig");
+const CursorNudge = @import("../../drivers/input/cursor_types.zig").CursorNudge;
 
 const KB_DATA_PORT: u16 = 0x60;
 const KB_STATUS_PORT: u16 = 0x64;
@@ -19,6 +20,12 @@ var initialized: bool = false;
 
 /// Ctrl+Shift+Esc → Task Manager (desktop shell; consumed via `consumeTaskMgrHotkey`)
 var taskmgr_hotkey_pending: bool = false;
+
+/// 扩展键前缀（方向键等为 E0 xx）
+var e0_prefix: bool = false;
+/// 方向键微移光标（PS/2 不可用时兜底）
+var cursor_nudge_dx: i32 = 0;
+var cursor_nudge_dy: i32 = 0;
 
 const scancode_normal: [128]u8 = blk: {
     var table = [_]u8{0} ** 128;
@@ -155,12 +162,37 @@ pub fn handleIrq() void {
     handleScancodeByte(portio.inb(KB_DATA_PORT));
 }
 
+pub fn takeCursorNudge() CursorNudge {
+    const r = CursorNudge{ .dx = cursor_nudge_dx, .dy = cursor_nudge_dy };
+    cursor_nudge_dx = 0;
+    cursor_nudge_dy = 0;
+    return r;
+}
+
 /// Process one PS/2 scan code (also used when draining the 8042 buffer from the mouse poll path).
 pub fn handleScancodeByte(scancode: u8) void {
+    if (scancode == 0xE0) {
+        e0_prefix = true;
+        return;
+    }
     if (scancode & 0x80 != 0) {
+        if (e0_prefix) e0_prefix = false;
         const released = scancode & 0x7F;
         if (released == 0x2A or released == 0x36) shift_held = false;
         if (released == 0x1D) ctrl_held = false;
+        return;
+    }
+
+    if (e0_prefix) {
+        e0_prefix = false;
+        const step: i32 = 12;
+        switch (scancode) {
+            0x48 => cursor_nudge_dy -= step,
+            0x50 => cursor_nudge_dy += step,
+            0x4B => cursor_nudge_dx -= step,
+            0x4D => cursor_nudge_dx += step,
+            else => {},
+        }
         return;
     }
 
@@ -175,6 +207,28 @@ pub fn handleScancodeByte(scancode: u8) void {
     if (scancode == 0x3A) {
         caps_lock = !caps_lock;
         return;
+    }
+
+    // WASD 微移光标（PS/2 不可用时仍可操作桌面）
+    const kstep: i32 = 10;
+    switch (scancode) {
+        0x11 => {
+            cursor_nudge_dy -= kstep;
+            return;
+        }, // W
+        0x1E => {
+            cursor_nudge_dx -= kstep;
+            return;
+        }, // A
+        0x1F => {
+            cursor_nudge_dy += kstep;
+            return;
+        }, // S
+        0x20 => {
+            cursor_nudge_dx += kstep;
+            return;
+        }, // D
+        else => {},
     }
 
     // Esc (make code 0x01): Task Manager shortcut when Ctrl+Shift held

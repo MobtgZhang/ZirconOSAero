@@ -66,6 +66,8 @@ pub const DeviceType = enum(u32) {
     rtc_clock = 12,
     /// USB xHCI/EHCI root (stub until PnP + MMIO bring-up)
     usb_host = 13,
+    /// USB HID 类占位（完整路径：xHCI MMIO → 枚举 → HID 中断端点；当前指针以 PS/2 + VirtIO-Input 为主）
+    usb_hid = 14,
 };
 
 pub const DeviceObject = struct {

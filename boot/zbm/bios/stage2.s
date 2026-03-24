@@ -27,7 +27,7 @@
 .set STAGE2_MAGIC,    0x5A42        # 'ZB' — verified by VBR
 .set KERNEL_LOAD_SEG, 0x1000        # Segment for kernel loading
 .set KERNEL_LOAD_OFF, 0x0000
-.set KERNEL_PHYS,     0x100000      # 1MB — final kernel position (PM)
+.set KERNEL_PHYS,     0x02000000    # 32MB — 与 link/x86_64.ld 一致（UEFI/BIOS 同 ELF 布局）
 .set E820_BUF,        0x0500        # E820 memory map buffer
 .set E820_MAX_ENTRIES,64
 .set VGA_TEXT_BASE,   0xB8000
@@ -476,12 +476,12 @@ pm_entry:
     # Kernel starts at partition_start + 65 sectors on the disk image.
     # The partition start LBA was stored at a known location by stage2 init.
     # For ZBM disk images, kernel is at sector 2113 (2048 + 65).
-    movl $KERNEL_PHYS, %edi         # Destination: 1MB
+    movl $KERNEL_PHYS, %edi         # Destination: 32MB (see link/x86_64.ld)
     movl $2113, %ebx                # Starting LBA (partition_start + 65)
     movl $512, %ecx                 # Read 512 sectors (256KB, enough for kernel)
     call ata_pio_read_sectors
 
-    # Verify ELF magic at 1MB
+    # Verify ELF magic at load address
     cmpl $0x464C457F, (KERNEL_PHYS) # "\x7FELF"
     jne .pm_no_kernel
 
@@ -641,7 +641,7 @@ pm_entry:
     jmp .pm_print_jump
 .pm_print_jump_done:
 
-    # ── Jump to kernel at 1MB ──
+    # ── Jump to kernel load address ──
     # EAX = Multiboot2 bootloader magic
     # EBX = physical address of boot info structure
     movl $0x36D76289, %eax
@@ -869,11 +869,11 @@ menu_footer:
 pm_msg_loading:
     .asciz "ZBM: Loading kernel from disk (ATA PIO)..."
 pm_msg_ok:
-    .asciz "ZBM: Kernel loaded at 1MB, ELF verified"
+    .asciz "ZBM: Kernel loaded at 32MB, ELF verified"
 pm_msg_jump:
     .asciz "ZBM: Jumping to kernel_main (Multiboot2)..."
 pm_msg_err:
-    .asciz "ZBM: ERROR - No valid ELF kernel at 1MB!"
+    .asciz "ZBM: ERROR - No valid ELF kernel at load addr!"
 pm_bootloader_name:
     .asciz "ZirconOS Boot Manager 1.0 (BIOS)"
 

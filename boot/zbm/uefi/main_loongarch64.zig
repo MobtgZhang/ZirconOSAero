@@ -19,12 +19,23 @@ const Attr = menu.Attr;
 const ZIRCON_LOONGARCH_EFI_MAGIC: u32 = 0x6372697A;
 const HANDOFF_PHYS: usize = 0x100000;
 
+/// 与 `src/arch/loongarch64/boot.zig` 中 `EfiHandoff` 布局一致（含 GOP 字段）
 const EfiHandoff = extern struct {
     magic: u32,
     version: u32,
     boot_mode: u32,
     desktop: u32,
+    fb_addr: u64 = 0,
+    fb_pitch: u32 = 0,
+    fb_width: u32 = 0,
+    fb_height: u32 = 0,
+    fb_bpp: u8 = 0,
+    _pad: [3]u8 = [_]u8{0} ** 3,
 };
+
+/// 与 `build.conf` / x86 多引导默认 `RESOLUTION` 一致
+const PREFERRED_FB_WIDTH: u32 = 1024;
+const PREFERRED_FB_HEIGHT: u32 = 768;
 
 const Elf64_Ehdr = extern struct {
     e_ident: [16]u8,
@@ -94,6 +105,12 @@ fn handoffForSelectedEntry(idx: usize) EfiHandoff {
         .version = 1,
         .boot_mode = boot_mode,
         .desktop = desktop,
+        .fb_addr = 0,
+        .fb_pitch = 0,
+        .fb_width = 0,
+        .fb_height = 0,
+        .fb_bpp = 0,
+        ._pad = [_]u8{0} ** 3,
     };
 }
 
@@ -200,9 +217,87 @@ const GopFbInfo = struct {
     pixel_bgr: u8,
 };
 
+fn gopPixelFormatIsLinear(f: uefi.protocol.GraphicsOutput.PixelFormat) bool {
+    return f == .red_green_blue_reserved_8_bit_per_color or
+        f == .blue_green_red_reserved_8_bit_per_color or
+        f == .bit_mask;
+}
+
+/// virtio-gpu / 部分固件以 PixelBltOnly 启动；尝试切到带线性帧缓冲的模式。
+fn trySetLinearGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput) void {
+    const cur = gop.mode.info.pixel_format;
+    if (gopPixelFormatIsLinear(cur)) return;
+
+    var mid: u32 = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        if (gopPixelFormatIsLinear(mi.pixel_format)) {
+            gop.setMode(mid) catch continue;
+            puts(out, "    [*] GOP: selected linear framebuffer mode\r\n");
+            return;
+        }
+    }
+}
+
+/// 优先 1024×768（与 x86 默认一致），其次不小于该分辨率的最小模式，再选最大线性模式。
+fn trySetPreferredGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput, want_w: u32, want_h: u32) void {
+    trySetLinearGopMode(out, gop);
+
+    var mid: u32 = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        if (mi.horizontal_resolution == want_w and mi.vertical_resolution == want_h) {
+            gop.setMode(mid) catch continue;
+            puts(out, "    [*] GOP: set preferred mode 1024x768\r\n");
+            return;
+        }
+    }
+
+    var best_cover: ?u32 = null;
+    var best_cover_px: u64 = std.math.maxInt(u64);
+    mid = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        const w = mi.horizontal_resolution;
+        const h = mi.vertical_resolution;
+        if (w < want_w or h < want_h) continue;
+        const px = @as(u64, w) * @as(u64, h);
+        if (best_cover == null or px < best_cover_px) {
+            best_cover = mid;
+            best_cover_px = px;
+        }
+    }
+    if (best_cover) |m| {
+        gop.setMode(m) catch return;
+        puts(out, "    [*] GOP: set mode >= preferred 1024x768\r\n");
+        return;
+    }
+
+    var best_any: ?u32 = null;
+    var max_px: u64 = 0;
+    mid = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        const px = @as(u64, mi.horizontal_resolution) * @as(u64, mi.vertical_resolution);
+        if (px > max_px) {
+            best_any = mid;
+            max_px = px;
+        }
+    }
+    if (best_any) |m| {
+        gop.setMode(m) catch return;
+        puts(out, "    [*] GOP: set largest linear mode\r\n");
+    }
+}
+
 fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
     const gop_opt = bs.locateProtocol(uefi.protocol.GraphicsOutput, null) catch return null;
     const gop = gop_opt orelse return null;
+
+    trySetPreferredGopMode(out, gop, PREFERRED_FB_WIDTH, PREFERRED_FB_HEIGHT);
 
     const mode = gop.mode;
     const info = mode.info;
@@ -388,13 +483,24 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
     printDecimal(out, segments_loaded);
     puts(out, " ELF segments\r\n");
 
-    _ = queryGopFramebuffer(out, bs);
+    // SetMode 到 ≥1024×768 后把线性 GOP 写入 handoff，使内核与 QEMU 主窗口（固件 GOP 扫描）一致。
+    const gop_fb_opt = queryGopFramebuffer(out, bs);
 
     puts(out, "    [*] kernel entry at 0x");
     printHex64(out, ehdr.e_entry);
     puts(out, "\r\n");
 
-    const hand = handoffForSelectedEntry(menu.selected);
+    var hand = handoffForSelectedEntry(menu.selected);
+    if (gop_fb_opt) |gf| {
+        if (gf.width >= PREFERRED_FB_WIDTH and gf.height >= PREFERRED_FB_HEIGHT) {
+            hand.version = 2;
+            hand.fb_addr = gf.addr;
+            hand.fb_pitch = gf.pitch;
+            hand.fb_width = gf.width;
+            hand.fb_height = gf.height;
+            hand.fb_bpp = gf.bpp;
+        }
+    }
     const ho_ptr: [*]align(4096) uefi.Page = @ptrFromInt(HANDOFF_PHYS);
     _ = bs.allocatePages(.{ .address = ho_ptr }, .loader_data, 1) catch {
         puts(out, "    [!!] Failed to allocate handoff page\r\n");

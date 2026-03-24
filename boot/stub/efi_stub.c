@@ -83,6 +83,11 @@ static void print_dec(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, UINT32 val) {
 	}
 }
 
+/* UEFI: PixelRedGreenBlueReserved8BitPerColor=0, BGR=1, BitMask=2, BltOnly=3 */
+static int gop_pixel_linear(UINT32 fmt) {
+	return (int)(fmt <= 2u);
+}
+
 static void init_entries(void) {
 	entries[0].desc = L"ZirconOSAero (NT 6.1)";
 	entries[0].boot_mode = 0;
@@ -469,37 +474,99 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 	hp->fb_height = 0;
 	hp->fb_bpp = 0;
 
-	/* Get framebuffer from GOP for display (avoids "Display output is not active") */
+	/* QEMU GTK 常把主窗口接到固件 GOP（如 800×600），而内核 ramfb 写在 0xF000000 → 看不见桌面。
+	 * 在 ExitBootServices 前 SetMode 到 ≥1024×768 的线性 GOP，并把该缓冲写入 handoff，内核与窗口同源。 */
 	{
 		typedef EFI_STATUS (*LP)(EFI_GUID *Protocol, VOID *Registration, VOID **Interface);
+		typedef EFI_STATUS (*GOP_QUERY_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32, UINTN *, EFI_GRAPHICS_OUTPUT_MODE_INFO **);
+		typedef EFI_STATUS (*GOP_SET_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32);
+
 		EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
 		EFI_STATUS gst = ((LP)bs->LocateProtocol)((EFI_GUID *)&gop_guid, 0, (VOID **)&gop);
-		if (gst == EFI_SUCCESS && gop && gop->Mode && gop->Mode->FrameBufferBase != 0) {
-			hp->fb_addr = gop->Mode->FrameBufferBase;
-			hp->fb_width = gop->Mode->Info ? gop->Mode->Info->HorizontalResolution : 1024;
-			hp->fb_height = gop->Mode->Info ? gop->Mode->Info->VerticalResolution : 768;
-			hp->fb_pitch = gop->Mode->Info ? (gop->Mode->Info->PixelsPerScanLine * 4) : (hp->fb_width * 4);
-			hp->fb_bpp = 32;
-			if (hp->fb_pitch == 0)
-				hp->fb_pitch = hp->fb_width * 4;
-			print(con, L"  [*] GOP framebuffer: ");
-			print_dec(con, (UINT32)hp->fb_width);
-			print(con, L"x");
-			print_dec(con, (UINT32)hp->fb_height);
-			print(con, L" @ 0x");
-			{ /* hex dump addr */
-				UINT64 a = hp->fb_addr;
-				CHAR16 hx[] = L"0123456789ABCDEF";
-				CHAR16 buf[20];
-				int i = 0;
-				for (int sh = 60; sh >= 0; sh -= 4)
-					buf[i++] = hx[(a >> sh) & 0xF];
-				buf[i] = 0;
-				print(con, buf);
-			}
-			print(con, L"\r\n");
+		if (gst != EFI_SUCCESS || !gop || !gop->Mode || !gop->Mode->Info) {
+			print(con, L"  [*] GOP unavailable (kernel will use ramfb)\r\n");
 		} else {
-			print(con, L"  [!] GOP not found, display may not work\r\n");
+			GOP_QUERY_MODE qm = (GOP_QUERY_MODE)gop->QueryMode;
+			GOP_SET_MODE sm = (GOP_SET_MODE)gop->SetMode;
+			UINT32 want_w = 1024, want_h = 768;
+
+			/* Blt-only → 先切到线性模式 */
+			if (!gop_pixel_linear(gop->Mode->Info->PixelFormat)) {
+				UINT32 m;
+				for (m = 0; m < gop->Mode->MaxMode; m++) {
+					UINTN sz = 0;
+					EFI_GRAPHICS_OUTPUT_MODE_INFO *mi = 0;
+					if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
+					if (gop_pixel_linear(mi->PixelFormat) && sm(gop, m) == EFI_SUCCESS)
+						break;
+				}
+			}
+
+			/* 优先 1024×768 */
+			{
+				UINT32 m;
+				for (m = 0; m < gop->Mode->MaxMode; m++) {
+					UINTN sz = 0;
+					EFI_GRAPHICS_OUTPUT_MODE_INFO *mi = 0;
+					if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
+					if (!gop_pixel_linear(mi->PixelFormat)) continue;
+					if (mi->HorizontalResolution == want_w && mi->VerticalResolution == want_h) {
+						sm(gop, m);
+						break;
+					}
+				}
+			}
+			/* 否则选不小于 want 的最小面积 */
+			{
+				UINT32 m, best_m = 0xFFFFFFFFu;
+				UINT64 best_px = (UINT64)-1;
+				for (m = 0; m < gop->Mode->MaxMode; m++) {
+					UINTN sz = 0;
+					EFI_GRAPHICS_OUTPUT_MODE_INFO *mi = 0;
+					if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
+					if (!gop_pixel_linear(mi->PixelFormat)) continue;
+					UINT32 w = mi->HorizontalResolution, h = mi->VerticalResolution;
+					if (w < want_w || h < want_h) continue;
+					UINT64 px = (UINT64)w * h;
+					if (px < best_px) {
+						best_px = px;
+						best_m = m;
+					}
+				}
+				if (best_m != 0xFFFFFFFFu)
+					sm(gop, best_m);
+			}
+
+			if (gop->Mode->Info && gop_pixel_linear(gop->Mode->Info->PixelFormat) &&
+			    gop->Mode->Info->HorizontalResolution >= want_w &&
+			    gop->Mode->Info->VerticalResolution >= want_h &&
+			    gop->Mode->FrameBufferBase != 0) {
+				hp->fb_addr = gop->Mode->FrameBufferBase;
+				hp->fb_width = gop->Mode->Info->HorizontalResolution;
+				hp->fb_height = gop->Mode->Info->VerticalResolution;
+				hp->fb_pitch = gop->Mode->Info->PixelsPerScanLine * 4;
+				if (hp->fb_pitch == 0)
+					hp->fb_pitch = hp->fb_width * 4;
+				hp->fb_bpp = 32;
+				print(con, L"  [*] GOP → handoff (kernel desktop, QEMU scanout): ");
+				print_dec(con, hp->fb_width);
+				print(con, L"x");
+				print_dec(con, hp->fb_height);
+				print(con, L" @ 0x");
+				{
+					CHAR16 hx[] = L"0123456789ABCDEF";
+					CHAR16 buf[20];
+					int i = 0;
+					UINT64 a = hp->fb_addr;
+					for (int sh = 60; sh >= 0; sh -= 4)
+						buf[i++] = hx[(a >> sh) & 0xF];
+					buf[i] = 0;
+					print(con, buf);
+				}
+				print(con, L"\r\n");
+			} else {
+				print(con, L"  [*] GOP <1024x768 or non-linear after SetMode; kernel uses ramfb\r\n");
+			}
 		}
 	}
 

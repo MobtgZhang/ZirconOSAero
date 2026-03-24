@@ -26,13 +26,17 @@ pub const BootEntry = struct {
 
 pub const KERNEL_PATH = "\\boot\\kernel.elf";
 
-// 扩展按键：EFI 标准 + PC 扩展 + Unicode 箭头 + j/k w/s
+// 扩展按键：EFI 标准 + PageUp/Down + Home/End + PC 扩展 + Unicode 箭头 + j/k w/s
 const SCAN_UP = 0x01;
 const SCAN_DOWN = 0x02;
-const SCAN_UP_EXT = 0x48;
-const SCAN_DOWN_EXT = 0x50;
+const SCAN_HOME = 0x05;
+const SCAN_END = 0x06;
+const SCAN_PAGE_UP = 0x09;
+const SCAN_PAGE_DOWN = 0x0A;
 const SCAN_ENTER = 0x0D;
 const SCAN_ESC = 0x17;
+const SCAN_UP_EXT = 0x48;
+const SCAN_DOWN_EXT = 0x50;
 const UNICODE_UP: u21 = 0x2191;
 const UNICODE_DOWN: u21 = 0x2193;
 
@@ -103,14 +107,24 @@ pub fn runMenuLoop(
 
         if (cin) |con_in_ptr| {
             const con_in: *uefi.protocol.SimpleTextInput = @ptrCast(@alignCast(@constCast(con_in_ptr)));
-            if (readKey(con_in)) |key| {
+            if (tryReadKey(con_in)) |key| {
                 timer_active = false;
 
                 const is_up = key.scan_code == SCAN_UP or key.scan_code == SCAN_UP_EXT or
+                    key.scan_code == SCAN_PAGE_UP or key.scan_code == SCAN_HOME or
                     key.unicode_char == UNICODE_UP or key.unicode_char == 'k' or key.unicode_char == 'w';
                 const is_down = key.scan_code == SCAN_DOWN or key.scan_code == SCAN_DOWN_EXT or
+                    key.scan_code == SCAN_PAGE_DOWN or key.scan_code == SCAN_END or
                     key.unicode_char == UNICODE_DOWN or key.unicode_char == 'j' or key.unicode_char == 's';
 
+                if (key.scan_code == SCAN_HOME) {
+                    selected = 0;
+                    continue;
+                }
+                if (key.scan_code == SCAN_END and entry_count > 0) {
+                    selected = entry_count - 1;
+                    continue;
+                }
                 if (is_up and selected > 0) {
                     selected -= 1;
                     continue;
@@ -125,7 +139,7 @@ pub fn runMenuLoop(
                 if (key.scan_code == SCAN_ENTER or key.unicode_char == '\r' or key.unicode_char == '\n') {
                     break;
                 }
-                if (key.unicode_char >= '1' and key.unicode_char <= '6') {
+                if (key.unicode_char >= '1' and key.unicode_char <= '0' + MAX_ENTRIES) {
                     const idx: usize = @intCast(key.unicode_char - '1');
                     if (idx < entry_count) {
                         selected = idx;
@@ -162,9 +176,21 @@ fn readKey(cin: *uefi.protocol.SimpleTextInput) ?uefi.protocol.SimpleTextInput.K
     return cin.readKeyStroke() catch return null;
 }
 
+/// 非阻塞读键；部分固件需先 `checkEvent(wait_for_key)` 后 `readKeyStroke` 才返回方向键。
+fn tryReadKey(cin: *uefi.protocol.SimpleTextInput) ?uefi.protocol.SimpleTextInput.Key.Input {
+    if (readKey(cin)) |k| return k;
+    if (bs.checkEvent(cin.wait_for_key) catch false) {
+        return readKey(cin);
+    }
+    return null;
+}
+
 fn waitForKey(b: *uefi.tables.BootServices, cin: *uefi.protocol.SimpleTextInput) void {
-    while (readKey(cin) == null) {
-        _ = b.stall(10_000) catch {};
+    while (true) {
+        if (tryReadKey(cin)) |_| return;
+        _ = b.waitForEvent(&.{cin.wait_for_key}) catch {
+            _ = b.stall(10_000) catch {};
+        };
     }
 }
 

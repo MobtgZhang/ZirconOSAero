@@ -129,6 +129,65 @@ const Elf64_Phdr = extern struct {
 };
 
 const PT_LOAD: u32 = 1;
+const PF_X: u32 = 1;
+const PF_W: u32 = 2;
+
+/// PT_LOAD 在内存中占用的物理页上界（独占），用于与下一页对齐的区间 `[p_lo, end)`。
+fn ptLoadPageRangeEndExclusive(p_paddr: u64, memsz: u64) u64 {
+    if (memsz == 0) return p_paddr & ~@as(u64, 0xFFF);
+    const last_byte = p_paddr +% (memsz -% 1);
+    return (last_byte & ~@as(u64, 0xFFF)) + 4096;
+}
+
+fn physPageWantsLoaderData(
+    file_data: []const u8,
+    file_size: usize,
+    ehdr: *const Elf64_Ehdr,
+    page_addr: u64,
+) bool {
+    const page_end = page_addr + 4096;
+    var i: u16 = 0;
+    while (i < ehdr.e_phnum) : (i += 1) {
+        const ph_off: usize = @intCast(ehdr.e_phoff + @as(usize, i) * ehdr.e_phentsize);
+        if (ph_off + @sizeOf(Elf64_Phdr) > file_size) break;
+        const phdr: *const Elf64_Phdr = @ptrCast(@alignCast(file_data.ptr + ph_off));
+        if (phdr.p_type != PT_LOAD) continue;
+        if (phdr.p_memsz == 0) continue;
+        const seg_lo = phdr.p_paddr;
+        const seg_hi = phdr.p_paddr +% phdr.p_memsz;
+        if (seg_lo < page_end and seg_hi > page_addr) {
+            if ((phdr.p_flags & PF_W) != 0) return true;
+        }
+    }
+    return false;
+}
+
+/// virtio-gpu 等可能以 PixelBltOnly 启动，无线性帧缓冲；尝试 SetMode 到带 RGB/BGR/bit_mask 的模式。
+fn trySetLinearGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput) void {
+    const cur = gop.mode.info.pixel_format;
+    if (cur == .red_green_blue_reserved_8_bit_per_color or
+        cur == .blue_green_red_reserved_8_bit_per_color or
+        cur == .bit_mask)
+    {
+        return;
+    }
+
+    var mid: u32 = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        switch (mi.pixel_format) {
+            .red_green_blue_reserved_8_bit_per_color,
+            .blue_green_red_reserved_8_bit_per_color,
+            .bit_mask,
+            => {
+                gop.setMode(mid) catch continue;
+                puts(out, "    [*] GOP: selected linear framebuffer mode\r\n");
+                return;
+            },
+            else => {},
+        }
+    }
+}
 
 // GOP framebuffer info passed from UEFI to kernel via multiboot2 tag
 const GopFbInfo = struct {
@@ -151,11 +210,36 @@ const UefiVectorTable = extern struct {
     stack_addr: u64,
 };
 
+const mmap_scratch_nbytes: usize = 32768;
+const boot_info_page_size: usize = 4096;
+
+/// 按「mmap 缓冲能容纳的最多 UEFI 描述符」估算 Multiboot2 块上限，避免固件项多或 ExitBootServices 后重取图时越界。
+fn multiboot2BootInfoMaxBytes(max_mmap_entries: usize, cmdline_len: usize, has_fb: bool) usize {
+    var need: usize = 8;
+    const str_sz = cmdline_len + 1;
+    need +|= (8 + str_sz + 7) & ~@as(usize, 7);
+    need +|= 16;
+    const mmap_body = 16 + max_mmap_entries * 24;
+    need +|= (mmap_body + 7) & ~@as(usize, 7);
+    if (has_fb) need +|= (32 + 7) & ~@as(usize, 7);
+    need +|= 8;
+    return need;
+}
+
+fn bootInfoPagesForScratchBuffer(scratch_len: usize, cmdline_len: usize, has_fb: bool) usize {
+    const desc_sz = @sizeOf(uefi.tables.MemoryDescriptor);
+    const max_entries = scratch_len / desc_sz;
+    const bytes = multiboot2BootInfoMaxBytes(max_entries, cmdline_len, has_fb);
+    return @max((bytes + boot_info_page_size - 1) / boot_info_page_size, 1);
+}
+
 // ── Kernel Loading (UEFI) ──
 
 fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
     const gop_opt = bs.locateProtocol(uefi.protocol.GraphicsOutput, null) catch return null;
     const gop = gop_opt orelse return null;
+
+    trySetLinearGopMode(out, gop);
 
     const mode = gop.mode;
     const info = mode.info;
@@ -302,8 +386,59 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
     printDecimal(out, ehdr.e_phnum);
     puts(out, " program headers\r\n");
 
-    // ── Step 4: Load PT_LOAD segments into physical memory ──
+    // ── Step 4: Load PT_LOAD — 先按物理页去重 allocatePages（多段常共享同一页），再逐段 memcpy
+    const max_kernel_pages: u64 = 262144; // 1GiB / 4KiB，防止畸形 ELF
+    var min_page: u64 = std.math.maxInt(u64);
+    var max_page_excl: u64 = 0;
     var segments_loaded: u32 = 0;
+
+    {
+        var i: u16 = 0;
+        while (i < ehdr.e_phnum) : (i += 1) {
+            const ph_off: usize = @intCast(ehdr.e_phoff + @as(usize, i) * ehdr.e_phentsize);
+            if (ph_off + @sizeOf(Elf64_Phdr) > file_size) break;
+            const phdr: *const Elf64_Phdr = @ptrCast(@alignCast(file_data.ptr + ph_off));
+            if (phdr.p_type != PT_LOAD) continue;
+            if (phdr.p_memsz == 0) continue;
+            segments_loaded += 1;
+            const p_lo = phdr.p_paddr & ~@as(u64, 0xFFF);
+            const p_hi_excl = ptLoadPageRangeEndExclusive(phdr.p_paddr, phdr.p_memsz);
+            min_page = @min(min_page, p_lo);
+            max_page_excl = @max(max_page_excl, p_hi_excl);
+        }
+    }
+
+    if (segments_loaded == 0) {
+        puts(out, "    [!!] No PT_LOAD segments in kernel ELF\r\n");
+        return;
+    }
+
+    const total_pages = (max_page_excl - min_page) / 4096;
+    if (total_pages > max_kernel_pages) {
+        puts(out, "    [!!] PT_LOAD span too large for UEFI loader\r\n");
+        return;
+    }
+
+    var pa = min_page;
+    while (pa < max_page_excl) : (pa += 4096) {
+        const page_mem_type: uefi.tables.MemoryType =
+            if (physPageWantsLoaderData(file_data, file_size, ehdr, pa))
+                .loader_data
+            else
+                .loader_code;
+        _ = bs.allocatePages(
+            .{ .address = @ptrFromInt(pa) },
+            page_mem_type,
+            1,
+        ) catch {
+            puts(out, "    [!!] allocatePages failed for kernel phys page 0x");
+            printHex64(out, pa);
+            puts(out, "\r\n");
+            return;
+        };
+    }
+
+    segments_loaded = 0;
     for (0..ehdr.e_phnum) |i| {
         const ph_off: usize = @intCast(ehdr.e_phoff + i * ehdr.e_phentsize);
         if (ph_off + @sizeOf(Elf64_Phdr) > file_size) break;
@@ -311,17 +446,6 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
         const phdr: *const Elf64_Phdr = @ptrCast(@alignCast(file_data.ptr + ph_off));
         if (phdr.p_type != PT_LOAD) continue;
         if (phdr.p_memsz == 0) continue;
-
-        const num_pages: usize = @intCast((phdr.p_memsz + 4095) / 4096);
-        const page_base: usize = @intCast(phdr.p_paddr & ~@as(u64, 0xFFF));
-
-        _ = bs.allocatePages(
-            .{ .address = @ptrFromInt(page_base) },
-            .loader_data,
-            num_pages,
-        ) catch {
-            // Pages might overlap or be pre-allocated; continue anyway
-        };
 
         const dst: [*]u8 = @ptrFromInt(@as(usize, @intCast(phdr.p_paddr)));
         const filesz: usize = @intCast(phdr.p_filesz);
@@ -385,35 +509,54 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
     // ── Step 6: Query GOP framebuffer (must be done BEFORE ExitBootServices) ──
     const gop_fb = queryGopFramebuffer(out, bs);
 
-    // ── Step 7: Build Multiboot2-compatible boot info ──
-    const boot_info_pages = bs.allocatePages(.{ .any = {} }, .loader_data, 2) catch {
-        puts(out, "    [!!] Failed to allocate boot info memory\r\n");
-        return;
-    };
-    const bi_base: [*]u8 = @ptrCast(boot_info_pages.ptr);
-    @memset(bi_base[0..8192], 0);
-
-    // Get UEFI memory map (final state) and build boot info from it
-    var mmap_buf: [32768]u8 align(@alignOf(uefi.tables.MemoryDescriptor)) = undefined;
+    // ── Step 7: Memory map + sized Multiboot2 boot info ──
+    var mmap_buf: [mmap_scratch_nbytes]u8 align(@alignOf(uefi.tables.MemoryDescriptor)) = undefined;
     const mmap = bs.getMemoryMap(@as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) catch {
         puts(out, "    [!!] Failed to get memory map\r\n");
         return;
     };
 
-    const boot_info_addr = buildBootInfo(bi_base, mmap, menu.entries[menu.selected].cmdline, gop_fb);
-    puts(out, "    [*] Multiboot2 boot info ready\r\n");
+    const cmdline = menu.entries[menu.selected].cmdline;
+    const bi_num_pages = bootInfoPagesForScratchBuffer(mmap_buf.len, cmdline.len, gop_fb != null);
+    const boot_info_pages = bs.allocatePages(.{ .any = {} }, .loader_data, bi_num_pages) catch {
+        puts(out, "    [!!] Failed to allocate boot info memory\r\n");
+        return;
+    };
+    const bi_cap = bi_num_pages * boot_info_page_size;
+    const bi_base: [*]u8 = @ptrCast(boot_info_pages.ptr);
+    @memset(bi_base[0..bi_cap], 0);
+
+    const boot_info_addr = buildBootInfo(bi_base, bi_cap, mmap, cmdline, gop_fb) catch {
+        puts(out, "    [!!] Multiboot2 boot info larger than buffer (internal error)\r\n");
+        return;
+    };
+    puts(out, "    [*] Multiboot2 boot info ready (");
+
+    printDecimal(out, @intCast(bi_num_pages));
+    puts(out, " pages)\r\n");
 
     // ── Step 8: Exit boot services ──
     puts(out, "    [*] Exiting boot services...\r\n");
 
     bs.exitBootServices(uefi.handle, mmap.info.key) catch {
-        // Key changed, retry
         const mmap2 = bs.getMemoryMap(@as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) catch return;
-        _ = buildBootInfo(bi_base, mmap2, menu.entries[menu.selected].cmdline, gop_fb);
+        _ = buildBootInfo(bi_base, bi_cap, mmap2, cmdline, gop_fb) catch return;
         bs.exitBootServices(uefi.handle, mmap2.info.key) catch return;
     };
 
     // ═══ NO MORE UEFI CALLS PAST THIS POINT ═══
+
+    // 将 ELF 段 memcpy 到 RAM 后须使指令对 CPU 可见（AArch64 I-cache；RISC-V fence.i）
+    switch (builtin.target.cpu.arch) {
+        .aarch64 => asm volatile (
+            \\ic iallu
+            \\dsb sy
+            \\isb
+            ::: .{ .memory = true }
+        ),
+        .riscv64 => asm volatile ("fence.i" ::: .{ .memory = true }),
+        else => {},
+    }
 
     // ── Jump to kernel_main（架构相关调用约定）──
     // x86_64: RDI=magic, RSI=info, RSP=内核栈（勿用 UEFI 栈）
@@ -470,26 +613,30 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
 
 fn buildBootInfo(
     bi_base: [*]u8,
+    cap: usize,
     mmap: uefi.tables.MemoryMapSlice,
     cmdline: []const u8,
     gop_fb: ?GopFbInfo,
-) usize {
+) error{BootInfoTooLarge}!usize {
     var off: usize = 8; // skip BootInfoHeader (filled at end)
 
     // Tag: command line (type=1)
     {
+        const str_sz: u32 = @intCast(cmdline.len + 1);
+        const tag_len = (8 + str_sz + 7) & ~@as(usize, 7);
+        if (off + tag_len > cap) return error.BootInfoTooLarge;
         const p: [*]u32 = @ptrCast(@alignCast(bi_base + off));
         p[0] = 1;
-        const str_sz: u32 = @intCast(cmdline.len + 1);
         p[1] = 8 + str_sz;
         @memcpy((bi_base + off + 8)[0..cmdline.len], cmdline);
         (bi_base + off + 8)[cmdline.len] = 0;
-        off += (8 + str_sz + 7) & ~@as(usize, 7);
+        off += tag_len;
     }
 
     // Tag: basic memory info (type=4)
     const meminfo_off = off;
     {
+        if (off + 16 > cap) return error.BootInfoTooLarge;
         const p: [*]u32 = @ptrCast(@alignCast(bi_base + off));
         p[0] = 4;
         p[1] = 16;
@@ -501,6 +648,7 @@ fn buildBootInfo(
     // Tag: memory map (type=6)
     {
         const tag_start = off;
+        if (off + 16 > cap) return error.BootInfoTooLarge;
         const p: [*]u32 = @ptrCast(@alignCast(bi_base + off));
         p[0] = 6;
         p[2] = 24; // entry_size
@@ -510,6 +658,7 @@ fn buildBootInfo(
 
         var it = mmap.iterator();
         while (it.next()) |desc| {
+            if (tag_start + eoff + 24 > cap) return error.BootInfoTooLarge;
             const mb_type: u32 = uefiToMb2MemType(desc.type);
             const base = desc.physical_start;
             const length = desc.number_of_pages * 4096;
@@ -532,11 +681,15 @@ fn buildBootInfo(
         const mi: [*]u32 = @ptrCast(@alignCast(bi_base + meminfo_off));
         mi[3] = mem_upper_kb;
 
-        off += (eoff + 7) & ~@as(usize, 7);
+        const mmap_tag_total = (eoff + 7) & ~@as(usize, 7);
+        if (tag_start + mmap_tag_total > cap) return error.BootInfoTooLarge;
+        off += mmap_tag_total;
     }
 
     // Tag: framebuffer (type=8) — GOP framebuffer info for graphical desktop
     if (gop_fb) |fb| {
+        const tag_len = (32 + 7) & ~@as(usize, 7);
+        if (off + tag_len > cap) return error.BootInfoTooLarge;
         const base = bi_base + off;
         @as(*u32, @ptrCast(@alignCast(base))).* = 8; // type
         @as(*u32, @ptrCast(@alignCast(base + 4))).* = 32; // size (8+8+4+4+4+1+1+2=32)
@@ -548,11 +701,12 @@ fn buildBootInfo(
         base[29] = 1; // fb_type = 1 (direct color)
         base[30] = fb.pixel_bgr; // 1=BGR 首字节蓝, 0=RGB 首字节红
         base[31] = 0x5A; // 扩展有效标记（旧引导未填时内核默认 BGR）
-        off += (32 + 7) & ~@as(usize, 7);
+        off += tag_len;
     }
 
     // Tag: end (type=0)
     {
+        if (off + 8 > cap) return error.BootInfoTooLarge;
         const p: [*]u32 = @ptrCast(@alignCast(bi_base + off));
         p[0] = 0;
         p[1] = 8;

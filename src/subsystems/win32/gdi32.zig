@@ -261,8 +261,8 @@ pub fn CreateCompatibleDC(hdc: HDC) HDC {
     dc.text_align = TA_LEFT | TA_TOP;
     dc.rop2 = 13;
     dc.map_mode = 1;
-    dc.clip_right = 800;
-    dc.clip_bottom = 600;
+    dc.clip_right = user32.getScreenWidth();
+    dc.clip_bottom = user32.getScreenHeight();
     next_dc_handle += 1;
     dc_count += 1;
     return dc.handle;

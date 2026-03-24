@@ -2,6 +2,7 @@
 //! Phase 9-10: Manages Win32 subsystem registration, console sessions,
 //! window stations, desktops, GUI message dispatch, and process lifecycle.
 
+const std = @import("std");
 const klog = @import("../../rtl/klog.zig");
 const ob = @import("../../ob/object.zig");
 const process = @import("../../ps/process.zig");
@@ -121,6 +122,10 @@ pub const Win32Process = struct {
 var window_stations: [MAX_WINDOW_STATIONS]WindowStation = [_]WindowStation{.{}} ** MAX_WINDOW_STATIONS;
 var station_count: usize = 0;
 
+/// 交互会话默认 `WinSta0`；见 `docs/cn/DesktopManagerSpec.md`
+var active_window_station_idx: usize = 0;
+var active_desktop_idx: usize = 0;
+
 var win32_processes: [MAX_WIN32_PROCESSES]Win32Process = [_]Win32Process{.{}} ** MAX_WIN32_PROCESSES;
 var win32_process_count: usize = 0;
 
@@ -205,6 +210,36 @@ pub fn getWindowStation(idx: usize) ?*WindowStation {
     return null;
 }
 
+pub fn getActiveDesktopIndex() usize {
+    return active_desktop_idx;
+}
+
+/// 将活动桌面切换为指定名称（如 `Default`、`Winlogon`）；ReactOS `NtUser` 桌面切换语义子集。
+pub fn switchToDesktop(name: []const u8) bool {
+    const ws = getWindowStation(active_window_station_idx) orelse return false;
+    for (0..ws.desktop_count) |i| {
+        const d = &ws.desktops[i];
+        if (d.name_len == name.len and std.mem.eql(u8, d.name[0..d.name_len], name)) {
+            for (0..ws.desktop_count) |j| {
+                ws.desktops[j].is_active = (j == i);
+            }
+            active_desktop_idx = i;
+            klog.info("csrss: SwitchDesktop (len=%u idx=%u)", .{ @as(u32, @intCast(name.len)), @as(u32, @intCast(i)) });
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 绑定 Win32 进程到窗口站内的桌面索引（0..desktop_count-1）。
+pub fn setProcessDesktop(pid: u32, desktop_index: u32) bool {
+    const wp = findWin32Process(pid) orelse return false;
+    const ws = getWindowStation(active_window_station_idx) orelse return false;
+    if (desktop_index >= ws.desktop_count) return false;
+    wp.desktop_id = desktop_index;
+    return true;
+}
+
 // ── API Dispatch ──
 
 pub fn handleApiCall(api: CsrApiNumber, pid: u32, _: ?*const [ipc.MSG_DATA_SIZE]u8) i32 {
@@ -236,6 +271,18 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, _: ?*const [ipc.MSG_DATA_SIZE]
         .shutdown_system => {
             subsystem_state = .shutdown;
             klog.info("csrss: System shutdown requested by PID=%u", .{pid});
+            return 0;
+        },
+        .create_window_station => {
+            _ = createWindowStation("StaUser", 0) orelse return -1;
+            return 0;
+        },
+        .create_desktop => {
+            const ws = getWindowStation(active_window_station_idx) orelse return -1;
+            var buf: [16]u8 = undefined;
+            const suffix = api_call_count % 1000;
+            const label = std.fmt.bufPrint(&buf, "Desk{}", .{suffix}) catch return -1;
+            _ = ws.createDesktop(label) orelse return -1;
             return 0;
         },
         else => return -1,
@@ -339,6 +386,12 @@ pub fn init() void {
     if (ws) |station| {
         _ = station.createDesktop("Default");
         _ = station.createDesktop("Winlogon");
+        active_window_station_idx = 0;
+        active_desktop_idx = 0;
+        station.desktops[0].is_active = true;
+        if (station.desktop_count > 1) {
+            station.desktops[1].is_active = false;
+        }
     }
 
     _ = registerProcess(1, .native, "System", 0);

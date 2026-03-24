@@ -327,8 +327,17 @@ var capture_hwnd: HWND = 0;
 var active_hwnd: HWND = 0;
 var foreground_hwnd: HWND = 0;
 
-var screen_width: i32 = 800;
-var screen_height: i32 = 600;
+/// 与 `build.conf` / 多引导默认 1024×768 一致；进入桌面后由 `syncScreenFromFramebuffer()` 与内核 FB 对齐。
+var screen_width: i32 = 1024;
+var screen_height: i32 = 768;
+
+pub fn getScreenWidth() i32 {
+    return screen_width;
+}
+
+pub fn getScreenHeight() i32 {
+    return screen_height;
+}
 
 var user32_initialized: bool = false;
 var total_messages_processed: u64 = 0;
@@ -641,6 +650,16 @@ pub fn GetForegroundWindow() HWND {
 
 pub fn GetDesktopWindow() HWND {
     return HWND_DESKTOP;
+}
+
+/// 切换活动桌面（csrss 窗口站内 `Desktop` 对象）；名称须与 `createDesktop` 一致（如 `Default`）。
+pub fn SwitchDesktopByName(name: []const u8) BOOL {
+    return if (subsystem.switchToDesktop(name)) TRUE else FALSE;
+}
+
+/// 将 Win32 进程绑定到当前窗口站内的桌面索引。
+pub fn SetProcessDesktopByIndex(pid: DWORD, desktop_index: DWORD) BOOL {
+    return if (subsystem.setProcessDesktop(pid, desktop_index)) TRUE else FALSE;
 }
 
 // ── Message Loop ──
@@ -997,5 +1016,20 @@ pub fn init() void {
     klog.info("user32: Message APIs: GetMessage, PeekMessage, PostMessage, DispatchMessage", .{});
     klog.info("user32: Paint APIs: BeginPaint, EndPaint, InvalidateRect, GetDC", .{});
     klog.info("user32: Input APIs: SetFocus, SetCapture, SetTimer, MessageBox", .{});
-    klog.info("user32: Screen: %ux%u", .{@as(u32, @intCast(screen_width)), @as(u32, @intCast(screen_height))});
+    klog.info("user32: Screen: %ux%u (default; sync after desktop FB init)", .{
+        @as(u32, @intCast(screen_width)),
+        @as(u32, @intCast(screen_height)),
+    });
+}
+
+/// 桌面 `initDesktopMode` 之后调用，使 GetSystemMetrics 与真实帧缓冲一致。
+pub fn syncScreenFromFramebuffer() void {
+    const fb = @import("../../drivers/video/framebuffer.zig");
+    if (!fb.isInitialized()) return;
+    const w = fb.getWidth();
+    const h = fb.getHeight();
+    if (w == 0 or h == 0) return;
+    screen_width = @intCast(w);
+    screen_height = @intCast(h);
+    klog.info("user32: Screen synced to kernel framebuffer: %ux%u", .{ w, h });
 }

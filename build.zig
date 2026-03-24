@@ -10,6 +10,16 @@ pub fn build(b: *std.Build) void {
         "Target architecture (x86_64, loongarch64, aarch64, riscv64, mips64el)",
     ) orelse "x86_64";
     const debug_mode = b.option(bool, "debug", "Enable debug mode (verbose klog, serial output)") orelse false;
+    const mouse_debug_opt = b.option(
+        bool,
+        "mouse_debug",
+        "MOUSEDBG: always log pointer coords + VirtIO queue snapshot (serial); status bar shows ptr x,y",
+    ) orelse false;
+    const agent_ndjson_opt = b.option(
+        bool,
+        "agent_ndjson",
+        "Serial lines AGENT_LOG:{...} NDJSON for host ingest (.cursor/debug-*.log via scripts/agent-ingest-serial.sh)",
+    ) orelse false;
     const enable_idt_opt = b.option(bool, "enable_idt", "Enable IDT, timer and syscall (x86_64 only)") orelse true;
 
     var cpu_arch: std.Target.Cpu.Arch = .x86_64;
@@ -41,6 +51,8 @@ pub fn build(b: *std.Build) void {
 
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "debug", debug_mode);
+    build_opts.addOption(bool, "mouse_debug", mouse_debug_opt);
+    build_opts.addOption(bool, "agent_ndjson", agent_ndjson_opt);
     build_opts.addOption(bool, "enable_idt", enable_idt_opt);
     build_opts.addOption([]const u8, "default_desktop", desktop_default);
 
@@ -70,6 +82,13 @@ pub fn build(b: *std.Build) void {
     });
     root_mod.addImport("config_defaults", config_defaults_mod);
 
+    const dwm_nt61_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/dwm_nt61_defaults.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    root_mod.addImport("dwm_nt61_defaults", dwm_nt61_mod);
+
     const kernel = b.addExecutable(.{
         .name = "kernel",
         .root_module = root_mod,
@@ -79,6 +98,10 @@ pub fn build(b: *std.Build) void {
     kernel.link_gc_sections = false;
     kernel.pie = false;
     kernel.link_z_max_page_size = 0x1000;
+    // Zig 自托管链接器会覆盖脚本中的起始 VA；显式与 link/x86_64.ld 对齐（UEFI 大内核需避开 16MiB 附近分配失败区）
+    if (cpu_arch == .x86_64) {
+        kernel.image_base = 0x02000000;
+    }
 
     const linker_script = if (mem.eql(u8, arch_opt, "x86_64"))
         b.path("link/x86_64.ld")
@@ -138,6 +161,13 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
 
     const target = b.standardTargetOptions(.{});
 
+    // 与 `src/desktop/aero/build.zig` 一致：`theme.zig` 依赖单一玻璃默认值源
+    const dwm_nt61_desktop_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/dwm_nt61_defaults.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const desktop_all_step = b.step("desktop-all", "Build all desktop themes (EXE + DLL)");
     const dll_all_step = b.step("desktop-dll-all", "Build all desktop theme DLLs");
 
@@ -150,6 +180,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .root_source_file = b.path(root_path),
             .target = target,
         });
+        theme_mod.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
 
         // EXE
         const exe = b.addExecutable(.{
@@ -161,29 +192,35 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             }),
         });
         exe.root_module.addImport(entry.import_name, theme_mod);
+        // main.zig 使用 @import("root.zig")，与库模块分离；theme 等文件在 exe 模块内解析 nt61
+        exe.root_module.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
         const install_exe = b.addInstallArtifact(exe, .{});
 
         // Static library (.lib)
+        const lib_rm = b.createModule(.{
+            .root_source_file = b.path(root_path),
+            .target = target,
+            .optimize = optimize,
+        });
+        lib_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
         const lib = b.addLibrary(.{
             .name = exe_name,
             .linkage = .static,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(root_path),
-                .target = target,
-                .optimize = optimize,
-            }),
+            .root_module = lib_rm,
         });
         const install_lib = b.addInstallArtifact(lib, .{});
 
         // DLL (shared library / PE DLL when targeting Windows)
+        const dll_rm = b.createModule(.{
+            .root_source_file = b.path(root_path),
+            .target = target,
+            .optimize = optimize,
+        });
+        dll_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
         const dll = b.addLibrary(.{
             .name = exe_name,
             .linkage = .dynamic,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(root_path),
-                .target = target,
-                .optimize = optimize,
-            }),
+            .root_module = dll_rm,
         });
         const install_dll = b.addInstallArtifact(dll, .{});
 
@@ -220,6 +257,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     .root_source_file = b.path(root_path),
                     .target = target,
                 });
+                theme_mod.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
 
                 const exe = b.addExecutable(.{
                     .name = exe_name,
@@ -230,29 +268,34 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     }),
                 });
                 exe.root_module.addImport(entry.import_name, theme_mod);
+                exe.root_module.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
                 const install_sel_exe = b.addInstallArtifact(exe, .{});
                 desktop_step.dependOn(&install_sel_exe.step);
 
+                const lib_sel_rm = b.createModule(.{
+                    .root_source_file = b.path(root_path),
+                    .target = target,
+                    .optimize = optimize,
+                });
+                lib_sel_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
                 const lib = b.addLibrary(.{
                     .name = exe_name,
                     .linkage = .static,
-                    .root_module = b.createModule(.{
-                        .root_source_file = b.path(root_path),
-                        .target = target,
-                        .optimize = optimize,
-                    }),
+                    .root_module = lib_sel_rm,
                 });
                 const install_sel_lib = b.addInstallArtifact(lib, .{});
                 desktop_step.dependOn(&install_sel_lib.step);
 
+                const dll_sel_rm = b.createModule(.{
+                    .root_source_file = b.path(root_path),
+                    .target = target,
+                    .optimize = optimize,
+                });
+                dll_sel_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
                 const dll = b.addLibrary(.{
                     .name = exe_name,
                     .linkage = .dynamic,
-                    .root_module = b.createModule(.{
-                        .root_source_file = b.path(root_path),
-                        .target = target,
-                        .optimize = optimize,
-                    }),
+                    .root_module = dll_sel_rm,
                 });
                 const install_sel_dll = b.addInstallArtifact(dll, .{});
                 desktop_step.dependOn(&install_sel_dll.step);

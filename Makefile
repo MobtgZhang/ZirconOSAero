@@ -29,6 +29,10 @@ QEMU_MEM     ?= 512M
 QEMU_MEM_LOONGARCH64 ?= 1536M
 ENABLE_IDT   ?= true
 DEBUG_LOG    ?= true
+# 鼠标诊断：串口/控制台 [MOUSEDBG] + 底栏显示 ptr x,y（不依赖 DEBUG_LOG）
+MOUSE_DEBUG  ?= false
+# Cursor 调试会话：内核经串口输出 AGENT_LOG:{...}，make run 2>&1 | bash scripts/agent-ingest-serial.sh
+AGENT_NDJSON ?= false
 
 # Validate DESKTOP
 VALID_DESKTOPS := aero none
@@ -78,6 +82,8 @@ OVMF_VARS    ?= $(if $(wildcard $(FIRMWARE_DIR)/OVMF_VARS-x86_64.fd),$(FIRMWARE_
 # aarch64: QEMU_EFI from EDK2 nightly
 AARCH64_EFI_CODE ?= $(FIRMWARE_DIR)/QEMU_EFI-aarch64.fd
 AARCH64_EFI_VARS ?= $(FIRMWARE_DIR)/QEMU_VARS-aarch64.fd
+# QEMU virt：pflash 槽位固定 64MiB；nightly 的 .fd 较小，run-aarch64 会在 $(TMP_DIR) 生成填充镜像
+AARCH64_PFLASH_MB ?= 64
 
 # riscv64: QEMU virt 固件（fetch-firmware → VIRT-riscv64.fd）
 RISCV64_EFI_CODE ?= $(FIRMWARE_DIR)/VIRT-riscv64.fd
@@ -133,36 +139,71 @@ THEME_DIR := $(THEME_DIR_MAP_$(DESKTOP))
 # 勿默认附加 usb-mouse/usb-kbd：客户机内为 USB HID，当前内核无对应驱动，会导致“无鼠标/键盘”。
 # Per-architecture QEMU flags
 # 固定 i440fx+8259+板载 PS/2，避免 q35/IOAPIC-only 路径下 IRQ1/12 与 PIC 行为不一致导致键鼠失灵。
+# 同时附加 virtio-input 键鼠（与 `virtio_input_pci.zig` 一致）：部分 QEMU/固件组合下 PS/2 流不可靠时有第二路径。
 QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
-	-display gtk,zoom-to-fit=on,show-cursor=on -vga std
+	-display gtk,zoom-to-fit=on,show-cursor=on -vga std \
+	-device virtio-mouse-pci -device virtio-keyboard-pci
 
-QEMU_COMMON_AARCH64 := -M virt -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
+# highmem-ecam=off：PCIe ECAM 固定在 0x3f00_0000，与内核 pcie.zig 一致（否则默认 ECAM 可落在 >4GiB）
+QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
 
 QEMU_COMMON_RISCV64 := -M virt -cpu rv64 -m $(QEMU_MEM) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
 
+# 与 LoongArch UEFI 路径类似：virtio-gpu + virtio-input（进内核后）；usb-kbd 供 UEFI/ZBM 菜单 ConIn
+QEMU_AARCH64_DEVICES := \
+	-drive if=none,id=zircon-esp-a64,file=$(BUILD_DIR)/esp-aarch64.img,format=raw \
+	-device virtio-blk-pci,drive=zircon-esp-a64,bootindex=0 \
+	-device virtio-gpu-pci,id=zircon_vgpu \
+	-device virtio-tablet-pci,display=zircon_vgpu \
+	-device virtio-keyboard-pci,display=zircon_vgpu \
+	-device qemu-xhci,id=xhci_a64 \
+	-device usb-kbd,bus=xhci_a64.0
+
+# usb-kbd：与 AArch64 一致，部分 EDK2 下 virtio-keyboard 未挂 ConIn 时仍可用 USB 键盘操作 ZBM
+# 显示：与 LoongArch 相同，virtio-gpu 与固件默认输出并存时 GTK 常提示 “Display output is not active”；默认 ramfb。
+RISCV64_QEMU_VIRTIO_GPU ?= 0
+ifeq ($(RISCV64_QEMU_VIRTIO_GPU),1)
+QEMU_RISCV64_FB_DEVICE := -device virtio-gpu-pci,id=zircon_vgpu
+QEMU_RISCV64_VIRTIO_INPUT := -device virtio-tablet-pci,display=zircon_vgpu -device virtio-keyboard-pci,display=zircon_vgpu
+else
+QEMU_RISCV64_FB_DEVICE := -device ramfb,id=zircon_ramfb
+# 与 LoongArch ramfb 相同：mouse=REL（见上），勿绑 display 以免与 GTK 主控制台不一致。
+QEMU_RISCV64_VIRTIO_INPUT := -device virtio-mouse-pci -device virtio-keyboard-pci
+endif
+QEMU_RISCV64_EXTRA := \
+	$(QEMU_RISCV64_FB_DEVICE) \
+	$(QEMU_RISCV64_VIRTIO_INPUT) \
+	-device qemu-xhci,id=xhci_rv \
+	-device usb-kbd,bus=xhci_rv.0
+
 # LoongArch `virt` 公共参数（是否加 -bios / -kernel 由 LOONGARCH64_QEMU_MODE 决定）
-QEMU_LOONGARCH64_BASE := -M virt -cpu la464 -m $(QEMU_MEM_LOONGARCH64) -serial stdio \
+# 默认 off：与 ramfb 桌面并存时，机内 GOP 易成 GTK 另一控制台。ramfb 路径用 virtio-mouse-pci（REL）：QEMU ui/input.c 里 tablet 仅 INPUT_EVENT_MASK_ABS，GTK 未抓取时常发 REL，tablet 永远匹配不到（H6 used 永 0）；不设 display= 则 con=NULL 走全局回退。需固件菜单高分辨率时可设 LOONGARCH64_VIRT_GRAPHICS=on。
+LOONGARCH64_VIRT_GRAPHICS ?= off
+QEMU_LOONGARCH64_BASE := -M virt,graphics=$(LOONGARCH64_VIRT_GRAPHICS) -cpu la464 -m $(QEMU_MEM_LOONGARCH64) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
 # virtio-blk bootindex：便于固件将磁盘列为启动候选（部分环境仍会因 BdsDxe Boot0001 失败而进 Shell）。
 # USB 键盘：LoongArch virt 机无默认键鼠，UEFI ConIn 需 usb-kbd 才能接收按键；内核可能无 USB HID 驱动，但不影响 ZBM 菜单。
 #
-# 显示：virtio-gpu-pci 与 ramfb 同时存在时，QEMU gtk 常把主输出接到未扫描的 virtio-gpu，
-# 窗口出现 “Display output is not active”，而 EDK2 GOP 与内核手绘实际在 ramfb 上（串口可见 640x480 等）。
-# 默认只挂 ramfb；若需仅测 virtio GPU GOP，可: make run-loongarch64 LOONGARCH64_QEMU_VIRTIO_GPU=1
+# 显示：virtio-gpu-pci 与 ramfb 同时存在时，QEMU gtk 常把主输出接到未扫描的 virtio-gpu。
+# 默认 ramfb。ZBM（C/Zig）在 ExitBootServices 前将 GOP SetMode 到 ≥1024×768 并写入 handoff 时，内核用该 GOP（与 QEMU 主窗口同源）；
+# 否则内核 `ramfb.setup()` 写 RAMFB_PHYS（部分配置下 GTK 仍扫固件 GOP 则看不见桌面，见 LOONGARCH64_VIRT_GRAPHICS）。virtio GPU：LOONGARCH64_QEMU_VIRTIO_GPU=1
 LOONGARCH64_QEMU_VIRTIO_GPU ?= 0
 ifeq ($(LOONGARCH64_QEMU_VIRTIO_GPU),1)
-QEMU_LOONGARCH64_FB_DEVICE := -device virtio-gpu-pci
+QEMU_LOONGARCH64_FB_DEVICE := -device virtio-gpu-pci,id=zircon_vgpu
+# GTK 对未抓取指针多走 ABS → virtio-tablet；内核 parseLinuxInput 已支持 EV_ABS。
+QEMU_LOONGARCH64_VIRTIO_INPUT := -device virtio-tablet-pci,display=zircon_vgpu -device virtio-keyboard-pci,display=zircon_vgpu
 else
-QEMU_LOONGARCH64_FB_DEVICE := -device ramfb
+QEMU_LOONGARCH64_FB_DEVICE := -device ramfb,id=zircon_ramfb
+# ramfb：virtio-mouse-pci + 不绑 display（见 LOONGARCH64_VIRT_GRAPHICS 注释）；多描述符 recv 见 virtio_input_pci.zig。
+QEMU_LOONGARCH64_VIRTIO_INPUT := -device virtio-mouse-pci -device virtio-keyboard-pci
 endif
 QEMU_LOONGARCH64_DEVICES := \
 	-drive if=none,id=zircon-esp0,file=$(ESP_IMG_LOONGARCH64),format=raw \
 	-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
 	$(QEMU_LOONGARCH64_FB_DEVICE) \
-	-device virtio-mouse-pci \
-	-device virtio-keyboard-pci \
+	$(QEMU_LOONGARCH64_VIRTIO_INPUT) \
 	-device qemu-xhci,id=xhci \
 	-device usb-kbd,bus=xhci.0
 
@@ -200,6 +241,10 @@ show-config:
 		echo "║  LOONGARCH64_BOOT_EFI     = $(LOONGARCH64_BOOT_EFI)"; \
 		echo "║  LOONGARCH64_QEMU_MODE     = $(LOONGARCH64_QEMU_MODE)  (kernel|uefi; ZBM+UEFI only)"; \
 		echo "║  LOONGARCH64_QEMU_VIRTIO_GPU = $(LOONGARCH64_QEMU_VIRTIO_GPU)  (0=ramfb 默认, 1=仅 virtio-gpu)"; \
+		echo "║  LOONGARCH64_VIRT_GRAPHICS   = $(LOONGARCH64_VIRT_GRAPHICS)  (默认 off 利 ramfb+virtio-input; 要固件 GOP 可设 on)"; \
+	fi
+	@if [ "$(ARCH)" = "riscv64" ]; then \
+		echo "║  RISCV64_QEMU_VIRTIO_GPU = $(RISCV64_QEMU_VIRTIO_GPU)  (0=ramfb 默认, 1=virtio-gpu-pci)"; \
 	fi
 	@echo "╚══════════════════════════════════════════════╝"
 	@if [ "$(ARCH)" = "aarch64" ]; then \
@@ -253,7 +298,7 @@ help:
 	@echo "  make run                    Build + run per build.conf"
 	@echo "  make run-debug              Run with GDB server on :1234"
 	@echo "  make run-aarch64            UEFI boot on QEMU AArch64 (EDK2 nightly)"
-	@echo "  make run-riscv64            UEFI boot on QEMU RISC-V64 virt (VIRT.fd + ESP)"
+	@echo "  make run-riscv64            UEFI boot on QEMU RISC-V64 virt (VIRT.fd + ESP; 默认 ramfb)"
 	@echo "  make run-loongarch64        QEMU LoongArch64（默认: UEFI+ESP+startup.nsh → ZBM 菜单）"
 	@echo "  make run-loongarch64-autozbm  同 run（LOONGARCH64_QEMU_MODE=uefi 别名）"
 	@echo "  make run-aarch64-debug      AArch64 + GDB on :1234"
@@ -265,6 +310,7 @@ help:
 	@echo "  make BOOT_METHOD=mbr BOOTLOADER=zbm      BIOS/MBR + ZBM (raw disk)"
 	@echo "  make BOOT_METHOD=uefi BOOTLOADER=zbm     UEFI + ZBM (ESP)"
 	@echo "  make DESKTOP=none                        Text/CMD mode"
+	@echo "  make run-riscv64 RISCV64_QEMU_VIRTIO_GPU=1  RISC-V QEMU 使用 virtio-gpu（易现 Display not active）"
 	@echo ""
 	@echo "Test:"
 	@echo "  make test                   Run all tests"
@@ -273,7 +319,7 @@ help:
 	@echo "  make test-boot              Boot combination tests"
 	@echo ""
 	@echo "Firmware / toolchain:"
-	@echo "  make fetch-firmware         Download EDK2 nightly UEFI firmware"
+	@echo "  make fetch-firmware         Download EDK2 nightly UEFI firmware (→ ./download-edk2-nightly.sh)"
 	@echo "  make fetch-gnu-efi          Build GNU-EFI (LoongArch ZBM 链接)"
 	@echo "  make fetch-gnu-efi-riscv64  Build GNU-EFI ncroxon fork（RISC-V64 ZBM 链接，需 gcc-riscv64-linux-gnu）"
 	@echo "  make fetch-loongarch-boot-efi  LoongArch: BOOTLOONGARCH64.EFI (EDK2 Shell, 可选备用)"
@@ -302,6 +348,8 @@ build:
 		-Doptimize=$(OPTIMIZE) \
 		-Darch=$(ARCH) \
 		-Ddebug=$(DEBUG_LOG) \
+		-Dmouse_debug=$(MOUSE_DEBUG) \
+		-Dagent_ndjson=$(AGENT_NDJSON) \
 		-Denable_idt=$(ENABLE_IDT) \
 		-Ddefault_desktop=$(DESKTOP) \
 		--cache-dir $(TMP_DIR)/zig-cache \
@@ -583,12 +631,16 @@ run-aarch64: build-esp
 		exit 1; \
 	fi
 	@mkdir -p $(TMP_DIR)
-	@cp -f $(AARCH64_EFI_VARS) $(TMP_DIR)/AARCH64_VARS.fd
+	@echo "[ZirconOS] Padding AArch64 pflash to $(AARCH64_PFLASH_MB)MiB (QEMU virt requirement)..."
+	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH0.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
+	@dd if=$(AARCH64_EFI_CODE) of=$(TMP_DIR)/AARCH64_PFLASH0.fd conv=notrunc status=none
+	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH1.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
+	@dd if=$(AARCH64_EFI_VARS) of=$(TMP_DIR)/AARCH64_PFLASH1.fd conv=notrunc status=none
 	qemu-system-aarch64 \
 		$(QEMU_COMMON_AARCH64) \
-		-drive if=pflash,format=raw,readonly=on,file=$(AARCH64_EFI_CODE) \
-		-drive if=pflash,format=raw,file=$(TMP_DIR)/AARCH64_VARS.fd \
-		-drive format=raw,file=$(BUILD_DIR)/esp-aarch64.img
+		-drive if=pflash,format=raw,readonly=on,file=$(TMP_DIR)/AARCH64_PFLASH0.fd \
+		-drive if=pflash,format=raw,file=$(TMP_DIR)/AARCH64_PFLASH1.fd \
+		$(QEMU_AARCH64_DEVICES)
 
 run-aarch64-debug: build-esp
 	@echo "[ZirconOS] AArch64 debug mode (GDB on :1234)..."
@@ -597,12 +649,16 @@ run-aarch64-debug: build-esp
 		exit 1; \
 	fi
 	@mkdir -p $(TMP_DIR)
-	@cp -f $(AARCH64_EFI_VARS) $(TMP_DIR)/AARCH64_VARS.fd
+	@echo "[ZirconOS] Padding AArch64 pflash to $(AARCH64_PFLASH_MB)MiB (QEMU virt requirement)..."
+	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH0.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
+	@dd if=$(AARCH64_EFI_CODE) of=$(TMP_DIR)/AARCH64_PFLASH0.fd conv=notrunc status=none
+	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH1.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
+	@dd if=$(AARCH64_EFI_VARS) of=$(TMP_DIR)/AARCH64_PFLASH1.fd conv=notrunc status=none
 	qemu-system-aarch64 \
 		$(QEMU_COMMON_AARCH64) \
-		-drive if=pflash,format=raw,readonly=on,file=$(AARCH64_EFI_CODE) \
-		-drive if=pflash,format=raw,file=$(TMP_DIR)/AARCH64_VARS.fd \
-		-drive format=raw,file=$(BUILD_DIR)/esp-aarch64.img \
+		-drive if=pflash,format=raw,readonly=on,file=$(TMP_DIR)/AARCH64_PFLASH0.fd \
+		-drive if=pflash,format=raw,file=$(TMP_DIR)/AARCH64_PFLASH1.fd \
+		$(QEMU_AARCH64_DEVICES) \
 		-s -S
 
 # ══════════════════════════════════════════════════════
@@ -619,7 +675,8 @@ run-riscv64: build-esp
 		$(QEMU_COMMON_RISCV64) \
 		-bios $(RISCV64_EFI_CODE) \
 		-drive if=none,id=zircon-esp0,file=$(ESP_IMG),format=raw \
-		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0
+		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
+		$(QEMU_RISCV64_EXTRA)
 
 run-riscv64-debug: build-esp
 	@echo "[ZirconOS] RISC-V64 UEFI debug (GDB on :1234)..."
@@ -632,6 +689,7 @@ run-riscv64-debug: build-esp
 		-bios $(RISCV64_EFI_CODE) \
 		-drive if=none,id=zircon-esp0,file=$(ESP_IMG),format=raw \
 		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
+		$(QEMU_RISCV64_EXTRA) \
 		-s -S
 
 # ══════════════════════════════════════════════════════
@@ -646,7 +704,7 @@ ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
 	@echo "[ZirconOS] 若 QEMU 持续显示 'Guest has not initialized the display'，可尝试: make run-loongarch64 LOONGARCH64_QEMU_MODE=uefi（需固件）"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-kernel $(KERNEL_ELF) \
-		-device ramfb
+		-device ramfb,id=zircon_ramfb
 else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
 	@$(MAKE) build-esp ARCH=loongarch64 DESKTOP=$(DESKTOP)
 	@echo "[ZirconOS] LoongArch64 UEFI + ZBM — $(LOONGARCH64_EFI_CODE)"
@@ -673,7 +731,7 @@ ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
 	@$(MAKE) build ARCH=loongarch64
 	@echo "[ZirconOS] LoongArch64 debug: -kernel + ramfb + GDB :1234"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
-		-kernel $(KERNEL_ELF) -device ramfb -s -S
+		-kernel $(KERNEL_ELF) -device ramfb,id=zircon_ramfb -s -S
 else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
 	@$(MAKE) build-esp ARCH=loongarch64 DESKTOP=$(DESKTOP)
 	@echo "[ZirconOS] LoongArch64 UEFI debug (GDB on :1234)..."

@@ -74,8 +74,9 @@ def main() -> None:
         f"if=none,id=zircon-esp0,file={esp},format=raw",
         "-device",
         "virtio-blk-pci,drive=zircon-esp0,bootindex=0",
+        # 与 Makefile 一致：勿与 virtio-gpu 并存，否则 gtk 常显示 “Display output is not active”
         "-device",
-        "virtio-gpu-pci",
+        "ramfb",
         "-boot",
         "order=d",
     ]

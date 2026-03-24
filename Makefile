@@ -8,7 +8,7 @@
 	build-desktop build-desktop-all build-desktop-dll \
 	fetch-themes fetch-firmware fetch-gnu-efi fetch-gnu-efi-riscv64 fetch-loongarch-boot-efi fonts resources \
 	run-aarch64 run-riscv64 run-loongarch64 run-loongarch64-autozbm run-aarch64-debug run-riscv64-debug run-loongarch64-debug \
-	test test-kernel test-config test-boot test-all \
+	test test-kernel test-config test-boot test-all smoke-qemu-mbr \
 	clean help show-config configure
 
 # ══════════════════════════════════════════════════════
@@ -132,7 +132,8 @@ THEME_DIR := $(THEME_DIR_MAP_$(DESKTOP))
 # 默认使用 i8042 PS/2 键鼠（IRQ1/IRQ12），与内核 PS/2 驱动一致。
 # 勿默认附加 usb-mouse/usb-kbd：客户机内为 USB HID，当前内核无对应驱动，会导致“无鼠标/键盘”。
 # Per-architecture QEMU flags
-QEMU_COMMON_X86 := -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
+# 固定 i440fx+8259+板载 PS/2，避免 q35/IOAPIC-only 路径下 IRQ1/12 与 PIC 行为不一致导致键鼠失灵。
+QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
 	-display gtk,zoom-to-fit=on,show-cursor=on -vga std
 
 QEMU_COMMON_AARCH64 := -M virt -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
@@ -146,12 +147,22 @@ QEMU_LOONGARCH64_BASE := -M virt -cpu la464 -m $(QEMU_MEM_LOONGARCH64) -serial s
 	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
 # virtio-blk bootindex：便于固件将磁盘列为启动候选（部分环境仍会因 BdsDxe Boot0001 失败而进 Shell）。
 # USB 键盘：LoongArch virt 机无默认键鼠，UEFI ConIn 需 usb-kbd 才能接收按键；内核可能无 USB HID 驱动，但不影响 ZBM 菜单。
-# virtio-gpu + ramfb：优先用 GOP（与固件同表面），无 GOP 时退回到 ramfb
+#
+# 显示：virtio-gpu-pci 与 ramfb 同时存在时，QEMU gtk 常把主输出接到未扫描的 virtio-gpu，
+# 窗口出现 “Display output is not active”，而 EDK2 GOP 与内核手绘实际在 ramfb 上（串口可见 640x480 等）。
+# 默认只挂 ramfb；若需仅测 virtio GPU GOP，可: make run-loongarch64 LOONGARCH64_QEMU_VIRTIO_GPU=1
+LOONGARCH64_QEMU_VIRTIO_GPU ?= 0
+ifeq ($(LOONGARCH64_QEMU_VIRTIO_GPU),1)
+QEMU_LOONGARCH64_FB_DEVICE := -device virtio-gpu-pci
+else
+QEMU_LOONGARCH64_FB_DEVICE := -device ramfb
+endif
 QEMU_LOONGARCH64_DEVICES := \
 	-drive if=none,id=zircon-esp0,file=$(ESP_IMG_LOONGARCH64),format=raw \
 	-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
-	-device virtio-gpu-pci \
-	-device ramfb \
+	$(QEMU_LOONGARCH64_FB_DEVICE) \
+	-device virtio-mouse-pci \
+	-device virtio-keyboard-pci \
 	-device qemu-xhci,id=xhci \
 	-device usb-kbd,bus=xhci.0
 
@@ -188,6 +199,7 @@ show-config:
 		echo "║  LOONGARCH64_EFI_CODE     = $(LOONGARCH64_EFI_CODE)"; \
 		echo "║  LOONGARCH64_BOOT_EFI     = $(LOONGARCH64_BOOT_EFI)"; \
 		echo "║  LOONGARCH64_QEMU_MODE     = $(LOONGARCH64_QEMU_MODE)  (kernel|uefi; ZBM+UEFI only)"; \
+		echo "║  LOONGARCH64_QEMU_VIRTIO_GPU = $(LOONGARCH64_QEMU_VIRTIO_GPU)  (0=ramfb 默认, 1=仅 virtio-gpu)"; \
 	fi
 	@echo "╚══════════════════════════════════════════════╝"
 	@if [ "$(ARCH)" = "aarch64" ]; then \
@@ -743,6 +755,10 @@ test-kernel: build
 	python3 $(ROOT_DIR)/tests/run_all.py \
 		--kernel $(KERNEL_ELF) \
 		--output-dir $(TEST_RESULTS_DIR)
+
+# 无头 QEMU 烟测（需已安装 qemu-system-x86_64）；串口字节数见脚本输出。
+smoke-qemu-mbr:
+	@bash $(ROOT_DIR)/scripts/smoke-qemu-mbr.sh
 
 test-config:
 	@echo "[ZirconOS] Running build configuration tests..."

@@ -6,15 +6,25 @@ fn rgb(r: u32, g: u32, b: u32) u32 {
     return b | (g << 8) | (r << 16);
 }
 
+/// 与 `src/desktop/aero/src/resource_loader.zig` 内置图标 ID 一致（1–17）；14+ 为壳层辅助并在 loader 中登记路径。
 pub const IconId = enum(u8) {
-    computer = 0,
-    documents = 1,
-    network = 2,
+    computer = 1,
+    documents = 2,
     recycle_bin = 3,
-    browser = 4,
-    settings = 5,
-    terminal = 6,
-    folder = 7,
+    terminal = 4,
+    network = 5,
+    browser = 6,
+    settings = 7,
+    calculator = 8,
+    text_editor = 9,
+    pictures = 10,
+    music = 11,
+    folder = 12,
+    control_panel = 13,
+    file = 14,
+    user = 15,
+    lock = 16,
+    shutdown = 17,
 };
 
 pub const ThemeStyle = enum(u8) {
@@ -26,25 +36,55 @@ pub const ICON_PX_SIZE: u32 = 16;
 pub const SvgIconPaths = struct {
     computer: []const u8,
     documents: []const u8,
-    network: []const u8,
     recycle_bin: []const u8,
+    terminal: []const u8,
+    network: []const u8,
     browser: []const u8,
     settings: []const u8,
-    terminal: []const u8,
+    calculator: []const u8,
+    text_editor: []const u8,
+    pictures: []const u8,
+    music: []const u8,
     folder: []const u8,
+    control_panel: []const u8,
+    file: []const u8,
+    user: []const u8,
+    lock: []const u8,
+    shutdown: []const u8,
 };
 
 pub fn getSvgPaths(style: ThemeStyle) SvgIconPaths {
     _ = style;
+    const p = "src/desktop/aero/resources/icons/";
     return .{
-        .computer = "src/desktop/aero/resources/icons/computer.svg",
-        .documents = "src/desktop/aero/resources/icons/documents.svg",
-        .network = "src/desktop/aero/resources/icons/network.svg",
-        .recycle_bin = "src/desktop/aero/resources/icons/recycle_bin.svg",
-        .browser = "src/desktop/aero/resources/icons/browser.svg",
-        .settings = "src/desktop/aero/resources/icons/settings.svg",
-        .terminal = "src/desktop/aero/resources/icons/terminal.svg",
-        .folder = "src/desktop/aero/resources/icons/folder.svg",
+        .computer = p ++ "computer.svg",
+        .documents = p ++ "documents.svg",
+        .recycle_bin = p ++ "recycle_bin.svg",
+        .terminal = p ++ "terminal.svg",
+        .network = p ++ "network.svg",
+        .browser = p ++ "browser.svg",
+        .settings = p ++ "settings.svg",
+        .calculator = p ++ "calculator.svg",
+        .text_editor = p ++ "text_editor.svg",
+        .pictures = p ++ "pictures.svg",
+        .music = p ++ "music.svg",
+        .folder = p ++ "folder.svg",
+        .control_panel = p ++ "control_panel.svg",
+        .file = p ++ "file.svg",
+        .user = p ++ "user.svg",
+        .lock = p ++ "lock.svg",
+        .shutdown = p ++ "shutdown.svg",
+    };
+}
+
+/// 16×16 位图仅覆盖 1–13；辅助 ID 映射到最接近的内置形。
+pub fn bitmapIconId(id: IconId) IconId {
+    return switch (id) {
+        .file => .folder,
+        .user => .computer,
+        .lock => .settings,
+        .shutdown => .recycle_bin,
+        else => id,
     };
 }
 
@@ -53,7 +93,7 @@ pub fn drawIcon(id: IconId, screen_x: i32, screen_y: i32, scale: u32) void {
 }
 
 pub fn drawThemedIcon(id: IconId, screen_x: i32, screen_y: i32, scale: u32, _: ThemeStyle) void {
-    drawAeroIcon(id, screen_x, screen_y, scale);
+    drawAeroIcon(bitmapIconId(id), screen_x, screen_y, scale);
 }
 
 pub fn getIconTotalSize(scale: u32) i32 {
@@ -75,11 +115,12 @@ fn drawPixelIcon(
     screen_x: i32,
     screen_y: i32,
     scale: u32,
-    palettes: *const [8]IconPalette,
-    pixels: *const [8]IconPixels,
+    palettes: *const [13]IconPalette,
+    pixels: *const [13]IconPixels,
 ) void {
-    const idx = @intFromEnum(id);
-    if (idx >= 8) return;
+    const v = @intFromEnum(id);
+    if (v < 1 or v > 13) return;
+    const idx: usize = @intCast(v - 1);
     const data = &pixels[idx];
     const palette = &palettes[idx];
     const s: i32 = if (scale < 1) 1 else @intCast(scale);
@@ -98,7 +139,7 @@ fn drawPixelIcon(
         }
     }
 }
-const aero_desktop_icon_pixels = [8]IconPixels{
+const aero_desktop_icon_pixels = [13]IconPixels{
     // computer — flat monitor + base
     .{
         .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
@@ -137,26 +178,7 @@ const aero_desktop_icon_pixels = [8]IconPixels{
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     },
-    // network — flat
-    .{
-        .{ 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0 },
-        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
-        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
-        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
-        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
-        .{ 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0 },
-        .{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
-        .{ 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 0, 0 },
-        .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-    },
-    // recycle_bin — flat
+    // 3 recycle_bin（原索引 3）
     .{
         .{ 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0 },
         .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
@@ -175,7 +197,45 @@ const aero_desktop_icon_pixels = [8]IconPixels{
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     },
-    // browser — flat circle
+    // 4 terminal（原 6）
+    .{
+        .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 3, 2, 2, 3, 3, 3, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    // 5 network（原 2）
+    .{
+        .{ 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0 },
+        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
+        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
+        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
+        .{ 0, 1, 3, 3, 3, 1, 0, 0, 0, 0, 1, 3, 3, 3, 1, 0 },
+        .{ 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0 },
+        .{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
+        .{ 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 0, 0 },
+        .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    // 6 browser
     .{
         .{ 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0 },
         .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
@@ -213,7 +273,7 @@ const aero_desktop_icon_pixels = [8]IconPixels{
         .{ 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 },
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     },
-    // terminal — flat
+    // 8 calculator（与 terminal 同形，调色板区分）
     .{
         .{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },
         .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
@@ -232,7 +292,7 @@ const aero_desktop_icon_pixels = [8]IconPixels{
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     },
-    // folder — flat
+    // 9 text_editor（同 documents）
     .{
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         .{ 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
@@ -251,6 +311,82 @@ const aero_desktop_icon_pixels = [8]IconPixels{
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     },
+    // 10 pictures（同 browser）
+    .{
+        .{ 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 1, 1, 3, 3, 1, 3, 1, 3, 3, 1, 1, 0, 0, 0 },
+        .{ 0, 1, 1, 3, 3, 3, 2, 3, 2, 3, 3, 3, 1, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 1, 1, 3, 3, 1, 3, 1, 3, 1, 3, 1, 3, 3, 1, 1, 0 },
+        .{ 1, 2, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 0 },
+        .{ 1, 1, 3, 3, 1, 3, 1, 3, 1, 3, 1, 3, 3, 1, 1, 0 },
+        .{ 1, 2, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 0 },
+        .{ 1, 1, 3, 3, 1, 3, 1, 3, 1, 3, 1, 3, 3, 1, 1, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 1, 3, 3, 3, 2, 3, 2, 3, 3, 3, 1, 1, 0, 0 },
+        .{ 0, 0, 1, 1, 3, 3, 1, 3, 1, 3, 3, 1, 1, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    // 11 music（同 browser）
+    .{
+        .{ 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 1, 1, 3, 3, 1, 3, 1, 3, 3, 1, 1, 0, 0, 0 },
+        .{ 0, 1, 1, 3, 3, 3, 2, 3, 2, 3, 3, 3, 1, 1, 0, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 1, 1, 3, 3, 1, 3, 1, 3, 1, 3, 1, 3, 3, 1, 1, 0 },
+        .{ 1, 2, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 0 },
+        .{ 1, 1, 3, 3, 1, 3, 1, 3, 1, 3, 1, 3, 3, 1, 1, 0 },
+        .{ 1, 2, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 0 },
+        .{ 1, 1, 3, 3, 1, 3, 1, 3, 1, 3, 1, 3, 3, 1, 1, 0 },
+        .{ 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0 },
+        .{ 0, 1, 1, 3, 3, 3, 2, 3, 2, 3, 3, 3, 1, 1, 0, 0 },
+        .{ 0, 0, 1, 1, 3, 3, 1, 3, 1, 3, 3, 1, 1, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    // 12 folder
+    .{
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    // 13 control_panel（同 settings）
+    .{
+        .{ 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 3, 3, 3, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 1, 1, 0, 1, 1, 3, 0, 0, 0, 3, 1, 1, 0, 1, 1, 0 },
+        .{ 1, 1, 1, 1, 1, 3, 0, 0, 0, 3, 1, 1, 1, 1, 1, 0 },
+        .{ 1, 1, 0, 1, 1, 3, 0, 0, 0, 3, 1, 1, 0, 1, 1, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 3, 3, 3, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0 },
+        .{ 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 },
+        .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
 };
 
 // ════════════════════════════════════════════════════════════
@@ -258,15 +394,20 @@ const aero_desktop_icon_pixels = [8]IconPixels{
 //  Uses Aero palette from src/desktop/aero/resources
 // ════════════════════════════════════════════════════════════
 
-const aero_palettes = [8]IconPalette{
+const aero_palettes = [13]IconPalette{
     .{ 0, rgb(0x2B, 0x56, 0x7A), rgb(0x41, 0x80, 0xC8), rgb(0x6B, 0xA0, 0xD8), rgb(0xA0, 0xC0, 0xE8), rgb(0xFF, 0xFF, 0xFF), rgb(0xC0, 0xC0, 0xC0), rgb(0x80, 0x80, 0x80), rgb(0x40, 0x40, 0x40) },
     .{ 0, rgb(0xC0, 0x90, 0x20), rgb(0xE0, 0xB8, 0x40), rgb(0xFF, 0xD8, 0x70), rgb(0xFF, 0xFF, 0xFF), rgb(0x1A, 0x1A, 0x1A), rgb(0x80, 0x80, 0x80), rgb(0xF0, 0xF0, 0xF0), rgb(0xA0, 0x70, 0x10) },
-    .{ 0, rgb(0x41, 0x80, 0xC8), rgb(0x2B, 0x56, 0x7A), rgb(0x80, 0xC0, 0xFF), rgb(0xF0, 0xF0, 0xF0), rgb(0x33, 0x99, 0xFF), rgb(0x80, 0x80, 0x80), rgb(0xFF, 0xFF, 0xFF), rgb(0x40, 0x40, 0x40) },
     .{ 0, rgb(0x80, 0x80, 0x80), rgb(0xA0, 0xA0, 0xA0), rgb(0x60, 0x60, 0x60), rgb(0xD0, 0xD0, 0xD0), rgb(0x40, 0x40, 0x40), rgb(0xFF, 0xFF, 0xFF), rgb(0x00, 0x80, 0x40), rgb(0xC0, 0xC0, 0xC0) },
+    .{ 0, rgb(0x10, 0x10, 0x10), rgb(0x2B, 0x56, 0x7A), rgb(0x00, 0xC0, 0x00), rgb(0x60, 0x70, 0x80), rgb(0xD0, 0xD0, 0xD0), rgb(0x00, 0x80, 0x00), rgb(0xFF, 0xFF, 0xFF), rgb(0x41, 0x80, 0xC8) },
+    .{ 0, rgb(0x41, 0x80, 0xC8), rgb(0x2B, 0x56, 0x7A), rgb(0x80, 0xC0, 0xFF), rgb(0xF0, 0xF0, 0xF0), rgb(0x33, 0x99, 0xFF), rgb(0x80, 0x80, 0x80), rgb(0xFF, 0xFF, 0xFF), rgb(0x40, 0x40, 0x40) },
     .{ 0, rgb(0x20, 0x80, 0xC0), rgb(0x10, 0x60, 0x90), rgb(0x60, 0xC0, 0xF0), rgb(0xFF, 0xFF, 0xFF), rgb(0x1A, 0x8A, 0x8A), rgb(0x3F, 0xA3, 0xD8), rgb(0xE8, 0xF8, 0xF8), rgb(0x0A, 0x4A, 0x6A) },
     .{ 0, rgb(0x80, 0x90, 0xA0), rgb(0x60, 0x70, 0x80), rgb(0xA0, 0xB0, 0xC0), rgb(0xFF, 0xFF, 0xFF), rgb(0x40, 0x50, 0x60), rgb(0xC0, 0xC8, 0xD0), rgb(0xD0, 0xD8, 0xE0), rgb(0x41, 0x80, 0xC8) },
     .{ 0, rgb(0x10, 0x10, 0x10), rgb(0x2B, 0x56, 0x7A), rgb(0x00, 0xC0, 0x00), rgb(0x60, 0x70, 0x80), rgb(0xD0, 0xD0, 0xD0), rgb(0x00, 0x80, 0x00), rgb(0xFF, 0xFF, 0xFF), rgb(0x41, 0x80, 0xC8) },
+    .{ 0, rgb(0xC0, 0x90, 0x20), rgb(0xE0, 0xB8, 0x40), rgb(0xFF, 0xD8, 0x70), rgb(0xFF, 0xFF, 0xFF), rgb(0x1A, 0x1A, 0x1A), rgb(0x80, 0x80, 0x80), rgb(0xF0, 0xF0, 0xF0), rgb(0xA0, 0x70, 0x10) },
+    .{ 0, rgb(0x20, 0x80, 0xC0), rgb(0x10, 0x60, 0x90), rgb(0x60, 0xC0, 0xF0), rgb(0xFF, 0xFF, 0xFF), rgb(0x1A, 0x8A, 0x8A), rgb(0x3F, 0xA3, 0xD8), rgb(0xE8, 0xF8, 0xF8), rgb(0x0A, 0x4A, 0x6A) },
+    .{ 0, rgb(0x20, 0x80, 0xC0), rgb(0x10, 0x60, 0x90), rgb(0x60, 0xC0, 0xF0), rgb(0xFF, 0xFF, 0xFF), rgb(0x1A, 0x8A, 0x8A), rgb(0x3F, 0xA3, 0xD8), rgb(0xE8, 0xF8, 0xF8), rgb(0x0A, 0x4A, 0x6A) },
     .{ 0, rgb(0xC0, 0x90, 0x20), rgb(0xA0, 0x70, 0x10), rgb(0xE0, 0xB8, 0x40), rgb(0x80, 0x60, 0x00), rgb(0x60, 0x60, 0x60), rgb(0xFF, 0xFF, 0xFF), rgb(0xF0, 0xF0, 0xF0), rgb(0x40, 0x40, 0x40) },
+    .{ 0, rgb(0x80, 0x90, 0xA0), rgb(0x60, 0x70, 0x80), rgb(0xA0, 0xB0, 0xC0), rgb(0xFF, 0xFF, 0xFF), rgb(0x40, 0x50, 0x60), rgb(0xC0, 0xC8, 0xD0), rgb(0xD0, 0xD8, 0xE0), rgb(0x41, 0x80, 0xC8) },
 };
 
 fn drawAeroIcon(id: IconId, screen_x: i32, screen_y: i32, scale: u32) void {

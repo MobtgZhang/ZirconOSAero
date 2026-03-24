@@ -9,26 +9,27 @@
 
 const fb = @import("framebuffer.zig");
 const theme = @import("theme.zig");
+const nt61 = @import("dwm_nt61_defaults");
 const rgb = theme.rgb;
 
 pub const DwmConfig = struct {
-    glass_enabled: bool = true,
-    glass_opacity: u8 = 210,
-    /// 与 docs/cn/AeroRendering.md `initAeroDwm` 一致（标题栏/面板盒式模糊）
-    glass_blur_radius: u8 = 6,
-    glass_blur_passes: u8 = 2,
-    glass_saturation: u8 = 208,
-    glass_tint_color: u32 = 0x4068A0,
-    glass_tint_opacity: u8 = 62,
+    glass_enabled: bool = nt61.KernelDwm.glass_enabled,
+    glass_opacity: u8 = nt61.KernelDwm.glass_opacity,
+    /// 与 docs/cn/AeroRendering.md、`dwm_nt61_defaults` 一致（标题栏/面板盒式模糊）
+    glass_blur_radius: u8 = nt61.KernelDwm.glass_blur_radius,
+    glass_blur_passes: u8 = nt61.KernelDwm.glass_blur_passes,
+    glass_saturation: u8 = nt61.KernelDwm.glass_saturation,
+    glass_tint_color: u32 = nt61.KernelDwm.glass_tint_color,
+    glass_tint_opacity: u8 = nt61.KernelDwm.glass_tint_opacity,
     /// 任务栏略低于窗口标题栏的不透明度，更易透出 Harmony 壁纸（Win7 任务栏偏「实」仍保留）
-    glass_taskbar_tint_opacity: u8 = 96,
-    specular_intensity: u8 = 42,
-    animation_enabled: bool = true,
-    peek_enabled: bool = true,
-    shadow_enabled: bool = true,
-    vsync_compositor: bool = true,
-    smooth_cursor: bool = true,
-    cursor_lerp_factor: i32 = 255,
+    glass_taskbar_tint_opacity: u8 = nt61.KernelDwm.glass_taskbar_tint_opacity,
+    specular_intensity: u8 = nt61.KernelDwm.specular_intensity,
+    animation_enabled: bool = nt61.KernelDwm.animation_enabled,
+    peek_enabled: bool = nt61.KernelDwm.peek_enabled,
+    shadow_enabled: bool = nt61.KernelDwm.shadow_enabled,
+    vsync_compositor: bool = nt61.KernelDwm.vsync_compositor,
+    smooth_cursor: bool = nt61.KernelDwm.smooth_cursor,
+    cursor_lerp_factor: i32 = nt61.KernelDwm.cursor_lerp_factor,
 };
 
 pub const GlassChrome = enum { taskbar, caption, panel };

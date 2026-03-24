@@ -27,23 +27,23 @@ pub const MenuItem = struct {
 
 const aero7_left = [_]MenuItem{
     .{ .label = "Internet Explorer", .icon_id = .browser, .bold = true },
-    .{ .label = "Windows Media Player", .icon_id = .documents, .separator_after = true },
-    .{ .label = "Terminal", .icon_id = .computer },
-    .{ .label = "Notepad", .icon_id = .documents },
-    .{ .label = "Calculator", .icon_id = .computer },
-    .{ .label = "Paint", .icon_id = .documents },
+    .{ .label = "Windows Media Player", .icon_id = .music, .separator_after = true },
+    .{ .label = "Terminal", .icon_id = .terminal },
+    .{ .label = "Notepad", .icon_id = .text_editor },
+    .{ .label = "Calculator", .icon_id = .calculator },
+    .{ .label = "Paint", .icon_id = .pictures },
 };
 const aero7_right = [_]MenuItem{
     .{ .label = "Documents", .icon_id = .documents, .bold = true },
-    .{ .label = "Pictures", .icon_id = .documents, .bold = true },
-    .{ .label = "Music", .icon_id = .documents, .bold = true },
-    .{ .label = "Games", .icon_id = .computer, .separator_after = true },
+    .{ .label = "Pictures", .icon_id = .pictures, .bold = true },
+    .{ .label = "Music", .icon_id = .music, .bold = true },
+    .{ .label = "Games", .icon_id = .folder, .separator_after = true },
     .{ .label = "Computer", .icon_id = .computer, .bold = true },
     .{ .label = "Network", .icon_id = .network },
-    .{ .label = "Control Panel", .icon_id = .computer },
-    .{ .label = "Devices and Printers", .icon_id = .computer },
-    .{ .label = "Help and Support", .icon_id = .documents, .separator_after = true },
-    .{ .label = "Run...", .icon_id = .computer },
+    .{ .label = "Control Panel", .icon_id = .control_panel },
+    .{ .label = "Devices and Printers", .icon_id = .settings },
+    .{ .label = "Help and Support", .icon_id = .settings, .separator_after = true },
+    .{ .label = "Run...", .icon_id = .terminal },
 };
 
 const AERO7_HEADER_H: i32 = 52;
@@ -85,6 +85,10 @@ pub fn toggle(_: MenuStyle) void {
 
 pub fn setHoverIndex(idx: i32) void {
     hover_index = idx;
+}
+
+pub fn pointerHoverIndex() i32 {
+    return hover_index;
 }
 
 fn aeroRect(scr_h: i32) MenuRect {

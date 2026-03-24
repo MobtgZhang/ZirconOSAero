@@ -26,50 +26,21 @@ const rgb = theme.rgb;
 
 pub fn initDwm() void {
     if (dwm.isInitialized()) return;
-    // 与 display.initAeroDwm 相同参数（正常启动路径下 display 已 init，此处仅作兜底）。
-    dwm.init(.{
-        .glass_enabled = true,
-        .glass_opacity = 210,
-        .glass_blur_radius = 6,
-        .glass_blur_passes = 2,
-        .glass_saturation = 208,
-        .glass_tint_color = 0x4068A0,
-        .glass_tint_opacity = 62,
-        .glass_taskbar_tint_opacity = 96,
-        .specular_intensity = 42,
-        .animation_enabled = true,
-        .peek_enabled = true,
-        .shadow_enabled = true,
-        .vsync_compositor = true,
-        .smooth_cursor = true,
-        .cursor_lerp_factor = 255,
-    });
+    // 与 display.initAeroDwm 相同参数（`dwm_nt61_defaults` 单一源；正常启动路径下 display 已 init）。
+    const cfg = dwm.DwmConfig{};
+    dwm.init(cfg);
 
     mat.init(.glass);
     mat.configureGlass(.{
-        .blur_radius = 6,
-        .blur_passes = 2,
-        .tint_color = 0x4068A0,
-        .tint_opacity = 62,
-        .saturation = 208,
-        .specular_intensity = 42,
+        .blur_radius = cfg.glass_blur_radius,
+        .blur_passes = cfg.glass_blur_passes,
+        .tint_color = cfg.glass_tint_color,
+        .tint_opacity = cfg.glass_tint_opacity,
+        .saturation = cfg.glass_saturation,
+        .specular_intensity = cfg.specular_intensity,
     });
 
-    dwm_comp.initAero(.{
-        .glass_enabled = true,
-        .glass_opacity = 210,
-        .blur_radius = 6,
-        .blur_passes = 2,
-        .saturation = 208,
-        .tint_color = 0x4068A0,
-        .tint_opacity = 62,
-        .specular_intensity = 42,
-        .shadow_layers = 3,
-        .shadow_offset = 6,
-        .peek_enabled = true,
-        .flip3d_enabled = true,
-        .animation_speed = 250,
-    });
+    dwm_comp.initAero(.{});
 }
 
 pub fn render() void {
@@ -99,7 +70,6 @@ pub fn renderFrame() void {
 fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
     renderBackground(w, h);
     display.renderDesktopIcons(w, h, t);
-    renderGadgetCpu(w, h, tb_h, t);
     renderExplorerWindow(w, h, t);
     display.renderTaskManagerWin(w, h, t);
     renderTaskbar(w, h, t, tb_h);
@@ -174,18 +144,100 @@ fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors)
     fb.drawTextTransparentUi(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
     fb.drawTextTransparentUi(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
 
-    display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t);
+    display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
 
     display.drawAeroWindowFrameBorder(win_x, win_y, win_w, win_h);
     renderExplorerContent(win_x + 2, win_y + aero_tb_h, win_w - 4, win_h - aero_tb_h - 2, t);
 }
 
+/// 与 `resource_loader` 内置壁纸条目顺序对齐（0=Harmony，1…=各 SVG 主题对应的程序化近似）。
+var aero_wallpaper_preset: u8 = 0;
+pub const wallpaper_preset_count: u8 = 12;
+
+pub fn cycleWallpaperPreset() void {
+    aero_wallpaper_preset = (aero_wallpaper_preset + 1) % wallpaper_preset_count;
+}
+
+pub fn wallpaperPresetIndex() u8 {
+    return aero_wallpaper_preset;
+}
+
 fn renderBackground(w: i32, h: i32) void {
-    // 首帧仅渐变壁纸，避免大块 blendTint 拖长「首屏可见」时间；后续整屏重绘再画 Harmony。
+    // 首帧仅渐变壁纸，避免大块 blendTint 拖长「首屏可见」时间；后续整屏重绘再画预设。
     if (display.getPresentCount() == 0) {
         fb.drawGradientV(0, 0, w, h, rgb(0x08, 0x1E, 0x42), rgb(0x04, 0x12, 0x28));
     } else {
-        renderHarmonyWallpaper(w, h);
+        renderWallpaperByPreset(w, h, aero_wallpaper_preset);
+    }
+}
+
+fn wallpaperVignetteFrame(w: i32, h: i32) void {
+    const vstrip: i32 = 28;
+    fb.blendTintRect(0, 0, w, vstrip, rgb(0x00, 0x04, 0x12), 36, 255);
+    fb.blendTintRect(0, h - vstrip, w, vstrip, rgb(0x00, 0x02, 0x0A), 44, 255);
+    fb.blendTintRect(0, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 30, 255);
+    fb.blendTintRect(w - vstrip, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 30, 255);
+}
+
+fn renderWallpaperByPreset(w: i32, h: i32, preset: u8) void {
+    switch (preset) {
+        0 => renderHarmonyWallpaper(w, h),
+        1 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x18, 0x48, 0x88), rgb(0x04, 0x14, 0x30));
+            fb.blendTintRect(@divTrunc(w, 3), @divTrunc(h, 5), @divTrunc(w, 3), @divTrunc(h, 3), rgb(0x40, 0x70, 0xA8), 14, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        2 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x28, 0x30, 0x38), rgb(0x10, 0x14, 0x1C));
+            fb.blendTintRect(@divTrunc(w, 5), @divTrunc(h, 6), @divTrunc(w * 2, 3), @divTrunc(h, 4), rgb(0x58, 0x68, 0x78), 22, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        3 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x38, 0x20, 0x58), rgb(0x10, 0x28, 0x48));
+            fb.blendTintRect(@divTrunc(w, 4), @divTrunc(h, 8), @divTrunc(w, 2), @divTrunc(h, 3), rgb(0x50, 0x90, 0xA8), 24, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        4 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x42, 0x28, 0x58), rgb(0x18, 0x10, 0x30));
+            fb.blendTintRect(@divTrunc(w, 6), @divTrunc(h, 4), @divTrunc(w, 3), @divTrunc(h, 2), rgb(0x90, 0x58, 0x78), 18, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        5 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x18, 0x48, 0x30), rgb(0x08, 0x20, 0x14));
+            fb.blendTintRect(@divTrunc(w, 5), @divTrunc(h, 5), @divTrunc(w, 2), @divTrunc(h, 2), rgb(0x40, 0x88, 0x50), 20, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        6 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x50, 0x38, 0x20), rgb(0x18, 0x10, 0x28));
+            fb.blendTintRect(@divTrunc(w, 3), @divTrunc(h, 7), @divTrunc(w, 2), @divTrunc(h, 3), rgb(0xA0, 0x70, 0x40), 16, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        7 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x38, 0x40, 0x28), rgb(0x14, 0x18, 0x10));
+            fb.blendTintRect(@divTrunc(w, 4), @divTrunc(h, 6), @divTrunc(w * 2, 3), @divTrunc(h, 3), rgb(0x70, 0x78, 0x48), 18, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        8 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x30, 0x34, 0x40), rgb(0x0C, 0x10, 0x18));
+            fb.blendTintRect(@divTrunc(w, 5), @divTrunc(h, 8), @divTrunc(w, 3), @divTrunc(h, 4), rgb(0x68, 0x70, 0x88), 20, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        9 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x10, 0x40, 0x58), rgb(0x04, 0x18, 0x28));
+            fb.blendTintRect(@divTrunc(w, 4), @divTrunc(h, 9), @divTrunc(w, 2), @divTrunc(h * 2, 5), rgb(0x28, 0x78, 0x90), 22, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        10 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x28, 0x18, 0x48), rgb(0x08, 0x08, 0x20));
+            fb.blendTintRect(@divTrunc(w, 3), @divTrunc(h, 6), @divTrunc(w, 2), @divTrunc(h, 3), rgb(0x60, 0x40, 0x90), 26, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        11 => {
+            fb.drawGradientV(0, 0, w, h, rgb(0x20, 0x42, 0x50), rgb(0x08, 0x20, 0x28));
+            fb.blendTintRect(@divTrunc(w, 6), @divTrunc(h, 5), @divTrunc(w * 2, 3), @divTrunc(h, 2), rgb(0x48, 0x88, 0x78), 18, 255);
+            wallpaperVignetteFrame(w, h);
+        },
+        else => renderHarmonyWallpaper(w, h),
     }
 }
 
@@ -201,22 +253,6 @@ pub fn renderHarmonyWallpaper(w: i32, h: i32) void {
     fb.blendTintRect(0, h - vstrip, w, vstrip, rgb(0x00, 0x02, 0x0A), 48, 255);
     fb.blendTintRect(0, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
     fb.blendTintRect(w - vstrip, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
-}
-
-fn renderGadgetCpu(w: i32, h: i32, tb_h: i32, t: *const theme.ThemeColors) void {
-    _ = tb_h;
-    const cx = w - 110;
-    const cy = @divTrunc(h, 4);
-    const r: i32 = 46;
-    const bx = cx - r;
-    const by = cy - r;
-    if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(bx, by, r * 2, r * 2, dwm.getConfig().glass_tint_color, .panel);
-    } else {
-        fb.fillRoundedRect(bx, by, r * 2, r * 2, r, rgb(0x20, 0x34, 0x50));
-    }
-    fb.drawTextTransparent(bx + 30, by + 16, "23%", t.icon_text);
-    fb.drawTextTransparent(bx + 26, by + 32, "0K/s", rgb(0xAA, 0xCC, 0xEE));
 }
 
 fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
@@ -260,7 +296,7 @@ fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32)
 
     const app_items = [_]struct { id: icons.IconId, text: []const u8, active: bool }{
         .{ .id = .computer, .text = "Computer", .active = true },
-        .{ .id = .computer, .text = "Core", .active = false },
+        .{ .id = .folder, .text = "Core", .active = false },
         .{ .id = .terminal, .text = "CMD", .active = false },
     };
     var ax = qx + 8;
@@ -330,7 +366,7 @@ fn renderExplorerWindow(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) voi
     fb.drawTextTransparentUi(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
     fb.drawTextTransparentUi(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
 
-    display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t);
+    display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
 
     display.drawAeroWindowFrameBorder(win_x, win_y, win_w, win_h);
     renderExplorerContent(win_x + 2, win_y + aero_tb_h, win_w - 4, win_h - aero_tb_h - 2, t);
@@ -434,8 +470,8 @@ fn renderExplorerContent(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeCo
         .{ .name = "Program Files", .date = "2026/03/20", .size = "", .icon = .documents },
         .{ .name = "Windows", .date = "2026/02/10", .size = "", .icon = .documents },
         .{ .name = "PerfLogs", .date = "2026/01/01", .size = "", .icon = .documents },
-        .{ .name = "boot.ini", .date = "2026/01/01", .size = "1 KB", .icon = .computer },
-        .{ .name = "pagefile.sys", .date = "2026/03/21", .size = "2 GB", .icon = .computer },
+        .{ .name = "boot.ini", .date = "2026/01/01", .size = "1 KB", .icon = .text_editor },
+        .{ .name = "pagefile.sys", .date = "2026/03/21", .size = "2 GB", .icon = .text_editor },
     };
     var ey: i32 = body_y + 22;
     for (entries, 0..) |entry, i| {

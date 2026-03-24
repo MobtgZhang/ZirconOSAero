@@ -1,6 +1,8 @@
 //! DWM 合成器 — NT 6.1 Aero（D3D9 风格重定向表面 + 高斯模糊玻璃）
+//! 表面标志语义见 `src/config/dwm_surface_spec.zig`、`docs/cn/DesktopManagerSpec.md`。
 
 const klog = @import("../../rtl/klog.zig");
+const nt61 = @import("dwm_nt61_defaults");
 const fb = @import("framebuffer.zig");
 const material = @import("material.zig");
 
@@ -49,19 +51,19 @@ pub const SurfaceFlags = struct {
 };
 
 pub const AeroConfig = struct {
-    glass_enabled: bool = true,
-    glass_opacity: u8 = 180,
-    blur_radius: u8 = 12,
-    blur_passes: u8 = 3,
-    saturation: u8 = 200,
-    tint_color: u32 = 0x4068A0,
-    tint_opacity: u8 = 60,
-    specular_intensity: u8 = 35,
-    shadow_layers: u8 = 4,
-    shadow_offset: u8 = 8,
-    peek_enabled: bool = true,
-    flip3d_enabled: bool = true,
-    animation_speed: u16 = 250,
+    glass_enabled: bool = nt61.KernelDwm.glass_enabled,
+    glass_opacity: u8 = nt61.KernelDwm.glass_opacity,
+    blur_radius: u8 = nt61.KernelDwm.glass_blur_radius,
+    blur_passes: u8 = nt61.KernelDwm.glass_blur_passes,
+    saturation: u8 = nt61.KernelDwm.glass_saturation,
+    tint_color: u32 = nt61.KernelDwm.glass_tint_color,
+    tint_opacity: u8 = nt61.KernelDwm.glass_tint_opacity,
+    specular_intensity: u8 = nt61.KernelDwm.specular_intensity,
+    shadow_layers: u8 = nt61.KernelCompositor.shadow_layers,
+    shadow_offset: u8 = nt61.KernelCompositor.shadow_offset,
+    peek_enabled: bool = nt61.KernelCompositor.peek_enabled,
+    flip3d_enabled: bool = nt61.KernelCompositor.flip3d_enabled,
+    animation_speed: u16 = nt61.KernelCompositor.animation_speed,
 };
 
 const MAX_SURFACES: usize = 128;

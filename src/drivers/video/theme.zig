@@ -1,9 +1,7 @@
 //! NT 6.1 (Windows 7) Aero — 唯一受支持的桌面主题。
-
-const builtin = @import("builtin");
-
-const is_x86 = (builtin.target.cpu.arch == .x86_64);
-const use_ps2_style_mouse = is_x86 or (builtin.target.cpu.arch == .loongarch64);
+//!
+//! `rgb`：**BGR888 装入 u32 低 24 位**（与 Win32 COLORREF / `dwm_nt61_defaults` 字面值一致）。
+//! 用户态 Aero 库 `desktop/aero/src/theme.zig` 使用相反分量顺序，勿混用。
 
 pub fn rgb(r: u32, g: u32, b: u32) u32 {
     return b | (g << 8) | (r << 16);
@@ -76,15 +74,13 @@ pub fn setTheme(id: ThemeId) void {
     _ = id;
     active_theme_id = .aero;
     active_theme = &THEME_AERO;
-    // 内核 PS/2 路径：勿启用插值/平滑。插值步长为 0 时会出现「坐标未变 → 不重绘 →
-    // renderDesktopFrame 内 while(isInterpolating) 永不运行」的死锁，指针表现为完全不动。
-    if (use_ps2_style_mouse) {
-        const mouse = @import("../input/mouse.zig");
-        mouse.setInterpolation(false, 1);
-        mouse.setSmoothing(false);
-        mouse.setSensitivity(10);
-        mouse.setAcceleration(false, 3);
-    }
+    // 所有架构：关闭驱动侧插值/平滑。插值与主循环节拍错位时会出现「坐标看似未变 →
+    // 不重绘」的死锁；VirtIO-Input 与 PS/2 路径均适用。
+    const mouse = @import("../input/mouse.zig");
+    mouse.setInterpolation(false, 1);
+    mouse.setSmoothing(false);
+    mouse.setSensitivity(10);
+    mouse.setAcceleration(false, 3);
 }
 
 pub fn getActiveTheme() *const ThemeColors {

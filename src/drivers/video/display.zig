@@ -3,7 +3,6 @@
 //! Screen space (same as Windows / top-left origin): **(0,0) = top-left**, X increases
 //! **right**, Y increases **down**. Taskbar occupies `y ∈ [scr_h - tb_h, scr_h)`.
 
-const builtin = @import("builtin");
 const std = @import("std");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
@@ -16,12 +15,11 @@ const dwm_comp = @import("dwm_compositor.zig");
 const mat = @import("material.zig");
 const shell_strings = @import("shell_strings.zig");
 const aero_tray = @import("aero_tray.zig");
+const aero_cursor_shape = @import("aero_cursor_shape.zig");
 
 pub const theme_mod = @import("theme.zig");
 pub const dwm_mod = @import("dwm.zig");
 pub const renderer_aero = @import("renderer_aero.zig");
-
-const is_x86 = (builtin.target.cpu.arch == .x86_64);
 
 pub const ThemeColors = theme_mod.ThemeColors;
 
@@ -104,6 +102,8 @@ var display_state: DisplayState = .uninitialized;
 var display_mode: DisplayMode = .text;
 var desktop_ctx: DesktopContext = .{};
 
+var desktop_cursor_kind: aero_cursor_shape.CursorKind = .arrow;
+
 var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;
@@ -113,7 +113,8 @@ var use_hdmi: bool = false;
 
 // ── Layout Constants ──
 
-const TASKBAR_H: i32 = 30;
+/// 与 `theme.getTaskbarHeight()`（40）一致；遗留 `renderTaskbar` 路径仅内部使用。
+const TASKBAR_H: i32 = 40;
 const TITLEBAR_H: i32 = 26;
 const START_BTN_W: i32 = 108;
 const ICON_GRID_X: i32 = 75;
@@ -128,6 +129,60 @@ const BTN_SIZE: i32 = 21;
 /// 双行标题（主标题 + 副标题）需 ≥34px，避免与客户端首行工具栏视觉重叠。
 pub const AERO_TITLEBAR_H: i32 = 36;
 pub const AERO_CLIENT_INSET: i32 = 2;
+
+/// Win7 Aero 标题栏三键悬停（DWM 风格绘制 + 命中测试）。
+pub const AeroCaptionBtnHover = enum { none, minimize, maximize, close };
+
+var explorer_caption_btn_hover: AeroCaptionBtnHover = .none;
+var taskmgr_caption_btn_hover: AeroCaptionBtnHover = .none;
+
+pub fn getExplorerCaptionBtnHover() AeroCaptionBtnHover {
+    return explorer_caption_btn_hover;
+}
+
+pub fn getTaskMgrCaptionBtnHover() AeroCaptionBtnHover {
+    return taskmgr_caption_btn_hover;
+}
+
+/// 与 Win7 DWM 接近：三列等宽、贴满标题栏高度；`group_sep_x` 为标题区与按钮组分界。
+pub fn aeroCaptionButtonLayout(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32) struct {
+    min_x: i32,
+    max_x: i32,
+    close_x: i32,
+    btn_w: i32,
+    btn_y: i32,
+    btn_h: i32,
+    group_sep_x: i32,
+} {
+    const btn_h = titlebar_h;
+    const btn_y = win_y;
+    const btn_w: i32 = if (titlebar_h >= 32) 46 else @max(36, titlebar_h + 4);
+    const close_x = win_x + win_w - btn_w;
+    const max_x = close_x - btn_w;
+    const min_x = max_x - btn_w;
+    const group_sep_x = min_x - 1;
+    return .{
+        .min_x = min_x,
+        .max_x = max_x,
+        .close_x = close_x,
+        .btn_w = btn_w,
+        .btn_y = btn_y,
+        .btn_h = btn_h,
+        .group_sep_x = group_sep_x,
+    };
+}
+
+pub fn hitTestAeroCaptionButtons(px: i32, py: i32, win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32) AeroCaptionBtnHover {
+    if (titlebar_h < 4 or win_w < 96) return .none;
+    if (px < win_x or py < win_y or px >= win_x + win_w or py >= win_y + titlebar_h) return .none;
+    const L = aeroCaptionButtonLayout(win_x, win_y, win_w, titlebar_h);
+    if (px < L.min_x) return .none;
+    if (px >= L.close_x + L.btn_w) return .none;
+    if (px >= L.close_x) return .close;
+    if (px >= L.max_x) return .maximize;
+    return .minimize;
+}
+
 /// 与 renderer_aero.renderExplorerContent 中命令栏/地址栏高度一致（用于命中测试）。
 pub const AERO_EXPLORER_CMD_H: i32 = 28;
 pub const AERO_EXPLORER_ADDR_H: i32 = 26;
@@ -321,9 +376,9 @@ fn renderCurrentDesktop() void {
     renderer_aero.renderFrame();
 }
 
-/// Returns the taskbar height for the active theme.
+/// Returns the taskbar height for the active theme（与 Aero 任务栏绘制一致）。
 pub fn getTaskbarHeight() i32 {
-    return 40;
+    return theme_mod.getTaskbarHeight();
 }
 
 /// Align DWM smooth-cursor state with the PS/2 driver so the first painted frame
@@ -367,9 +422,20 @@ fn appendU32Digits(buf: []u8, pos: usize, n: u32) usize {
     return p;
 }
 
+fn appendSignedI32(buf: []u8, pos: usize, v: i32) usize {
+    if (v >= 0) return appendU32Digits(buf, pos, @intCast(v));
+    var p = pos;
+    if (p < buf.len) {
+        buf[p] = '-';
+        p += 1;
+    }
+    const vu: u32 = @intCast(-@as(i64, v));
+    return appendU32Digits(buf, p, vu);
+}
+
 /// Bottom-right status line: theme + resolution + DWM (above taskbar, not top-left banner).
 fn buildSystemInfoText() []const u8 {
-    var buf: [96]u8 = undefined;
+    var buf: [160]u8 = undefined;
     var pos: usize = 0;
     const prefix = "ZirconOS | ";
     for (prefix) |c| {
@@ -405,6 +471,24 @@ fn buildSystemInfoText() []const u8 {
             pos += 1;
         }
     }
+    if (@import("build_options").mouse_debug) {
+        const mouse = @import("../input/mouse.zig");
+        const mx = mouse.getX();
+        const my = mouse.getY();
+        const ptr_lbl = " | ptr ";
+        for (ptr_lbl) |c| {
+            if (pos < buf.len) {
+                buf[pos] = c;
+                pos += 1;
+            }
+        }
+        pos = appendSignedI32(buf[0..], pos, mx);
+        if (pos < buf.len) {
+            buf[pos] = ',';
+            pos += 1;
+        }
+        pos = appendSignedI32(buf[0..], pos, my);
+    }
     return buf[0..pos];
 }
 
@@ -431,25 +515,27 @@ pub fn drawSystemInfoStrip(scr_w: i32, scr_h: i32, tb_h: i32) void {
 pub fn renderDesktopFrame() void {
     if (!use_framebuffer or !fb.isInitialized()) return;
 
-    if (is_x86) {
-        const mouse = @import("../../drivers/input/mouse.zig");
+    // 合成前再排空一轮输入，避免 IRQ/轮询与取样之间存在竞态导致本帧光标滞后一整帧。
+    const input_hub = @import("../../drivers/input/input_hub.zig");
+    input_hub.pollAll();
 
-        while (mouse.isInterpolating()) {
-            mouse.interpolateStep();
-        }
+    // VirtIO-Input / PS/2 均在 mouse 状态中更新坐标；非 x86 也必须每帧同步到 desktop_ctx，
+    // 否则光标停留在 syncCursorFromMouse 的初值（VirtIO 事件无法驱动绘制）。
+    const mouse = @import("../../drivers/input/mouse.zig");
 
-        const raw_x = mouse.getX();
-        const raw_y = mouse.getY();
-
-        updateSmoothCursor(raw_x, raw_y);
-        desktop_ctx.cursor_x = desktop_ctx.smooth_cursor.display_x;
-        desktop_ctx.cursor_y = desktop_ctx.smooth_cursor.display_y;
-
-        renderCurrentDesktop();
-        mouse.clearCursorMoved();
-    } else {
-        renderCurrentDesktop();
+    while (mouse.isInterpolating()) {
+        mouse.interpolateStep();
     }
+
+    const raw_x = mouse.getX();
+    const raw_y = mouse.getY();
+
+    updateSmoothCursor(raw_x, raw_y);
+    desktop_ctx.cursor_x = desktop_ctx.smooth_cursor.display_x;
+    desktop_ctx.cursor_y = desktop_ctx.smooth_cursor.display_y;
+
+    renderCurrentDesktop();
+    mouse.clearCursorMoved();
 }
 
 fn updateSmoothCursor(raw_x: i32, raw_y: i32) void {
@@ -491,11 +577,18 @@ pub fn hideStartMenu() void {
     startmenu.hide();
 }
 
-/// 键盘快捷键（如 Ctrl+Shift+Esc → 任务管理器）。返回 true 时需整屏重绘。
+/// 键盘快捷键（如 Ctrl+Shift+Esc → 任务管理器；Ctrl+Alt+F9 → 循环壁纸预设）。返回 true 时需整屏重绘。
 pub fn handleDesktopHotkeys() bool {
-    if (!@import("../../arch.zig").consumeTaskMgrHotkey()) return false;
-    bringTaskManagerToFront();
-    return true;
+    const arch = @import("../../arch.zig");
+    if (arch.consumeTaskMgrHotkey()) {
+        bringTaskManagerToFront();
+        return true;
+    }
+    if (arch.consumeWallpaperCycleHotkey()) {
+        renderer_aero.cycleWallpaperPreset();
+        return true;
+    }
+    return false;
 }
 
 fn bringTaskManagerToFront() void {
@@ -670,22 +763,48 @@ pub fn handleClick(x: i32, y: i32) bool {
     initTaskMgrPosition(w, h);
     if (taskMgrWindowContains(x, y, w, h)) {
         if (taskMgrTitlebarHit(x, y, w, h)) {
-            taskmgr_drag_active = true;
-            taskmgr_drag_off_x = x - taskmgr_x;
-            taskmgr_drag_off_y = y - taskmgr_y;
-            taskmgr_drag_prev_rect = .{ .x = taskmgr_x, .y = taskmgr_y, .w = 320, .h = 260 };
-            return true;
+            const tm_w: i32 = 320;
+            const cap = shellTitlebarH();
+            switch (hitTestAeroCaptionButtons(x, y, taskmgr_x, taskmgr_y, tm_w, cap)) {
+                .close => {
+                    klog.info("Task Manager: close (stub)", .{});
+                    return true;
+                },
+                .minimize, .maximize => {
+                    klog.info("Task Manager: min/max (stub)", .{});
+                    return true;
+                },
+                .none => {
+                    taskmgr_drag_active = true;
+                    taskmgr_drag_off_x = x - taskmgr_x;
+                    taskmgr_drag_off_y = y - taskmgr_y;
+                    taskmgr_drag_prev_rect = .{ .x = taskmgr_x, .y = taskmgr_y, .w = 320, .h = 260 };
+                    return true;
+                },
+            }
         }
         return false;
     }
     const wr = getWindowRect(w, h);
     const cap_h = shellTitlebarH();
     if (x >= wr.x and x < wr.x + wr.w and y >= wr.y and y < wr.y + cap_h) {
-        drag_active = true;
-        drag_offset_x = x - window_x;
-        drag_offset_y = y - window_y;
-        explorer_drag_prev_rect = .{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
-        return true;
+        switch (hitTestAeroCaptionButtons(x, y, wr.x, wr.y, wr.w, cap_h)) {
+            .close => {
+                klog.info("Explorer: close (stub)", .{});
+                return true;
+            },
+            .minimize, .maximize => {
+                klog.info("Explorer: min/max (stub)", .{});
+                return true;
+            },
+            .none => {
+                drag_active = true;
+                drag_offset_x = x - window_x;
+                drag_offset_y = y - window_y;
+                explorer_drag_prev_rect = .{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
+                return true;
+            },
+        }
     }
     if (x >= wr.x and x < wr.x + wr.w and y >= wr.y and y < wr.y + wr.h) {
         if (aeroExplorerClientClick(x, y, w, h)) return true;
@@ -758,7 +877,7 @@ pub fn handleMouseMove(x: i32, y: i32) bool {
     desktop_ctx.smooth_cursor.target_y = y;
 
     var hover_changed = false;
-    if (is_x86 and startmenu.isVisible()) {
+    if (startmenu.isVisible()) {
         const w: i32 = @intCast(fb.getWidth());
         const h: i32 = @intCast(fb.getHeight());
         hover_changed = startmenu.updatePointerHover(x, y, w, h);
@@ -775,7 +894,67 @@ pub fn handleMouseMove(x: i32, y: i32) bool {
         initTaskMgrPosition(scr_w, scr_h);
         applyTaskMgrDrag(x, y, scr_w, scr_h);
     }
-    return hover_changed;
+
+    const scr_w: i32 = @intCast(fb.getWidth());
+    const scr_h: i32 = @intCast(fb.getHeight());
+    const prev_expl = explorer_caption_btn_hover;
+    const prev_tm = taskmgr_caption_btn_hover;
+    explorer_caption_btn_hover = .none;
+    taskmgr_caption_btn_hover = .none;
+    const wr = getWindowRect(scr_w, scr_h);
+    const cap_h = shellTitlebarH();
+    initTaskMgrPosition(scr_w, scr_h);
+    const tm_w: i32 = 320;
+    if (taskMgrWindowContains(x, y, scr_w, scr_h) and taskMgrTitlebarHit(x, y, scr_w, scr_h)) {
+        // 任务管理器盖住 Explorer 时，标题栏命中优先算顶层窗。
+        taskmgr_caption_btn_hover = hitTestAeroCaptionButtons(x, y, taskmgr_x, taskmgr_y, tm_w, cap_h);
+    } else if (x >= wr.x and x < wr.x + wr.w and y >= wr.y and y < wr.y + cap_h) {
+        explorer_caption_btn_hover = hitTestAeroCaptionButtons(x, y, wr.x, wr.y, wr.w, cap_h);
+    }
+    hover_changed = hover_changed or prev_expl != explorer_caption_btn_hover or prev_tm != taskmgr_caption_btn_hover;
+
+    const prev_kind = desktop_cursor_kind;
+    updateDesktopCursorKind(x, y);
+    return hover_changed or prev_kind != desktop_cursor_kind;
+}
+
+fn pointInExplorerAddressBar(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
+    const wr = getWindowRect(scr_w, scr_h);
+    if (px < wr.x or py < wr.y or px >= wr.x + wr.w or py >= wr.y + wr.h) return false;
+    const cx = wr.x + 2;
+    const cy = wr.y + AERO_TITLEBAR_H;
+    const cw = wr.w - 4;
+    const cmd_h: i32 = AERO_EXPLORER_CMD_H;
+    const addr_h: i32 = AERO_EXPLORER_ADDR_H;
+    const addr_y = cy + cmd_h + 1;
+    const go_btn_w: i32 = 44;
+    const go_x = cx + cw - 8 - go_btn_w;
+    const addr_field_x = cx + 52;
+    const addr_field_w = @max(64, go_x - 4 - addr_field_x);
+    return px >= addr_field_x and px < addr_field_x + addr_field_w and
+        py >= addr_y and py < addr_y + addr_h;
+}
+
+fn updateDesktopCursorKind(px: i32, py: i32) void {
+    if (isWindowDragging()) {
+        desktop_cursor_kind = .move;
+        return;
+    }
+    const scr_w: i32 = @intCast(fb.getWidth());
+    const scr_h: i32 = @intCast(fb.getHeight());
+    if (startmenu.isVisible() and startmenu.pointerHoverIndex() >= 0) {
+        desktop_cursor_kind = .hand;
+        return;
+    }
+    if (pointInExplorerAddressBar(px, py, scr_w, scr_h)) {
+        desktop_cursor_kind = .ibeam;
+        return;
+    }
+    if (explorer_caption_btn_hover != .none or taskmgr_caption_btn_hover != .none) {
+        desktop_cursor_kind = .hand;
+        return;
+    }
+    desktop_cursor_kind = .arrow;
 }
 
 /// 拖动资源管理器或任务管理器标题栏时，仅在指针实际移动时需要重绘（见 main 循环）。
@@ -808,22 +987,6 @@ fn renderHarmonyStyleWallpaper(w: i32, h: i32) void {
     fb.blendTintRect(0, h - vstrip, w, vstrip, rgb(0x00, 0x02, 0x0A), 48, 255);
     fb.blendTintRect(0, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
     fb.blendTintRect(w - vstrip, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
-}
-
-fn renderAeroGadgetCpu(w: i32, h: i32, tb_h: i32, t: *const ThemeColors) void {
-    _ = tb_h;
-    const cx = w - 110;
-    const cy = @divTrunc(h, 4);
-    const r: i32 = 46;
-    const bx = cx - r;
-    const by = cy - r;
-    if (dwm_initialized and dwm_config.glass_enabled) {
-        renderGlassEffect(bx, by, r * 2, r * 2, dwm_config.glass_tint_color, .panel);
-    } else {
-        fb.fillRoundedRect(bx, by, r * 2, r * 2, r, rgb(0x20, 0x34, 0x50));
-    }
-    fb.drawTextTransparent(bx + 30, by + 16, "23%", t.icon_text);
-    fb.drawTextTransparent(bx + 26, by + 32, "0K/s", rgb(0xAA, 0xCC, 0xEE));
 }
 
 fn renderAeroBackground(w: i32, h: i32, t: *const ThemeColors) void {
@@ -873,7 +1036,7 @@ fn renderAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, tb_h: i32) v
 
     const app_items = [_]struct { id: icons.IconId, text: []const u8, active: bool }{
         .{ .id = .computer, .text = "Computer", .active = true },
-        .{ .id = .computer, .text = "Core", .active = false },
+        .{ .id = .folder, .text = "Core", .active = false },
         .{ .id = .terminal, .text = "CMD", .active = false },
     };
     var ax = qx + 10;
@@ -921,42 +1084,10 @@ pub fn initAeroDwm() void {
         // present() 在 Aero 下整帧 flip，减轻指针移动时与 flipDirty 矩形顺序相关的块状撕裂。
         // 半径×遍数过大时首帧会长时间阻塞，双缓冲下在首次 flip 前屏幕可能一直黑屏或旧内容。
         // 默认用较轻模糊（仍可见毛玻璃），需要画质再调大 glass_blur_*。
-        const cfg = DwmConfig{
-            .glass_enabled = true,
-            .glass_opacity = 210,
-            .glass_blur_radius = 6,
-            .glass_blur_passes = 2,
-            .glass_saturation = 208,
-            .glass_tint_color = 0x4068A0,
-            .glass_tint_opacity = 62,
-            .glass_taskbar_tint_opacity = 96,
-            .specular_intensity = 42,
-            .animation_enabled = true,
-            .peek_enabled = true,
-            .shadow_enabled = true,
-            .vsync_compositor = true,
-            .smooth_cursor = true,
-            .cursor_lerp_factor = 255,
-        };
+        const cfg = DwmConfig{};
         initDwm(cfg);
 
-        dwm_mod.init(.{
-            .glass_enabled = cfg.glass_enabled,
-            .glass_opacity = cfg.glass_opacity,
-            .glass_blur_radius = cfg.glass_blur_radius,
-            .glass_blur_passes = cfg.glass_blur_passes,
-            .glass_saturation = cfg.glass_saturation,
-            .glass_tint_color = cfg.glass_tint_color,
-            .glass_tint_opacity = cfg.glass_tint_opacity,
-            .glass_taskbar_tint_opacity = cfg.glass_taskbar_tint_opacity,
-            .specular_intensity = cfg.specular_intensity,
-            .animation_enabled = cfg.animation_enabled,
-            .peek_enabled = cfg.peek_enabled,
-            .shadow_enabled = cfg.shadow_enabled,
-            .vsync_compositor = cfg.vsync_compositor,
-            .smooth_cursor = cfg.smooth_cursor,
-            .cursor_lerp_factor = cfg.cursor_lerp_factor,
-        });
+        dwm_mod.init(cfg);
 
         mat.init(.glass);
         mat.configureGlass(.{
@@ -968,52 +1099,17 @@ pub fn initAeroDwm() void {
             .specular_intensity = cfg.specular_intensity,
         });
 
-        dwm_comp.initAero(.{
-            .glass_enabled = true,
-            .glass_opacity = cfg.glass_opacity,
-            .blur_radius = cfg.glass_blur_radius,
-            .blur_passes = cfg.glass_blur_passes,
-            .saturation = cfg.glass_saturation,
-            .tint_color = cfg.glass_tint_color,
-            .tint_opacity = cfg.glass_tint_opacity,
-            .specular_intensity = cfg.specular_intensity,
-            .shadow_layers = 3,
-            .shadow_offset = 6,
-            .peek_enabled = true,
-            .flip3d_enabled = true,
-            .animation_speed = 250,
-        });
+        dwm_comp.initAero(.{});
     }
 }
 
 // ── Desktop Window Manager (DWM) Compositor ──
+// 默认字段来自 `dwm_nt61_defaults`（经 `dwm_mod.DwmConfig`）
 
-pub const DwmConfig = struct {
-    glass_enabled: bool = true,
-    /// Legacy overall strength (some UI paths); tint strength is `glass_tint_opacity`
-    glass_opacity: u8 = 210,
-    /// docs/cn/AeroRendering.md — 与 `initAeroDwm` / `dwm.zig` 默认一致
-    glass_blur_radius: u8 = 6,
-    /// Separable box-blur passes (win7Desktop.md: multi-pass ≈ Gaussian)
-    glass_blur_passes: u8 = 2,
-    glass_saturation: u8 = 208,
-    /// BGR 0x00BBGGRR style packed color (same as theme colorization)
-    glass_tint_color: u32 = 0x4068A0,
-    /// Step 3: alpha blend with theme tint (Aero Glass pipeline)
-    glass_tint_opacity: u8 = 62,
-    /// Taskbar band: stronger tint（与轻量 blur 叠加）
-    glass_taskbar_tint_opacity: u8 = 96,
-    specular_intensity: u8 = 42,
-    animation_enabled: bool = true,
-    peek_enabled: bool = true,
-    shadow_enabled: bool = true,
-    vsync_compositor: bool = true,
-    smooth_cursor: bool = true,
-    cursor_lerp_factor: i32 = 255,
-};
+pub const DwmConfig = dwm_mod.DwmConfig;
 
 /// Chrome drawn after blur+tint (taskbar has side rails; caption only divider to client)
-pub const GlassChrome = enum { taskbar, caption, panel };
+pub const GlassChrome = dwm_mod.GlassChrome;
 
 var dwm_config: DwmConfig = .{};
 var dwm_initialized: bool = false;
@@ -1157,9 +1253,13 @@ const IconDef = struct {
 const desktop_icon_list_aero = [_]IconDef{
     .{ .label = "Computer", .id = .computer },
     .{ .label = "Recycle Bin", .id = .recycle_bin },
+    .{ .label = "Documents", .id = .documents },
     .{ .label = "Network", .id = .network },
-    .{ .label = "Control Panel", .id = .settings, .shortcut = true },
+    .{ .label = "Control Panel", .id = .control_panel, .shortcut = true },
     .{ .label = "Browser", .id = .browser, .shortcut = true },
+    .{ .label = "Terminal", .id = .terminal, .shortcut = true },
+    .{ .label = "Calculator", .id = .calculator },
+    .{ .label = "User", .id = .user, .shortcut = true },
 };
 
 pub fn renderDesktopIcons(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
@@ -1374,7 +1474,7 @@ fn renderTaskManagerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) voi
     } else {
         fb.drawGradientH(win_x, win_y, tm_w, th, t.titlebar_active_left, t.titlebar_active_right);
     }
-    drawAeroCaptionButtons(win_x, win_y, tm_w, th, t);
+    drawAeroCaptionButtons(win_x, win_y, tm_w, th, t, getTaskMgrCaptionBtnHover());
     fb.drawTextTransparent(win_x + 8, win_y + 5, "Windows Task Manager", t.titlebar_text);
     drawAeroWindowFrameBorder(win_x, win_y, tm_w, tm_h);
     renderTaskMgrW2kContent(win_x + 2, win_y + th, tm_w - 4, tm_h - th - 2, t);
@@ -1661,7 +1761,7 @@ fn renderSampleWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
 
 fn renderTitlebarButtons(win_x: i32, win_y: i32, win_w: i32, t: *const ThemeColors) void {
     if (dwm_initialized and dwm_config.glass_enabled) {
-        drawAeroCaptionButtons(win_x, win_y, win_w, TITLEBAR_H, t);
+        drawAeroCaptionButtons(win_x, win_y, win_w, TITLEBAR_H, t, .none);
         return;
     }
 
@@ -1680,56 +1780,77 @@ fn renderTitlebarButtons(win_x: i32, win_y: i32, win_w: i32, t: *const ThemeColo
     drawMinSymbol(min_x, btn_y, BTN_SIZE);
 }
 
-/// Windows 7 Aero：在整块标题栏玻璃已绘制后，为最小化/最大化/关闭绘制玻璃抬升、顶缘高光、分隔线与关闭键微暖色。
-pub fn drawAeroCaptionButtons(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32, _: *const ThemeColors) void {
+fn drawWin7CaptionMinGlyph(bx: i32, by: i32, bw: i32, bh: i32, fg: u32) void {
+    if (bw < 8 or bh < 8) return;
+    const bar_w = @max(10, bw - 18);
+    const bar_h: i32 = 2;
+    const sx = bx + @divTrunc(bw - bar_w, 2);
+    const sy = by + @divTrunc(bh - bar_h, 2) + 1;
+    fb.fillRect(sx, sy, bar_w, bar_h, fg);
+}
+
+fn drawWin7CaptionMaxGlyph(bx: i32, by: i32, bw: i32, bh: i32, fg: u32) void {
+    if (bw < 10 or bh < 10) return;
+    const m = @max(5, @min(8, @divTrunc(@min(bw, bh), 5)));
+    const sz = @max(7, @min(bw, bh) - 2 * m);
+    const ox = bx + @divTrunc(bw - sz, 2);
+    const oy = by + @divTrunc(bh - sz, 2);
+    fb.drawRect(ox, oy, sz, sz, fg);
+    fb.drawHLine(ox, oy + 1, sz, fg);
+}
+
+fn drawWin7CaptionCloseGlyph(bx: i32, by: i32, bw: i32, bh: i32, fg: u32) void {
+    if (bw < 8 or bh < 8) return;
+    const cx = bx + @divTrunc(bw, 2);
+    const cy = by + @divTrunc(bh, 2);
+    const arm: i32 = @min(5, @max(3, @divTrunc(@min(bw, bh), 2) - 3));
+    var d: i32 = -arm;
+    while (d <= arm) : (d += 1) {
+        fb.putPixel32(@intCast(cx + d), @intCast(cy + d), fg);
+        fb.putPixel32(@intCast(cx + d), @intCast(cy - d), fg);
+    }
+}
+
+/// Windows 7 DWM Aero：三键为贴标题栏全高的等宽列；默认无方块描边、关闭键默认非红；细竖线分隔；悬停时 Min/Max 微亮、Close 为珊瑚红。
+pub fn drawAeroCaptionButtons(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32, _: *const ThemeColors, hover: AeroCaptionBtnHover) void {
     if (titlebar_h < 8 or win_w < 96) return;
 
-    const btn_w: i32 = if (titlebar_h >= 28) 26 else @min(22, titlebar_h - 2);
-    const btn_y = win_y + @divTrunc(titlebar_h - btn_w, 2);
-    const close_x = win_x + win_w - btn_w;
-    const max_x = close_x - btn_w;
-    const min_x = max_x - btn_w;
-    const sep_x = min_x - 1;
+    const L = aeroCaptionButtonLayout(win_x, win_y, win_w, titlebar_h);
+    const min_x = L.min_x;
+    const max_x = L.max_x;
+    const close_x = L.close_x;
+    const btn_w = L.btn_w;
+    const btn_y = L.btn_y;
+    const btn_h = L.btn_h;
 
-    const edge = rgb(0x50, 0x78, 0xA8);
-    const div = rgb(0x78, 0xA0, 0xD0);
-    const glyph = rgb(0xF8, 0xFA, 0xFF);
+    const div_dark = rgb(0x3A, 0x5A, 0x78);
+    const div_light = rgb(0xB8, 0xD0, 0xE8);
+    const glyph_idle = rgb(0xE8, 0xF2, 0xFA);
+    const glyph_on_red = rgb(0xFF, 0xFF, 0xFF);
 
-    // 标题区与按钮组之间的竖向分隔（高光 + 阴影边）
-    if (sep_x > win_x + 4) {
-        fb.drawVLine(sep_x, win_y + 2, titlebar_h - 4, rgb(0xFF, 0xFF, 0xFF));
-        fb.drawVLine(sep_x + 1, win_y + 3, titlebar_h - 6, edge);
+    // 标题区 | 按钮组：Win7 常见双线竖隔
+    if (L.group_sep_x > win_x + 4) {
+        fb.drawVLine(L.group_sep_x, win_y + 1, titlebar_h - 2, div_light);
+        fb.drawVLine(L.group_sep_x + 1, win_y + 2, titlebar_h - 4, div_dark);
+    }
+    // 列与列之间单竖线（贴顶底）
+    fb.drawVLine(max_x, win_y + 1, titlebar_h - 2, div_dark);
+    fb.drawVLine(close_x, win_y + 1, titlebar_h - 2, div_dark);
+
+    // 悬停底衬（关闭键仅在悬停时铺红，符合 Win7）
+    if (hover == .minimize) {
+        fb.blendTintRect(min_x, btn_y, btn_w, btn_h, rgb(0xFF, 0xFF, 0xFF), 22, 120);
+    }
+    if (hover == .maximize) {
+        fb.blendTintRect(max_x, btn_y, btn_w, btn_h, rgb(0xFF, 0xFF, 0xFF), 22, 120);
+    }
+    if (hover == .close) {
+        fb.fillRect(close_x, btn_y, btn_w, btn_h, rgb(0xE8, 0x11, 0x23));
     }
 
-    const slots = [_]struct { x: i32, close: bool }{
-        .{ .x = min_x, .close = false },
-        .{ .x = max_x, .close = false },
-        .{ .x = close_x, .close = true },
-    };
-
-    for (slots) |s| {
-        const rx = s.x;
-        const ry = btn_y;
-        if (s.close) {
-            fb.blendTintRect(rx, ry, btn_w, btn_w, rgb(0xD8, 0x58, 0x48), 16, 255);
-        }
-        fb.blendTintRect(rx, ry, btn_w, btn_w, rgb(0xFF, 0xFF, 0xFF), 24, 255);
-        if (dwm_initialized and dwm_config.glass_enabled) {
-            const band = @max(2, @divTrunc(btn_w, 4));
-            fb.addSpecularBand(rx, ry, btn_w, band, 10);
-        }
-        fb.drawRect(rx, ry, btn_w, btn_w, rgb(0xA0, 0xC8, 0xE8));
-    }
-
-    const div_len = btn_w - 4;
-    if (div_len > 0) {
-        fb.drawVLine(max_x, btn_y + 2, div_len, div);
-        fb.drawVLine(close_x, btn_y + 2, div_len, div);
-    }
-
-    drawMinSymbolColored(min_x, btn_y, btn_w, glyph);
-    drawMaxSymbolColored(max_x, btn_y, btn_w, glyph);
-    drawCloseSymbolColored(close_x, btn_y, btn_w, glyph);
+    drawWin7CaptionMinGlyph(min_x, btn_y, btn_w, btn_h, glyph_idle);
+    drawWin7CaptionMaxGlyph(max_x, btn_y, btn_w, btn_h, glyph_idle);
+    drawWin7CaptionCloseGlyph(close_x, btn_y, btn_w, btn_h, if (hover == .close) glyph_on_red else glyph_idle);
 }
 
 pub fn drawCloseSymbol(bx: i32, by: i32, bs: i32) void {
@@ -2079,33 +2200,13 @@ fn isInsideContextMenu(x: i32, y: i32) bool {
 
 pub fn renderCursor(x: i32, y: i32) void {
     if (!use_framebuffer or !fb.isInitialized()) return;
+    if (!desktop_ctx.cursor_visible) return;
 
     const w_i32: i32 = @intCast(fb.getWidth());
     const h_i32: i32 = @intCast(fb.getHeight());
 
-    // 0=transparent, 1=fill, 2=outline, 3=glass_highlight, 4=inner_glow
-    const cursor_shape = [_][14]u3{
-        .{ 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 3, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 3, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 3, 3, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 3, 3, 1, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 4, 3, 3, 1, 1, 1, 2, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 4, 3, 3, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0 },
-        .{ 2, 4, 4, 3, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0 },
-        .{ 2, 4, 4, 3, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0 },
-        .{ 2, 4, 4, 3, 1, 1, 1, 2, 2, 2, 2, 2, 0, 0 },
-        .{ 2, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 1, 1, 2, 4, 1, 1, 2, 0, 0, 0, 0, 0, 0 },
-        .{ 2, 1, 2, 0, 2, 4, 1, 1, 2, 0, 0, 0, 0, 0 },
-        .{ 2, 2, 0, 0, 2, 4, 1, 1, 2, 0, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 2, 4, 1, 1, 2, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 2, 4, 1, 1, 2, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 0, 2, 1, 2, 0, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0 },
-    };
+    // 0=transparent, 1=fill, 2=outline, 3=glass_highlight, 4=inner_glow（与 Aero `aero_cursor_shape.zig` 同源）
+    const cursor_shape = aero_cursor_shape.pixels(desktop_cursor_kind).*;
 
     const scale: i32 = 1;
     const outline = rgb(0x00, 0x00, 0x00);
@@ -2220,8 +2321,8 @@ pub fn renderLoginScreen(width: u32, height: u32, top_color: u32, bottom_color: 
 
 pub fn present() void {
     if (!use_framebuffer) return;
-    // 仅 Aero：整帧 flip，减轻指针移动时 flipDirty 多矩形顺序拷贝的块状撕裂。其它主题保持 flipDirty，避免改变既有启动/帧耗。
-    if (dwm_initialized and dwm_config.vsync_compositor) {
+    // 双缓冲：必须整帧 memcpy 到真实 GOP。若走 flipDirty 且损坏矩形未覆盖光标/毛玻璃区，会表现为指针「粘住」或局部残影（与输入是否到达无关，也会误以为是鼠标坏了）。
+    if (fb.isDoubleBuffered()) {
         fb.flip();
     } else {
         fb.flipDirty();

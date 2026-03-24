@@ -48,8 +48,8 @@ def find_kernel(explicit_path=None):
     if explicit_path:
         return explicit_path
     candidates = [
-        os.path.join(PROJECT_ROOT, 'build', 'tmp', 'kernel-prefix', 'bin', 'kernel'),
         os.path.join(PROJECT_ROOT, 'build', 'tmp', 'kernel.elf'),
+        os.path.join(PROJECT_ROOT, 'build', 'tmp', 'kernel-prefix', 'bin', 'kernel'),
         os.path.join(PROJECT_ROOT, 'zig-out', 'bin', 'kernel'),
     ]
     for c in candidates:

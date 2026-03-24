@@ -8,7 +8,8 @@ and has a correct structure for GRUB/UEFI boot.
 Usage:
     python3 tests/test_multiboot.py [--kernel PATH]
 
-The default kernel path is build/tmp/kernel-prefix/bin/kernel.
+Prefer stripped `build/tmp/kernel.elf` (Multiboot2 header within first 32KB);
+fallback to kernel-prefix install binary.
 Test artifacts are written to build/test-results/.
 """
 
@@ -448,13 +449,17 @@ def test_kernel_size(data, result):
     else:
         result.ok(f"Kernel size: {size_mb:.1f} MB ({size} bytes)")
 
-    if size < 10 * 1024 * 1024:
-        result.ok("Size < 10MB (good for bootable image)")
+    if size <= 10 * 1024 * 1024:
+        result.ok("Size <= 10MB (compact boot image)")
+    elif size <= 64 * 1024 * 1024:
+        result.ok(
+            f"Size {size_mb:.1f}MB — acceptable for stripped ZirconOSAero "
+            "(large .data/rodata / Aero assets; multiboot2 offset validated above)"
+        )
     else:
         result.fail(
-            f"Kernel > 10MB ({size_mb:.1f}MB) — consider stripping debug info",
-            "Debug sections inflate the file and can push the multiboot2 header "
-            "past the 32KB scan limit"
+            "Kernel suspiciously large after strip",
+            f"{size_mb:.1f}MB — check for accidental debug sections or bloat",
         )
 
 
@@ -507,6 +512,7 @@ def main():
         kernel_path = args.kernel
     else:
         candidates = [
+            os.path.join(project_root, 'build', 'tmp', 'kernel.elf'),
             os.path.join(project_root, 'build', 'tmp', 'kernel-prefix', 'bin', 'kernel'),
             os.path.join(project_root, 'zig-out', 'bin', 'kernel'),
         ]

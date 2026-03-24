@@ -408,15 +408,24 @@ pub fn RtlMoveMemory(dest: []u8, src: []const u8) void {
 
 pub const RTL_OSVERSIONINFOW = struct {
     os_version_info_size: u32 = @sizeOf(RTL_OSVERSIONINFOW),
-    major_version: u32 = 10,
-    minor_version: u32 = 0,
-    build_number: u32 = 19041,
+    /// Windows 7 / NT 6.1（与 docs/cn/PROCESS_NT61.md Phase 2 对外语义一致）
+    major_version: u32 = 6,
+    minor_version: u32 = 1,
+    build_number: u32 = 7601,
     platform_id: u32 = 2,
     csd_version: [128]u8 = [_]u8{0} ** 128,
 };
 
 pub fn RtlGetVersion(info: *RTL_OSVERSIONINFOW) NTSTATUS {
-    info.* = .{};
+    if (info.os_version_info_size < 20) return STATUS_INVALID_PARAMETER;
+    const csd = "Service Pack 1";
+    info.os_version_info_size = @sizeOf(RTL_OSVERSIONINFOW);
+    info.major_version = 6;
+    info.minor_version = 1;
+    info.build_number = 7601;
+    info.platform_id = 2;
+    @memset(&info.csd_version, 0);
+    @memcpy(info.csd_version[0..csd.len], csd);
     return STATUS_SUCCESS;
 }
 

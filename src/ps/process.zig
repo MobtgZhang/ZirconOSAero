@@ -1,6 +1,7 @@
 //! Process & Thread Model (NT style)
 //! Integrates with Object Manager, Handle Table, and Security Token
 
+const std = @import("std");
 const vm = @import("../mm/vm.zig");
 const FrameAllocator = @import("../mm/frame.zig").FrameAllocator;
 const ob = @import("../ob/object.zig");
@@ -114,6 +115,7 @@ pub fn allocPid() ?u32 {
 }
 
 pub fn allocTid() ?u32 {
+    if (next_tid == std.math.maxInt(u32)) return null;
     const tid = next_tid;
     next_tid += 1;
     return tid;

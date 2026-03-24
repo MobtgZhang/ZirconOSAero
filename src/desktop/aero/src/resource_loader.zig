@@ -4,15 +4,16 @@
 //!   resources/icons/         — Application and system icons (SVG)
 //!   resources/cursors/       — Animated cursor sprites (SVG)
 //!   resources/themes/        — .theme configuration files
-//!   resources/sounds/        — Event sound schemes
+//!   resources/sounds/        — Event sound schemes（当前仅元数据路径登记，无播放栈）
 //!
 //! At init time, the loader registers known built-in resource entries
 //! so the compositor and shell can reference them by path or ID.
 
-pub const MAX_WALLPAPERS: usize = 16;
+pub const MAX_WALLPAPERS: usize = 24;
 pub const MAX_ICONS: usize = 64;
-pub const MAX_CURSORS: usize = 16;
+pub const MAX_CURSORS: usize = 24;
 pub const MAX_THEME_FILES: usize = 16;
+pub const MAX_SOUND_SCHEMES: usize = 16;
 pub const PATH_MAX: usize = 128;
 
 pub const ResourceEntry = struct {
@@ -33,6 +34,9 @@ var cursor_count: usize = 0;
 
 var theme_files: [MAX_THEME_FILES]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_THEME_FILES;
 var theme_file_count: usize = 0;
+
+var sound_schemes: [MAX_SOUND_SCHEMES]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_SOUND_SCHEMES;
+var sound_scheme_count: usize = 0;
 
 var initialized: bool = false;
 
@@ -80,6 +84,15 @@ fn addThemeFile(path: []const u8, id: u16) void {
     theme_file_count += 1;
 }
 
+fn addSoundScheme(path: []const u8, id: u16) void {
+    if (sound_scheme_count >= MAX_SOUND_SCHEMES) return;
+    var e = &sound_schemes[sound_scheme_count];
+    e.path_len = setPath(&e.path, path);
+    e.id = id;
+    e.loaded = true;
+    sound_scheme_count += 1;
+}
+
 pub fn init() void {
     if (initialized) return;
 
@@ -87,11 +100,13 @@ pub fn init() void {
     icon_count = 0;
     cursor_count = 0;
     theme_file_count = 0;
+    sound_scheme_count = 0;
 
     registerBuiltinWallpapers();
     registerBuiltinIcons();
     registerBuiltinCursors();
     registerBuiltinThemeFiles();
+    registerBuiltinSoundSchemes();
 
     initialized = true;
 }
@@ -106,10 +121,14 @@ fn registerBuiltinWallpapers() void {
     addWallpaper("resources/wallpapers/zircon_scenes.svg", 6);
     addWallpaper("resources/wallpapers/zircon_landscapes.svg", 7);
     addWallpaper("resources/wallpapers/zircon_architecture.svg", 8);
+    addWallpaper("resources/wallpapers/zircon_ocean.svg", 10);
+    addWallpaper("resources/wallpapers/zircon_nebula.svg", 11);
+    addWallpaper("resources/wallpapers/zircon_landscape.svg", 12);
 }
 
 fn registerBuiltinIcons() void {
-    addIcon("resources/icons/this_pc.svg", 1);
+    // ID 与 desktop.zig / shell 一致；路径须与 resources/icons/*.svg 文件名一致
+    addIcon("resources/icons/computer.svg", 1);
     addIcon("resources/icons/documents.svg", 2);
     addIcon("resources/icons/recycle_bin.svg", 3);
     addIcon("resources/icons/terminal.svg", 4);
@@ -122,28 +141,44 @@ fn registerBuiltinIcons() void {
     addIcon("resources/icons/music.svg", 11);
     addIcon("resources/icons/folder.svg", 12);
     addIcon("resources/icons/control_panel.svg", 13);
+    addIcon("resources/icons/file.svg", 14);
+    addIcon("resources/icons/user.svg", 15);
+    addIcon("resources/icons/lock.svg", 16);
+    addIcon("resources/icons/shutdown.svg", 17);
 }
 
 fn registerBuiltinCursors() void {
     addCursor("resources/cursors/zircon_arrow.svg", 1);
-    addCursor("resources/cursors/zircon_hand.svg", 2);
-    addCursor("resources/cursors/zircon_ibeam.svg", 3);
-    addCursor("resources/cursors/zircon_wait.svg", 4);
-    addCursor("resources/cursors/zircon_crosshair.svg", 5);
-    addCursor("resources/cursors/zircon_size_ns.svg", 6);
-    addCursor("resources/cursors/zircon_size_ew.svg", 7);
+    addCursor("resources/cursors/zircon_link.svg", 2);
+    addCursor("resources/cursors/zircon_text.svg", 3);
+    addCursor("resources/cursors/zircon_busy.svg", 4);
+    addCursor("resources/cursors/zircon_nesw.svg", 5);
+    addCursor("resources/cursors/zircon_ns.svg", 6);
+    addCursor("resources/cursors/zircon_ew.svg", 7);
     addCursor("resources/cursors/zircon_move.svg", 8);
+    addCursor("resources/cursors/zircon_pen.svg", 9);
+    addCursor("resources/cursors/zircon_help.svg", 10);
+    addCursor("resources/cursors/zircon_working.svg", 11);
+    addCursor("resources/cursors/zircon_unavail.svg", 12);
+    addCursor("resources/cursors/zircon_up.svg", 13);
 }
 
 fn registerBuiltinThemeFiles() void {
-    addThemeFile("resources/themes/zircon_aero.theme", 1);
-    addThemeFile("resources/themes/zircon_aero_blue.theme", 2);
-    addThemeFile("resources/themes/aero_graphite.theme", 3);
-    addThemeFile("resources/themes/zircon_aero_characters.theme", 4);
-    addThemeFile("resources/themes/zircon_aero_nature.theme", 5);
-    addThemeFile("resources/themes/zircon_aero_scenes.theme", 6);
-    addThemeFile("resources/themes/zircon_aero_landscapes.theme", 7);
-    addThemeFile("resources/themes/zircon_aero_architecture.theme", 8);
+    addThemeFile("resources/themes/zircon-aero.theme", 1);
+    addThemeFile("resources/themes/zircon-aero-blue.theme", 2);
+    addThemeFile("resources/themes/zircon-aero-graphite.theme", 3);
+    addThemeFile("resources/themes/characters.theme", 4);
+    addThemeFile("resources/themes/nature.theme", 5);
+    addThemeFile("resources/themes/scenes.theme", 6);
+    addThemeFile("resources/themes/landscapes.theme", 7);
+    addThemeFile("resources/themes/architecture.theme", 8);
+}
+
+/// 声音方案仅登记路径（内核暂无 WAV 播放器；供清单与后续音频栈对齐）。
+fn registerBuiltinSoundSchemes() void {
+    addSoundScheme("resources/sounds/sound_scheme.conf", 1);
+    addSoundScheme("resources/sounds/README.md", 2);
+    addSoundScheme("resources/sounds/Desktop.ini", 3);
 }
 
 // ── Public query API ──
@@ -164,6 +199,10 @@ pub fn getThemeFileCount() usize {
     return theme_file_count;
 }
 
+pub fn getSoundSchemeCount() usize {
+    return sound_scheme_count;
+}
+
 pub fn getWallpapers() []const ResourceEntry {
     return wallpapers[0..wallpaper_count];
 }
@@ -178,6 +217,10 @@ pub fn getCursors() []const ResourceEntry {
 
 pub fn getThemeFiles() []const ResourceEntry {
     return theme_files[0..theme_file_count];
+}
+
+pub fn getSoundSchemes() []const ResourceEntry {
+    return sound_schemes[0..sound_scheme_count];
 }
 
 pub fn findWallpaperById(id: u16) ?*const ResourceEntry {
@@ -196,6 +239,13 @@ pub fn findIconById(id: u16) ?*const ResourceEntry {
 
 pub fn findCursorById(id: u16) ?*const ResourceEntry {
     for (cursors[0..cursor_count]) |*e| {
+        if (e.id == id) return e;
+    }
+    return null;
+}
+
+pub fn findSoundSchemeById(id: u16) ?*const ResourceEntry {
+    for (sound_schemes[0..sound_scheme_count]) |*e| {
         if (e.id == id) return e;
     }
     return null;

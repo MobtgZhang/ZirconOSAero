@@ -280,25 +280,28 @@ pub const button_shadow = rgb(0xA0, 0xA0, 0xA0);
 pub const selection_bg = rgb(0x33, 0x99, 0xFF);
 
 // ── DWM Configuration Defaults ──
+const nt61 = @import("dwm_nt61_defaults");
 
-/// 与 docs/cn/AeroRendering.md、`src/drivers/video/dwm.zig` 中 `initAeroDwm` 默认值一致
+/// 与 `src/config/dwm_nt61_defaults.zig` / 内核 `initAeroDwm` 数值一致（单一源）
 pub const DwmDefaults = struct {
-    pub const glass_enabled: bool = true;
-    pub const glass_opacity: u8 = 210;
-    pub const blur_radius: u8 = 6;
-    pub const blur_passes: u8 = 2;
-    pub const glass_saturation: u8 = 208;
-    pub const glass_tint_color: u32 = rgb(0x38, 0x62, 0x98);
-    pub const glass_tint_opacity: u8 = 62;
-    pub const animation_enabled: bool = true;
-    pub const peek_enabled: bool = true;
-    pub const shadow_enabled: bool = true;
-    pub const shadow_size: u8 = 6;
-    pub const shadow_layers: u8 = 3;
-    pub const vsync: bool = true;
+    pub const glass_enabled: bool = nt61.UserShellDwm.glass_enabled;
+    pub const glass_opacity: u8 = nt61.UserShellDwm.glass_opacity;
+    pub const blur_radius: u8 = nt61.UserShellDwm.blur_radius;
+    pub const blur_passes: u8 = nt61.UserShellDwm.blur_passes;
+    pub const glass_saturation: u8 = nt61.UserShellDwm.glass_saturation;
+    /// 与内核相同的 u32 打包值（勿用本文件 `rgb()` 重算，避免与帧缓冲路径色差）
+    pub const glass_tint_color: u32 = nt61.UserShellDwm.glass_tint_color;
+    pub const glass_tint_opacity: u8 = nt61.UserShellDwm.glass_tint_opacity;
+    pub const animation_enabled: bool = nt61.UserShellDwm.animation_enabled;
+    pub const peek_enabled: bool = nt61.UserShellDwm.peek_enabled;
+    pub const shadow_enabled: bool = nt61.UserShellDwm.shadow_enabled;
+    pub const shadow_size: u8 = nt61.UserShellDwm.shadow_size;
+    pub const shadow_layers: u8 = nt61.UserShellDwm.shadow_layers;
+    pub const vsync: bool = nt61.UserShellDwm.vsync;
 };
 
 // ── Layout Constants ──
+// 高 DPI / 缩放策略见 docs/cn/DpiDesktop.md（当前为参考分辨率下像素常量）。
 
 pub const Layout = struct {
     pub const taskbar_height: i32 = 40;

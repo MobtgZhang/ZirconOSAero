@@ -1,4 +1,5 @@
 //! Compositor - ZirconOS Aero Desktop Window Manager (DWM)
+//! 表面标志与内核 `dwm_compositor` 的语义映射见 `src/config/dwm_surface_spec.zig`、`docs/cn/DesktopManagerSpec.md`。
 //! Enhanced compositing engine with full alpha blending support,
 //! glass transparency, blur effects, and per-surface opacity.
 //! Each window renders to its own surface; the compositor merges
@@ -8,9 +9,9 @@
 //! VSync-aligned frame presentation ensures zero tearing.
 //! Reference: DWM composition; Porter-Duff compositing (public algorithm)
 
+const std = @import("std");
 const theme = @import("theme.zig");
 const renderer = @import("renderer.zig");
-const input = @import("input.zig");
 
 pub const Rect = renderer.Rect;
 pub const COLORREF = theme.COLORREF;
@@ -139,6 +140,18 @@ var dwm_composition_enabled: bool = true;
 
 var cursor_layer: CursorLayer = .{};
 var vsync_state: VsyncState = .{};
+
+/// Flip3D / 任务切换预览（离屏二次投影）— 宿主在启用时绘制覆盖层
+pub var flip3d_preview_enabled: bool = false;
+
+pub fn setFlip3dPreviewEnabled(enabled: bool) void {
+    flip3d_preview_enabled = enabled;
+    compositor_dirty = true;
+}
+
+pub fn isFlip3dPreviewEnabled() bool {
+    return flip3d_preview_enabled;
+}
 
 pub fn init(width: u32, height: u32) void {
     screen_width = width;
@@ -439,9 +452,16 @@ fn composeSurface(sfc: *const Surface) void {
         renderer.drawShadow(bounds, theme.WINDOW_SHADOW_SIZE);
     }
 
-    if (sfc.flags.needs_blur and dwm_composition_enabled) {
-        renderer.drawBlur(bounds, sfc.blur_radius);
-        stats.glass_surfaces += 1;
+    if (dwm_composition_enabled) {
+        if (sfc.flags.is_glass) {
+            const gp = theme.getGlassParams();
+            renderer.drawBlur(bounds, sfc.blur_radius);
+            renderer.fillRectAlpha(bounds, gp.tint_color, gp.tint_opacity);
+            stats.glass_surfaces += 1;
+        } else if (sfc.flags.needs_blur) {
+            renderer.drawBlur(bounds, sfc.blur_radius);
+            stats.glass_surfaces += 1;
+        }
     }
 
     renderer.blitSurface(sfc.id, bounds, sfc.alpha);
@@ -529,4 +549,47 @@ pub fn setRefreshRate(hz: u32) void {
     if (hz > 0) {
         vsync_state.frame_target_us = 1_000_000 / @as(u64, hz);
     }
+}
+
+/// 自顶向下 Hit-test（排除桌面底图与光标层）；与 Shell 输入路由 Z 序一致。
+pub fn hitTestTopMost(px: i32, py: i32) ?u32 {
+    sortSurfacesByZOrder();
+    var i = surface_count;
+    while (i > 0) {
+        i -= 1;
+        const sfc = &surfaces[i];
+        if (!sfc.flags.is_visible or sfc.flags.is_cursor or sfc.flags.is_desktop) continue;
+        const b = sfc.getBounds();
+        if (b.contains(px, py)) return sfc.id;
+    }
+    return null;
+}
+
+/// 若距离上一帧不足 `frame_target_us`，宿主可跳过 `compose()` 以降低 CPU 占用。
+pub fn shouldThrottleFrame(now_us: u64) bool {
+    if (!vsync_state.enabled) return false;
+    if (vsync_state.last_present_tick == 0) return false;
+    return (now_us -| vsync_state.last_present_tick) < vsync_state.frame_target_us;
+}
+
+pub fn recordPresentTime(now_us: u64) void {
+    const elapsed = if (now_us > vsync_state.last_present_tick)
+        now_us - vsync_state.last_present_tick
+    else
+        0;
+    if (vsync_state.enabled and vsync_state.last_present_tick != 0 and elapsed > vsync_state.frame_target_us) {
+        stats.vsync_misses += 1;
+    }
+    vsync_state.last_present_tick = now_us;
+}
+
+test "hitTestTopMost prefers higher z-order" {
+    init(640, 480);
+    const back = createSurface(100, 100, .{ .is_visible = true });
+    const front = createSurface(50, 50, .{ .is_visible = true });
+    moveSurface(back, 0, 0);
+    setSurfaceZOrder(back, 1);
+    moveSurface(front, 10, 10);
+    setSurfaceZOrder(front, 10);
+    try std.testing.expectEqual(front, hitTestTopMost(15, 15).?);
 }

@@ -1,6 +1,7 @@
 //! Aero Taskbar
 //! Start orb, quick launch, task buttons, notification area (tray),
 //! stacked clock (time + date), and Aero Peek show-desktop strip.
+//! 任务栏缩略图 / 实时预览应对接合成器离屏表面（DWM 缩略图概念），见 `compositor` 与 `docs/cn/DesktopManagerSpec.md`。
 
 const theme = @import("theme.zig");
 

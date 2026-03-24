@@ -14,6 +14,7 @@
 
 const theme = @import("theme.zig");
 const dwm = @import("dwm.zig");
+const compositor = @import("compositor.zig");
 const desktop_mod = @import("desktop.zig");
 const taskbar_mod = @import("taskbar.zig");
 const startmenu_mod = @import("startmenu.zig");
@@ -128,6 +129,15 @@ pub fn handleDesktopClick(x: i32, y: i32, screen_h: i32) void {
         if (!startmenu_mod.contains(screen_h, x, y)) {
             startmenu_mod.hide();
         }
+        return;
+    }
+
+    // Z-order：合成器窗口 → 桌面小工具 → 任务栏 → 桌面图标（与 DWM 层叠一致）
+    if (compositor.hitTestTopMost(x, y)) |_| {
+        return;
+    }
+
+    if (gadgets_mod.hitCpuMeter(x, y)) {
         return;
     }
 

@@ -41,7 +41,7 @@ fn addDefaultIcons() void {
     addIcon("Recycle Bin", 0, 1, 3, false);
     addIcon("Documents", 0, 2, 2, false);
     addIcon("Network", 0, 3, 5, false);
-    addIcon("Control Panel", 1, 0, 2, true);
+    addIcon("Control Panel", 1, 0, 13, true);
     addIcon("Zircon Browser", 1, 1, 6, true);
     addIcon("Terminal", 1, 2, 4, true);
     addIcon("Settings", 1, 3, 7, true);

@@ -4,6 +4,14 @@
 
 ZirconOS Aero 桌面管理器采用分层架构设计，参考 Windows 7 DWM 的核心理念：**每个窗口独立渲染到显存表面，合成器统一合成输出**。
 
+### 1.1 与内核的职责划分（方案 B）
+
+当前选定 **方案 B**（详见仓库根文档 [`docs/cn/DesktopManagerSpec.md`](../../../../docs/cn/DesktopManagerSpec.md)）：
+
+- **内核**（`framebuffer.zig`、`display.zig`、`renderer_aero.zig`、`dwm_compositor.zig`）：完成帧缓冲上的 **实际像素输出** 与 **present**；玻璃参数默认值来自 **`src/config/dwm_nt61_defaults.zig`**。
+- **本 Aero 库**（`compositor.zig`、`shell.zig`）：维护 **离屏 Surface、Z-order、脏区、光标层、Hit-test** 等与 MS DWM 一致的概念模型；宿主在接好 `renderer.RenderOps` 后执行合成。
+- 向「用户态唯一合成进程」（方案 A）演进时，可将内核绘制迁出，保留本模块 API。
+
 ```
 ┌─────────────────────────────────────────────────────┐
 │                 用户态应用程序                        │

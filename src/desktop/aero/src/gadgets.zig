@@ -56,3 +56,12 @@ pub fn setCpuPercent(p: u8) void {
 pub fn setNetworkLabel(text: []const u8) void {
     cpu_meter.net_kbps_len = setStr(&cpu_meter.net_kbps_str, text);
 }
+
+/// 圆形 Hit-test（与 `Layout.gadget_cpu_radius` 一致）
+pub fn hitCpuMeter(px: i32, py: i32) bool {
+    if (!cpu_meter.visible) return false;
+    const dx = px - cpu_meter.center_x;
+    const dy = py - cpu_meter.center_y;
+    const r = cpu_meter.radius;
+    return dx * dx + dy * dy <= r * r;
+}

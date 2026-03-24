@@ -64,6 +64,7 @@ pub fn main() !void {
     p(out, "  Icons      : {d} loaded\n", .{resource_loader.getIconCount()});
     p(out, "  Cursors    : {d} loaded\n", .{resource_loader.getCursorCount()});
     p(out, "  Themes     : {d} loaded\n", .{resource_loader.getThemeFileCount()});
+    p(out, "  Sound meta : {d} entries\n", .{resource_loader.getSoundSchemeCount()});
 
     // ── Phase 2: Load Fonts ──
     p(out, "\n--- Phase 2: Loading Fonts ---\n", .{});

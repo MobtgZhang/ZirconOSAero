@@ -104,3 +104,7 @@ pub fn readInputChar() ?u8 {
 pub fn consumeTaskMgrHotkey() bool {
     return @import("../../drivers/input/evdev_virtio_bridge.zig").consumeTaskMgrHotkey();
 }
+
+pub fn consumeWallpaperCycleHotkey() bool {
+    return @import("../../drivers/input/evdev_virtio_bridge.zig").consumeWallpaperCycleHotkey();
+}

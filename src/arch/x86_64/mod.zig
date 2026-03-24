@@ -91,6 +91,10 @@ pub fn consumeTaskMgrHotkey() bool {
     return keyboard.consumeTaskMgrHotkey();
 }
 
+pub fn consumeWallpaperCycleHotkey() bool {
+    return keyboard.consumeWallpaperCycleHotkey();
+}
+
 pub fn takeCursorNudge() @import("../../drivers/input/cursor_types.zig").CursorNudge {
     return keyboard.takeCursorNudge();
 }

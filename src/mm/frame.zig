@@ -2,12 +2,14 @@
 //! Bitmap-based management of available physical pages
 //! NT style: kernel provides physical memory allocation mechanism
 
+const std = @import("std");
 const arch = @import("../arch.zig");
 const boot_mod = arch.impl.boot;
 
 pub const FRAME_SIZE: usize = arch.PAGE_SIZE;
 
-const MAX_PHYS_FRAMES: usize = 262144; // 1GB / 4KB
+/// 物理页号上限（QEMU AArch64/RISC-V 等 RAM 常在 0x4000_0000 / 0x8000_0000 之后，须覆盖 ≥4GB 线性地址空间）
+const MAX_PHYS_FRAMES: usize = 1048576; // 4GiB / 4KiB
 const BITMAP_SIZE: usize = (MAX_PHYS_FRAMES + 63) / 64;
 
 pub const FrameAllocator = struct {
@@ -42,12 +44,24 @@ pub const FrameAllocator = struct {
         }
     }
 
+    /// Multiboot2 信息块首字段为 `total_size`（字节）；保留 `[mbi_phys, …)` 向上取整到页，避免 ZBM 多页 MBI 被帧分配器覆盖。
+    fn multibootReservedEndExclusive(mbi_phys: usize) usize {
+        const hdr: *align(1) const volatile u32 = @ptrFromInt(mbi_phys);
+        var total: usize = hdr.*;
+        if (total < 8) total = 8;
+        const max_total: usize = 16 * 1024 * 1024;
+        if (total > max_total) total = max_total;
+        return mbi_phys + std.mem.alignForward(usize, total, FRAME_SIZE);
+    }
+
     fn isReserved(self: *FrameAllocator, frame: u64, kernel_end: usize, mbi_phys: usize) bool {
         const addr = frame * FRAME_SIZE;
         if (addr < 0x100000) return true;
         if (addr < kernel_end) return true;
-        const mbi_page = mbi_phys & ~(FRAME_SIZE - 1);
-        if (addr >= mbi_page and addr < mbi_page + FRAME_SIZE) return true;
+        if (mbi_phys != 0) {
+            const end_excl = multibootReservedEndExclusive(mbi_phys);
+            if (addr < end_excl and addr + FRAME_SIZE > mbi_phys) return true;
+        }
         const bitmap_addr = @intFromPtr(&self.bitmap);
         const bitmap_page = bitmap_addr & ~(FRAME_SIZE - 1);
         if (addr >= bitmap_page and addr < bitmap_page + FRAME_SIZE) return true;

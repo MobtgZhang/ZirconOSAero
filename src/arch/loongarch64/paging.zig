@@ -14,8 +14,11 @@ pub const V: u64 = 1 << 0;
 pub const D: u64 = 1 << 1;
 pub const PLV_KERNEL: u64 = 0 << 2;
 pub const PLV_USER: u64 = 3 << 2;
+/// MAT[5:4]：0=SUC 强非缓存，1=CC 一致可缓存，2=WUC 弱非缓存（MMIO 常用）
 pub const MAT_CC: u64 = 1 << 4;
 pub const MAT_SUC: u64 = 0 << 4;
+pub const MAT_WUC: u64 = 2 << 4;
+pub const MAT_MASK: u64 = 3 << 4;
 pub const NR: u64 = @as(u64, 1) << 61;
 pub const NX: u64 = @as(u64, 1) << 62;
 pub const RPLV: u64 = @as(u64, 1) << 63;
@@ -24,7 +27,8 @@ pub const Present: u64 = V;
 pub const Write: u64 = D;
 pub const User: u64 = PLV_USER;
 pub const WriteThrough: u64 = 0;
-pub const CacheDisable: u64 = MAT_SUC;
+/// 须为非零 MAT，否则 `fromFrame` 会默认加 CC；`0<<4` 无法与「未指定 MAT」区分
+pub const CacheDisable: u64 = MAT_WUC;
 pub const Accessed: u64 = 0;
 pub const Dirty: u64 = D;
 pub const LargePage: u64 = 0;
@@ -45,7 +49,9 @@ pub const PageTableEntry = packed struct(u64) {
     }
 
     pub fn fromFrame(frame: u64, flags: u64) PageTableEntry {
-        return .{ .raw = (frame & ADDR_MASK) | flags | V | MAT_CC | PLV_KERNEL };
+        var raw = (frame & ADDR_MASK) | flags | V | PLV_KERNEL;
+        if ((raw & MAT_MASK) == 0) raw |= MAT_CC;
+        return .{ .raw = raw };
     }
 };
 

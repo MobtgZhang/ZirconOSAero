@@ -130,6 +130,13 @@ pub fn consumeTaskMgrHotkey() bool {
     return false;
 }
 
+pub fn consumeWallpaperCycleHotkey() bool {
+    if (@hasDecl(impl, "consumeWallpaperCycleHotkey")) {
+        return impl.consumeWallpaperCycleHotkey();
+    }
+    return false;
+}
+
 const CursorNudge = @import("drivers/input/cursor_types.zig").CursorNudge;
 
 pub fn takeCursorNudge() CursorNudge {
@@ -152,10 +159,15 @@ pub fn waitForInterrupt() void {
             \\sti
             \\hlt
         ),
-        .aarch64 => asm volatile ("wfi"),
-        .riscv64 => asm volatile ("wfi"),
-        .mips64el => asm volatile ("wait"),
-        .loongarch64 => asm volatile ("idle 0"),
-        else => {},
+        // AArch64 / RISC-V / LoongArch 等走 `kernel_main` 时通常未安装完整陷阱向量、也未
+        // `enableInterrupts()`；此处若用 WFI/idle 且定时器无法唤醒，桌面主循环会永久卡在
+        // 第一次 idle，无法再 `input_hub.pollAll()`，表现为鼠标完全不动。短暂自旋即可让
+        // 轮询路径持续运行（代价是 QEMU 下 CPU 占用略高，直至各架构补齐 IRQ+trap）。
+        else => {
+            var i: u32 = 0;
+            while (i < 65536) : (i += 1) {
+                asm volatile ("" ::: .{ .memory = true });
+            }
+        },
     }
 }

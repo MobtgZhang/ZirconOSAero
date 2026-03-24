@@ -31,7 +31,8 @@ pub fn bindKernelAddressSpace(space: *AddressSpace) void {
 
 /// 将 `[phys_base, phys_base+size)` 按页做 identity 映射（MMIO：可写、不可执行、uncached）
 pub fn mapDeviceMmioIdentity(phys_base: u64, size: u64) bool {
-    const space = g_kernel_space orelse return false;
+    // 尚无内核页表时（如仍沿用 UEFI 映射）：假定固件已映射 MMIO，跳过以免阻塞 VirtIO attach
+    const space = g_kernel_space orelse return true;
     if (size == 0) return true;
     const page_size = paging.page_size;
     const start = phys_base & ~@as(u64, page_size - 1);
@@ -39,9 +40,35 @@ pub fn mapDeviceMmioIdentity(phys_base: u64, size: u64) bool {
     var addr = start;
     const flags = MapFlags{ .writable = true, .executable = false, .no_cache = true };
     while (addr < end) : (addr += page_size) {
-        if (!space.mapPage(addr, addr, flags)) return false;
+        if (space.mapPage(addr, addr, flags)) continue;
+        if (space.getPhysical(addr)) |p| {
+            if (p == addr) {
+                // LoongArch 等：启动时整段 identity 映射已为 WB/CC，须改为非缓存才能可靠访问 PCI BAR / VirtIO MMIO
+                _ = space.unmapPage(addr);
+                if (!space.mapPage(addr, addr, flags)) return false;
+                continue;
+            }
+        }
+        return false;
     }
     return true;
+}
+
+/// 当前内核页表下虚址对应的物理地址（VirtIO 环须用 GPA）；无绑定页表时假定 identity。
+pub fn kernelVirtToPhys(virt: usize) usize {
+    const space = g_kernel_space orelse return virt;
+    return space.getPhysical(virt) orelse virt;
+}
+
+/// 将已 identity 映射的内核页改为非缓存，使 PCI DMA 与 CPU 对同一 GPA 的观测一致（见 H7：VA≠PA 时仅修正 GPA 仍不足）。
+/// VirtIO-Input 事件环页在 LoongArch 上经 `virtio_input_pci.remapInstQueueDmaUncached` 整页调用本函数。
+pub fn remapIdentityVirtPageUncached(virt: usize) bool {
+    const space = g_kernel_space orelse return true;
+    const page_size = paging.page_size;
+    const va = virt & ~@as(usize, page_size - 1);
+    const phys = space.getPhysical(va) orelse return false;
+    _ = space.unmapPage(va);
+    return space.mapPage(va, phys, .{ .writable = true, .executable = false, .no_cache = true });
 }
 
 pub const AddressSpace = struct {

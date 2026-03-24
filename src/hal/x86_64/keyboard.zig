@@ -15,11 +15,14 @@ var ring_head: usize = 0;
 var ring_tail: usize = 0;
 var shift_held: bool = false;
 var ctrl_held: bool = false;
+var alt_held: bool = false;
 var caps_lock: bool = false;
 var initialized: bool = false;
 
 /// Ctrl+Shift+Esc → Task Manager (desktop shell; consumed via `consumeTaskMgrHotkey`)
 var taskmgr_hotkey_pending: bool = false;
+/// Ctrl+Alt+F9 → 循环 Aero 壁纸预设（`consumeWallpaperCycleHotkey`）
+var wallpaper_cycle_pending: bool = false;
 
 /// 扩展键前缀（方向键等为 E0 xx）
 var e0_prefix: bool = false;
@@ -144,6 +147,7 @@ pub fn init() void {
     ring_tail = 0;
     shift_held = false;
     ctrl_held = false;
+    alt_held = false;
     caps_lock = false;
     initialized = true;
 }
@@ -180,6 +184,7 @@ pub fn handleScancodeByte(scancode: u8) void {
         const released = scancode & 0x7F;
         if (released == 0x2A or released == 0x36) shift_held = false;
         if (released == 0x1D) ctrl_held = false;
+        if (released == 0x38) alt_held = false;
         return;
     }
 
@@ -204,8 +209,18 @@ pub fn handleScancodeByte(scancode: u8) void {
         ctrl_held = true;
         return;
     }
+    if (scancode == 0x38) {
+        alt_held = true;
+        return;
+    }
     if (scancode == 0x3A) {
         caps_lock = !caps_lock;
+        return;
+    }
+
+    // Ctrl+Alt+F9：与 evdev 路径一致，切换壁纸预设（先于 WASD 微移处理）
+    if (scancode == 0x43 and ctrl_held and alt_held) {
+        wallpaper_cycle_pending = true;
         return;
     }
 
@@ -286,6 +301,14 @@ pub fn isInitialized() bool {
 pub fn consumeTaskMgrHotkey() bool {
     if (taskmgr_hotkey_pending) {
         taskmgr_hotkey_pending = false;
+        return true;
+    }
+    return false;
+}
+
+pub fn consumeWallpaperCycleHotkey() bool {
+    if (wallpaper_cycle_pending) {
+        wallpaper_cycle_pending = false;
         return true;
     }
     return false;

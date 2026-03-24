@@ -94,3 +94,13 @@ pub fn disableInterrupts() void {
         : [val] "r" (crmd)
     );
 }
+
+pub fn readInputChar() ?u8 {
+    const ev = @import("../../drivers/input/evdev_virtio_bridge.zig");
+    if (ev.hasData()) return ev.readChar();
+    return uart.readByte();
+}
+
+pub fn consumeTaskMgrHotkey() bool {
+    return @import("../../drivers/input/evdev_virtio_bridge.zig").consumeTaskMgrHotkey();
+}

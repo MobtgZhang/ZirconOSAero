@@ -22,6 +22,28 @@ pub const MapFlags = struct {
     }
 };
 
+/// 当前内核地址空间（供 PCI MMIO / VirtIO 等在驱动层做 identity map）
+var g_kernel_space: ?*AddressSpace = null;
+
+pub fn bindKernelAddressSpace(space: *AddressSpace) void {
+    g_kernel_space = space;
+}
+
+/// 将 `[phys_base, phys_base+size)` 按页做 identity 映射（MMIO：可写、不可执行、uncached）
+pub fn mapDeviceMmioIdentity(phys_base: u64, size: u64) bool {
+    const space = g_kernel_space orelse return false;
+    if (size == 0) return true;
+    const page_size = paging.page_size;
+    const start = phys_base & ~@as(u64, page_size - 1);
+    const end = (phys_base + size + page_size - 1) & ~@as(u64, page_size - 1);
+    var addr = start;
+    const flags = MapFlags{ .writable = true, .executable = false, .no_cache = true };
+    while (addr < end) : (addr += page_size) {
+        if (!space.mapPage(addr, addr, flags)) return false;
+    }
+    return true;
+}
+
 pub const AddressSpace = struct {
     pml4_phys: u64,
     allocator: *FrameAllocator,
@@ -59,6 +81,9 @@ pub const AddressSpace = struct {
     }
 
     pub fn getPhysical(self: *AddressSpace, virt: u64) ?u64 {
+        if (@hasDecl(paging, "translateVirtualToPhysical")) {
+            return paging.translateVirtualToPhysical(self.pml4_phys, virt);
+        }
         const v = paging.VirtAddr{ .value = virt };
         const pml4 = @as(*paging.PageTable, @ptrFromInt(self.pml4_phys));
         const pml4e = &pml4.entries[v.pml4Index()];

@@ -224,5 +224,22 @@ pub fn flushTlb() void {
     loadCr3(readCr3());
 }
 
+pub fn translateVirtualToPhysical(pml4_phys: u64, virt: u64) ?u64 {
+    const v = VirtAddr{ .value = virt };
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    const pml4e = &pml4.entries[v.pml4Index()];
+    if (!pml4e.isPresent()) return null;
+    const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+    const pdpte = &pdpt.entries[v.pdptIndex()];
+    if (!pdpte.isPresent()) return null;
+    const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde = &pd.entries[v.pdIndex()];
+    if (!pde.isPresent()) return null;
+    const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
+    const pte = &pt.entries[v.ptIndex()];
+    if (!pte.isPresent()) return null;
+    return pte.toFrame() | (virt & page_mask);
+}
+
 pub const page_size = PAGE_SIZE;
 pub const page_mask = PAGE_MASK;

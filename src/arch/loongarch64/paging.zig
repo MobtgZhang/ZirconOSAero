@@ -66,13 +66,29 @@ pub const VirtAddr = struct {
     pub fn pdptIndex(self: VirtAddr) u9 {
         return @truncate((self.value >> L1_SHIFT) & INDEX_MASK);
     }
+    /// 第三级页表索引（与 `ptIndex` 相同位段；仅用于与 x86 命名对齐的 API）
     pub fn pdIndex(self: VirtAddr) u9 {
-        return @truncate((self.value >> L1_SHIFT) & INDEX_MASK);
+        return @truncate((self.value >> L2_SHIFT) & INDEX_MASK);
     }
     pub fn ptIndex(self: VirtAddr) u9 {
         return @truncate((self.value >> L2_SHIFT) & INDEX_MASK);
     }
 };
+
+/// 遍历三级页表得到叶子物理帧 + 页内偏移（与 `mapPage`/`unmapPage` 一致）
+pub fn translateVirtualToPhysical(pgd_phys: u64, virt: u64) ?u64 {
+    const v = VirtAddr{ .value = virt };
+    const pgd = @as(*PageTable, @ptrFromInt(pgd_phys));
+    const l0e = &pgd.entries[v.pml4Index()];
+    if (!l0e.isPresent()) return null;
+    const l1 = @as(*PageTable, @ptrFromInt(l0e.toFrame()));
+    const l1e = &l1.entries[v.pdptIndex()];
+    if (!l1e.isPresent()) return null;
+    const l2 = @as(*PageTable, @ptrFromInt(l1e.toFrame()));
+    const l2e = &l2.entries[v.ptIndex()];
+    if (!l2e.isPresent()) return null;
+    return l2e.toFrame() | (virt & page_mask);
+}
 
 pub const AllocFrameFn = *const fn (?*anyopaque) ?u64;
 

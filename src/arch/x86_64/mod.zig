@@ -64,7 +64,7 @@ pub fn initKeyboard() void {
 
 pub fn initMouse() void {
     const mouse = @import("../../drivers/input/mouse.zig");
-    mouse.init();
+    mouse.initHardware();
     pic.unmaskIrq(12);
 }
 
@@ -89,6 +89,10 @@ pub fn readInputChar() ?u8 {
 
 pub fn consumeTaskMgrHotkey() bool {
     return keyboard.consumeTaskMgrHotkey();
+}
+
+pub fn takeCursorNudge() @import("../../drivers/input/cursor_types.zig").CursorNudge {
+    return keyboard.takeCursorNudge();
 }
 
 pub fn halt() noreturn {

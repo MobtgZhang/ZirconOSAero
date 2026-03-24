@@ -64,7 +64,7 @@ pub const VirtAddr = struct {
         return @truncate((self.value >> L1_SHIFT) & INDEX_MASK);
     }
     pub fn pdIndex(self: VirtAddr) u9 {
-        return @truncate((self.value >> L1_SHIFT) & INDEX_MASK);
+        return @truncate((self.value >> L2_SHIFT) & INDEX_MASK);
     }
     pub fn ptIndex(self: VirtAddr) u9 {
         return @truncate((self.value >> L2_SHIFT) & INDEX_MASK);
@@ -127,3 +127,17 @@ pub fn unmapPage(pgd_phys: u64, virt: u64) bool {
 }
 
 pub fn loadCr3(_: u64) void {}
+
+pub fn translateVirtualToPhysical(pgd_phys: u64, virt: u64) ?u64 {
+    const v = VirtAddr{ .value = virt };
+    const pgd = @as(*PageTable, @ptrFromInt(pgd_phys));
+    const l0e = &pgd.entries[v.pml4Index()];
+    if (!l0e.isPresent()) return null;
+    const l1_table = @as(*PageTable, @ptrFromInt(l0e.toFrame()));
+    const l1e = &l1_table.entries[v.pdptIndex()];
+    if (!l1e.isPresent()) return null;
+    const l2_table = @as(*PageTable, @ptrFromInt(l1e.toFrame()));
+    const l2e = &l2_table.entries[v.ptIndex()];
+    if (!l2e.isPresent()) return null;
+    return l2e.toFrame() | (virt & page_mask);
+}

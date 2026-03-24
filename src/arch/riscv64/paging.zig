@@ -149,3 +149,17 @@ pub fn loadCr3(phys: u64) void {
         : [val] "r" (satp_val)
     );
 }
+
+pub fn translateVirtualToPhysical(root_phys: u64, virt: u64) ?u64 {
+    const v = VirtAddr{ .value = virt };
+    const root = @as(*PageTable, @ptrFromInt(root_phys));
+    const l2e = &root.entries[v.pml4Index()];
+    if (!l2e.isPresent()) return null;
+    const l1_table = @as(*PageTable, @ptrFromInt(l2e.toFrame()));
+    const l1e = &l1_table.entries[v.pdptIndex()];
+    if (!l1e.isPresent()) return null;
+    const l0_table = @as(*PageTable, @ptrFromInt(l1e.toFrame()));
+    const l0e = &l0_table.entries[v.ptIndex()];
+    if (!l0e.isPresent()) return null;
+    return l0e.toFrame() | (virt & page_mask);
+}

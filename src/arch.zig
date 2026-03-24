@@ -130,6 +130,15 @@ pub fn consumeTaskMgrHotkey() bool {
     return false;
 }
 
+const CursorNudge = @import("drivers/input/cursor_types.zig").CursorNudge;
+
+pub fn takeCursorNudge() CursorNudge {
+    if (@hasDecl(impl, "takeCursorNudge")) {
+        return impl.takeCursorNudge();
+    }
+    return CursorNudge{ .dx = 0, .dy = 0 };
+}
+
 pub fn initFramebuffer(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8) void {
     if (@hasDecl(impl, "initFramebuffer")) {
         impl.initFramebuffer(addr, width, height, pitch, bpp);
@@ -138,7 +147,11 @@ pub fn initFramebuffer(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8
 
 pub fn waitForInterrupt() void {
     switch (@import("builtin").target.cpu.arch) {
-        .x86_64 => asm volatile ("hlt"),
+        // 若 IF=0 时执行 HLT，除 NMI 外无法被 PIC/Local APIC 唤醒，键鼠与 PIT 均停滞。
+        .x86_64 => asm volatile (
+            \\sti
+            \\hlt
+        ),
         .aarch64 => asm volatile ("wfi"),
         .riscv64 => asm volatile ("wfi"),
         .mips64el => asm volatile ("wait"),

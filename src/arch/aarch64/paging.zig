@@ -155,3 +155,20 @@ pub fn loadCr3(phys: u64) void {
 fn tlbiVmalle1() void {
     asm volatile ("tlbi vmalle1\ndsb sy\nisb");
 }
+
+pub fn translateVirtualToPhysical(pgd_phys: u64, virt: u64) ?u64 {
+    const v = VirtAddr{ .value = virt };
+    const pgd = @as(*PageTable, @ptrFromInt(pgd_phys));
+    const l0e = &pgd.entries[v.pml4Index()];
+    if (!l0e.isPresent()) return null;
+    const pud = @as(*PageTable, @ptrFromInt(l0e.toFrame()));
+    const l1e = &pud.entries[v.pdptIndex()];
+    if (!l1e.isPresent()) return null;
+    const pmd = @as(*PageTable, @ptrFromInt(l1e.toFrame()));
+    const l2e = &pmd.entries[v.pdIndex()];
+    if (!l2e.isPresent()) return null;
+    const pt = @as(*PageTable, @ptrFromInt(l2e.toFrame()));
+    const l3e = &pt.entries[v.ptIndex()];
+    if (!l3e.isPresent()) return null;
+    return l3e.toFrame() | (virt & page_mask);
+}

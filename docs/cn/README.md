@@ -15,6 +15,12 @@ ZirconOS 是一个基于 Zig 语言实现的 **NT 风格混合微内核操作系
 | [Subsystems.md](Subsystems.md) | 子系统：Win32 (CMD/PowerShell/user32/gdi32)、WOW64、POSIX |
 | [BuildSystem.md](BuildSystem.md) | 构建系统：build.conf 配置、Makefile、build.zig、run.sh 用法 |
 | [Roadmap.md](Roadmap.md) | 开发路线图：里程碑 Phase 0–11、设计目标与非目标、风险分析 |
+| [PROCESS_NT61.md](PROCESS_NT61.md) | ZirconOSAero（NT 6.1 风格）阶段流程与验证门禁 |
+| [DesktopManagerSpec.md](DesktopManagerSpec.md) | 桌面 / 窗口站 / DWM 职责边界与方案 B 规格 |
+| [DesktopQA.md](DesktopQA.md) | 桌面与合成验证清单；配合 `scripts/desktop-qa.sh` |
+| [AeroDesktopRuntime.md](AeroDesktopRuntime.md) | Aero 内核桌面数据流、鼠标调试判据、QEMU 输入与快捷键 |
+| [Assets.md](Assets.md) | 资源合规：禁微软素材、开源 / 自有 / AI 生成归档要求 |
+| [DpiDesktop.md](DpiDesktop.md) | 高 DPI 与逻辑像素策略（Aero Shell） |
 
 ## 项目概览
 

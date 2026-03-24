@@ -2,6 +2,8 @@
 
 本文记录 **内核帧缓冲路径**（`src/drivers/video/renderer_aero.zig`、`dwm.zig`、`display.zig`）中与 Windows 7 Aero 氛围对齐的默认参数及托盘布局。
 
+**单一数值源**：`src/config/dwm_nt61_defaults.zig`（内核与用户态 Aero 主题共用）。架构与职责见 [DesktopManagerSpec.md](DesktopManagerSpec.md)。
+
 ## DWM 玻璃（`renderGlassEffect`）
 
 | 参数 | 当前默认（`initAeroDwm`） | 说明 |
@@ -9,7 +11,7 @@
 | `glass_blur_radius` | 6 | 标题栏/面板盒式模糊半径 |
 | `glass_blur_passes` | 2 | 逼近高斯的遍数 |
 | `glass_tint_opacity` | 62 | 标题栏染色强度 |
-| `glass_taskbar_tint_opacity` | 104 | 任务栏略更不透明，贴近 Win7 实机 |
+| `glass_taskbar_tint_opacity` | 96 | 任务栏略更不透明（与当前 `initAeroDwm` 一致） |
 | `specular_intensity` | 42 | 顶区镜面高光 |
 
 任务栏在 `dwm.zig` 内使用 **两遍较小半径** 的 `boxBlurRect`，在性能与观感间折中。
@@ -29,3 +31,9 @@
 - `compositor.zig` 的 **局部合成** 会先以桌面底色填充所有脏矩形之 **并集**，再按层绘制，避免 clip 合成残留。
 
 更完整的阶段划分见 [PROCESS_NT61.md](PROCESS_NT61.md)。
+
+## 指针与输入（全架构）
+
+- **光标绘制**：`display.renderDesktopFrame` 每帧从 `drivers/input/mouse.zig` 同步 `cursor_x` / `cursor_y`，**不依赖 x86**；VirtIO-Input 与 PS/2 共用同一逻辑坐标。
+- **QEMU 建议**：非 x86 或无可用时，为虚拟机添加 **`-device virtio-mouse-pci`**（与 `virtio_input_pci.zig` 对齐）；x86 仍可使用默认 PS/2 或同上 VirtIO。
+- **壳层图标 ID**：`icons.zig` 中 `IconId` 与 Aero `resource_loader` 内置图标 ID 1–13 一致，任务栏/开始菜单/桌面使用同一套枚举与 `src/desktop/aero/resources/icons/*.svg` 路径。

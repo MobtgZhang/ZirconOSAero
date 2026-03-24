@@ -59,7 +59,7 @@ Win32 子系统的核心服务进程，类似 Windows 的 csrss.exe。
 | 功能 | 说明 |
 |------|------|
 | 窗口站 | 管理 Window Station 对象 |
-| 桌面 | 管理 Desktop 对象 |
+| 桌面 | 管理 Desktop 对象；`subsystem.switchToDesktop` / user32 `SwitchDesktopByName`（NT6 桌面切换子集） |
 | 进程注册 | 注册 Win32 进程到子系统 |
 | GUI 分发 | 图形消息分发与路由 |
 

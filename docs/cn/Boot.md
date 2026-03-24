@@ -76,6 +76,13 @@ UEFI 固件
 - 启动菜单 UI
 - 内核加载与跳转
 
+### UEFI 文本菜单操作（`boot/zbm/uefi/menu_common.zig`）
+
+- **方向键**：标准 EFI 扫描码、Page Up / Page Down、Home / End；部分固件需依赖 `WaitForKey` 事件，已实现 `checkEvent` + `waitForEvent` 与轮询结合。
+- **字母键**：`j` / `k` 或 `w` / `s` 等价下/上。
+- **数字键**：`1`–`8` 直接选中对应条目（与 `MAX_ENTRIES` 一致）。
+- **限制**：若固件未提供 `ConIn`（例如仅串口、无图形控制台输入），菜单无法读键；需使用支持键盘的 UEFI 控制台或调整固件/虚拟机参数。
+
 ## 4. x86_64 内核早期启动 (start.s)
 
 这是所有引导路径汇合后的内核入口点。

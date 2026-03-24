@@ -169,6 +169,16 @@ fn formatInt(buf: []u8, value: anytype, base: u8, signed: bool) usize {
     return start;
 }
 
+/// 仅当 `-Dmouse_debug=true` 编译时输出；**不受** `DEBUG_MODE`/Release 日志级别限制，便于无冗长日志下抓指针。
+pub fn mouseDbg(comptime fmt: []const u8, args: anytype) void {
+    if (!@import("build_options").mouse_debug) return;
+    output("[MOUSEDBG] ");
+    var buf_storage: [224]u8 = undefined;
+    const result = formatToBuf(&buf_storage, fmt, args);
+    output(result);
+    output("\n");
+}
+
 pub fn emerg(comptime fmt: []const u8, args: anytype) void { klog(.emerg, fmt, args); }
 pub fn alert(comptime fmt: []const u8, args: anytype) void { klog(.alert, fmt, args); }
 pub fn crit(comptime fmt: []const u8, args: anytype) void { klog(.crit, fmt, args); }

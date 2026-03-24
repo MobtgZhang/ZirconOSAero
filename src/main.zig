@@ -13,6 +13,10 @@ fn panicImpl(msg: []const u8, _: ?usize) noreturn {
 }
 
 extern const stack_top: u8;
+extern const _kernel_end: u8;
+
+/// agent_ndjson：桌面循环心跳序号（x86 / generic 二选一，同映像共用）
+var agent_desktop_h4_tick: u32 = 0;
 
 comptime {
     switch (builtin.target.cpu.arch) {
@@ -364,6 +368,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                     arch.impl.framebuffer.setConsoleEnabled(false);
 
                     drivers.initDesktopMode(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp, fb_i.pixel_bgr != 0);
+                    user32_mod.syncScreenFromFramebuffer();
                     display.syncCursorFromMouse();
                     display.clearFramebuffer();
                 }
@@ -395,6 +400,8 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
             const mouse = @import("drivers/input/mouse.zig");
             const input_hub = @import("drivers/input/input_hub.zig");
+            const mouse_debug = @import("drivers/input/mouse_debug.zig");
+            const virtio_input_pci = @import("drivers/input/virtio_input_pci.zig");
             var prev_buttons: u8 = 0;
             // 与当前逻辑坐标对齐，否则 (0,0) 与初值 -32768 比较会误判「指针移动」，
             // 在首次 present 后立即再画一整帧（第二帧关闭毛玻璃盒式模糊快速路径，易触发重负载路径）。
@@ -444,11 +451,22 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
                 const mx = mouse.getX();
                 const my = mouse.getY();
+                mouse_debug.desktopHeartbeat(mx, my, virtio_input_pci.isActive());
+                // #region agent log
+                if (@import("build_options").agent_ndjson) {
+                    agent_desktop_h4_tick +%= 1;
+                    if (agent_desktop_h4_tick % 72 == 0) {
+                        const ag = @import("debug/agent_ndjson.zig");
+                        ag.emit("H4", "main.zig:desktop", "heartbeat", "pre", @intFromBool(virtio_input_pci.isActive()), @as(u64, @intCast(agent_desktop_h4_tick)), 0, 0, mx, my);
+                    }
+                }
+                // #endregion
                 const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
+                const queued = mouse.hasEvents();
 
                 // 整帧重绘：双缓冲不能只叠画光标。
                 // 若启用鼠标插值，必须在「仍在插值」时继续合成，否则子步长为 0 时 pixel_moved 为假会死锁。
-                const need_paint = needs_ui_paint or hover_changed or pixel_moved or
+                const need_paint = needs_ui_paint or hover_changed or pixel_moved or queued or
                     mouse.isInterpolating() or mouse.hasCursorMoved();
 
                 if (need_paint) {
@@ -461,7 +479,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                     mouse.clearCursorMoved();
                 }
 
-                for (0..4) |_| input_hub.pollAll();
+                for (0..16) |_| input_hub.pollAll();
                 arch.waitForInterrupt();
             }
         } else {
@@ -672,6 +690,26 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     var alloc: frame.FrameAllocator = undefined;
     // LoongArch：尽早初始化 alloc + VM，map 2GB 以覆盖 GOP framebuffer（可能 >512MB）
     if (builtin.target.cpu.arch == .loongarch64) {
+        // QEMU GTK 往往只扫「固件 GOP」窗口；若 ZBM 已将 GOP SetMode 到 ≥1024×768，handoff 与该窗口同源，应直接使用。
+        // 否则丢弃过小/非线性 GOP，由 ramfb.setup() 写 0xF000000（部分 QEMU 配置下窗口仍不跟 ramfb，见文档）。
+        if (boot_info) |bi_in| {
+            var bi_mut = bi_in;
+            const gop_ok = if (bi_mut.fb_info) |fb|
+                (fb.width >= 1024 and fb.height >= 768 and fb.addr != 0 and fb.bpp == 32)
+            else
+                false;
+            if (!gop_ok) {
+                if (bi_mut.fb_info != null) {
+                    klog.info("Display: GOP handoff not ≥1024x768; using ramfb @ RAMFB_PHYS", .{});
+                }
+                bi_mut.fb_info = null;
+            } else {
+                klog.info("Display: using UEFI GOP %ux%u (same as QEMU primary scanout)", .{
+                    bi_mut.fb_info.?.width, bi_mut.fb_info.?.height,
+                });
+            }
+            boot_info = bi_mut;
+        }
         alloc.init(boot_info, 0x400000, 0);
         const paging = arch.impl.paging;
         if (vm.createAddressSpace(&alloc)) |ks| {
@@ -722,7 +760,49 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     }
 
     if (builtin.target.cpu.arch != .loongarch64) {
-        alloc.init(boot_info, 0x400000, 0);
+        const k_reserved = ( @intFromPtr(&_kernel_end) + 4095 ) & ~@as(usize, 4095);
+        alloc.init(boot_info, k_reserved, info_addr);
+    }
+
+    // QEMU virt：启用自有页表并 identity map，否则 ExitBootServices 后 VirtIO PCI / ECAM 访问不可靠
+    var virt_qemu_kernel_space: ?vm.AddressSpace = null;
+    if (builtin.target.cpu.arch == .aarch64) {
+        const paging = arch.impl.paging;
+        if (vm.createAddressSpace(&alloc)) |ks| {
+            virt_qemu_kernel_space = ks;
+            const ksp = &virt_qemu_kernel_space.?;
+            const npg = (2 * 1024 * 1024 * 1024) / paging.page_size;
+            var ip: usize = 0;
+            while (ip < npg) : (ip += 1) {
+                const v = ip * paging.page_size;
+                _ = ksp.mapPage(v, v, .{ .writable = true, .executable = true });
+            }
+            ksp.activate();
+            vm.bindKernelAddressSpace(ksp);
+            klog.info("VM: AArch64 identity map 0-2GiB (PCI ECAM / VirtIO / RAM)", .{});
+        }
+    } else if (builtin.target.cpu.arch == .riscv64) {
+        const paging = arch.impl.paging;
+        if (vm.createAddressSpace(&alloc)) |ks| {
+            virt_qemu_kernel_space = ks;
+            const ksp = &virt_qemu_kernel_space.?;
+            const flags = vm.MapFlags{ .writable = true, .executable = true };
+            const n_low = (2 * 1024 * 1024 * 1024) / paging.page_size;
+            var ip: usize = 0;
+            while (ip < n_low) : (ip += 1) {
+                const v = ip * paging.page_size;
+                _ = ksp.mapPage(v, v, flags);
+            }
+            const ram_pages = (512 * 1024 * 1024) / paging.page_size;
+            ip = 0;
+            while (ip < ram_pages) : (ip += 1) {
+                const v = 0x80000000 + ip * paging.page_size;
+                _ = ksp.mapPage(v, v, flags);
+            }
+            ksp.activate();
+            vm.bindKernelAddressSpace(ksp);
+            klog.info("VM: RISC-V64 identity map low 2GiB + RAM@0x80000000 (512MiB)", .{});
+        }
     }
     if (boot_info) |info| {
         klog.info("Memory: upper=%u KB, mmap_entries=%u", .{
@@ -815,8 +895,8 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) has_gfx_fb = true;
         }
     }
-    klog.info("Display: has_gfx_fb=%s desktop=%s", .{
-        if (has_gfx_fb) "yes" else "no",
+    klog.info("Display: has_gfx_fb=%u desktop=%s", .{
+        @intFromBool(has_gfx_fb),
         desktopThemeName(desktop_theme),
     });
 
@@ -833,6 +913,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                     arch.impl.framebuffer.setConsoleEnabled(false);
                     // LoongArch ramfb / UEFI GOP：线性缓冲通常为 BGRx（与 x86 GOP 一致）；x86 多来自 Multiboot 元数据
                     drivers.initDesktopMode(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp, builtin.target.cpu.arch != .x86_64);
+                    user32_mod.syncScreenFromFramebuffer();
                     display.syncCursorFromMouse();
                     display.clearFramebuffer();
                 }
@@ -853,6 +934,8 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             display.present();
             const mouse = @import("drivers/input/mouse.zig");
             const input_hub = @import("drivers/input/input_hub.zig");
+            const mouse_debug = @import("drivers/input/mouse_debug.zig");
+            const virtio_input_pci = @import("drivers/input/virtio_input_pci.zig");
             var prev_buttons: u8 = 0;
             var last_draw_cx: i32 = mouse.getX();
             var last_draw_cy: i32 = mouse.getY();
@@ -885,8 +968,19 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                 if (display.handleDesktopHotkeys()) needs_ui_paint = true;
                 const mx = mouse.getX();
                 const my = mouse.getY();
+                mouse_debug.desktopHeartbeat(mx, my, virtio_input_pci.isActive());
+                // #region agent log
+                if (@import("build_options").agent_ndjson) {
+                    agent_desktop_h4_tick +%= 1;
+                    if (agent_desktop_h4_tick % 72 == 0) {
+                        const ag = @import("debug/agent_ndjson.zig");
+                        ag.emit("H4", "main.zig:desktop_generic", "heartbeat", "pre", @intFromBool(virtio_input_pci.isActive()), @as(u64, @intCast(agent_desktop_h4_tick)), 0, 0, mx, my);
+                    }
+                }
+                // #endregion
                 const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
-                const need_paint = needs_ui_paint or hover_changed or pixel_moved or
+                const queued = mouse.hasEvents();
+                const need_paint = needs_ui_paint or hover_changed or pixel_moved or queued or
                     mouse.isInterpolating() or mouse.hasCursorMoved();
                 if (need_paint) {
                     display.renderDesktopFrame();
@@ -896,7 +990,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                 } else if (mouse.hasCursorMoved()) {
                     mouse.clearCursorMoved();
                 }
-                for (0..4) |_| input_hub.pollAll();
+                for (0..16) |_| input_hub.pollAll();
                 arch.waitForInterrupt();
             }
         } else {

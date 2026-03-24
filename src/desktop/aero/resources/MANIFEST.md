@@ -7,11 +7,19 @@
 
 | 资源类型 | 数量 | 说明 |
 |---------|------|------|
-| 壁纸 | 12 SVG | 原创矢量壁纸，覆盖 8 个主题变体（含 Harmony 风默认） |
-| 图标 | 12 SVG | 48x48 系统图标，水晶/玻璃风格 |
-| 光标 | 14 SVG | 32x32 光标集，含动画状态 |
-| Logo | 1 SVG | ZirconOS Aero 品牌标识 |
-| 开始按钮 | 1 SVG | Start Orb 按钮图标 |
+| 壁纸 | 12 SVG | 原创矢量壁纸，覆盖 8 个主题变体（含 Harmony 风默认）；默认/Harmony 中心光晕与主题 accent 对齐微调 |
+| 图标 | 17 SVG | 48×48，内置 13 枚 + `file`/`user`/`lock`/`shutdown` 辅助；见 `icons/README.md` |
+| 光标 | 14 SVG | 32×32；内置 8 枚在 `resource_loader.zig` 与文件名对齐（手型→`zircon_link`、十字→`zircon_nesw` 等） |
+| Logo | 1 SVG | 与 `theme.zig` accent `#3D8ED8` 同色族 |
+| 开始按钮 | 1 SVG | Start Orb，同上 |
+| 设计规格 | `DESIGN.md` | 画布、描边、色板、高光、ID 映射 |
+| 视觉验收 | `VISUAL_QA.md` | 四场景截图检查表与构建要点 |
+
+### 图标文件一览
+
+内置注册：`computer`, `documents`, `recycle_bin`, `terminal`, `network`, `browser`, `settings`, `calculator`, `text_editor`, `pictures`, `music`, `folder`, `control_panel`。辅助：`file`, `user`, `lock`, `shutdown`。
+
+内核帧缓冲壳层（`src/drivers/video/icons.zig`）中 `IconId` 数值与上表 **1–13** 一致，16×16 回退位图与同名 SVG 路径对应；辅助 ID 14–17 映射到最近内置形。
 
 ## 主题配置
 
@@ -60,3 +68,7 @@
 
 `other/resources/Aero/` 中的第三方参考资源**不得**用于发行版构建。
 发行版仅使用代码生成的原创资源。
+
+## 合规策略
+
+完整政策与 AI 生成素材归档模板见 **[docs/cn/Assets.md](../../../../docs/cn/Assets.md)**：禁止微软专有素材；仅允许开源许可 / 公有领域 / 自有或 AI 生成并记录来源。

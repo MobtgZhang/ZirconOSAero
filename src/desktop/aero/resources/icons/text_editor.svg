@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="tPaper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F8FCFF"/>
+      <stop offset="100%" stop-color="#D8E8F0"/>
+    </linearGradient>
+    <linearGradient id="tFold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3D8ED8"/>
+      <stop offset="100%" stop-color="#2ABFBF"/>
+    </linearGradient>
+    <filter id="tSh"><feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="#0D5C5C" flood-opacity="0.28"/></filter>
+  </defs>
+  <path d="M10 8h22l6 6v30H10z" fill="url(#tPaper)" stroke="#156575" stroke-width="1.5" filter="url(#tSh)"/>
+  <path d="M32 8v6h6" fill="url(#tFold)" stroke="#156575" stroke-width="1.5" stroke-linejoin="round"/>
+  <g stroke="#6A9AB0" stroke-width="1.2" stroke-linecap="round">
+    <path d="M15 20h18M15 25h22M15 30h16M15 35h20"/>
+  </g>
+  <rect x="15" y="16" width="10" height="2" rx="0.5" fill="#3D8ED8" opacity="0.85"/>
+</svg>

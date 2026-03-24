@@ -2,7 +2,7 @@
   <defs>
     <linearGradient id="busyGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#A8F0F0"/>
-      <stop offset="50%" stop-color="#2ABFBF"/>
+      <stop offset="50%" stop-color="#3D8ED8"/>
       <stop offset="100%" stop-color="#0D5C5C"/>
     </linearGradient>
     <linearGradient id="busyGrad2" x1="100%" y1="0%" x2="0%" y2="100%">

@@ -8,8 +8,8 @@
     </linearGradient>
 
     <radialGradient id="centerGlow" cx="50%" cy="42%" r="45%">
-      <stop offset="0%" stop-color="#2680C8" stop-opacity="0.18"/>
-      <stop offset="50%" stop-color="#1667B0" stop-opacity="0.08"/>
+      <stop offset="0%" stop-color="#3D8ED8" stop-opacity="0.2"/>
+      <stop offset="50%" stop-color="#2A78C0" stop-opacity="0.09"/>
       <stop offset="100%" stop-color="#0F2847" stop-opacity="0"/>
     </radialGradient>
 

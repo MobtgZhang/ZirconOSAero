@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="pSky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7EC8F0"/>
+      <stop offset="100%" stop-color="#3D8ED8"/>
+    </linearGradient>
+    <linearGradient id="pHill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ABFBF"/>
+      <stop offset="100%" stop-color="#0D5C5C"/>
+    </linearGradient>
+    <filter id="pSh"><feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="#0D3C4C" flood-opacity="0.35"/></filter>
+  </defs>
+  <rect x="7" y="10" width="34" height="28" rx="2.5" fill="#E8F4FA" stroke="#156575" stroke-width="1.5" filter="url(#pSh)"/>
+  <rect x="10" y="13" width="28" height="20" rx="1.5" fill="url(#pSky)" stroke="#0A5A80" stroke-width="1"/>
+  <circle cx="30" cy="19" r="3.5" fill="#FFE8A0" stroke="#D4A020" stroke-width="0.8"/>
+  <path d="M10 30c4-4 8-2 12 1s8-3 14-1l4 3v6H10z" fill="url(#pHill)" opacity="0.95"/>
+  <path d="M14 26l4 3 4-5 6 8" fill="none" stroke="#A8F0F0" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+</svg>

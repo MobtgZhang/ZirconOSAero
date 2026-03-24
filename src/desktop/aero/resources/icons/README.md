@@ -1,58 +1,43 @@
 # ZirconOS Aero Icons
 
-Original icon designs for ZirconOS Aero theme.
-All icons use a distinctive crystal/glass aesthetic with teal-blue accents.
+原创图标，与 `resource_loader.zig` 注册 ID 一致。统一规格见上级目录 **[DESIGN.md](../DESIGN.md)**。
 
-## System Icons
+## 内置 ID（`registerBuiltinIcons`）
 
-| ID | File | Name | Size | Description |
-|----|------|------|------|-------------|
-| 0 | `computer.svg` | Computer | 48x48 | Display monitor with crystal glass screen, ZirconOS "Z" logo, silver bezel and slim stand |
-| 1 | `documents.svg` | Documents | 48x48 | Open folder with glass-translucent body, teal accent tab, visible papers inside |
-| 2 | `network.svg` | Network | 48x48 | Three connected crystal globe nodes in triangle layout with glowing link lines |
-| 3 | `recycle_bin.svg` | Recycle Bin | 48x48 | Translucent glass cylindrical container with crystal facets and recycling symbol |
-| 4 | `browser.svg` | Browser | 48x48 | Crystal glass globe with latitude/longitude grid lines, surrounded by compass ring |
-| 5 | `folder.svg` | Folder | 48x48 | Closed folder with glass-gradient body, teal accent tab |
-| 6 | `file.svg` | File | 48x48 | Document with folded corner, glass-gradient body, faint grid lines |
-| 7 | `settings.svg` | Settings | 48x48 | Gear/cog shape with crystal glass gradient fill and glass highlight reflection |
-| 8 | `terminal.svg` | Terminal | 48x48 | Dark terminal window with "Z:\>" prompt text, glass frame border |
-| 9 | `user.svg` | User | 48x48 | Person silhouette bust inside glass circle frame with teal gradient |
-| 10 | `shutdown.svg` | Shutdown | 48x48 | Power symbol (circle with line) in glass red-gradient with subtle glow |
-| 11 | `lock.svg` | Lock | 48x48 | Padlock with glass body and teal shackle, crystal facet details |
+| ID | 文件 | 说明 |
+|----|------|------|
+| 1 | `computer.svg` | 此电脑 / 显示器 |
+| 2 | `documents.svg` | 文档 |
+| 3 | `recycle_bin.svg` | 回收站 |
+| 4 | `terminal.svg` | 终端 |
+| 5 | `network.svg` | 网络 |
+| 6 | `browser.svg` | 浏览器 |
+| 7 | `settings.svg` | 设置 |
+| 8 | `calculator.svg` | 计算器 |
+| 9 | `text_editor.svg` | 文本编辑器 / 记事本 |
+| 10 | `pictures.svg` | 图片 / 画图占位 |
+| 11 | `music.svg` | 媒体 / WMP 占位 |
+| 12 | `folder.svg` | 文件夹 |
+| 13 | `control_panel.svg` | 控制面板 |
 
-## Design Language
+## 辅助资源（未按 ID 注册，供文档或其它壳层引用）
 
-All icons follow the ZirconOS Aero visual language:
+| 文件 | 说明 |
+|------|------|
+| `file.svg` | 通用文件 |
+| `user.svg` | 用户头像 |
+| `lock.svg` | 锁定 |
+| `shutdown.svg` | 关机 |
 
-- **Crystal Facets**: Subtle diagonal lines suggesting cut crystal surfaces
-- **Glass Gradients**: LinearGradient and RadialGradient fills for translucent glass appearance
-- **Glass Highlights**: White semi-transparent overlays creating specular reflections
-- **Shadow/Glow Effects**: Drop shadows and Gaussian blur glows for depth
+## 色板（摘要）
 
-## Color Palette
+与 `theme.zig` `scheme_blue.accent`（`#3D8ED8`）及青色系 `#2ABFBF` 对齐；描边多用 `#156575`。
 
-| Color | Hex | Usage |
-|-------|-----|-------|
-| Teal | `#2ABFBF` | Primary accent, main surfaces |
-| Dark Teal | `#1A8A8A` | Shadows, darker surfaces |
-| Deep Teal | `#0D5C5C` | Deep shadows, gradients |
-| Light Teal | `#A8F0F0` | Highlights, light areas |
-| Highlight | `#E8F8F8` | Glass reflections, bright accents |
-| Blue Accent | `#3FA3D8` | Secondary accent, variety |
+## 技术
 
-## Technical Details
+- 格式：SVG，`viewBox="0 0 48 48"`
+- 无外链资源
 
-- Format: SVG (Scalable Vector Graphics)
-- ViewBox: `0 0 48 48` for all icons
-- All icons use `<defs>` for gradient and filter definitions
-- No external dependencies or linked resources
-- Compatible with standard SVG renderers
+## 版权
 
-## Copyright Notice
-
-Copyright (C) 2024-2026 ZirconOS Project
-Licensed under GNU Lesser General Public License v2.1
-
-These icons are **original designs** created for ZirconOS.
-They are NOT derived from, copied from, or affiliated with any
-Microsoft Corporation products or any other third-party icon sets.
+Copyright (C) 2024-2026 ZirconOS Project — LGPL-2.1。非微软资产衍生。

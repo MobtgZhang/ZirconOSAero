@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="cBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E8F4FC"/>
+      <stop offset="100%" stop-color="#B8D4E8"/>
+    </linearGradient>
+    <linearGradient id="cScreen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3D8ED8"/>
+      <stop offset="100%" stop-color="#0D5C8C"/>
+    </linearGradient>
+    <filter id="cSh"><feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="#0D5C5C" flood-opacity="0.3"/></filter>
+  </defs>
+  <rect x="8" y="6" width="32" height="36" rx="3" fill="url(#cBody)" stroke="#156575" stroke-width="1.5" filter="url(#cSh)"/>
+  <rect x="11" y="9" width="26" height="10" rx="1.5" fill="url(#cScreen)" stroke="#0A4A6A" stroke-width="1"/>
+  <g fill="#2ABFBF" stroke="#156575" stroke-width="0.8">
+    <rect x="11" y="22" width="7" height="5" rx="0.8"/>
+    <rect x="20.5" y="22" width="7" height="5" rx="0.8"/>
+    <rect x="30" y="22" width="7" height="5" rx="0.8"/>
+    <rect x="11" y="28.5" width="7" height="5" rx="0.8"/>
+    <rect x="20.5" y="28.5" width="7" height="5" rx="0.8"/>
+    <rect x="30" y="28.5" width="7" height="5" rx="0.8"/>
+    <rect x="11" y="35" width="7" height="5" rx="0.8"/>
+    <rect x="20.5" y="35" width="7" height="5" rx="0.8"/>
+    <rect x="30" y="35" width="7" height="5" rx="0.8" fill="#3D8ED8"/>
+  </g>
+  <path d="M14 12h14" stroke="#A8F0F0" stroke-width="1" stroke-linecap="round" opacity="0.7"/>
+</svg>

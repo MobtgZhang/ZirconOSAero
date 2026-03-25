@@ -57,6 +57,26 @@ pub fn getVersion() []const u8 {
     return system_config.getOr("system", "version", "6.1.7601");
 }
 
+pub fn getCsdVersion() []const u8 {
+    return system_config.getOr("system", "csd_version", "Service Pack 1");
+}
+
+pub fn getServicePackMajor() u64 {
+    return system_config.getIntOr("system", "service_pack_major", 1);
+}
+
+pub fn getServicePackMinor() u64 {
+    return system_config.getIntOr("system", "service_pack_minor", 0);
+}
+
+pub fn getSuiteMask() u64 {
+    return system_config.getHexOr("system", "suite_mask", 0x0100);
+}
+
+pub fn getProductType() u64 {
+    return system_config.getIntOr("system", "product_type", 1);
+}
+
 pub fn getArch() []const u8 {
     return system_config.getOr("system", "arch", "x86_64");
 }

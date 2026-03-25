@@ -33,6 +33,28 @@ DEBUG_LOG    ?= true
 MOUSE_DEBUG  ?= false
 # Cursor 调试会话：内核经串口输出 AGENT_LOG:{...}，make run 2>&1 | bash scripts/agent-ingest-serial.sh
 AGENT_NDJSON ?= false
+# x86_64：枚举 AMD 1002 显示类 PCI、映射 MMIO；无硬件时静默回退 GOP。真机 Intel 可另开 INTEL_IGPU
+AMD_IGPU   ?= true
+# AMD PCI/BAR 探测延到首次 resolveDesktopFramebuffer（GOP 就绪后）
+AMD_IGPU_DEFER_PROBE ?= false
+# AMD 显示 MMIO 可选探测（默认关，仅 GOP handoff）
+AMD_KMS_EXPERIMENTAL ?= false
+# x86_64：Intel 8086 显示类（默认开；与 AMD 并存，帧缓冲解析链 Intel 先于 AMD）
+INTEL_IGPU   ?= true
+# Intel PCI/BAR 探测延到首次 resolveDesktopFramebuffer（GOP 就绪后）；对照固件/鼠标异常时可设 true
+INTEL_IGPU_DEFER_PROBE ?= false
+# Intel 显示 MMIO 可选探测（默认关，仅 GOP handoff）
+INTEL_KMS_EXPERIMENTAL ?= false
+# 桌面主循环不自旋 HLT（避免部分环境下 HLT 唤醒过稀导致 VirtIO/PS2 轮询「像卡住」）；QEMU CPU 占用略升
+DESKTOP_IDLE_SPIN ?= true
+# loongarch64：龙芯 0014 显示 PCI/MMIO（阶段一透传 GOP/ramfb）；其它 ARCH 下应为 false
+ifeq ($(ARCH),loongarch64)
+LOONGSON_IGPU ?= true
+else
+LOONGSON_IGPU ?= false
+endif
+LOONGSON_IGPU_DEFER_PROBE ?= false
+LOONGSON_KMS_EXPERIMENTAL ?= false
 
 # Validate DESKTOP
 VALID_DESKTOPS := aero none
@@ -140,9 +162,13 @@ THEME_DIR := $(THEME_DIR_MAP_$(DESKTOP))
 # Per-architecture QEMU flags
 # 固定 i440fx+8259+板载 PS/2，避免 q35/IOAPIC-only 路径下 IRQ1/12 与 PIC 行为不一致导致键鼠失灵。
 # 同时附加 virtio-input 键鼠（与 `virtio_input_pci.zig` 一致）：部分 QEMU/固件组合下 PS/2 流不可靠时有第二路径。
+# 自定义 QEMU 时请勿删掉 -device virtio-mouse-pci（除非确认 PS/2 可用）；勿用 usb-tablet/usb-kbd 替代（内核无 USB HID）。
+# grab-on-hover=on：指针移入窗口即抓取，REL 型 virtio-mouse 在未抓取时 QEMU 往往不发位移；设 QEMU_GTK_EXTRA= 可关闭。
+# virtio-tablet-pci：GTK 未抓取时常走 ABS，驱动已把 ABS 差分转为位移（与 mouse 并存，MAX_INST≥3）。
+QEMU_GTK_EXTRA ?= ,grab-on-hover=on
 QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
-	-display gtk,zoom-to-fit=on,show-cursor=on -vga std \
-	-device virtio-mouse-pci -device virtio-keyboard-pci
+	-display gtk,zoom-to-fit=on,show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
+	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci
 
 # highmem-ecam=off：PCIe ECAM 固定在 0x3f00_0000，与内核 pcie.zig 一致（否则默认 ECAM 可落在 >4GiB）
 QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
@@ -234,6 +260,15 @@ show-config:
 	@if [ "$(ARCH)" = "loongarch64" ]; then echo "║  QEMU_MEM_LOONGARCH64 = $(QEMU_MEM_LOONGARCH64)  (run-loongarch64; QEMU virt requires >1G)"; fi
 	@echo "║  ENABLE_IDT   = $(ENABLE_IDT)"
 	@echo "║  DEBUG_LOG    = $(DEBUG_LOG)"
+	@if [ "$(ARCH)" = "x86_64" ]; then \
+		echo "║  AMD_IGPU   = $(AMD_IGPU)  (false=skip AMD PCI/MMIO probe)"; \
+		echo "║  AMD_IGPU_DEFER_PROBE = $(AMD_IGPU_DEFER_PROBE)  (true=probe after GOP resolve)"; \
+		echo "║  AMD_KMS_EXPERIMENTAL = $(AMD_KMS_EXPERIMENTAL)"; \
+		echo "║  INTEL_IGPU   = $(INTEL_IGPU)  (true=probe Intel 8086 display PCI)"; \
+		echo "║  INTEL_IGPU_DEFER_PROBE = $(INTEL_IGPU_DEFER_PROBE)  (true=probe after GOP resolve)"; \
+		echo "║  INTEL_KMS_EXPERIMENTAL = $(INTEL_KMS_EXPERIMENTAL)"; \
+		echo "║  DESKTOP_IDLE_SPIN = $(DESKTOP_IDLE_SPIN)  (true=no HLT in desktop loop)"; \
+	fi
 	@echo "║  FIRMWARE_DIR = $(FIRMWARE_DIR)"
 	@if [ "$(ARCH)" = "loongarch64" ]; then \
 		echo "║  LOONGARCH64_FIRMWARE_DIR = $(LOONGARCH64_FIRMWARE_DIR)"; \
@@ -242,6 +277,9 @@ show-config:
 		echo "║  LOONGARCH64_QEMU_MODE     = $(LOONGARCH64_QEMU_MODE)  (kernel|uefi; ZBM+UEFI only)"; \
 		echo "║  LOONGARCH64_QEMU_VIRTIO_GPU = $(LOONGARCH64_QEMU_VIRTIO_GPU)  (0=ramfb 默认, 1=仅 virtio-gpu)"; \
 		echo "║  LOONGARCH64_VIRT_GRAPHICS   = $(LOONGARCH64_VIRT_GRAPHICS)  (默认 off 利 ramfb+virtio-input; 要固件 GOP 可设 on)"; \
+		echo "║  LOONGSON_IGPU = $(LOONGSON_IGPU)  (false=skip 0014 display PCI probe)"; \
+		echo "║  LOONGSON_IGPU_DEFER_PROBE = $(LOONGSON_IGPU_DEFER_PROBE)"; \
+		echo "║  LOONGSON_KMS_EXPERIMENTAL = $(LOONGSON_KMS_EXPERIMENTAL)"; \
 	fi
 	@if [ "$(ARCH)" = "riscv64" ]; then \
 		echo "║  RISCV64_QEMU_VIRTIO_GPU = $(RISCV64_QEMU_VIRTIO_GPU)  (0=ramfb 默认, 1=virtio-gpu-pci)"; \
@@ -310,6 +348,9 @@ help:
 	@echo "  make BOOT_METHOD=mbr BOOTLOADER=zbm      BIOS/MBR + ZBM (raw disk)"
 	@echo "  make BOOT_METHOD=uefi BOOTLOADER=zbm     UEFI + ZBM (ESP)"
 	@echo "  make DESKTOP=none                        Text/CMD mode"
+	@echo "  make AMD_IGPU=false MOUSE_DEBUG=true     对照指针：排除 AMD 探测 + VirtIO 串口跟踪"
+	@echo "  make INTEL_IGPU=false                    x86：关闭 Intel 8086 显示 PCI 探测（默认与 AMD 并存，解析链 Intel 先于 AMD）"
+	@echo "  make DESKTOP_IDLE_SPIN=true              桌面循环不 HLT（调试 IRQ/鼠标）"
 	@echo "  make run-riscv64 RISCV64_QEMU_VIRTIO_GPU=1  RISC-V QEMU 使用 virtio-gpu（易现 Display not active）"
 	@echo ""
 	@echo "Test:"
@@ -351,6 +392,16 @@ build:
 		-Dmouse_debug=$(MOUSE_DEBUG) \
 		-Dagent_ndjson=$(AGENT_NDJSON) \
 		-Denable_idt=$(ENABLE_IDT) \
+		-Damd_igpu=$(AMD_IGPU) \
+		-Damd_igpu_defer_probe=$(AMD_IGPU_DEFER_PROBE) \
+		-Damd_kms_experimental=$(AMD_KMS_EXPERIMENTAL) \
+		-Dintel_igpu=$(INTEL_IGPU) \
+		-Dintel_igpu_defer_probe=$(INTEL_IGPU_DEFER_PROBE) \
+		-Dintel_kms_experimental=$(INTEL_KMS_EXPERIMENTAL) \
+		-Dloongson_igpu=$(LOONGSON_IGPU) \
+		-Dloongson_igpu_defer_probe=$(LOONGSON_IGPU_DEFER_PROBE) \
+		-Dloongson_kms_experimental=$(LOONGSON_KMS_EXPERIMENTAL) \
+		-Ddesktop_idle_spin=$(DESKTOP_IDLE_SPIN) \
 		-Ddefault_desktop=$(DESKTOP) \
 		--cache-dir $(TMP_DIR)/zig-cache \
 		--prefix $(TMP_DIR)/kernel-prefix

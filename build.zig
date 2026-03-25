@@ -21,7 +21,41 @@ pub fn build(b: *std.Build) void {
         "Serial lines AGENT_LOG:{...} NDJSON for host ingest (.cursor/debug-*.log via scripts/agent-ingest-serial.sh)",
     ) orelse false;
     const enable_idt_opt = b.option(bool, "enable_idt", "Enable IDT, timer and syscall (x86_64 only)") orelse true;
-
+    const amd_igpu_opt = b.option(
+        bool,
+        "amd_igpu",
+        "x86_64: probe AMD/ATI integrated GPU (1002:03xx PCI/MMIO + GOP handoff); QEMU pc -vga std has no AMD display — falls back silently",
+    ) orelse true;
+    const amd_igpu_defer_probe_opt = b.option(
+        bool,
+        "amd_igpu_defer_probe",
+        "x86_64: run AMD PCI/BAR probe on first resolveDesktopFramebuffer (after GOP handoff)",
+    ) orelse false;
+    const amd_kms_experimental_opt = b.option(
+        bool,
+        "amd_kms_experimental",
+        "AMD: allow optional MMIO display probe path (default handoff-only; unsafe on some platforms)",
+    ) orelse false;
+    const intel_igpu_opt = b.option(
+        bool,
+        "intel_igpu",
+        "x86_64: probe Intel integrated GPU (PCI/MMIO + GOP handoff); default on alongside AMD (resolve chain Intel before AMD)",
+    ) orelse true;
+    const intel_igpu_defer_probe_opt = b.option(
+        bool,
+        "intel_igpu_defer_probe",
+        "x86_64: run Intel PCI/BAR probe on first resolveDesktopFramebuffer (after GOP handoff) to reduce firmware race risk",
+    ) orelse false;
+    const intel_kms_experimental_opt = b.option(
+        bool,
+        "intel_kms_experimental",
+        "Intel: allow optional MMIO display probe path (default handoff-only; unsafe on some platforms)",
+    ) orelse false;
+    const desktop_idle_spin_opt = b.option(
+        bool,
+        "desktop_idle_spin",
+        "x86_64 desktop loop: spin instead of sti;hlt (smoother input polling in QEMU; higher guest CPU use; Makefile DESKTOP_IDLE_SPIN)",
+    ) orelse true;
     var cpu_arch: std.Target.Cpu.Arch = .x86_64;
     if (mem.eql(u8, arch_opt, "x86_64")) {
         cpu_arch = .x86_64;
@@ -36,6 +70,33 @@ pub fn build(b: *std.Build) void {
     } else {
         @panic("Unsupported arch; expected: x86_64, loongarch64, aarch64, riscv64, mips64el");
     }
+
+    const usb_xhci_opt = b.option(
+        bool,
+        "usb_xhci",
+        "Probe PCI xHCI (USB3/2) and run minimal enumeration + HID boot mouse poll (QEMU-friendly; MVP)",
+    ) orelse (cpu_arch == .x86_64);
+    const usb_ehci_opt = b.option(
+        bool,
+        "usb_ehci",
+        "Probe EHCI when no xHCI (stub driver: log only until QH/qTD implemented)",
+    ) orelse false;
+
+    const loongson_igpu_opt = b.option(
+        bool,
+        "loongson_igpu",
+        "loongarch64: probe Loongson PCI display (vendor 0014) + MMIO map; framebuffer stays UEFI GOP / ramfb until KMS",
+    ) orelse (cpu_arch == .loongarch64);
+    const loongson_igpu_defer_probe_opt = b.option(
+        bool,
+        "loongson_igpu_defer_probe",
+        "loongarch64: run Loongson PCI/BAR probe on first resolveDesktopFramebuffer",
+    ) orelse false;
+    const loongson_kms_experimental_opt = b.option(
+        bool,
+        "loongson_kms_experimental",
+        "Loongson: allow future MMIO display probe paths (default handoff-only)",
+    ) orelse false;
 
     const target = b.resolveTargetQuery(.{
         .cpu_arch = cpu_arch,
@@ -54,6 +115,18 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "mouse_debug", mouse_debug_opt);
     build_opts.addOption(bool, "agent_ndjson", agent_ndjson_opt);
     build_opts.addOption(bool, "enable_idt", enable_idt_opt);
+    build_opts.addOption(bool, "amd_igpu", amd_igpu_opt);
+    build_opts.addOption(bool, "amd_igpu_defer_probe", amd_igpu_defer_probe_opt);
+    build_opts.addOption(bool, "amd_kms_experimental", amd_kms_experimental_opt);
+    build_opts.addOption(bool, "intel_igpu", intel_igpu_opt);
+    build_opts.addOption(bool, "intel_igpu_defer_probe", intel_igpu_defer_probe_opt);
+    build_opts.addOption(bool, "intel_kms_experimental", intel_kms_experimental_opt);
+    build_opts.addOption(bool, "loongson_igpu", loongson_igpu_opt);
+    build_opts.addOption(bool, "loongson_igpu_defer_probe", loongson_igpu_defer_probe_opt);
+    build_opts.addOption(bool, "loongson_kms_experimental", loongson_kms_experimental_opt);
+    build_opts.addOption(bool, "desktop_idle_spin", desktop_idle_spin_opt);
+    build_opts.addOption(bool, "usb_xhci", usb_xhci_opt);
+    build_opts.addOption(bool, "usb_ehci", usb_ehci_opt);
     build_opts.addOption([]const u8, "default_desktop", desktop_default);
 
     const code_model: std.builtin.CodeModel = switch (cpu_arch) {

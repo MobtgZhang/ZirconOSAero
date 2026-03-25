@@ -89,6 +89,11 @@ pub fn checkPrivilege(token: *const Token, priv: u64) bool {
     return token.hasPrivilege(priv);
 }
 
+/// NT Phase 3: object access via the process handle table (delegates to `ob.HandleTable.checkAccess`).
+pub fn checkHandleAccess(table: *const ob.HandleTable, handle: ob.Handle, required: ob.ACCESS_MASK) bool {
+    return table.checkAccess(handle, required);
+}
+
 pub fn init() void {
     next_token_id = 1;
     klog.info("Security: Reference Monitor initialized", .{});

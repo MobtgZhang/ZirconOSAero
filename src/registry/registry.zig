@@ -7,7 +7,7 @@
 //!   HKU   - HKEY_USERS         (all user profiles)
 //!   HKCC  - HKEY_CURRENT_CONFIG (current hardware profile)
 //!
-//! Reference: ReactOS ntoskrnl/config/
+//! Layout inspired by the NT registry; **no code copied** from ReactOS or Windows (see THIRD_PARTY.md).
 
 const klog = @import("../rtl/klog.zig");
 

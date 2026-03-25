@@ -3,6 +3,7 @@
 //! Return value placed in frame.rax
 
 const ipc = @import("../../lpc/ipc.zig");
+const lpc_port = @import("../../lpc/port.zig");
 const process = @import("../../ps/process.zig");
 const klog = @import("../../rtl/klog.zig");
 const ob = @import("../../ob/object.zig");
@@ -31,6 +32,8 @@ pub const STATUS_QUEUE_FULL: i64 = -2;
 pub const STATUS_NO_MESSAGE: i64 = -3;
 pub const STATUS_ACCESS_DENIED: i64 = -4;
 pub const STATUS_NO_MEMORY: i64 = -5;
+/// Matches `STATUS_NOT_IMPLEMENTED` (0xC0000002) for user-visible consistency with ntdll.
+pub const STATUS_NOT_IMPLEMENTED: i64 = -1073741822;
 
 pub fn dispatch(frame: *InterruptFrame) void {
     const syscall_no = frame.rax;
@@ -42,13 +45,18 @@ pub fn dispatch(frame: *InterruptFrame) void {
     _ = frame.r9;
 
     const result: i64 = switch (syscall_no) {
-        SYS_IPC_SEND => handleIpcSend(arg1, arg2, arg3),
-        SYS_IPC_RECEIVE => handleIpcReceive(arg1),
         SYS_CREATE_PROCESS => handleCreateProcess(arg1),
         SYS_CREATE_THREAD => handleCreateThread(arg1, arg2),
+        SYS_IPC_SEND => handleIpcSend(arg1, arg2, arg3),
+        SYS_IPC_RECEIVE => handleIpcReceive(arg1),
         SYS_MAP_MEMORY => handleMapMemory(arg1, arg2, arg3),
+        SYS_UNMAP_MEMORY => handleUnmapMemory(arg1),
         SYS_EXIT_PROCESS => handleExitProcess(arg1),
+        SYS_OPEN_HANDLE => STATUS_NOT_IMPLEMENTED,
         SYS_CLOSE_HANDLE => handleCloseHandle(arg1),
+        SYS_WAIT_OBJECT => STATUS_SUCCESS,
+        SYS_CREATE_PORT => handleCreatePort(arg1, arg2),
+        SYS_CONNECT_PORT => handleConnectPort(arg1, arg2),
         SYS_GET_PID => @intCast(process.getCurrentPid()),
         SYS_YIELD => blk: {
             const scheduler = @import("../../ke/scheduler.zig");
@@ -94,6 +102,7 @@ fn handleCreateThread(_: u64, _: u64) i64 {
 
 fn handleMapMemory(virt: u64, _: u64, _: u64) i64 {
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_PARAMETER;
+    if (virt & 0xFFF != 0) return STATUS_INVALID_PARAMETER;
     if (proc.address_space) |*space| {
         const flags = vm.MapFlags{ .writable = true, .user = true };
         if (space.mapPageAlloc(virt, flags)) |_| {
@@ -101,6 +110,39 @@ fn handleMapMemory(virt: u64, _: u64, _: u64) i64 {
         }
     }
     return STATUS_NO_MEMORY;
+}
+
+fn handleUnmapMemory(virt: u64) i64 {
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_PARAMETER;
+    if (virt & 0xFFF != 0) return STATUS_INVALID_PARAMETER;
+    if (proc.address_space) |*space| {
+        _ = space.unmapPage(virt);
+        return STATUS_SUCCESS;
+    }
+    return STATUS_INVALID_PARAMETER;
+}
+
+fn copyNameArg(name_ptr: u64, name_len: u64, out: *[32]u8) ?[]const u8 {
+    if (name_ptr == 0 or name_len == 0 or name_len > out.len) return null;
+    const p = @as([*]const u8, @ptrFromInt(name_ptr));
+    @memcpy(out[0..name_len], p[0..name_len]);
+    return out[0..name_len];
+}
+
+fn handleCreatePort(name_ptr: u64, name_len: u64) i64 {
+    var buf: [32]u8 = undefined;
+    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return STATUS_INVALID_PARAMETER;
+    const pid = process.getCurrentPid();
+    const pt = lpc_port.createPort(pid, nm) orelse return STATUS_NO_MEMORY;
+    return @intCast(pt.id);
+}
+
+fn handleConnectPort(name_ptr: u64, name_len: u64) i64 {
+    var buf: [32]u8 = undefined;
+    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return STATUS_INVALID_PARAMETER;
+    const pid = process.getCurrentPid();
+    const pt = lpc_port.connectPort(pid, nm) orelse return STATUS_INVALID_PARAMETER;
+    return @intCast(pt.id);
 }
 
 fn handleExitProcess(exit_code: u64) i64 {

@@ -117,6 +117,272 @@ pub fn readConfigByte(bus: u8, dev: u8, func: u8, offset: u16) u8 {
     return @truncate(dw >> shift);
 }
 
+pub fn readConfigWord(bus: u8, dev: u8, func: u8, offset: u16) u16 {
+    const aligned = offset & ~@as(u16, 1);
+    const dw = readConfigDword(bus, dev, func, aligned);
+    const shift: u5 = @intCast((offset & 2) * 8);
+    return @truncate(dw >> shift);
+}
+
+pub fn writeConfigWord(bus: u8, dev: u8, func: u8, offset: u16, value: u16) void {
+    const aligned = offset & ~@as(u16, 1);
+    var dw = readConfigDword(bus, dev, func, aligned);
+    if ((offset & 2) != 0) {
+        dw = (dw & 0xFFFF) | (@as(u32, value) << 16);
+    } else {
+        dw = (dw & 0xFFFF0000) | value;
+    }
+    writeConfigDword(bus, dev, func, aligned, dw);
+}
+
+/// Intel PCI vendor id
+pub const PCI_VENDOR_INTEL: u16 = 0x8086;
+/// AMD / ATI PCI vendor id
+pub const PCI_VENDOR_AMD_ATI: u16 = 0x1002;
+/// Loongson PCI vendor id (display class 0x03 on LS2K/7A 等，见 `video/loongson/dids.zig`)
+pub const PCI_VENDOR_LOONGSON: u16 = 0x0014;
+
+/// Decoded PCI BAR (memory or I/O)
+pub const PciBarResource = struct {
+    base: u64 = 0,
+    size: u64 = 0,
+    is_io: bool = false,
+    is_64: bool = false,
+    prefetchable: bool = false,
+};
+
+/// 显示控制器（class 0x03xx）在 PCI 上的快照 — Intel / AMD 共用
+pub const DisplayGfxPciInfo = struct {
+    loc: PciLoc,
+    vendor_id: u16,
+    device_id: u16,
+    revision_id: u8,
+    /// 配置空间 0x08 处的 class/rev 双字（字节序：rev, prog_if, subclass, class）
+    class_code: u32,
+    bars: [6]PciBarResource,
+};
+
+/// 与 `DisplayGfxPciInfo` 相同（历史命名）
+pub const IntelGfxPciInfo = DisplayGfxPciInfo;
+
+fn probeOneBar(bus: u8, dev: u8, func: u8, idx: u8) struct { bar: PciBarResource, consumed: u32 } {
+    const off: u16 = 0x10 + @as(u16, idx) * 4;
+    const lo = readConfigDword(bus, dev, func, off);
+    if (lo == 0)
+        return .{ .bar = .{}, .consumed = 1 };
+
+    if ((lo & 1) != 0) {
+        writeConfigDword(bus, dev, func, off, 0xFFFFFFFF);
+        const inv = readConfigDword(bus, dev, func, off);
+        writeConfigDword(bus, dev, func, off, lo);
+        const sz = (~(inv & 0xFFFFFFFC) +% 1) & 0xFFFF;
+        return .{
+            .bar = .{
+                .base = @as(u64, lo & 0xFFFFFFFC),
+                .size = sz,
+                .is_io = true,
+            },
+            .consumed = 1,
+        };
+    }
+
+    const is_64 = (lo & 0x6) == 0x4;
+    const prefetch = (lo & 8) != 0;
+    const hi_orig: u32 = if (is_64) readConfigDword(bus, dev, func, off + 4) else 0;
+
+    writeConfigDword(bus, dev, func, off, 0xFFFFFFFF);
+    const sz_lo = readConfigDword(bus, dev, func, off) & 0xFFFFFFF0;
+    var sz_hi: u32 = 0;
+    if (is_64) {
+        writeConfigDword(bus, dev, func, off + 4, 0xFFFFFFFF);
+        sz_hi = readConfigDword(bus, dev, func, off + 4);
+        writeConfigDword(bus, dev, func, off + 4, hi_orig);
+    }
+    writeConfigDword(bus, dev, func, off, lo);
+
+    const size: u64 = if (!is_64) blk: {
+        if (sz_lo == 0) break :blk 0;
+        break :blk (~@as(u64, sz_lo) +% 1) & 0xFFFFFFFF;
+    } else blk: {
+        const combined: u64 = (@as(u64, sz_hi) << 32) | @as(u64, sz_lo);
+        if (combined == 0) break :blk 0;
+        break :blk ~combined +% 1;
+    };
+
+    const base: u64 = (@as(u64, hi_orig) << 32) | @as(u64, lo & 0xFFFFFFF0);
+
+    return .{
+        .bar = .{
+            .base = base,
+            .size = size,
+            .is_64 = is_64,
+            .prefetchable = prefetch,
+        },
+        .consumed = if (is_64) 2 else 1,
+    };
+}
+
+/// 解析 6 个 BAR 槽位（64-bit BAR 占连续两项）
+pub fn decodePciBars(bus: u8, dev: u8, func: u8) [6]PciBarResource {
+    var bars: [6]PciBarResource = [_]PciBarResource{.{}} ** 6;
+    var i: u32 = 0;
+    while (i < 6) {
+        const r = probeOneBar(bus, dev, func, @intCast(i));
+        bars[i] = r.bar;
+        i += r.consumed;
+    }
+    return bars;
+}
+
+/// 置位 MEM Space + Bus Master（访问 MMIO / DMA 所需）
+pub fn enablePciMemAndBusMaster(bus: u8, dev: u8, func: u8) void {
+    if (!supports_pci_config) return;
+    const cmd = readConfigWord(bus, dev, func, 0x04);
+    const new = cmd | 0x0006;
+    if (new != cmd) writeConfigWord(bus, dev, func, 0x04, new);
+}
+
+/// 基类 Display Controller（0x03），含 VGA、XGA、3D 等子类
+fn isPciDisplayClass(class_dword: u32) bool {
+    return @as(u8, @truncate(class_dword >> 24)) == 0x03;
+}
+
+/// 扫描 PCI（默认前 `max_bus` 条总线），收集指定厂商的显示控制器（class 0x03）
+pub fn collectDisplayDevicesByVendor(vendor: u16, out: []DisplayGfxPciInfo, max_bus: u8) usize {
+    if (!supports_pci_config) return 0;
+    var n: usize = 0;
+    var b: u8 = 0;
+    while (b <= max_bus) : (b += 1) {
+        var d: u8 = 0;
+        while (d < 32) : (d += 1) {
+            var f: u8 = 0;
+            while (f < 8) : (f += 1) {
+                const id = readConfigDword(b, d, f, 0);
+                if (id == 0xFFFFFFFF) continue;
+                const vid: u16 = @truncate(id);
+                if (vid != vendor) continue;
+                const cls = readConfigDword(b, d, f, 0x08);
+                if (!isPciDisplayClass(cls)) continue;
+
+                enablePciMemAndBusMaster(b, d, f);
+                const bars = decodePciBars(b, d, f);
+                if (n < out.len) {
+                    out[n] = .{
+                        .loc = .{ .bus = b, .dev = d, .func = f },
+                        .vendor_id = vid,
+                        .device_id = @truncate(id >> 16),
+                        .revision_id = readConfigByte(b, d, f, 0x08),
+                        .class_code = cls,
+                        .bars = bars,
+                    };
+                    n += 1;
+                }
+            }
+        }
+    }
+    return n;
+}
+
+/// 扫描 PCI，收集 Intel（8086）显示控制器
+pub fn collectIntelDisplayDevices(out: []IntelGfxPciInfo, max_bus: u8) usize {
+    return collectDisplayDevicesByVendor(PCI_VENDOR_INTEL, out, max_bus);
+}
+
+/// 扫描 PCI，收集 AMD/ATI（1002）显示控制器
+pub fn collectAmdDisplayDevices(out: []DisplayGfxPciInfo, max_bus: u8) usize {
+    return collectDisplayDevicesByVendor(PCI_VENDOR_AMD_ATI, out, max_bus);
+}
+
+/// 扫描 PCI，收集龙芯（0014）显示控制器（class 0x03）
+pub fn collectLoongsonDisplayDevices(out: []DisplayGfxPciInfo, max_bus: u8) usize {
+    return collectDisplayDevicesByVendor(PCI_VENDOR_LOONGSON, out, max_bus);
+}
+
+/// 选取首个非零 MMIO BAR（通常为寄存器块）
+pub fn firstMmioBar(info: *const DisplayGfxPciInfo) ?PciBarResource {
+    for (info.bars) |bar| {
+        if (!bar.is_io and bar.size > 0 and bar.base != 0) return bar;
+    }
+    return null;
+}
+
+/// PCI base class Serial Bus Controller（0x0C）下的 USB 主机控制器种类
+pub const UsbHostKind = enum(u8) {
+    uhci = 0, // prog_if 0x00
+    ohci = 1, // 0x10
+    ehci = 2, // 0x20
+    xhci = 3, // 0x30
+    unknown = 0xFF,
+};
+
+/// USB 主机控制器在 PCI 上的快照（class 0x0C03 + prog_if）
+pub const UsbHostPciInfo = struct {
+    loc: PciLoc,
+    vendor_id: u16,
+    device_id: u16,
+    revision_id: u8,
+    /// 配置空间 0x08：rev, prog_if, subclass, class（小端双字）
+    class_code: u32,
+    kind: UsbHostKind,
+    bars: [6]PciBarResource,
+};
+
+fn usbKindFromClass(class_dword: u32) ?UsbHostKind {
+    const cls: u8 = @truncate(class_dword >> 24);
+    const sub: u8 = @truncate((class_dword >> 16) & 0xFF);
+    const pif: u8 = @truncate((class_dword >> 8) & 0xFF);
+    if (cls != 0x0C or sub != 0x03) return null;
+    return switch (pif) {
+        0x00 => .uhci,
+        0x10 => .ohci,
+        0x20 => .ehci,
+        0x30 => .xhci,
+        else => .unknown,
+    };
+}
+
+/// 扫描 PCI（0..max_bus），收集 USB 主机控制器（class 0x0C03）
+pub fn collectUsbHostControllers(out: []UsbHostPciInfo, max_bus: u8) usize {
+    if (!supports_pci_config) return 0;
+    var n: usize = 0;
+    var b: u8 = 0;
+    while (b <= max_bus) : (b += 1) {
+        var d: u8 = 0;
+        while (d < 32) : (d += 1) {
+            var f: u8 = 0;
+            while (f < 8) : (f += 1) {
+                const id = readConfigDword(b, d, f, 0);
+                if (id == 0xFFFFFFFF) continue;
+                const cls = readConfigDword(b, d, f, 0x08);
+                const kind = usbKindFromClass(cls) orelse continue;
+
+                enablePciMemAndBusMaster(b, d, f);
+                const bars = decodePciBars(b, d, f);
+                if (n < out.len) {
+                    out[n] = .{
+                        .loc = .{ .bus = b, .dev = d, .func = f },
+                        .vendor_id = @truncate(id),
+                        .device_id = @truncate(id >> 16),
+                        .revision_id = readConfigByte(b, d, f, 0x08),
+                        .class_code = cls,
+                        .kind = kind,
+                        .bars = bars,
+                    };
+                    n += 1;
+                }
+            }
+        }
+    }
+    return n;
+}
+
+pub fn firstMmioBarUsb(info: *const UsbHostPciInfo) ?PciBarResource {
+    for (info.bars) |bar| {
+        if (!bar.is_io and bar.size > 0 and bar.base != 0) return bar;
+    }
+    return null;
+}
+
 pub const PciLoc = struct {
     bus: u8,
     dev: u8,
@@ -141,19 +407,23 @@ pub fn findDevicePci0(vendor_id: u16, device_ids: []const u16) ?PciLoc {
 }
 
 /// 枚举总线 0 上所有 VirtIO Input PCI（1af4:1052），用于同时挂 mouse + keyboard
+/// 扫描 func 0..7：多功能设备或部分固件下 virtio 不在 func0。
 pub fn collectVirtioInputDevicesPci0(out: []PciLoc) usize {
     if (!supports_pci_config) return 0;
     var n: usize = 0;
     var d: u8 = 0;
     while (d < 32) : (d += 1) {
-        const id = readConfigDword(0, d, 0, 0);
-        if (id == 0xFFFFFFFF) continue;
-        const vid: u16 = @truncate(id);
-        const did: u16 = @truncate(id >> 16);
-        if (vid == 0x1AF4 and did == 0x1052) {
-            if (n < out.len) {
-                out[n] = .{ .bus = 0, .dev = d, .func = 0 };
-                n += 1;
+        var f: u8 = 0;
+        while (f < 8) : (f += 1) {
+            const id = readConfigDword(0, d, f, 0);
+            if (id == 0xFFFFFFFF) continue;
+            const vid: u16 = @truncate(id);
+            const did: u16 = @truncate(id >> 16);
+            if (vid == 0x1AF4 and did == 0x1052) {
+                if (n < out.len) {
+                    out[n] = .{ .bus = 0, .dev = d, .func = f };
+                    n += 1;
+                }
             }
         }
     }

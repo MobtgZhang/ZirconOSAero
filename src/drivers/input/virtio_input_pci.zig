@@ -1,5 +1,5 @@
 //! VirtIO Input PCI（QEMU `virtio-mouse-pci` / `virtio-tablet-pci` / `virtio-keyboard-pci`，均为 1af4:1052）
-//! 现代 VirtIO 1.0 传输 + 事件队列轮询；支持最多 2 个 PCI 实例（键鼠各一）。
+//! 现代 VirtIO 1.0 传输 + 事件队列轮询；支持最多 MAX_INST 个 PCI 实例（键鼠/平板等）。
 //! 参考：VirtIO 1.2 §5.4 Input、§4.1.4 Virtio PCI。
 
 const builtin = @import("builtin");
@@ -47,7 +47,8 @@ const VirtqDesc = extern struct {
     next: u16,
 };
 
-const MAX_INST: usize = 2;
+/// mouse + keyboard + tablet（QEMU 可挂多个 1af4:1052）
+const MAX_INST: usize = 4;
 const LINUX_INPUT_EVENT_SZ: u32 = 8;
 /// QEMU virtio_input_send：SYN_REPORT 前对每个排队事件各 virtqueue_pop 一次；仅 1 个 avail 缓冲时第二次 pop 失败则整批丢弃（H6：used 永 0）。
 const RECV_BYTES_PER_DESC: u32 = LINUX_INPUT_EVENT_SZ;
@@ -81,7 +82,7 @@ const VirtioInputInst = struct {
     has_pointer_ev: bool = false,
 };
 
-var instances: [MAX_INST]VirtioInputInst = .{ .{}, .{} };
+var instances: [MAX_INST]VirtioInputInst = [_]VirtioInputInst{.{}} ** MAX_INST;
 
 fn fullMemoryFence() void {
     switch (builtin.target.cpu.arch) {
@@ -145,9 +146,10 @@ fn mapBarIfNeeded(phys: u64) bool {
     return vm.mapDeviceMmioIdentity(phys, 0x10000);
 }
 
-/// LoongArch：内核 direct map 上 VA≠GPA（H7）；环须用 GPA 编程 MMIO，且 CPU 写 avail 须经非缓存映射，否则 QEMU 读物理 RAM 看不到 D-cache（H6 used_idx 恒 0）。
+/// LoongArch：VA≠GPA 时须非缓存 + 正确 GPA（H7）。x86_64 等：部分 QEMU/TCG 路径下 PCI DMA 回填的 used 环与 CPU D-cache 可能不一致，读 used.idx 长期停滞则鼠标无位移（与 H6 同类）。
 fn remapInstQueueDmaUncached(inst: *VirtioInputInst) void {
-    if (builtin.target.cpu.arch != .loongarch64) return;
+    const need_uncached = builtin.target.cpu.arch == .loongarch64 or builtin.target.cpu.arch == .x86_64;
+    if (!need_uncached) return;
     const ps: usize = @import("../../arch.zig").impl.paging.page_size;
     const r0 = @intFromPtr(&inst.ring_page);
     const r1 = r0 + inst.ring_page.len;
@@ -222,6 +224,7 @@ fn syncDeliver(inst: *VirtioInputInst) void {
     inst.acc_dx = 0;
     inst.acc_dy = 0;
     inst.acc_scroll = 0;
+    inst.has_pointer_ev = false;
 }
 
 fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [LINUX_INPUT_EVENT_SZ]u8) void {
@@ -239,9 +242,25 @@ fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [LINUX_INPUT_EVENT_SZ]
             if (code == REL_X or code == REL_Y or code == REL_WHEEL) {
                 inst.has_pointer_ev = true;
             }
-            if (code == REL_X) inst.acc_dx += val;
-            if (code == REL_Y) inst.acc_dy += val;
-            if (code == REL_WHEEL) inst.acc_scroll += val;
+            // REL_X/Y：立即上报位移，不依赖 EV_SYN。部分 QEMU/virtqueue 路径下 SYN 批处理延迟或异常时，
+            // 仅累加 acc_* 会导致指针长期不动；SYN 上 acc 已为 0，deliverMouseEvent 会按重复包丢弃。
+            if (code == REL_X) {
+                mouse.deliverMouseEvent(.{
+                    .dx = @truncate(std.math.clamp(val, -32768, 32767)),
+                    .dy = 0,
+                    .buttons = inst.hid_buttons,
+                    .scroll = 0,
+                });
+            } else if (code == REL_Y) {
+                mouse.deliverMouseEvent(.{
+                    .dx = 0,
+                    .dy = @truncate(std.math.clamp(val, -32768, 32767)),
+                    .buttons = inst.hid_buttons,
+                    .scroll = 0,
+                });
+            } else if (code == REL_WHEEL) {
+                inst.acc_scroll += val;
+            }
         },
         EV_ABS => {
             if (code == ABS_X) {
@@ -266,12 +285,15 @@ fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [LINUX_INPUT_EVENT_SZ]
             if (code == BTN_LEFT) {
                 inst.has_pointer_ev = true;
                 if (val != 0) inst.hid_buttons |= 1 else inst.hid_buttons &= ~@as(u8, 1);
+                mouse.deliverMouseEvent(.{ .dx = 0, .dy = 0, .buttons = inst.hid_buttons, .scroll = 0 });
             } else if (code == BTN_RIGHT) {
                 inst.has_pointer_ev = true;
                 if (val != 0) inst.hid_buttons |= 2 else inst.hid_buttons &= ~@as(u8, 2);
+                mouse.deliverMouseEvent(.{ .dx = 0, .dy = 0, .buttons = inst.hid_buttons, .scroll = 0 });
             } else if (code == BTN_MIDDLE) {
                 inst.has_pointer_ev = true;
                 if (val != 0) inst.hid_buttons |= 4 else inst.hid_buttons &= ~@as(u8, 4);
+                mouse.deliverMouseEvent(.{ .dx = 0, .dy = 0, .buttons = inst.hid_buttons, .scroll = 0 });
             } else {
                 evdev.handleEvKey(code, val);
             }
@@ -326,7 +348,11 @@ fn pollOne(inst: *VirtioInputInst, inst_i: u8) void {
         if (elem.len >= LINUX_INPUT_EVENT_SZ) {
             const di = @as(usize, @intCast(elem.id % @as(u32, @intCast(inst.queue_size))));
             const base = inst.event_slot_off + di * @as(usize, @intCast(RECV_BYTES_PER_DESC));
-            parseLinuxInput(inst, inst.ring_page[base..][0..LINUX_INPUT_EVENT_SZ]);
+            const cap = @min(elem.len, RECV_BYTES_PER_DESC);
+            var off: u32 = 0;
+            while (off + LINUX_INPUT_EVENT_SZ <= cap) : (off += LINUX_INPUT_EVENT_SZ) {
+                parseLinuxInput(inst, inst.ring_page[base + @as(usize, off) ..][0..LINUX_INPUT_EVENT_SZ]);
+            }
         }
         inst.last_used_idx +%= 1;
         submitRecvSlot(inst, @truncate(elem.id));

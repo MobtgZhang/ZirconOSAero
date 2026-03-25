@@ -2,6 +2,8 @@
 const builtin = @import("builtin");
 
 pub fn pollAll() void {
+    const usb = @import("../usb/usb.zig");
+    usb.poll();
     const virtio_input_pci = @import("virtio_input_pci.zig");
     virtio_input_pci.poll();
     if (builtin.target.cpu.arch == .x86_64) {

@@ -10,7 +10,7 @@
 //!   video/    - VGA, HDMI, Framebuffer, display manager
 //!   audio/    - AC’97 (PortCls-style IOCTL surface)
 //!   input/    - PS/2 8042、VirtIO-Input PCI（`input_hub` 聚合轮询）
-//!   usb/      - USB 主机 + HID 类占位（MMIO/枚举待接）
+//!   usb/      - USB：PCI 枚举 xHCI/EHCI 占位、根口枚举、Hub 控制传输、HID Boot 鼠标（事件环轮询）
 //!
 //! Each driver registers a `DriverObject` dispatch routine and one or more `DeviceObject`s.
 
@@ -44,6 +44,10 @@ pub const video = struct {
     pub const hdmi = @import("video/hdmi.zig");
     pub const framebuffer = @import("video/framebuffer.zig");
     pub const display = @import("video/display.zig");
+    pub const intel_igpu = @import("video/intel_igpu.zig");
+    pub const amd_igpu = @import("video/amd_igpu.zig");
+    pub const loongson_igpu = @import("video/loongson_igpu.zig");
+    pub const desktop_fb_resolve = @import("video/desktop_fb_resolve.zig");
     /// Shell UI strings (English default); future MUI/language packs extend `shell_strings.zig`.
     pub const shell_strings = @import("video/shell_strings.zig");
     pub const icons = @import("video/icons.zig");
@@ -79,6 +83,17 @@ pub fn init() void {
         bus.pcie.init();
     }
 
+    const bopts_init = @import("build_options");
+    if (builtin.target.cpu.arch == .loongarch64 and bopts_init.loongson_igpu) {
+        video.loongson_igpu.init();
+    }
+    if (is_x86 and bopts_init.amd_igpu) {
+        video.amd_igpu.init();
+    }
+    if (is_x86 and bopts_init.intel_igpu) {
+        video.intel_igpu.init();
+    }
+
     if (is_x86) {
         bus.serial_bus.init();
         storage.ata.init();
@@ -93,10 +108,26 @@ pub fn init() void {
 
     drivers_initialized = true;
 
-    klog.info("Drivers: Video ready (VGA=%s, HDMI=%s, Display=%s)", .{
+    const bopts_log = @import("build_options");
+    klog.info("Drivers: Video ready (VGA=%s, HDMI=%s, Display=%s, LoongsonIGPU=%s, AMDIGPU=%s, IntelIGPU=%s)", .{
         if (video.vga.isInitialized()) "yes" else "no",
         if (video.hdmi.isInitialized()) "yes" else "no",
         if (video.display.isInitialized()) "yes" else "no",
+        if (builtin.target.cpu.arch == .loongarch64 and bopts_log.loongson_igpu) blk: {
+            if (video.loongson_igpu.isDeferredProbePending()) break :blk "defer";
+            if (video.loongson_igpu.isActive()) break :blk "yes";
+            break :blk "no";
+        } else "n/a",
+        if (is_x86 and bopts_log.amd_igpu) blk: {
+            if (video.amd_igpu.isDeferredProbePending()) break :blk "defer";
+            if (video.amd_igpu.isActive()) break :blk "yes";
+            break :blk "no";
+        } else "n/a",
+        if (is_x86 and bopts_log.intel_igpu) blk: {
+            if (video.intel_igpu.isDeferredProbePending()) break :blk "defer";
+            if (video.intel_igpu.isActive()) break :blk "yes";
+            break :blk "no";
+        } else "n/a",
     });
 
     if (is_x86) {
@@ -127,6 +158,23 @@ pub fn initInputDrivers() void {
         if (input.mouse.isInitialized()) "yes" else "no",
         if (input.virtio_input_pci.isActive()) "yes" else "no",
     });
+    klog.info("Input: VirtIO_Input_PCI=%s PS2_hw=%s (initDesktopMode sets pointer bounds)", .{
+        if (input.virtio_input_pci.isActive()) "active" else "inactive",
+        if (is_x86)
+            (if (input.mouse.isHardwareInitialized()) "ok" else "no")
+        else
+            "n/a",
+    });
+    const bopts = @import("build_options");
+    klog.info("InputDiag: MOUSE_DEBUG=%u AGENT_NDJSON=%u AMD_IGPU=%u amd_defer=%u INTEL_IGPU=%u intel_defer=%u idle_spin=%u — pointer stuck? see docs/cn/AeroDesktopRuntime.md; isolate: make AMD_IGPU=false / INTEL_IGPU=false", .{
+        @intFromBool(bopts.mouse_debug),
+        @intFromBool(bopts.agent_ndjson),
+        @intFromBool(bopts.amd_igpu),
+        @intFromBool(bopts.amd_igpu_defer_probe),
+        @intFromBool(bopts.intel_igpu),
+        @intFromBool(bopts.intel_igpu_defer_probe),
+        @intFromBool(bopts.desktop_idle_spin),
+    });
 }
 
 pub fn initAudioDrivers() void {
@@ -148,6 +196,17 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
     }
 
     klog.info("Drivers: Desktop display mode enabled (%ux%u@%ubpp)", .{ width, height, bpp });
+    klog.info("Desktop: fb %ux%u pitch=%u bpp=%u BGR=%u mouse=(%d,%d) bounds=%ux%u", .{
+        width,
+        height,
+        pitch,
+        bpp,
+        @intFromBool(pixel_bgr),
+        input.mouse.getX(),
+        input.mouse.getY(),
+        width,
+        height,
+    });
 }
 
 pub fn isInitialized() bool {

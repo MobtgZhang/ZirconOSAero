@@ -521,6 +521,10 @@ pub fn isInitialized() bool {
     return driver_initialized;
 }
 
+pub fn isHardwareInitialized() bool {
+    return hw_initialized;
+}
+
 /// 图形桌面就绪后再次打开数据流（长时间引导后部分固件/模拟器需重使能）。
 pub fn reassertStreamEnable() void {
     if (builtin.target.cpu.arch != .x86_64) return;

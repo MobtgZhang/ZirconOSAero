@@ -2,6 +2,8 @@
 
 **ZirconOS** 是一个 NT 风格混合微内核操作系统，使用 Zig 语言实现，支持 BIOS (GRUB Multiboot2) 和 UEFI 启动。
 
+**商标与独立性**：本项目不是 Microsoft 产品；「Windows」等商标归各自所有者。第三方与字体许可见仓库根目录 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
 <p align="center">
   <img src="assets/ZirconOS_logo.svg" alt="ZirconOS 标志" width="480" />
 </p>

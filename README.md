@@ -2,6 +2,8 @@
 
 **ZirconOSAero** 基于 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 路线，以 **NT 6.1（Windows 7）** 体验为默认目标：Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。
 
+**独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
+
 <p align="center">
   <img src="assets/ZirconOS_logo.svg" alt="ZirconOS logo" width="480" />
 </p>

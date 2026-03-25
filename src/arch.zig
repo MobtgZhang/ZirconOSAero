@@ -171,3 +171,15 @@ pub fn waitForInterrupt() void {
         },
     }
 }
+
+/// 桌面主循环空闲：可选 `-Ddesktop_idle_spin=true` 在 x86_64 上不自旋 HLT，对照 IRQ/IF 问题。
+pub fn waitForInterruptDesktop() void {
+    if (@import("builtin").target.cpu.arch == .x86_64 and @import("build_options").desktop_idle_spin) {
+        var i: u32 = 0;
+        while (i < 65536) : (i += 1) {
+            asm volatile ("" ::: .{ .memory = true });
+        }
+        return;
+    }
+    waitForInterrupt();
+}

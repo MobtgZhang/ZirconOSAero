@@ -30,6 +30,7 @@ pub fn bindKernelAddressSpace(space: *AddressSpace) void {
 }
 
 /// 将 `[phys_base, phys_base+size)` 按页做 identity 映射（MMIO：可写、不可执行、uncached）
+/// Intel 核显 BAR、VirtIO PCI 等均须经此路径或 `remapIdentityVirtPageUncached`，避免 WB 缓存导致 MMIO 读写异常。
 pub fn mapDeviceMmioIdentity(phys_base: u64, size: u64) bool {
     // 尚无内核页表时（如仍沿用 UEFI 映射）：假定固件已映射 MMIO，跳过以免阻塞 VirtIO attach
     const space = g_kernel_space orelse return true;

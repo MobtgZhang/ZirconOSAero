@@ -74,20 +74,25 @@ Selected via `src/arch.zig` for the build target.
 - Number: `rax`  
 - Args: `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9`  
 
-Implemented calls:
+Implemented calls (see [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig); other architectures use traps/MMIO only—no second table yet):
 
 | # | Name | Role |
 |---|------|------|
-| 0 | SYS_IPC_SEND | Send IPC message |
-| 1 | SYS_IPC_RECEIVE | Receive |
-| 2 | SYS_CREATE_PROCESS | Create process |
-| 3 | SYS_CREATE_THREAD | Create thread |
-| 4 | SYS_MAP_MEMORY | Map memory |
-| 5 | SYS_EXIT_PROCESS | Exit process |
-| 6 | SYS_CLOSE_HANDLE | Close handle |
-| 7 | SYS_GET_PID | Current PID |
-| 8 | SYS_YIELD | Yield |
-| 9 | SYS_DEBUG_PRINT | Debug print |
+| 0 | SYS_CREATE_PROCESS | Create process (`rdi` = `FrameAllocator*`) |
+| 1 | SYS_CREATE_THREAD | Allocate thread ID |
+| 2 | SYS_IPC_SEND | Send IPC message |
+| 3 | SYS_IPC_RECEIVE | Receive IPC |
+| 4 | SYS_MAP_MEMORY | Map user page at `rdi` (page-aligned) |
+| 5 | SYS_UNMAP_MEMORY | Unmap page at `rdi` |
+| 6 | SYS_EXIT_PROCESS | Exit with code `rdi` |
+| 7 | SYS_OPEN_HANDLE | Not implemented (`STATUS_NOT_IMPLEMENTED`) |
+| 8 | SYS_CLOSE_HANDLE | Close handle in current process |
+| 9 | SYS_WAIT_OBJECT | Stub wake (`STATUS_SUCCESS`) |
+| 10 | SYS_CREATE_PORT | Create LPC port; returns port id |
+| 11 | SYS_CONNECT_PORT | Connect to named port; returns client port id |
+| 12 | SYS_GET_PID | Current PID |
+| 13 | SYS_YIELD | Yield CPU |
+| 14 | SYS_DEBUG_PRINT | Write `rsi` bytes from `rdi` to console |
 
 ## 3. Memory management (`mm/`)
 

@@ -74,20 +74,25 @@ src/
 - 调用号：`rax`
 - 参数：`rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9`
 
-已实现的系统调用：
+已实现的系统调用（权威列表见 [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig)；其他架构当前无对等表）：
 
 | 编号 | 名称 | 功能 |
 |------|------|------|
-| 0 | SYS_IPC_SEND | 发送 IPC 消息 |
-| 1 | SYS_IPC_RECEIVE | 接收 IPC 消息 |
-| 2 | SYS_CREATE_PROCESS | 创建进程 |
-| 3 | SYS_CREATE_THREAD | 创建线程 |
-| 4 | SYS_MAP_MEMORY | 映射内存 |
-| 5 | SYS_EXIT_PROCESS | 退出进程 |
-| 6 | SYS_CLOSE_HANDLE | 关闭句柄 |
-| 7 | SYS_GET_PID | 获取进程 ID |
-| 8 | SYS_YIELD | 主动让出 CPU |
-| 9 | SYS_DEBUG_PRINT | 调试输出 |
+| 0 | SYS_CREATE_PROCESS | 创建进程（`rdi` = `FrameAllocator*`） |
+| 1 | SYS_CREATE_THREAD | 分配线程 ID |
+| 2 | SYS_IPC_SEND | 发送 IPC 消息 |
+| 3 | SYS_IPC_RECEIVE | 接收 IPC |
+| 4 | SYS_MAP_MEMORY | 映射用户页（`rdi` 须页对齐） |
+| 5 | SYS_UNMAP_MEMORY | 解除 `rdi` 虚拟页映射 |
+| 6 | SYS_EXIT_PROCESS | 以 `rdi` 为退出码终止进程 |
+| 7 | SYS_OPEN_HANDLE | 未实现（返回 `STATUS_NOT_IMPLEMENTED`） |
+| 8 | SYS_CLOSE_HANDLE | 关闭当前进程句柄 |
+| 9 | SYS_WAIT_OBJECT | 桩：立即成功 |
+| 10 | SYS_CREATE_PORT | 创建 LPC 端口，返回端口 id |
+| 11 | SYS_CONNECT_PORT | 连接命名端口，返回客户端端口 id |
+| 12 | SYS_GET_PID | 当前进程 ID |
+| 13 | SYS_YIELD | 主动让出 CPU |
+| 14 | SYS_DEBUG_PRINT | 将 `rdi` 起 `rsi` 字节输出到控制台 |
 
 ## 3. 内存管理 (mm/)
 

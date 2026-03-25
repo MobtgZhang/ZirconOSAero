@@ -1,0 +1,39 @@
+//! DID → `AmdGpuFamily`。未知 DID 返回 `.unknown`（仍允许 PCI 探测 + GOP handoff）。
+
+const types = @import("types.zig");
+const dids = @import("dids.zig");
+
+pub fn familyFromDeviceId(device_id: u16) types.AmdGpuFamily {
+    // Stoney Ridge (amdgpu CHIP_STONEY; 常见 0x98Ex)
+    if (device_id >= 0x98E0 and device_id <= 0x98FF) return .stoney;
+
+    // Carrizo + Bristol Ridge（显示块 DCE11 同代；Bristol DID 常与 Carrizo 同段）
+    if (device_id >= 0x9870 and device_id <= 0x987F) return .carrizo;
+
+    // Kaveri APU
+    if (device_id >= dids.kaveri_range_first and device_id <= dids.kaveri_range_last) return .kaveri;
+
+    // Kabini / Temash / Beema
+    if (device_id >= dids.kabini_range_first and device_id <= dids.kabini_range_last) return .kabini;
+
+    // Mullins
+    if (device_id >= dids.mullins_range_first and device_id <= dids.mullins_range_last) return .mullins;
+
+    // Trinity / Richland（扩展段）
+    if (device_id >= 0x9900 and device_id <= 0x991F) return .trinity_richland;
+
+    // Llano 及周边 APU
+    if (device_id >= 0x9640 and device_id <= 0x964F) return .llano;
+
+    // RS880 等北桥集显 / 老 IGP（片段）
+    switch (device_id) {
+        0x9710, 0x9712, 0x9713, 0x9714, 0x9715, 0x9802, 0x9803, 0x9804, 0x9805, 0x9806, 0x9807 => return .rs880_igp,
+        else => {},
+    }
+
+    // 其它 1002 显示控制器：保留为 legacy 桶，勿与 amdgpu 新 ASIC 寄存器混用
+    if (device_id >= 0x6600 and device_id <= 0x68FF) return .legacy_ni_si;
+    if (device_id >= 0x6700 and device_id <= 0x67FF) return .legacy_ni_si;
+
+    return .unknown;
+}

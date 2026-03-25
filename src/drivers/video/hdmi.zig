@@ -310,6 +310,23 @@ pub fn syncFramebufferMode(w: u32, h: u32, bpp: u8) void {
     }
 }
 
+/// Intel iGPU 探测后刷新主连接器元数据（DDC/EDID 仍由上层或固件提供）
+pub fn syncIntelIgpuConnector(device_id: u16, generation_code: u8) void {
+    _ = device_id;
+    _ = generation_code;
+    if (output_count == 0) return;
+    var out = &outputs[0];
+    out.connector = .edp;
+    out.status = .connected;
+    out.signal = .digital_dp;
+    out.edid.valid = true;
+    out.edid.digital_input = true;
+    out.edid.color_depth = 8;
+    const name = "Intel iGPU";
+    @memcpy(out.edid.monitor_name[0..name.len], name);
+    out.edid.monitor_name_len = name.len;
+}
+
 // ── IRP Dispatch ──
 
 fn hdmiDispatch(irp: *io.Irp) io.IoStatus {

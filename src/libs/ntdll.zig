@@ -71,6 +71,8 @@ pub const SystemPerformanceInformation: u32 = 2;
 pub const SystemTimeOfDayInformation: u32 = 3;
 pub const SystemProcessInformation: u32 = 5;
 pub const SystemModuleInformation: u32 = 11;
+/// Wine/ReactOS–aligned class for `RTL_OSVERSIONINFOEXW` (public SDK omits full enum).
+pub const SystemVersionInformation: u32 = 57;
 
 // ── Process APIs ──
 
@@ -329,6 +331,7 @@ pub const SYSTEM_BASIC_INFO = struct {
 };
 
 pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u32) NTSTATUS {
+    const osv = @import("../config/os_version.zig");
     switch (info_class) {
         SystemBasicInformation => {
             if (buffer.len < @sizeOf(SYSTEM_BASIC_INFO)) {
@@ -344,6 +347,14 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
         },
         SystemProcessInformation => {
             return_length.* = 0;
+            return STATUS_SUCCESS;
+        },
+        SystemVersionInformation => {
+            return_length.* = osv.rtl_osversioninfoexw_bytes;
+            if (buffer.len < osv.rtl_osversioninfoexw_bytes) {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            if (!osv.writeRtlOsVersionInfoExW(buffer)) return STATUS_INVALID_PARAMETER;
             return STATUS_SUCCESS;
         },
         else => {
@@ -406,26 +417,41 @@ pub fn RtlMoveMemory(dest: []u8, src: []const u8) void {
     RtlCopyMemory(dest, src);
 }
 
-pub const RTL_OSVERSIONINFOW = struct {
-    os_version_info_size: u32 = @sizeOf(RTL_OSVERSIONINFOW),
-    /// Windows 7 / NT 6.1（与 docs/cn/PROCESS_NT61.md Phase 2 对外语义一致）
-    major_version: u32 = 6,
-    minor_version: u32 = 1,
-    build_number: u32 = 7601,
-    platform_id: u32 = 2,
-    csd_version: [128]u8 = [_]u8{0} ** 128,
+/// Matches Windows `RTL_OSVERSIONINFOW` (WCHAR CSD string).
+pub const RTL_OSVERSIONINFOW = extern struct {
+    os_version_info_size: u32,
+    major_version: u32,
+    minor_version: u32,
+    build_number: u32,
+    platform_id: u32,
+    csd_version: [128]u16,
 };
 
 pub fn RtlGetVersion(info: *RTL_OSVERSIONINFOW) NTSTATUS {
+    const osv = @import("../config/os_version.zig");
     if (info.os_version_info_size < 20) return STATUS_INVALID_PARAMETER;
-    const csd = "Service Pack 1";
-    info.os_version_info_size = @sizeOf(RTL_OSVERSIONINFOW);
-    info.major_version = 6;
-    info.minor_version = 1;
-    info.build_number = 7601;
-    info.platform_id = 2;
-    @memset(&info.csd_version, 0);
-    @memcpy(info.csd_version[0..csd.len], csd);
+
+    if (info.os_version_info_size >= osv.rtl_osversioninfoexw_bytes) {
+        const raw: [*]u8 = @ptrCast(info);
+        if (!osv.writeRtlOsVersionInfoExW(raw[0..osv.rtl_osversioninfoexw_bytes])) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (info.os_version_info_size < @sizeOf(RTL_OSVERSIONINFOW)) return STATUS_INVALID_PARAMETER;
+
+    info.os_version_info_size = @intCast(@sizeOf(RTL_OSVERSIONINFOW));
+    info.major_version = osv.major();
+    info.minor_version = osv.minor();
+    info.build_number = osv.buildNumber();
+    info.platform_id = osv.platformId();
+    @memset(@as([*]u8, @ptrCast(&info.csd_version))[0 .. 128 * @sizeOf(u16)], 0);
+    const csd = osv.csdVersionAscii();
+    var i: usize = 0;
+    while (i < csd.len and i < 128) : (i += 1) {
+        info.csd_version[i] = csd[i];
+    }
     return STATUS_SUCCESS;
 }
 
@@ -438,6 +464,7 @@ pub fn RtlNtStatusToDosError(status: NTSTATUS) u32 {
         STATUS_OBJECT_NAME_NOT_FOUND => 2,
         STATUS_NOT_IMPLEMENTED => 120,
         STATUS_BUFFER_TOO_SMALL => 122,
+        STATUS_INFO_LENGTH_MISMATCH => 24,
         STATUS_END_OF_FILE => 38,
         STATUS_INVALID_HANDLE => 6,
         else => 317,
@@ -477,7 +504,7 @@ pub fn init() void {
     klog.info("ntdll: Sync APIs: NtCreateEvent, NtCreateMutant, NtWaitForSingleObject", .{});
     klog.info("ntdll: Memory APIs: NtAllocateVirtualMemory, NtFreeVirtualMemory, NtCreateSection", .{});
     klog.info("ntdll: IPC APIs: NtCreatePort, NtConnectPort, NtRequestWaitReplyPort", .{});
-    klog.info("ntdll: System APIs: NtQuerySystemInformation, NtQueryVirtualMemory", .{});
+    klog.info("ntdll: System APIs: NtQuerySystemInformation (incl. SystemVersionInformation), NtQueryVirtualMemory", .{});
     klog.info("ntdll: Registry APIs: NtOpenKey, NtCreateKey, NtQueryValueKey (stub)", .{});
     klog.info("ntdll: RTL: RtlGetVersion, RtlNtStatusToDosError, memory utils", .{});
     klog.info("ntdll: Debug: DbgPrint, DbgBreakPoint", .{});

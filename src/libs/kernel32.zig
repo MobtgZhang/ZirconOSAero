@@ -749,21 +749,21 @@ pub fn GetNativeSystemInfo(info: *SYSTEM_INFO) void {
 
 pub const OSVERSIONINFOA = struct {
     os_version_info_size: DWORD = @sizeOf(OSVERSIONINFOA),
-    major_version: DWORD = 10,
-    minor_version: DWORD = 0,
-    build_number: DWORD = 19041,
+    major_version: DWORD = 6,
+    minor_version: DWORD = 1,
+    build_number: DWORD = 7601,
     platform_id: DWORD = 2,
     csd_version: [128]u8 = [_]u8{0} ** 128,
 };
 
 pub const OSVERSIONINFOEXA = struct {
     os_version_info_size: DWORD = @sizeOf(OSVERSIONINFOEXA),
-    major_version: DWORD = 10,
-    minor_version: DWORD = 0,
-    build_number: DWORD = 19041,
+    major_version: DWORD = 6,
+    minor_version: DWORD = 1,
+    build_number: DWORD = 7601,
     platform_id: DWORD = 2,
     csd_version: [128]u8 = [_]u8{0} ** 128,
-    service_pack_major: u16 = 0,
+    service_pack_major: u16 = 1,
     service_pack_minor: u16 = 0,
     suite_mask: u16 = 0x0100,
     product_type: u8 = 1,
@@ -771,7 +771,31 @@ pub const OSVERSIONINFOEXA = struct {
 };
 
 pub fn GetVersionExA(info: *OSVERSIONINFOA) BOOL {
-    info.* = .{};
+    const osv = @import("../config/os_version.zig");
+    if (info.os_version_info_size < @sizeOf(OSVERSIONINFOA)) {
+        SetLastError(87);
+        return FALSE;
+    }
+    info.major_version = osv.major();
+    info.minor_version = osv.minor();
+    info.build_number = osv.buildNumber();
+    info.platform_id = osv.platformId();
+    @memset(&info.csd_version, 0);
+    const csd = osv.csdVersionAscii();
+    const n = @min(csd.len, info.csd_version.len);
+    @memcpy(info.csd_version[0..n], csd[0..n]);
+
+    if (info.os_version_info_size >= @sizeOf(OSVERSIONINFOEXA)) {
+        info.os_version_info_size = @sizeOf(OSVERSIONINFOEXA);
+        const ex: *OSVERSIONINFOEXA = @ptrCast(@alignCast(info));
+        ex.service_pack_major = osv.servicePackMajor();
+        ex.service_pack_minor = osv.servicePackMinor();
+        ex.suite_mask = osv.suiteMask();
+        ex.product_type = osv.productType();
+        ex.reserved = 0;
+    } else {
+        info.os_version_info_size = @sizeOf(OSVERSIONINFOA);
+    }
     return TRUE;
 }
 

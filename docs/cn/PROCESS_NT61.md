@@ -29,6 +29,7 @@
 ### Phase 3 — 子系统与用户态
 
 - 对象管理器、进程/LPC、I/O、安全描述符等按依赖顺序实现；与 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 上游目录结构对齐并做 NT6.1 行为差分。
+- 子里程碑拆分见 [ExecutivePhase3_Milestones.md](ExecutivePhase3_Milestones.md)。
 
 ### Phase 4 — Aero 桌面与合成
 

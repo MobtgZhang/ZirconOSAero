@@ -360,14 +360,22 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         if (boot_info) |binfo| {
             if (binfo.fb_info) |fb_i| {
                 if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) {
-                    const fb_addr = @as(usize, @truncate(fb_i.addr));
+                    const use_fb = drivers.video.desktop_fb_resolve.resolveDesktopFramebuffer(.{
+                        .addr = fb_i.addr,
+                        .width = fb_i.width,
+                        .height = fb_i.height,
+                        .pitch = fb_i.pitch,
+                        .bpp = fb_i.bpp,
+                        .pixel_bgr = fb_i.pixel_bgr != 0,
+                    });
+                    const fb_addr = @as(usize, @truncate(use_fb.addr));
 
                     if (!arch.impl.framebuffer.isReady()) {
-                        arch.initFramebuffer(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp);
+                        arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
                     }
                     arch.impl.framebuffer.setConsoleEnabled(false);
 
-                    drivers.initDesktopMode(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp, fb_i.pixel_bgr != 0);
+                    drivers.initDesktopMode(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp, use_fb.pixel_bgr);
                     user32_mod.syncScreenFromFramebuffer();
                     display.syncCursorFromMouse();
                     display.clearFramebuffer();
@@ -480,7 +488,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                 }
 
                 for (0..16) |_| input_hub.pollAll();
-                arch.waitForInterrupt();
+                arch.waitForInterruptDesktop();
             }
         } else {
             klog.err("Desktop: isDesktopReady=false (need multiboot framebuffer + initDesktopMode); text mode", .{});
@@ -549,6 +557,7 @@ fn desktopThemeName(theme: @import("arch.zig").impl.boot.DesktopTheme) []const u
 
 // ── ZBM 串口菜单（与 boot/zbm/uefi/main_loongarch64.zig 样式对齐：箭头、边框、描述、ENTER/ESC）──
 fn showZbmStyleBootMenu() void {
+    const sys_config = @import("config/config.zig");
     const COUNTDOWN_SEC: u32 = 10;
     var countdown: u32 = COUNTDOWN_SEC;
     var selected: usize = 0;
@@ -575,7 +584,7 @@ fn showZbmStyleBootMenu() void {
         if (need_full_redraw) {
             klog.info("", .{});
             klog.info("                    ZirconOS Boot Manager                                     ", .{});
-            klog.info("                         Version 6.1                                             ", .{});
+            klog.info("                         Version %s                                             ", .{sys_config.getVersion()});
             klog.info("", .{});
             klog.info("    Choose an operating system to start:", .{});
             klog.info("    (Use the arrow keys to highlight your choice, then press ENTER.)", .{});
@@ -715,6 +724,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         if (vm.createAddressSpace(&alloc)) |ks| {
             loong_kernel_space = ks;
             const kernel_space = &loong_kernel_space.?;
+            // 0–2GiB：GOP/ramfb；GPU MMIO 若落在 2–4GiB，`vm.mapDeviceMmioIdentity` 会按需建 identity 非缓存映射
             const identity_pages: usize = (2 * 1024 * 1024 * 1024) / paging.page_size;
             var i: usize = 0;
             while (i < identity_pages) : (i += 1) {
@@ -724,7 +734,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             }
             kernel_space.activate();
             vm.bindKernelAddressSpace(kernel_space);
-            klog.info("VM: LoongArch identity map 0-2GB (covers GOP fb)", .{});
+            klog.info("VM: LoongArch identity map 0-2GB (covers GOP fb; BAR>2G via mapDeviceMmioIdentity)", .{});
         }
         const ramfb = @import("hal/loongarch64/ramfb.zig");
         const has_gop_fb = if (boot_info) |b| (b.fb_info != null and b.fb_info.?.addr != 0) else false;
@@ -874,7 +884,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     audio.init();
 
     klog.info("", .{});
-    klog.info("=== ZirconOSAero NT 6.1 kernel ready (Phase 0–12) ===", .{});
+    klog.info("=== ZirconOSAero NT %s kernel ready (Phase 0–12) ===", .{sys_config.getVersion()});
     klog.info("Architecture : %s", .{arch.impl.name});
     klog.info("Processes    : %u", .{@import("ps/process.zig").getProcessCount()});
     klog.info("Sessions     : %u", .{smss.getSessionCount()});
@@ -906,13 +916,21 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         if (boot_info) |binfo| {
             if (binfo.fb_info) |fb_i| {
                 if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) {
-                    const fb_addr = @as(usize, @truncate(fb_i.addr));
+                    const use_fb = drivers.video.desktop_fb_resolve.resolveDesktopFramebuffer(.{
+                        .addr = fb_i.addr,
+                        .width = fb_i.width,
+                        .height = fb_i.height,
+                        .pitch = fb_i.pitch,
+                        .bpp = fb_i.bpp,
+                        .pixel_bgr = if (builtin.target.cpu.arch == .x86_64) (fb_i.pixel_bgr != 0) else true,
+                    });
+                    const fb_addr = @as(usize, @truncate(use_fb.addr));
                     if (!arch.impl.framebuffer.isReady()) {
-                        arch.initFramebuffer(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp);
+                        arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
                     }
                     arch.impl.framebuffer.setConsoleEnabled(false);
-                    // LoongArch ramfb / UEFI GOP：线性缓冲通常为 BGRx（与 x86 GOP 一致）；x86 多来自 Multiboot 元数据
-                    drivers.initDesktopMode(fb_addr, fb_i.width, fb_i.height, fb_i.pitch, fb_i.bpp, builtin.target.cpu.arch != .x86_64);
+                    // LoongArch ramfb / UEFI GOP：线性缓冲通常为 BGRx；x86 Multiboot 用元数据 pixel_bgr
+                    drivers.initDesktopMode(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp, use_fb.pixel_bgr);
                     user32_mod.syncScreenFromFramebuffer();
                     display.syncCursorFromMouse();
                     display.clearFramebuffer();
@@ -991,7 +1009,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                     mouse.clearCursorMoved();
                 }
                 for (0..16) |_| input_hub.pollAll();
-                arch.waitForInterrupt();
+                arch.waitForInterruptDesktop();
             }
         } else {
             klog.err("Desktop: isDesktopReady=false", .{});

@@ -124,16 +124,20 @@ fn writeRamfbConfig(key: u16, cfg_ptr: [*]const u8) bool {
     return false;
 }
 
+fn writeRamfbCfgToBuf(cfg_ptr: *align(8) [32]u8, phys: u64, width: u32, height: u32, stride: u32) void {
+    writeU64Be(@intFromPtr(cfg_ptr), phys);
+    writeU32Be(@intFromPtr(cfg_ptr) + 8, RAMFB_FOURCC_AR24);
+    writeU32Be(@intFromPtr(cfg_ptr) + 12, 0);
+    writeU32Be(@intFromPtr(cfg_ptr) + 16, width);
+    writeU32Be(@intFromPtr(cfg_ptr) + 20, height);
+    writeU32Be(@intFromPtr(cfg_ptr) + 24, stride);
+}
+
 /// 尝试初始化 ramfb，返回 RamfbInfo 或 null
 pub fn setup() ?RamfbInfo {
     const key = findRamfbKey() orelse return null;
     const cfg_ptr = &ramfb_cfg_buf;
-    writeU64Be(@intFromPtr(cfg_ptr), RAMFB_PHYS);
-    writeU32Be(@intFromPtr(cfg_ptr) + 8, RAMFB_FOURCC_AR24);
-    writeU32Be(@intFromPtr(cfg_ptr) + 12, 0);
-    writeU32Be(@intFromPtr(cfg_ptr) + 16, FB_WIDTH);
-    writeU32Be(@intFromPtr(cfg_ptr) + 20, FB_HEIGHT);
-    writeU32Be(@intFromPtr(cfg_ptr) + 24, FB_STRIDE);
+    writeRamfbCfgToBuf(cfg_ptr, RAMFB_PHYS, FB_WIDTH, FB_HEIGHT, FB_STRIDE);
     if (!writeRamfbConfig(key, cfg_ptr)) return null;
     return RamfbInfo{
         .addr = RAMFB_PHYS,
@@ -143,4 +147,13 @@ pub fn setup() ?RamfbInfo {
         .bpp = 32,
         .fb_type = 1,
     };
+}
+
+/// 将 QEMU `ramfb` 的扫描地址改到 **已有** 物理帧缓冲（如 UEFI GOP）。
+/// 当命令行同时存在 `-device ramfb` 与固件 GOP 时，GTK 常仍扫 ramfb 默认 0xF000000，内核却在 GOP 地址绘制 → 黑屏/固件残影；本函数使二者一致。
+pub fn pointRamfbToGuestPhys(phys: u64, width: u32, height: u32, stride: u32) bool {
+    const key = findRamfbKey() orelse return false;
+    const cfg_ptr = &ramfb_cfg_buf;
+    writeRamfbCfgToBuf(cfg_ptr, phys, width, height, stride);
+    return writeRamfbConfig(key, cfg_ptr);
 }

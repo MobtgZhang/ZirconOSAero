@@ -6,6 +6,8 @@ const std = @import("std");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 const cjk_font = @import("cjk_font.zig");
+const config_mod = @import("../../config/config.zig");
+const frame_mod = @import("../../mm/frame.zig");
 
 // ── Pixel Format ──
 
@@ -81,6 +83,19 @@ pub const Rect = struct {
     }
 };
 
+/// `origin + delta` 与 `limit` 比较后再截断为 u32，避免 `x0 + w` 在 u32 上先溢出（Debug 下 panic）。
+fn addU32Clamped(origin: u32, delta: u32, limit: u32) u32 {
+    const s = @as(u64, origin) + @as(u64, delta);
+    const l = @as(u64, limit);
+    return @intCast(@min(s, l));
+}
+
+/// `y * pitch + x * bytes_pp`，u64 中间值避免 u32 乘法在 Debug 下溢出。
+fn pixelByteOffset(x: u32, y: u32, bytes_pp: u32) usize {
+    const p = @as(u64, y) * @as(u64, fb_config.pitch) + @as(u64, x) * @as(u64, bytes_pp);
+    return @intCast(p);
+}
+
 // ── Dirty Region Tracking ──
 
 const MAX_DIRTY_RECTS: usize = 32;
@@ -123,6 +138,8 @@ var total_flips: u64 = 0;
 const BACK_BUF_MAX: usize = 10 * 1024 * 1024; // 10 MB – covers up to 1920×1080@32bpp
 var back_buf: [BACK_BUF_MAX]u8 = undefined;
 var double_buffer_active: bool = false;
+/// `allocContiguous` 后备时使用；与 `back_buffer_size`（字节）一致时为堆分配缓冲。
+var back_buffer_heap_nframes: usize = 0;
 
 // ── IOCTL Codes ──
 
@@ -139,9 +156,19 @@ pub const IOCTL_FB_GET_STATS: u32 = 0x0009001C;
 
 fn getDrawBuffer() [*]volatile u8 {
     if (double_buffer_active) {
-        return @volatileCast(@as([*]u8, &back_buf));
+        if (back_buffer_addr != 0) {
+            return @volatileCast(@as([*]u8, @ptrFromInt(back_buffer_addr)));
+        }
+        return @volatileCast(@as([*]u8, @ptrCast(&back_buf)));
     }
     return @ptrFromInt(fb_config.address);
+}
+
+fn backBufSrcPtr() [*]const u8 {
+    if (back_buffer_addr != 0) {
+        return @ptrFromInt(back_buffer_addr);
+    }
+    return &back_buf;
 }
 
 /// Pre-pack a color into the native pixel word so that solid fills can write
@@ -158,7 +185,7 @@ fn packPixel32(color: u32) u32 {
 }
 
 /// color 为与 `display.rgb` 一致：低 8 位 B，中 G，高 R（无 Alpha 语义）
-fn writePixel4(ptr: [*]volatile u8, offset: u32, color: u32) void {
+fn writePixel4(ptr: [*]volatile u8, offset: usize, color: u32) void {
     const b = color & 0xFF;
     const g = (color >> 8) & 0xFF;
     const r = (color >> 16) & 0xFF;
@@ -175,7 +202,7 @@ fn writePixel4(ptr: [*]volatile u8, offset: u32, color: u32) void {
     ptr[offset + 3] = 0xFF;
 }
 
-fn writePixel3(ptr: [*]volatile u8, offset: u32, color: u32) void {
+fn writePixel3(ptr: [*]volatile u8, offset: usize, color: u32) void {
     const b = color & 0xFF;
     const g = (color >> 8) & 0xFF;
     const r = (color >> 16) & 0xFF;
@@ -196,7 +223,7 @@ pub fn putPixel32(x: u32, y: u32, color: u32) void {
     if (x >= fb_config.width or y >= fb_config.height) return;
     const bpp = fb_config.bpp;
     const bytes_pp = @as(u32, bpp) / 8;
-    const offset = y * fb_config.pitch + x * bytes_pp;
+    const offset = pixelByteOffset(x, y, bytes_pp);
     const ptr = getDrawBuffer();
 
     if (bytes_pp >= 4) {
@@ -216,7 +243,7 @@ pub fn putPixel32(x: u32, y: u32, color: u32) void {
 pub fn getPixel32(x: u32, y: u32) u32 {
     if (x >= fb_config.width or y >= fb_config.height) return 0;
     const bytes_pp = @as(u32, fb_config.bpp) / 8;
-    const offset = y * fb_config.pitch + x * bytes_pp;
+    const offset = pixelByteOffset(x, y, bytes_pp);
     const ptr = getDrawBuffer();
 
     if (bytes_pp >= 3) {
@@ -261,7 +288,7 @@ pub fn blendPixel(x: u32, y: u32, color: u32, alpha: u8) void {
 fn fillRowDirect(py: u32, x0: u32, x1: u32, color: u32) void {
     const bytes_pp = @as(u32, fb_config.bpp) / 8;
     const ptr = getDrawBuffer();
-    const row_offset = py * fb_config.pitch + x0 * bytes_pp;
+    const row_offset = pixelByteOffset(x0, py, bytes_pp);
     const count = x1 - x0;
 
     if (bytes_pp == 4) {
@@ -275,7 +302,7 @@ fn fillRowDirect(py: u32, x0: u32, x1: u32, color: u32) void {
     } else if (bytes_pp == 3) {
         var i: u32 = 0;
         while (i < count) : (i += 1) {
-            writePixel3(ptr, row_offset + i * 3, color);
+            writePixel3(ptr, row_offset + @as(usize, i) * 3, color);
         }
     } else {
         var px: u32 = x0;
@@ -289,8 +316,8 @@ pub fn fillRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
     if (w <= 0 or h <= 0) return;
     const x0: u32 = if (x < 0) 0 else @intCast(x);
     const y0: u32 = if (y < 0) 0 else @intCast(y);
-    const x1: u32 = @min(x0 + @as(u32, @intCast(w)), fb_config.width);
-    const y1: u32 = @min(y0 + @as(u32, @intCast(h)), fb_config.height);
+    const x1: u32 = addU32Clamped(x0, @intCast(w), fb_config.width);
+    const y1: u32 = addU32Clamped(y0, @intCast(h), fb_config.height);
     if (x0 >= x1 or y0 >= y1) return;
 
     var py: u32 = y0;
@@ -302,17 +329,22 @@ pub fn fillRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
     addDirtyRect(.{ .x = x, .y = y, .w = w, .h = h });
 }
 
+fn clampDrawCoordI64(v: i64) i32 {
+    return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
+}
+
 pub fn drawRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
+    if (w <= 0 or h <= 0) return;
     drawHLine(x, y, w, color);
-    drawHLine(x, y + h - 1, w, color);
+    drawHLine(x, clampDrawCoordI64(@as(i64, y) + @as(i64, h) - 1), w, color);
     drawVLine(x, y, h, color);
-    drawVLine(x + w - 1, y, h, color);
+    drawVLine(clampDrawCoordI64(@as(i64, x) + @as(i64, w) - 1), y, h, color);
 }
 
 pub fn drawHLine(x: i32, y: i32, length: i32, color: u32) void {
     if (length <= 0 or y < 0 or y >= @as(i32, @intCast(fb_config.height))) return;
     const x0: u32 = if (x < 0) 0 else @intCast(x);
-    const x1: u32 = @min(x0 + @as(u32, @intCast(length)), fb_config.width);
+    const x1: u32 = addU32Clamped(x0, @intCast(length), fb_config.width);
     if (x0 >= x1) return;
     fillRowDirect(@intCast(y), x0, x1, color);
 }
@@ -320,7 +352,7 @@ pub fn drawHLine(x: i32, y: i32, length: i32, color: u32) void {
 pub fn drawVLine(x: i32, y: i32, length: i32, color: u32) void {
     if (length <= 0 or x < 0 or x >= @as(i32, @intCast(fb_config.width))) return;
     const y0: u32 = if (y < 0) 0 else @intCast(y);
-    const y1: u32 = @min(y0 + @as(u32, @intCast(length)), fb_config.height);
+    const y1: u32 = addU32Clamped(y0, @intCast(length), fb_config.height);
     var py: u32 = y0;
     while (py < y1) : (py += 1) {
         putPixel32(@intCast(x), py, color);
@@ -332,8 +364,8 @@ pub fn drawGradientH(x: i32, y: i32, w: i32, h: i32, color1: u32, color2: u32) v
     const uw: u32 = @intCast(w);
     const x0: u32 = if (x < 0) 0 else @intCast(x);
     const y0: u32 = if (y < 0) 0 else @intCast(y);
-    const x1: u32 = @min(x0 + uw, fb_config.width);
-    const y1: u32 = @min(y0 + @as(u32, @intCast(h)), fb_config.height);
+    const x1: u32 = addU32Clamped(x0, uw, fb_config.width);
+    const y1: u32 = addU32Clamped(y0, @intCast(h), fb_config.height);
     if (x0 >= x1 or y0 >= y1) return;
 
     const bytes_pp = @as(u32, fb_config.bpp) / 8;
@@ -343,15 +375,15 @@ pub fn drawGradientH(x: i32, y: i32, w: i32, h: i32, color1: u32, color2: u32) v
 
     var py: u32 = y0;
     while (py < y1) : (py += 1) {
-        const row_offset = py * fb_config.pitch + x0 * bytes_pp;
+        const row_offset = pixelByteOffset(x0, py, bytes_pp);
         var px: u32 = 0;
         while (px < row_pixels) : (px += 1) {
             const t = (x0 + px) -| base_x;
             const color = interpolateColor(color1, color2, t, uw);
             if (bytes_pp == 4) {
-                writePixel4(ptr, row_offset + px * 4, color);
+                writePixel4(ptr, row_offset + @as(usize, px) * 4, color);
             } else if (bytes_pp == 3) {
-                writePixel3(ptr, row_offset + px * 3, color);
+                writePixel3(ptr, row_offset + @as(usize, px) * 3, color);
             } else {
                 putPixel32(x0 + px, py, color);
             }
@@ -366,8 +398,8 @@ pub fn drawGradientV(x: i32, y: i32, w: i32, h: i32, color1: u32, color2: u32) v
     const uh: u32 = @intCast(h);
     const x0: u32 = if (x < 0) 0 else @intCast(x);
     const y0: u32 = if (y < 0) 0 else @intCast(y);
-    const x1: u32 = @min(x0 + @as(u32, @intCast(w)), fb_config.width);
-    const y1: u32 = @min(y0 + uh, fb_config.height);
+    const x1: u32 = addU32Clamped(x0, @intCast(w), fb_config.width);
+    const y1: u32 = addU32Clamped(y0, uh, fb_config.height);
     if (x0 >= x1 or y0 >= y1) return;
 
     const base_y: u32 = if (y < 0) 0 else @intCast(y);
@@ -399,9 +431,11 @@ pub fn interpolateColor(c1: u32, c2: u32, t: u32, total: u32) u32 {
 
 fn blendChannel(a: u32, b: u32, t: u32, total: u32) u32 {
     if (b >= a) {
-        return a + ((b - a) * t) / total;
+        const da: u64 = b - a;
+        return @truncate(a + @as(u32, @intCast(da * @as(u64, t) / @as(u64, total))));
     } else {
-        return a - ((a - b) * t) / total;
+        const da: u64 = a - b;
+        return @truncate(a - @as(u32, @intCast(da * @as(u64, t) / @as(u64, total))));
     }
 }
 
@@ -413,8 +447,8 @@ pub fn clearScreen(color: u32) void {
         const pxval = packPixel32(color);
         const ptr = getDrawBuffer();
         const base_addr = @intFromPtr(ptr);
-        const total = fb_config.pitch * fb_config.height;
-        var off: u32 = 0;
+        const total: usize = @intCast(@as(u64, fb_config.pitch) * @as(u64, fb_config.height));
+        var off: usize = 0;
         while (off < total) : (off += 4) {
             const word_ptr: *align(1) volatile u32 = @ptrFromInt(base_addr + off);
             word_ptr.* = pxval;
@@ -440,7 +474,6 @@ pub fn drawChar(x: i32, y: i32, ch: u8, fg: u32, bg: u32) void {
         const py = if (y < 0) return else @as(u32, @intCast(y)) + dy;
         if (py >= fb_config.height) break;
         const bits = glyph[dy];
-        const row_base = py * fb_config.pitch;
 
         var dx: u32 = 0;
         while (dx < CHAR_W) : (dx += 1) {
@@ -448,7 +481,7 @@ pub fn drawChar(x: i32, y: i32, ch: u8, fg: u32, bg: u32) void {
             if (px >= fb_config.width) break;
             const on = (bits >> @intCast(7 - dx)) & 1;
             const color: u32 = if (on != 0) fg else bg;
-            const off = row_base + px * bytes_pp;
+            const off = pixelByteOffset(px, py, bytes_pp);
             if (bytes_pp == 4) {
                 writePixel4(ptr, off, color);
             } else if (bytes_pp == 3) {
@@ -499,33 +532,37 @@ fn drawCjk16Transparent(x: i32, y: i32, rows: [16]u16, fg: u32) void {
 
 fn drawTextTransparentClippedInner(x: i32, y: i32, text: []const u8, fg: u32, clip_max_x: ?i32) void {
     const view = std.unicode.Utf8View.init(text) catch {
-        var cx = x;
+        var cx64 = @as(i64, x);
         for (text) |b| {
             if (clip_max_x) |mx| {
-                if (cx + @as(i32, @intCast(CHAR_W)) > mx) break;
+                if (cx64 + @as(i64, CHAR_W) > @as(i64, mx)) break;
             }
-            drawCharTransparent(cx, y, b, fg);
-            cx += @as(i32, @intCast(CHAR_W));
+            const cx_clamped = std.math.clamp(cx64, @as(i64, std.math.minInt(i32)), @as(i64, std.math.maxInt(i32)));
+            const cxi: i32 = @intCast(cx_clamped);
+            drawCharTransparent(cxi, y, b, fg);
+            cx64 += @as(i64, CHAR_W);
         }
         return;
     };
     var it = view.iterator();
-    var cx = x;
+    var cx64 = @as(i64, x);
     while (it.nextCodepoint()) |cp| {
-        const adv: i32 = @intCast(cjk_font.codepointWidth(cp));
+        const adv64 = @as(i64, @intCast(cjk_font.codepointWidth(cp)));
         if (clip_max_x) |mx| {
-            if (cx + adv > mx) break;
+            if (cx64 + adv64 > @as(i64, mx)) break;
         }
+        const cx_clamped = std.math.clamp(cx64, @as(i64, std.math.minInt(i32)), @as(i64, std.math.maxInt(i32)));
+        const cxi: i32 = @intCast(cx_clamped);
         if (cp < 0x80) {
-            drawCharTransparent(cx, y, @truncate(cp), fg);
+            drawCharTransparent(cxi, y, @truncate(cp), fg);
         } else if (cjk_font.lookup(cp)) |rows| {
-            drawCjk16Transparent(cx, y, rows, fg);
+            drawCjk16Transparent(cxi, y, rows, fg);
         } else if (cjk_font.isWideCodepoint(cp)) {
-            drawCjk16Transparent(cx, y, cjk_font.tofu_rows, fg);
+            drawCjk16Transparent(cxi, y, cjk_font.tofu_rows, fg);
         } else {
-            drawCharTransparent(cx, y, '?', fg);
+            drawCharTransparent(cxi, y, '?', fg);
         }
-        cx += adv;
+        cx64 += adv64;
     }
 }
 
@@ -588,11 +625,13 @@ pub fn drawTextTransparentScaled(x: i32, y: i32, text: []const u8, fg: u32, scal
 
 pub fn textWidthScaled(text: []const u8, scale: u32) i32 {
     if (scale < 1) return 0;
-    return @as(i32, @intCast(text.len * CHAR_W * scale));
+    const prod = @as(u128, text.len) *% @as(u128, CHAR_W) *% @as(u128, scale);
+    const capped = @min(prod, @as(u128, std.math.maxInt(i32)));
+    return @as(i32, @intCast(capped));
 }
 
 pub fn drawTextCentered(x: i32, y: i32, w: i32, h: i32, text: []const u8, fg: u32) void {
-    const text_w: i32 = @intCast(text.len * CHAR_W);
+    const text_w: i32 = textWidth(text);
     const tx = x + @divTrunc(w - text_w, 2);
     const ty = y + @divTrunc(h - @as(i32, CHAR_H), 2);
     drawTextTransparent(tx, ty, text, fg);
@@ -600,14 +639,18 @@ pub fn drawTextCentered(x: i32, y: i32, w: i32, h: i32, text: []const u8, fg: u3
 
 pub fn textWidth(text: []const u8) i32 {
     const view = std.unicode.Utf8View.init(text) catch {
-        return @intCast(text.len * CHAR_W);
+        const prod = @as(u128, text.len) *% @as(u128, CHAR_W);
+        const capped = @min(prod, @as(u128, std.math.maxInt(i32)));
+        return @as(i32, @intCast(capped));
     };
     var it = view.iterator();
-    var w: i32 = 0;
+    var w64: i64 = 0;
     while (it.nextCodepoint()) |cp| {
-        w += @as(i32, @intCast(cjk_font.codepointWidth(cp)));
+        w64 += @as(i64, @intCast(cjk_font.codepointWidth(cp)));
+        if (w64 > std.math.maxInt(i32)) return std.math.maxInt(i32);
     }
-    return w;
+    const w_clamped = std.math.clamp(w64, @as(i64, std.math.minInt(i32)), @as(i64, std.math.maxInt(i32)));
+    return @as(i32, @intCast(w_clamped));
 }
 
 // ── Rounded Rectangle ──
@@ -662,10 +705,11 @@ fn fillCircleQuarter(cx: i32, cy: i32, radius: i32, quarter: u2, color: u32) voi
 // ── 3D-style border effects ──
 
 pub fn draw3DRect(x: i32, y: i32, w: i32, h: i32, highlight: u32, shadow: u32) void {
+    if (w <= 0 or h <= 0) return;
     drawHLine(x, y, w, highlight);
     drawVLine(x, y, h, highlight);
-    drawHLine(x, y + h - 1, w, shadow);
-    drawVLine(x + w - 1, y, h, shadow);
+    drawHLine(x, clampDrawCoordI64(@as(i64, y) + @as(i64, h) - 1), w, shadow);
+    drawVLine(clampDrawCoordI64(@as(i64, x) + @as(i64, w) - 1), y, h, shadow);
 }
 
 // ── Aero Glass Blur (Multi-pass Box Blur) ──
@@ -682,8 +726,8 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
 
     const x0: u32 = if (x < 0) 0 else @intCast(x);
     const y0: u32 = if (y < 0) 0 else @intCast(y);
-    const x1: u32 = @min(x0 + @as(u32, @intCast(w)), fb_config.width);
-    const y1: u32 = @min(y0 + @as(u32, @intCast(h)), fb_config.height);
+    const x1: u32 = addU32Clamped(x0, @intCast(w), fb_config.width);
+    const y1: u32 = addU32Clamped(y0, @intCast(h), fb_config.height);
     if (x0 >= x1 or y0 >= y1) return;
 
     const rw = x1 - x0;
@@ -782,8 +826,8 @@ pub fn blendTintRect(x: i32, y: i32, w: i32, h: i32, tint: u32, alpha: u8, satur
 
     const x0: u32 = if (x < 0) 0 else @intCast(x);
     const y0: u32 = if (y < 0) 0 else @intCast(y);
-    const x1: u32 = @min(x0 + @as(u32, @intCast(w)), fb_config.width);
-    const y1: u32 = @min(y0 + @as(u32, @intCast(h)), fb_config.height);
+    const x1: u32 = addU32Clamped(x0, @intCast(w), fb_config.width);
+    const y1: u32 = addU32Clamped(y0, @intCast(h), fb_config.height);
     if (x0 >= x1 or y0 >= y1) return;
 
     const t_b: u32 = tint & 0xFF;
@@ -846,8 +890,8 @@ pub fn addSpecularBand(x: i32, y: i32, w: i32, band_h: i32, intensity: u32) void
 
     const x0: u32 = if (x < 0) 0 else @intCast(x);
     const y0: u32 = if (y < 0) 0 else @intCast(y);
-    const x1: u32 = @min(x0 + @as(u32, @intCast(w)), fb_config.width);
-    const y1: u32 = @min(y0 + @as(u32, @intCast(band_h)), fb_config.height);
+    const x1: u32 = addU32Clamped(x0, @intCast(w), fb_config.width);
+    const y1: u32 = addU32Clamped(y0, @intCast(band_h), fb_config.height);
     if (x0 >= x1 or y0 >= y1) return;
 
     const bh = y1 - y0;
@@ -861,7 +905,7 @@ pub fn addSpecularBand(x: i32, y: i32, w: i32, band_h: i32, intensity: u32) void
 
         var px: u32 = x0;
         while (px < x1) : (px += 1) {
-            const off = py * fb_config.pitch + px * bytes_pp;
+            const off = pixelByteOffset(px, py, bytes_pp);
             var r: u32 = undefined;
             var g: u32 = undefined;
             var b: u32 = undefined;
@@ -897,7 +941,8 @@ pub fn flip() void {
     if (double_buffer_active) {
         const size = @as(usize, fb_config.pitch) * @as(usize, fb_config.height);
         const dst: [*]u8 = @ptrFromInt(fb_config.address);
-        @memcpy(dst[0..size], back_buf[0..size]);
+        const src = backBufSrcPtr();
+        @memcpy(dst[0..size], src[0..size]);
     }
     dirty_count = 0;
     total_flips += 1;
@@ -905,10 +950,11 @@ pub fn flip() void {
 
 pub fn flipDirty() void {
     if (double_buffer_active) {
+        const src = backBufSrcPtr();
         if (dirty_count == 0 or dirty_count >= MAX_DIRTY_RECTS) {
             const size = @as(usize, fb_config.pitch) * @as(usize, fb_config.height);
             const dst: [*]u8 = @ptrFromInt(fb_config.address);
-            @memcpy(dst[0..size], back_buf[0..size]);
+            @memcpy(dst[0..size], src[0..size]);
         } else {
             const bytes_pp: usize = @as(usize, fb_config.bpp) / 8;
             const dst_base: [*]u8 = @ptrFromInt(fb_config.address);
@@ -917,20 +963,101 @@ pub fn flipDirty() void {
                 const ry0: u32 = if (r.y < 0) 0 else @intCast(r.y);
                 const rw: u32 = if (r.w < 0) 0 else @intCast(r.w);
                 const rh: u32 = if (r.h < 0) 0 else @intCast(r.h);
-                const rx1: u32 = @min(rx0 + rw, fb_config.width);
-                const ry1: u32 = @min(ry0 + rh, fb_config.height);
+                const rx1: u32 = addU32Clamped(rx0, rw, fb_config.width);
+                const ry1: u32 = addU32Clamped(ry0, rh, fb_config.height);
                 if (rx0 >= rx1 or ry0 >= ry1) continue;
                 const row_bytes = @as(usize, rx1 - rx0) * bytes_pp;
                 var py: u32 = ry0;
                 while (py < ry1) : (py += 1) {
                     const off = @as(usize, py) * @as(usize, fb_config.pitch) + @as(usize, rx0) * bytes_pp;
-                    @memcpy(dst_base[off .. off + row_bytes], back_buf[off .. off + row_bytes]);
+                    @memcpy(dst_base[off .. off + row_bytes], src[off .. off + row_bytes]);
                 }
             }
         }
     }
     dirty_count = 0;
     total_flips += 1;
+}
+
+/// 自当前绘制缓冲拷贝矩形像素到 `dst`（按行紧密排列）。返回写入字节数。
+pub fn copyDrawBufferRectBytes(dx: i32, dy: i32, w: i32, h: i32, dst: []u8) usize {
+    if (w <= 0 or h <= 0) return 0;
+    const bytes_pp: usize = @as(usize, fb_config.bpp) / 8;
+
+    var x0: i32 = dx;
+    var y0: i32 = dy;
+    var cw: i32 = w;
+    var ch: i32 = h;
+    if (x0 < 0) {
+        cw += x0;
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        ch += y0;
+        y0 = 0;
+    }
+    const fw: i32 = @intCast(fb_config.width);
+    const fh: i32 = @intCast(fb_config.height);
+    if (x0 >= fw or y0 >= fh) return 0;
+    if (x0 + cw > fw) cw = fw - x0;
+    if (y0 + ch > fh) ch = fh - y0;
+    if (cw <= 0 or ch <= 0) return 0;
+
+    const row_bytes: usize = @as(usize, @intCast(cw)) * bytes_pp;
+    const need: usize = @as(usize, @intCast(ch)) * row_bytes;
+    if (dst.len < need) return 0;
+
+    const ptr = getDrawBuffer();
+    var dst_off: usize = 0;
+    var row: i32 = 0;
+    while (row < ch) : (row += 1) {
+        const py: u32 = @intCast(y0 + row);
+        const off: usize = @as(usize, py) * @as(usize, fb_config.pitch) + @as(usize, @intCast(x0)) * bytes_pp;
+        const src_row = @as([*]u8, @volatileCast(ptr))[off .. off + row_bytes];
+        @memcpy(dst[dst_off..][0..row_bytes], src_row);
+        dst_off += row_bytes;
+    }
+    return dst_off;
+}
+
+/// 将 `src` 按行写回绘制缓冲（与 `copyDrawBufferRectBytes` 相同裁剪语义）。
+pub fn pasteDrawBufferRectBytes(dx: i32, dy: i32, w: i32, h: i32, src: []const u8) void {
+    if (w <= 0 or h <= 0) return;
+    const bytes_pp: usize = @as(usize, fb_config.bpp) / 8;
+
+    var x0: i32 = dx;
+    var y0: i32 = dy;
+    var cw: i32 = w;
+    var ch: i32 = h;
+    if (x0 < 0) {
+        cw += x0;
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        ch += y0;
+        y0 = 0;
+    }
+    const fw: i32 = @intCast(fb_config.width);
+    const fh: i32 = @intCast(fb_config.height);
+    if (x0 >= fw or y0 >= fh) return;
+    if (x0 + cw > fw) cw = fw - x0;
+    if (y0 + ch > fh) ch = fh - y0;
+    if (cw <= 0 or ch <= 0) return;
+
+    const row_bytes: usize = @as(usize, @intCast(cw)) * bytes_pp;
+    const need: usize = @as(usize, @intCast(ch)) * row_bytes;
+    if (src.len < need) return;
+
+    const ptr = getDrawBuffer();
+    var src_off: usize = 0;
+    var row: i32 = 0;
+    while (row < ch) : (row += 1) {
+        const py: u32 = @intCast(y0 + row);
+        const off: usize = @as(usize, py) * @as(usize, fb_config.pitch) + @as(usize, @intCast(x0)) * bytes_pp;
+        const dst_row = @as([*]u8, @volatileCast(ptr))[off .. off + row_bytes];
+        @memcpy(dst_row, src[src_off..][0..row_bytes]);
+        src_off += row_bytes;
+    }
 }
 
 pub fn isDoubleBuffered() bool {
@@ -957,13 +1084,13 @@ fn handleIoctl(irp: *io.Irp) io.IoStatus {
     switch (irp.ioctl_code) {
         IOCTL_FB_GET_CONFIG => {
             irp.buffer_ptr = fb_config.address;
-            irp.bytes_transferred = fb_config.pitch * fb_config.height;
+            irp.bytes_transferred = @intCast(@as(u64, fb_config.pitch) * @as(u64, fb_config.height));
             irp.complete(.success, fb_config.width);
             return .success;
         },
         IOCTL_FB_MAP_BUFFER => {
             irp.buffer_ptr = fb_config.address;
-            irp.complete(.success, fb_config.pitch * fb_config.height);
+            irp.complete(.success, @intCast(@as(u64, fb_config.pitch) * @as(u64, fb_config.height)));
             return .success;
         },
         IOCTL_FB_FLIP => {
@@ -1034,7 +1161,37 @@ pub fn getTotalFlips() u64 {
 
 pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr: bool) void {
     const required = @as(usize, pitch) * @as(usize, height);
-    double_buffer_active = (required > 0 and required <= BACK_BUF_MAX);
+    back_buffer_addr = 0;
+    back_buffer_size = 0;
+    back_buffer_heap_nframes = 0;
+    double_buffer_active = false;
+
+    const want_db = config_mod.isDoubleBufferEnabled();
+    if (want_db and required > 0 and addr != 0) {
+        if (required <= BACK_BUF_MAX) {
+            double_buffer_active = true;
+        } else if (frame_mod.getKernelFrameAllocator()) |fa| {
+            const nframes = (required + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
+            if (fa.allocContiguous(nframes)) |base_phys| {
+                back_buffer_addr = @as(usize, @truncate(base_phys));
+                back_buffer_heap_nframes = nframes;
+                back_buffer_size = nframes * frame_mod.FRAME_SIZE;
+                double_buffer_active = true;
+                const p: [*]u8 = @ptrFromInt(back_buffer_addr);
+                @memset(p[0..required], 0);
+                if (back_buffer_size > required) {
+                    @memset(p[required..back_buffer_size], 0);
+                }
+                klog.info("Framebuffer: heap back buffer %u pages phys=0x%x (%u bytes)", .{
+                    nframes, back_buffer_addr, required,
+                });
+            } else {
+                klog.warn("Framebuffer: allocContiguous failed (%u bytes); double_buf=OFF", .{required});
+            }
+        } else {
+            klog.warn("Framebuffer: no kernel frame allocator; large FB double_buf=OFF", .{});
+        }
+    }
 
     fb_config = .{
         .address = addr,

@@ -21,7 +21,6 @@ const dwm_comp = @import("dwm_compositor.zig");
 const mat = @import("material.zig");
 const display = @import("display.zig");
 const shell_strings = @import("shell_strings.zig");
-const aero_tray = @import("aero_tray.zig");
 const rgb = theme.rgb;
 
 pub fn initDwm() void {
@@ -46,10 +45,11 @@ pub fn initDwm() void {
 pub fn render() void {
     theme.setTheme(.aero);
     if (!dwm.isInitialized()) initDwm();
-    renderFrame();
+    renderFrameEx(true);
 }
 
-pub fn renderFrame() void {
+/// `draw_cursor=false` 时由 `display` 软件光标层在场景合成后单独叠加（save-under 快速路径）。
+pub fn renderFrameEx(draw_cursor: bool) void {
     if (!fb.isInitialized()) return;
 
     const w: i32 = @intCast(fb.getWidth());
@@ -61,13 +61,17 @@ pub fn renderFrame() void {
     const any_drag = drag_state.explorer_active or drag_state.taskmgr_active;
 
     if (any_drag) {
-        renderDragFrame(w, h, t, tb_h, drag_state);
+        renderDragFrame(w, h, t, tb_h, drag_state, draw_cursor);
     } else {
-        renderFullFrame(w, h, t, tb_h);
+        renderFullFrame(w, h, t, tb_h, draw_cursor);
     }
 }
 
-fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
+pub fn renderFrame() void {
+    renderFrameEx(true);
+}
+
+fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_cursor: bool) void {
     renderBackground(w, h);
     display.renderDesktopIcons(w, h, t);
     renderExplorerWindow(w, h, t);
@@ -78,12 +82,14 @@ fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32) void 
         startmenu.render(w, h);
     }
     display.renderContextMenu();
-    display.renderCursorAt();
+    if (draw_cursor) {
+        display.renderCursorAt();
+    }
     display.incFrameCount();
     fb.markFullScreenDirty();
 }
 
-fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: display.DragState) void {
+fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: display.DragState, draw_cursor: bool) void {
     patchDragBackground(w, h);
 
     display.renderDesktopIcons(w, h, t);
@@ -103,7 +109,9 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     }
     display.renderContextMenu();
 
-    display.renderCursorAt();
+    if (draw_cursor) {
+        display.renderCursorAt();
+    }
     display.incFrameCount();
 
     if (ds.explorer_active) {
@@ -122,6 +130,8 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
         u = display.rectClampToScreen(u, w, h);
         fb.markDirtyRegion(u.x, u.y, u.w, u.h);
     }
+
+    display.markCursorMotionDirtyRegions();
 }
 
 fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
@@ -256,87 +266,7 @@ pub fn renderHarmonyWallpaper(w: i32, h: i32) void {
 }
 
 fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
-    const tb_y = scr_h - tb_h;
-    // 拖动时走 Win7 合成器「交互态」路径：任务栏避免对整宽做毛玻璃采样，仅渐变填充（类似 DirectComposition 的 cached visual）。
-    const drag_fast = display.isDragging();
-    if (drag_fast) {
-        fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
-    } else if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(0, tb_y, scr_w, tb_h, rgb(0x28, 0x40, 0x60), .taskbar);
-    } else {
-        fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
-    }
-    fb.drawHLine(0, tb_y, scr_w, rgb(0x70, 0x90, 0xB8));
-    fb.drawHLine(0, tb_y + 1, scr_w, rgb(0x38, 0x52, 0x70));
-
-    const peek_w: i32 = 12;
-    const icon_s: u32 = 2;
-    const icon_px: i32 = icons.getIconTotalSize(icon_s);
-    const icon_s_apps: u32 = 1;
-    const pill_h: i32 = 20;
-
-    const orb_x: i32 = 4;
-    const orb_y = tb_y + @divTrunc(tb_h - 36, 2);
-    const orb_sz: i32 = 36;
-    // Win7 Start 球体语义：整圆 + 顶缘高光 + 外环微光（MSDN 任务栏/壳资源模型，非 UEFI 方块）
-    fb.fillRoundedRect(orb_x - 1, orb_y - 1, orb_sz + 2, orb_sz + 2, 19, rgb(0x18, 0x38, 0x60));
-    fb.fillRoundedRect(orb_x, orb_y, orb_sz, orb_sz, 18, rgb(0x24, 0x4A, 0x80));
-    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x58, 0x8C, 0xC8), rgb(0x28, 0x50, 0x88));
-    fb.blendTintRect(orb_x + 5, orb_y + 3, orb_sz - 10, 10, rgb(0xF0, 0xF8, 0xFF), 62, 255);
-    display.renderZirconLogo(orb_x + 11, orb_y + 11);
-
-    const ql_ids = [_]icons.IconId{ .browser, .terminal, .documents };
-    var qx: i32 = orb_x + orb_sz + 6;
-    const ql_y = tb_y + @divTrunc(tb_h - icon_px, 2);
-    for (ql_ids) |iid| {
-        icons.drawThemedIcon(iid, qx, ql_y, icon_s, .aero);
-        qx += icon_px + 4;
-    }
-    fb.drawVLine(qx + 2, tb_y + 6, tb_h - 12, rgb(0x50, 0x70, 0x90));
-
-    const app_items = [_]struct { id: icons.IconId, text: []const u8, active: bool }{
-        .{ .id = .computer, .text = "Computer", .active = true },
-        .{ .id = .folder, .text = "Core", .active = false },
-        .{ .id = .terminal, .text = "CMD", .active = false },
-    };
-    var ax = qx + 8;
-    const ay = tb_y + @divTrunc(tb_h - pill_h, 2);
-    for (app_items) |app| {
-        const bw: i32 = 58;
-        if (app.active) {
-            fb.fillRoundedRect(ax, ay, bw, pill_h, 7, rgb(0x50, 0x80, 0xB8));
-            fb.fillRect(ax + 2, ay + 2, bw - 4, 8, rgb(0x78, 0xA8, 0xD8));
-            fb.drawRect(ax, ay, bw, pill_h, rgb(0x90, 0xB8, 0xE8));
-        } else {
-            fb.fillRoundedRect(ax, ay, bw, pill_h, 7, rgb(0x30, 0x48, 0x68));
-            fb.drawRect(ax, ay, bw, pill_h, rgb(0x48, 0x60, 0x80));
-        }
-        icons.drawThemedIcon(app.id, ax + 3, ay + 3, icon_s_apps, .aero);
-        fb.drawTextTransparentUi(ax + 17, ay + 5, app.text, rgb(0xFF, 0xFF, 0xFF));
-        ax += bw + 4;
-    }
-
-    const tray = aero_tray.layout(scr_w, scr_h, tb_h);
-    if (tray.shelf_w > 4 and tray.shelf_h > 4) {
-        fb.fillRoundedRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, 5, rgb(0x10, 0x1C, 0x30));
-        fb.blendTintRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x50, 0x70, 0x98), 22, 100);
-        fb.drawRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x38, 0x50, 0x68));
-    }
-    icons.drawThemedIcon(.network, tray.net_x, tray.tray_icons_y, tray.icon_s, .aero);
-    icons.drawThemedIcon(.browser, tray.vol_x, tray.tray_icons_y, tray.icon_s, .aero);
-    icons.drawThemedIcon(.settings, tray.set_x, tray.tray_icons_y, tray.icon_s, .aero);
-    fb.drawTextTransparentUi(tray.chevron_x, tray.chevron_y, "^", rgb(0xB0, 0xC8, 0xE8));
-
-    const line_h_clk: i32 = 14;
-    const line_time = "12:00 PM";
-    const line_date = "3/21/2026";
-    fb.drawTextTransparentUi(tray.clk_x, tray.clk_y, line_time, t.clock_text);
-    fb.drawTextTransparentUi(tray.clk_x, tray.clk_y + line_h_clk + 1, line_date, rgb(0xC8, 0xD8, 0xE8));
-
-    display.renderAeroTrayFlyout(scr_w, scr_h);
-
-    fb.drawGradientV(scr_w - peek_w, tb_y, peek_w, tb_h, rgb(0x50, 0x70, 0x90), rgb(0x28, 0x40, 0x60));
-    fb.drawVLine(scr_w - peek_w, tb_y, tb_h, rgb(0x70, 0x90, 0xB0));
+    display.renderDesktopAeroTaskbar(scr_w, scr_h, t, tb_h);
 }
 
 fn renderExplorerWindow(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
@@ -403,9 +333,9 @@ fn renderExplorerContent(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeCo
     }
 
     const addr_y = y + cmd_h + 1;
-    const go_btn_w: i32 = 40;
+    const go_btn_w: i32 = display.AERO_EXPLORER_GO_BTN_W;
     const addr_field_x: i32 = x + 52;
-    const go_x = x + w - go_btn_w - 6;
+    const go_x = x + w - go_btn_w - display.AERO_EXPLORER_GO_MARGIN_END;
     const addr_field_w = @max(64, go_x - 4 - addr_field_x);
     fb.fillRect(x, addr_y, w, addr_h, rgb(0xF8, 0xF9, 0xFC));
     fb.drawHLine(x, addr_y + addr_h, w, rgb(0xC0, 0xC8, 0xD4));

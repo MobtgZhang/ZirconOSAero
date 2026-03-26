@@ -310,6 +310,23 @@ pub fn syncFramebufferMode(w: u32, h: u32, bpp: u8) void {
     }
 }
 
+/// AMD 显示控制器探测后刷新主连接器元数据（RX550 / Polaris 等；DDC/EDID 仍由固件或后续 KMS 提供）
+pub fn syncAmdDisplayConnector(device_id: u16, family_code: u8) void {
+    _ = device_id;
+    _ = family_code;
+    if (output_count == 0) return;
+    var out = &outputs[0];
+    out.connector = .hdmi_a;
+    out.status = .connected;
+    out.signal = .digital_tmds;
+    out.edid.valid = true;
+    out.edid.digital_input = true;
+    out.edid.color_depth = 8;
+    const name = "AMD display";
+    @memcpy(out.edid.monitor_name[0..name.len], name);
+    out.edid.monitor_name_len = name.len;
+}
+
 /// Intel iGPU 探测后刷新主连接器元数据（DDC/EDID 仍由上层或固件提供）
 pub fn syncIntelIgpuConnector(device_id: u16, generation_code: u8) void {
     _ = device_id;
@@ -323,6 +340,24 @@ pub fn syncIntelIgpuConnector(device_id: u16, generation_code: u8) void {
     out.edid.digital_input = true;
     out.edid.color_depth = 8;
     const name = "Intel iGPU";
+    @memcpy(out.edid.monitor_name[0..name.len], name);
+    out.edid.monitor_name_len = name.len;
+}
+
+/// NVIDIA GPU 探测后刷新主连接器桩（DDC/EDID 仍由固件或后续 KMS 提供）。
+/// 混合显卡时默认勿启用 `nvidia_hdmi_sync`，以免覆盖 Intel/AMD 已写的 `outputs[0]`。
+pub fn syncNvidiaGpuConnector(device_id: u16, family_code: u8) void {
+    _ = device_id;
+    _ = family_code;
+    if (output_count == 0) return;
+    var out = &outputs[0];
+    out.connector = .hdmi_a;
+    out.status = .connected;
+    out.signal = .digital_tmds;
+    out.edid.valid = true;
+    out.edid.digital_input = true;
+    out.edid.color_depth = 8;
+    const name = "NVIDIA GPU";
     @memcpy(out.edid.monitor_name[0..name.len], name);
     out.edid.monitor_name_len = name.len;
 }

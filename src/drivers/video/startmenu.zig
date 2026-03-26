@@ -109,8 +109,13 @@ pub const MenuRect = struct {
     h: i32,
 
     pub fn contains(self: MenuRect, px: i32, py: i32) bool {
-        return px >= self.x and px < self.x + self.w and
-            py >= self.y and py < self.y + self.h;
+        const pxi = @as(i64, px);
+        const pyi = @as(i64, py);
+        const x0 = @as(i64, self.x);
+        const y0 = @as(i64, self.y);
+        const w0 = @as(i64, self.w);
+        const h0 = @as(i64, self.h);
+        return pxi >= x0 and pxi < x0 + w0 and pyi >= y0 and pyi < y0 + h0;
     }
 };
 

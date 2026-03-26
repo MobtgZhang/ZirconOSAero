@@ -3,6 +3,9 @@
 
 const icons = @import("icons.zig");
 
+/// 与 `display.renderDesktopAeroTaskbar` 右侧 Show Desktop 条同宽。
+pub const TASKBAR_PEEK_STRIP_W: i32 = 14;
+
 pub const TrayLayout = struct {
     tb_y: i32,
     tb_h: i32,
@@ -34,7 +37,7 @@ pub const TrayLayout = struct {
 
 pub fn layout(scr_w: i32, scr_h: i32, tb_h: i32) TrayLayout {
     const tb_y = scr_h - tb_h;
-    const peek_w: i32 = 12;
+    const peek_w: i32 = TASKBAR_PEEK_STRIP_W;
     const icon_s: u32 = 2;
     const icon_px: i32 = icons.getIconTotalSize(icon_s);
     const gap: i32 = 6;

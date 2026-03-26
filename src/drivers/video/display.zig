@@ -16,6 +16,7 @@ const mat = @import("material.zig");
 const shell_strings = @import("shell_strings.zig");
 const aero_tray = @import("aero_tray.zig");
 const aero_cursor_shape = @import("aero_cursor_shape.zig");
+const config = @import("../../config/config.zig");
 
 pub const theme_mod = @import("theme.zig");
 pub const dwm_mod = @import("dwm.zig");
@@ -25,6 +26,28 @@ pub const ThemeColors = theme_mod.ThemeColors;
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme_mod.rgb(r, g, b);
+}
+
+fn clampI32FromI64(v: i64) i32 {
+    return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
+}
+
+/// 矩形宽/高：非负，且可安全落回 i32（用于 rectUnion 等 i64 差分）。
+fn clampRectDimI64(d: i64) i32 {
+    if (d <= 0) return 0;
+    if (d > std.math.maxInt(i32)) return std.math.maxInt(i32);
+    return @intCast(d);
+}
+
+/// 轴对齐矩形命中：`x ∈ [rx, rx+rw)`、`y ∈ [ry, ry+rh)`，加法在 i64 上避免 i32 溢出。
+fn pointInRectI32(px: i32, py: i32, rx: i32, ry: i32, rw: i32, rh: i32) bool {
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    const x0 = @as(i64, rx);
+    const y0 = @as(i64, ry);
+    const w0 = @as(i64, rw);
+    const h0 = @as(i64, rh);
+    return pxi >= x0 and pyi >= y0 and pxi < x0 + w0 and pyi < y0 + h0;
 }
 
 // ── Theme Definitions (canonical source: theme.zig) ──
@@ -157,10 +180,10 @@ pub fn aeroCaptionButtonLayout(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i
     const btn_h = titlebar_h;
     const btn_y = win_y;
     const btn_w: i32 = if (titlebar_h >= 32) 46 else @max(36, titlebar_h + 4);
-    const close_x = win_x + win_w - btn_w;
-    const max_x = close_x - btn_w;
-    const min_x = max_x - btn_w;
-    const group_sep_x = min_x - 1;
+    const close_x = clampI32FromI64(@as(i64, win_x) + @as(i64, win_w) - @as(i64, btn_w));
+    const max_x = clampI32FromI64(@as(i64, close_x) - @as(i64, btn_w));
+    const min_x = clampI32FromI64(@as(i64, max_x) - @as(i64, btn_w));
+    const group_sep_x = clampI32FromI64(@as(i64, min_x) - 1);
     return .{
         .min_x = min_x,
         .max_x = max_x,
@@ -174,18 +197,27 @@ pub fn aeroCaptionButtonLayout(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i
 
 pub fn hitTestAeroCaptionButtons(px: i32, py: i32, win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32) AeroCaptionBtnHover {
     if (titlebar_h < 4 or win_w < 96) return .none;
-    if (px < win_x or py < win_y or px >= win_x + win_w or py >= win_y + titlebar_h) return .none;
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    const wx = @as(i64, win_x);
+    const wy = @as(i64, win_y);
+    const ww = @as(i64, win_w);
+    const th = @as(i64, titlebar_h);
+    if (pxi < wx or pyi < wy or pxi >= wx + ww or pyi >= wy + th) return .none;
     const L = aeroCaptionButtonLayout(win_x, win_y, win_w, titlebar_h);
-    if (px < L.min_x) return .none;
-    if (px >= L.close_x + L.btn_w) return .none;
-    if (px >= L.close_x) return .close;
-    if (px >= L.max_x) return .maximize;
+    if (pxi < @as(i64, L.min_x)) return .none;
+    if (pxi >= @as(i64, L.close_x) + @as(i64, L.btn_w)) return .none;
+    if (pxi >= @as(i64, L.close_x)) return .close;
+    if (pxi >= @as(i64, L.max_x)) return .maximize;
     return .minimize;
 }
 
 /// 与 renderer_aero.renderExplorerContent 中命令栏/地址栏高度一致（用于命中测试）。
 pub const AERO_EXPLORER_CMD_H: i32 = 28;
 pub const AERO_EXPLORER_ADDR_H: i32 = 26;
+/// 与 `renderer_aero.renderExplorerContent` 地址栏「Go」按钮一致（命中测试必须同源）。
+pub const AERO_EXPLORER_GO_BTN_W: i32 = 40;
+pub const AERO_EXPLORER_GO_MARGIN_END: i32 = 6;
 
 fn shellTitlebarH() i32 {
     return AERO_TITLEBAR_H;
@@ -233,6 +265,7 @@ pub fn initTextMode() void {
 
 pub fn clearFramebuffer() void {
     if (!use_framebuffer or !fb.isInitialized()) return;
+    softwareCursorInvalidate();
     fb.clearScreen(0x00000000);
 }
 
@@ -244,22 +277,47 @@ pub const ShellRect = struct {
 };
 
 pub fn rectUnion(a: ShellRect, b: ShellRect) ShellRect {
-    const x1 = @min(a.x, b.x);
-    const y1 = @min(a.y, b.y);
-    const x2 = @max(a.x + a.w, b.x + b.w);
-    const y2 = @max(a.y + a.h, b.y + b.h);
-    return .{ .x = x1, .y = y1, .w = x2 - x1, .h = y2 - y1 };
+    const ax1 = @as(i64, a.x);
+    const ay1 = @as(i64, a.y);
+    const bx1 = @as(i64, b.x);
+    const by1 = @as(i64, b.y);
+    const ax2 = ax1 + a.w;
+    const ay2 = ay1 + a.h;
+    const bx2 = bx1 + b.w;
+    const by2 = by1 + b.h;
+    const x1 = @min(ax1, bx1);
+    const y1 = @min(ay1, by1);
+    const x2 = @max(ax2, bx2);
+    const y2 = @max(ay2, by2);
+    return .{
+        .x = clampI32FromI64(x1),
+        .y = clampI32FromI64(y1),
+        .w = clampRectDimI64(x2 - x1),
+        .h = clampRectDimI64(y2 - y1),
+    };
 }
 
 pub fn rectInflate(r: ShellRect, p: i32) ShellRect {
-    return .{ .x = r.x - p, .y = r.y - p, .w = r.w + 2 * p, .h = r.h + 2 * p };
+    const pi = @as(i64, p);
+    const x = @as(i64, r.x) - pi;
+    const y = @as(i64, r.y) - pi;
+    const w = @as(i64, r.w) + 2 * pi;
+    const h = @as(i64, r.h) + 2 * pi;
+    return .{
+        .x = clampI32FromI64(x),
+        .y = clampI32FromI64(y),
+        .w = clampRectDimI64(w),
+        .h = clampRectDimI64(h),
+    };
 }
 
 pub fn rectClampToScreen(r: ShellRect, scr_w: i32, scr_h: i32) ShellRect {
-    var x = r.x;
-    var y = r.y;
-    var rw = r.w;
-    var rh = r.h;
+    var x: i64 = r.x;
+    var y: i64 = r.y;
+    var rw: i64 = r.w;
+    var rh: i64 = r.h;
+    const sw: i64 = scr_w;
+    const sh: i64 = scr_h;
     if (x < 0) {
         rw += x;
         x = 0;
@@ -268,20 +326,38 @@ pub fn rectClampToScreen(r: ShellRect, scr_w: i32, scr_h: i32) ShellRect {
         rh += y;
         y = 0;
     }
-    if (x + rw > scr_w) rw = scr_w - x;
-    if (y + rh > scr_h) rh = scr_h - y;
+    if (x + rw > sw) rw = sw - x;
+    if (y + rh > sh) rh = sh - y;
     if (rw < 0) rw = 0;
     if (rh < 0) rh = 0;
-    return .{ .x = x, .y = y, .w = rw, .h = rh };
+    return .{
+        .x = clampI32FromI64(x),
+        .y = clampI32FromI64(y),
+        .w = clampRectDimI64(rw),
+        .h = clampRectDimI64(rh),
+    };
 }
 
 pub fn rectIntersection(a: ShellRect, b: ShellRect) ?ShellRect {
-    const x1 = @max(a.x, b.x);
-    const y1 = @max(a.y, b.y);
-    const x2 = @min(a.x + a.w, b.x + b.w);
-    const y2 = @min(a.y + a.h, b.y + b.h);
+    const ax1 = @as(i64, a.x);
+    const ay1 = @as(i64, a.y);
+    const bx1 = @as(i64, b.x);
+    const by1 = @as(i64, b.y);
+    const ax2 = ax1 + a.w;
+    const ay2 = ay1 + a.h;
+    const bx2 = bx1 + b.w;
+    const by2 = by1 + b.h;
+    const x1 = @max(ax1, bx1);
+    const y1 = @max(ay1, by1);
+    const x2 = @min(ax2, bx2);
+    const y2 = @min(ay2, by2);
     if (x2 <= x1 or y2 <= y1) return null;
-    return .{ .x = x1, .y = y1, .w = x2 - x1, .h = y2 - y1 };
+    return .{
+        .x = clampI32FromI64(x1),
+        .y = clampI32FromI64(y1),
+        .w = clampRectDimI64(x2 - x1),
+        .h = clampRectDimI64(y2 - y1),
+    };
 }
 
 pub fn patchVerticalGradientRegion(scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw: i32, rh: i32, topc: u32, botc: u32) void {
@@ -289,8 +365,11 @@ pub fn patchVerticalGradientRegion(scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw:
     r = rectClampToScreen(r, scr_w, scr_h);
     if (r.w <= 0 or r.h <= 0 or scr_h <= 0) return;
     const gh: u32 = @intCast(scr_h);
-    const t1 = @as(u32, @intCast(@max(0, @min(r.y, scr_h - 1))));
-    const t2 = @as(u32, @intCast(@max(0, @min(r.y + r.h - 1, scr_h - 1))));
+    const sh1: i64 = @as(i64, scr_h) - 1;
+    const row_top = std.math.clamp(@as(i64, r.y), 0, @max(0, sh1));
+    const row_bot = std.math.clamp(@as(i64, r.y) + @as(i64, r.h) - 1, 0, @max(0, sh1));
+    const t1 = @as(u32, @intCast(row_top));
+    const t2 = @as(u32, @intCast(row_bot));
     const c_top = fb.interpolateColor(topc, botc, t1, gh);
     const c_bot = fb.interpolateColor(topc, botc, t2, gh);
     fb.drawGradientV(r.x, r.y, r.w, r.h, c_top, c_bot);
@@ -363,17 +442,12 @@ fn patchAeroDragBackground(scr_w: i32, scr_h: i32) void {
     }
 }
 
-
 var explorer_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 var taskmgr_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
-
-
-
-
-fn renderCurrentDesktop() void {
+fn renderSceneWithoutSoftwareCursor() void {
     syncAeroGlassFastPath();
-    renderer_aero.renderFrame();
+    renderer_aero.renderFrameEx(false);
 }
 
 /// Returns the taskbar height for the active theme（与 Aero 任务栏绘制一致）。
@@ -513,6 +587,11 @@ pub fn drawSystemInfoStrip(scr_w: i32, scr_h: i32, tb_h: i32) void {
 }
 
 pub fn renderDesktopFrame() void {
+    renderDesktopFrameEx(true);
+}
+
+/// `scene_dirty`：壁纸/壳层/插值等需整场景重绘；否则可走软件光标 save-under 快速路径。
+pub fn renderDesktopFrameEx(scene_dirty: bool) void {
     if (!use_framebuffer or !fb.isInitialized()) return;
 
     // 合成前再排空一轮输入，避免 IRQ/轮询与取样之间存在竞态导致本帧光标滞后一整帧。
@@ -534,7 +613,15 @@ pub fn renderDesktopFrame() void {
     desktop_ctx.cursor_x = desktop_ctx.smooth_cursor.display_x;
     desktop_ctx.cursor_y = desktop_ctx.smooth_cursor.display_y;
 
-    renderCurrentDesktop();
+    if (scene_dirty) {
+        renderSceneWithoutSoftwareCursor();
+        softwareCursorComposeAfterScene(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
+    } else {
+        if (!softwareCursorMoveOnly(desktop_ctx.cursor_x, desktop_ctx.cursor_y)) {
+            renderSceneWithoutSoftwareCursor();
+            softwareCursorComposeAfterScene(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
+        }
+    }
     mouse.clearCursorMoved();
 }
 
@@ -546,21 +633,30 @@ fn updateSmoothCursor(raw_x: i32, raw_y: i32) void {
     sc.prev_x = sc.display_x;
     sc.prev_y = sc.display_y;
 
-    // With double buffering, the entire frame (including cursor) is drawn
-    // off-screen and presented atomically.  No interpolation lag needed.
-    sc.display_x = raw_x;
-    sc.display_y = raw_y;
-
-    const P: i32 = 256;
-    sc.sub_x = raw_x * P;
-    sc.sub_y = raw_y * P;
-
     const w_i32: i32 = @intCast(fb.getWidth());
     const h_i32: i32 = @intCast(fb.getHeight());
-    if (sc.display_x < 0) sc.display_x = 0;
-    if (sc.display_y < 0) sc.display_y = 0;
-    if (sc.display_x >= w_i32) sc.display_x = w_i32 - 1;
-    if (sc.display_y >= h_i32) sc.display_y = h_i32 - 1;
+    // 先钳位再算 sub_x=sub_y*256，避免 ABS/异常坐标下 i32 乘法在 Debug 下 panic。
+    var dx = raw_x;
+    var dy = raw_y;
+    if (dx < 0) dx = 0;
+    if (dy < 0) dy = 0;
+    if (w_i32 > 0) {
+        if (dx >= w_i32) dx = w_i32 - 1;
+    } else {
+        dx = 0;
+    }
+    if (h_i32 > 0) {
+        if (dy >= h_i32) dy = h_i32 - 1;
+    } else {
+        dy = 0;
+    }
+
+    sc.display_x = dx;
+    sc.display_y = dy;
+
+    const P: i32 = 256;
+    sc.sub_x = dx * P;
+    sc.sub_y = dy * P;
 
     sc.is_moving = (sc.display_x != sc.prev_x or sc.display_y != sc.prev_y);
 }
@@ -610,12 +706,15 @@ fn isStartButtonClick(click_x: i32, click_y: i32, scr_w: i32, scr_h: i32) bool {
     _ = scr_w;
     const tb_h = getTaskbarHeight();
     const tb_y = scr_h - tb_h;
-    if (click_y < tb_y or click_y >= scr_h) return false;
+    if (click_y >= scr_h) return false;
 
-    // 与 renderer_aero renderTaskbar：orb_x=4, orb_sz=36
+    // 与 `renderDesktopAeroTaskbar`：球体略高出任务栏顶缘
     const orb_x: i32 = 4;
-    const orb_w: i32 = 36;
-    return click_x >= orb_x - 2 and click_x < orb_x + orb_w + 6 and click_y < tb_y + tb_h;
+    const orb_raise: i32 = 6;
+    const orb_y = tb_y - orb_raise;
+    const orb_sz: i32 = 38;
+    return click_x >= orb_x - 4 and click_x < orb_x + orb_sz + 8 and
+        click_y >= orb_y - 2 and click_y < tb_y + tb_h;
 }
 
 fn taskMgrWindowContains(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
@@ -787,7 +886,7 @@ pub fn handleClick(x: i32, y: i32) bool {
     }
     const wr = getWindowRect(w, h);
     const cap_h = shellTitlebarH();
-    if (x >= wr.x and x < wr.x + wr.w and y >= wr.y and y < wr.y + cap_h) {
+    if (pointInRectI32(x, y, wr.x, wr.y, wr.w, cap_h)) {
         switch (hitTestAeroCaptionButtons(x, y, wr.x, wr.y, wr.w, cap_h)) {
             .close => {
                 klog.info("Explorer: close (stub)", .{});
@@ -806,7 +905,7 @@ pub fn handleClick(x: i32, y: i32) bool {
             },
         }
     }
-    if (x >= wr.x and x < wr.x + wr.w and y >= wr.y and y < wr.y + wr.h) {
+    if (pointInRectI32(x, y, wr.x, wr.y, wr.w, wr.h)) {
         if (aeroExplorerClientClick(x, y, w, h)) return true;
     }
     return false;
@@ -908,7 +1007,7 @@ pub fn handleMouseMove(x: i32, y: i32) bool {
     if (taskMgrWindowContains(x, y, scr_w, scr_h) and taskMgrTitlebarHit(x, y, scr_w, scr_h)) {
         // 任务管理器盖住 Explorer 时，标题栏命中优先算顶层窗。
         taskmgr_caption_btn_hover = hitTestAeroCaptionButtons(x, y, taskmgr_x, taskmgr_y, tm_w, cap_h);
-    } else if (x >= wr.x and x < wr.x + wr.w and y >= wr.y and y < wr.y + cap_h) {
+    } else if (pointInRectI32(x, y, wr.x, wr.y, wr.w, cap_h)) {
         explorer_caption_btn_hover = hitTestAeroCaptionButtons(x, y, wr.x, wr.y, wr.w, cap_h);
     }
     hover_changed = hover_changed or prev_expl != explorer_caption_btn_hover or prev_tm != taskmgr_caption_btn_hover;
@@ -920,19 +1019,25 @@ pub fn handleMouseMove(x: i32, y: i32) bool {
 
 fn pointInExplorerAddressBar(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
     const wr = getWindowRect(scr_w, scr_h);
-    if (px < wr.x or py < wr.y or px >= wr.x + wr.w or py >= wr.y + wr.h) return false;
-    const cx = wr.x + 2;
-    const cy = wr.y + AERO_TITLEBAR_H;
-    const cw = wr.w - 4;
-    const cmd_h: i32 = AERO_EXPLORER_CMD_H;
-    const addr_h: i32 = AERO_EXPLORER_ADDR_H;
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    const rx = @as(i64, wr.x);
+    const ry = @as(i64, wr.y);
+    const rw = @as(i64, wr.w);
+    const rh = @as(i64, wr.h);
+    if (pxi < rx or pyi < ry or pxi >= rx + rw or pyi >= ry + rh) return false;
+    const cx: i64 = rx + 2;
+    const cy: i64 = ry + AERO_TITLEBAR_H;
+    const cw: i64 = rw - 4;
+    const cmd_h: i64 = AERO_EXPLORER_CMD_H;
+    const addr_h: i64 = AERO_EXPLORER_ADDR_H;
     const addr_y = cy + cmd_h + 1;
-    const go_btn_w: i32 = 44;
-    const go_x = cx + cw - 8 - go_btn_w;
+    const go_x = cx + cw - @as(i64, AERO_EXPLORER_GO_MARGIN_END) - @as(i64, AERO_EXPLORER_GO_BTN_W);
     const addr_field_x = cx + 52;
-    const addr_field_w = @max(64, go_x - 4 - addr_field_x);
-    return px >= addr_field_x and px < addr_field_x + addr_field_w and
-        py >= addr_y and py < addr_y + addr_h;
+    const addr_field_w = @max(@as(i64, 64), go_x - 4 - addr_field_x);
+    const ady = addr_y;
+    const adh = addr_h;
+    return pxi >= addr_field_x and pxi < addr_field_x + addr_field_w and pyi >= ady and pyi < ady + adh;
 }
 
 fn updateDesktopCursorKind(px: i32, py: i32) void {
@@ -969,7 +1074,8 @@ pub fn handleMouseRelease() void {
 
 pub fn renderAeroDesktop() void {
     syncAeroGlassFastPath();
-    renderer_aero.render();
+    renderer_aero.renderFrameEx(false);
+    softwareCursorComposeAfterScene(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
 }
 
 /// Harmony-style wallpaper (Zircon brand: deep blue + soft bloom + edge vignette; Aero 7 氛围)
@@ -994,87 +1100,92 @@ fn renderAeroBackground(w: i32, h: i32, t: *const ThemeColors) void {
     renderHarmonyStyleWallpaper(w, h);
 }
 
-fn renderAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, tb_h: i32) void {
-    // y = scr_h - tb_h: bottom-aligned bar (Y downward, origin top-left)
+/// Aero 任务栏唯一绘制入口（`renderer_aero` 全帧与壳层共用，避免两套像素分叉）。
+pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, tb_h: i32) void {
     const tb_y = scr_h - tb_h;
+    const drag_fast = isDragging();
 
-    // Align with Sun Valley: when glass is on, tint the wallpaper under the bar (blur skipped
-    // for .taskbar). A separate opaque gradient + caption-tint read as "invisible" on Harmony blue.
-    if (dwm_initialized and dwm_config.glass_enabled) {
-        renderGlassEffect(0, tb_y, scr_w, tb_h, rgb(0x28, 0x40, 0x60), .taskbar);
+    if (drag_fast) {
+        fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
+    } else if (dwm_initialized and dwm_config.glass_enabled) {
+        renderGlassEffect(0, tb_y, scr_w, tb_h, rgb(0x34, 0x52, 0x72), .taskbar);
     } else {
         fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
     }
-    fb.drawHLine(0, tb_y, scr_w, rgb(0x58, 0x78, 0xA8));
+    fb.drawHLine(0, tb_y, scr_w, rgb(0xB0, 0xD0, 0xF0));
+    fb.drawHLine(0, tb_y + 1, scr_w, rgb(0x40, 0x5C, 0x78));
 
-    const peek_w: i32 = 12;
-    // Quick launch + tray：与 aero_tray.layout 一致（Show Desktop 条宽度 = peek_w）。
+    const peek_w: i32 = aero_tray.TASKBAR_PEEK_STRIP_W;
     const icon_s: u32 = 2;
     const icon_px: i32 = icons.getIconTotalSize(icon_s);
     const icon_s_apps: u32 = 1;
+    const app_icon_px: i32 = icons.getIconTotalSize(icon_s_apps);
+    const tile: i32 = 34;
+    const pill_h: i32 = tile;
 
-    // Start orb — Zircon logo on glassy circle (resources/logo.svg style)
     const orb_x: i32 = 4;
-    const orb_y = tb_y + 2;
-    const orb_sz: i32 = 36;
-    fb.fillRoundedRect(orb_x - 1, orb_y - 1, orb_sz + 2, orb_sz + 2, 19, rgb(0x18, 0x38, 0x60));
-    fb.fillRoundedRect(orb_x, orb_y, orb_sz, orb_sz, 18, rgb(0x24, 0x4A, 0x80));
-    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x58, 0x8C, 0xC8), rgb(0x28, 0x50, 0x88));
-    fb.blendTintRect(orb_x + 5, orb_y + 3, orb_sz - 10, 10, rgb(0xF0, 0xF8, 0xFF), 62, 255);
-    renderZirconLogo(orb_x + 11, orb_y + 11);
+    const orb_raise: i32 = 6;
+    const orb_y = tb_y - orb_raise;
+    const orb_sz: i32 = 38;
+    fb.fillRoundedRect(orb_x - 1, orb_y - 1, orb_sz + 2, orb_sz + 2, 19, rgb(0x10, 0x30, 0x55));
+    fb.fillRoundedRect(orb_x, orb_y, orb_sz, orb_sz, 18, rgb(0x22, 0x46, 0x7A));
+    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x60, 0x94, 0xD0), rgb(0x28, 0x50, 0x88));
+    fb.blendTintRect(orb_x + 5, orb_y + 3, orb_sz - 10, 11, rgb(0xF5, 0xFC, 0xFF), 72, 255);
+    renderZirconLogo(orb_x + 12, orb_y + 12);
 
-    // Quick launch — ZirconOSAero/resources/icons/*.svg → embedded Aero bitmaps
     const ql_ids = [_]icons.IconId{ .browser, .terminal, .documents };
-    var qx: i32 = orb_x + orb_sz + 8;
+    var qx: i32 = orb_x + orb_sz + 6;
+    const ql_y = tb_y + @divTrunc(tb_h - icon_px, 2);
     for (ql_ids) |iid| {
-        const qy = tb_y + @divTrunc(tb_h - icon_px, 2);
-        icons.drawThemedIcon(iid, qx, qy, icon_s, .aero);
-        qx += icon_px + 6;
+        icons.drawThemedIcon(iid, qx, ql_y, icon_s, .aero);
+        qx += icon_px + 4;
     }
+    fb.drawVLine(qx + 2, tb_y + 6, tb_h - 12, rgb(0x58, 0x78, 0x98));
 
-    fb.drawVLine(qx + 2, tb_y + 5, tb_h - 10, rgb(0x50, 0x70, 0x90));
-
-    const app_items = [_]struct { id: icons.IconId, text: []const u8, active: bool }{
-        .{ .id = .computer, .text = "Computer", .active = true },
-        .{ .id = .folder, .text = "Core", .active = false },
-        .{ .id = .terminal, .text = "CMD", .active = false },
+    const app_items = [_]struct { id: icons.IconId, active: bool }{
+        .{ .id = .computer, .active = true },
+        .{ .id = .folder, .active = false },
+        .{ .id = .terminal, .active = false },
     };
-    var ax = qx + 10;
+    var ax = qx + 8;
+    const ay = tb_y + @divTrunc(tb_h - pill_h, 2);
     for (app_items) |app| {
-        const ay = tb_y + @divTrunc(tb_h - 28, 2);
-        const bw: i32 = 102;
         if (app.active) {
-            fb.fillRoundedRect(ax, ay, bw, 28, 4, rgb(0x50, 0x80, 0xB8));
-            fb.fillRect(ax + 2, ay + 2, bw - 4, 11, rgb(0x78, 0xA8, 0xD8));
-            fb.drawRect(ax, ay, bw, 28, rgb(0x90, 0xB8, 0xE8));
+            fb.fillRoundedRect(ax, ay, tile, pill_h, 6, rgb(0x58, 0x88, 0xC0));
+            fb.fillRect(ax + 2, ay + 2, tile - 4, @divTrunc(pill_h, 2) - 2, rgb(0x78, 0xA8, 0xD8));
+            fb.drawRect(ax, ay, tile, pill_h, rgb(0x98, 0xC0, 0xE8));
         } else {
-            fb.fillRoundedRect(ax, ay, bw, 28, 4, rgb(0x30, 0x48, 0x68));
-            fb.drawRect(ax, ay, bw, 28, rgb(0x40, 0x58, 0x78));
+            fb.fillRoundedRect(ax, ay, tile, pill_h, 6, rgb(0x28, 0x40, 0x5C));
+            fb.drawRect(ax, ay, tile, pill_h, rgb(0x42, 0x5C, 0x78));
         }
-        icons.drawThemedIcon(app.id, ax + 4, ay + 6, icon_s_apps, .aero);
-        fb.drawTextTransparent(ax + 22, ay + 8, app.text, rgb(0xFF, 0xFF, 0xFF));
-        ax += bw + 6;
+        const ix = ax + @divTrunc(tile - app_icon_px, 2);
+        const iy = ay + @divTrunc(pill_h - app_icon_px, 2);
+        icons.drawThemedIcon(app.id, ix, iy, icon_s_apps, .aero);
+        ax += tile + 5;
     }
 
     const tray = aero_tray.layout(scr_w, scr_h, tb_h);
     if (tray.shelf_w > 4 and tray.shelf_h > 4) {
-        fb.fillRoundedRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, 5, rgb(0x10, 0x1C, 0x30));
-        fb.blendTintRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x50, 0x70, 0x98), 22, 100);
-        fb.drawRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x38, 0x50, 0x68));
+        fb.fillRoundedRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, 6, rgb(0x18, 0x28, 0x3C));
+        fb.blendTintRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x78, 0x98, 0xB8), 28, 120);
+        fb.drawRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x50, 0x70, 0x90));
     }
     icons.drawThemedIcon(.network, tray.net_x, tray.tray_icons_y, tray.icon_s, .aero);
     icons.drawThemedIcon(.browser, tray.vol_x, tray.tray_icons_y, tray.icon_s, .aero);
     icons.drawThemedIcon(.settings, tray.set_x, tray.tray_icons_y, tray.icon_s, .aero);
-    fb.drawTextTransparent(tray.chevron_x, tray.chevron_y, "^", rgb(0xB0, 0xC8, 0xE8));
+    fb.drawTextTransparentUi(tray.chevron_x, tray.chevron_y, "^", rgb(0xC0, 0xD8, 0xF0));
 
     const line_time = "12:00 PM";
-    const line_date = "3/21/2026";
+    const line_date = "2026/3/21";
     const line_h_clk: i32 = 14;
-    fb.drawTextTransparent(tray.clk_x, tray.clk_y, line_time, t.clock_text);
-    fb.drawTextTransparent(tray.clk_x, tray.clk_y + line_h_clk + 1, line_date, rgb(0xC8, 0xD8, 0xE8));
+    fb.drawTextTransparentUi(tray.clk_x, tray.clk_y, line_time, t.clock_text);
+    fb.drawTextTransparentUi(tray.clk_x, tray.clk_y + line_h_clk + 1, line_date, rgb(0xE0, 0xEC, 0xF8));
 
-    fb.drawGradientV(scr_w - peek_w, tb_y, peek_w, tb_h, rgb(0x50, 0x70, 0x90), rgb(0x28, 0x40, 0x60));
-    fb.drawVLine(scr_w - peek_w, tb_y, tb_h, rgb(0x70, 0x90, 0xB0));
+    renderAeroTrayFlyout(scr_w, scr_h);
+
+    fb.drawGradientV(scr_w - peek_w, tb_y, peek_w, tb_h, rgb(0x68, 0x88, 0xA8), rgb(0x30, 0x48, 0x64));
+    fb.drawVLine(scr_w - peek_w, tb_y, tb_h, rgb(0x90, 0xB0, 0xD0));
+    fb.drawVLine(scr_w - 1, tb_y, tb_h, rgb(0x20, 0x30, 0x44));
 }
 
 pub fn initAeroDwm() void {
@@ -1766,9 +1877,9 @@ fn renderTitlebarButtons(win_x: i32, win_y: i32, win_w: i32, t: *const ThemeColo
     }
 
     const btn_y = win_y + @divTrunc(TITLEBAR_H - BTN_SIZE, 2);
-    const close_x = win_x + win_w - BTN_SIZE - 4;
-    const max_x = close_x - BTN_SIZE - 2;
-    const min_x = max_x - BTN_SIZE - 2;
+    const close_x = clampI32FromI64(@as(i64, win_x) + @as(i64, win_w) - @as(i64, BTN_SIZE) - 4);
+    const max_x = clampI32FromI64(@as(i64, close_x) - @as(i64, BTN_SIZE) - 2);
+    const min_x = clampI32FromI64(@as(i64, max_x) - @as(i64, BTN_SIZE) - 2);
 
     fb.fillRoundedRect(close_x, btn_y, BTN_SIZE, BTN_SIZE, 3, t.btn_close_top);
     drawCloseSymbol(close_x, btn_y, BTN_SIZE);
@@ -2264,6 +2375,109 @@ pub fn renderCursor(x: i32, y: i32) void {
     }
 }
 
+// ── Software cursor layer（save-under：与场景分离的快速路径；概念见 mdcs/ideas.md） ──
+
+const sw_cursor_max_bytes: usize = 48 * 48 * 4;
+var sw_cursor_saved: [sw_cursor_max_bytes]u8 align(1) = undefined;
+var sw_cursor_saved_len: usize = 0;
+var sw_cursor_sx: i32 = 0;
+var sw_cursor_sy: i32 = 0;
+var sw_cursor_sw: i32 = 0;
+var sw_cursor_sh: i32 = 0;
+var sw_cursor_placed: bool = false;
+var sw_cursor_saved_kind: aero_cursor_shape.CursorKind = .arrow;
+
+fn softwareCursorExtent(cx: i32, cy: i32) fb.Rect {
+    const margin: i32 = 8;
+    if (!fb.isInitialized()) return .{ .x = 0, .y = 0, .w = 40, .h = 44 };
+    const w_i32: i32 = @intCast(fb.getWidth());
+    const h_i32: i32 = @intCast(fb.getHeight());
+    const max_x = if (w_i32 > 0) w_i32 - 1 else 0;
+    const max_y = if (h_i32 > 0) h_i32 - 1 else 0;
+    const cxx = std.math.clamp(cx, 0, max_x);
+    const cyy = std.math.clamp(cy, 0, max_y);
+    return .{ .x = cxx - margin, .y = cyy - margin, .w = 40, .h = 44 };
+}
+
+fn markCursorDirtyUnionFromPoints(ax: i32, ay: i32, bx: i32, by: i32) void {
+    const ra = softwareCursorExtent(ax, ay);
+    const rb = softwareCursorExtent(bx, by);
+    const ux = @min(ra.x, rb.x);
+    const uy = @min(ra.y, rb.y);
+    const rx: i64 = @max(@as(i64, ra.x) + ra.w, @as(i64, rb.x) + rb.w);
+    const ry: i64 = @max(@as(i64, ra.y) + ra.h, @as(i64, rb.y) + rb.h);
+    const rw = rx - @as(i64, ux);
+    const rh = ry - @as(i64, uy);
+    if (rw <= 0 or rh <= 0) return;
+    if (rw > std.math.maxInt(i32) or rh > std.math.maxInt(i32)) return;
+    fb.markDirtyRegion(ux, uy, @intCast(rw), @intCast(rh));
+}
+
+/// 拖拽等局部 `flipDirty` 路径：并入旧/新指针矩形，避免漏拷贝光标区。
+pub fn markCursorMotionDirtyRegions() void {
+    if (!use_framebuffer or !fb.isInitialized()) return;
+    markCursorDirtyUnionFromPoints(
+        desktop_ctx.smooth_cursor.prev_x,
+        desktop_ctx.smooth_cursor.prev_y,
+        desktop_ctx.cursor_x,
+        desktop_ctx.cursor_y,
+    );
+}
+
+pub fn softwareCursorInvalidate() void {
+    sw_cursor_placed = false;
+    sw_cursor_saved_len = 0;
+}
+
+fn softwareCursorComposeAfterScene(cx: i32, cy: i32) void {
+    if (!use_framebuffer or !fb.isInitialized()) return;
+    if (!desktop_ctx.cursor_visible) {
+        softwareCursorInvalidate();
+        return;
+    }
+    const ext = softwareCursorExtent(cx, cy);
+    sw_cursor_saved_len = fb.copyDrawBufferRectBytes(ext.x, ext.y, ext.w, ext.h, &sw_cursor_saved);
+    sw_cursor_sx = ext.x;
+    sw_cursor_sy = ext.y;
+    sw_cursor_sw = ext.w;
+    sw_cursor_sh = ext.h;
+    sw_cursor_saved_kind = desktop_cursor_kind;
+    renderCursor(cx, cy);
+    sw_cursor_placed = sw_cursor_saved_len > 0;
+    markCursorDirtyUnionFromPoints(cx, cy, cx, cy);
+}
+
+fn softwareCursorMoveOnly(cx: i32, cy: i32) bool {
+    if (!use_framebuffer or !fb.isInitialized()) return false;
+    if (!desktop_ctx.cursor_visible) return false;
+    if (!sw_cursor_placed) return false;
+    if (desktop_cursor_kind != sw_cursor_saved_kind) return false;
+
+    const prev_x = desktop_ctx.smooth_cursor.prev_x;
+    const prev_y = desktop_ctx.smooth_cursor.prev_y;
+    fb.pasteDrawBufferRectBytes(sw_cursor_sx, sw_cursor_sy, sw_cursor_sw, sw_cursor_sh, sw_cursor_saved[0..sw_cursor_saved_len]);
+
+    const ext = softwareCursorExtent(cx, cy);
+    sw_cursor_saved_len = fb.copyDrawBufferRectBytes(ext.x, ext.y, ext.w, ext.h, &sw_cursor_saved);
+    if (sw_cursor_saved_len == 0) {
+        softwareCursorInvalidate();
+        return false;
+    }
+    sw_cursor_sx = ext.x;
+    sw_cursor_sy = ext.y;
+    sw_cursor_sw = ext.w;
+    sw_cursor_sh = ext.h;
+    sw_cursor_saved_kind = desktop_cursor_kind;
+    renderCursor(cx, cy);
+    markCursorDirtyUnionFromPoints(prev_x, prev_y, cx, cy);
+    return true;
+}
+
+/// 预留：由显示控制器硬件实现指针 sprite（独立寄存器文档）；禁用配置时不做事。
+pub fn notifyHardwareCursorIfAvailable() void {
+    if (!config.isHardwareCursorEnabled()) return;
+}
+
 // ── Legacy Render Functions (backward compatibility) ──
 
 pub fn renderGradientBackground(top_color: u32, bottom_color: u32) void {
@@ -2321,12 +2535,13 @@ pub fn renderLoginScreen(width: u32, height: u32, top_color: u32, bottom_color: 
 
 pub fn present() void {
     if (!use_framebuffer) return;
-    // 双缓冲：必须整帧 memcpy 到真实 GOP。若走 flipDirty 且损坏矩形未覆盖光标/毛玻璃区，会表现为指针「粘住」或局部残影（与输入是否到达无关，也会误以为是鼠标坏了）。
+    // 双缓冲：整帧 memcpy；单缓冲时直接写屏前，flipDirty 仅清脏区标记。
     if (fb.isDoubleBuffered()) {
         fb.flip();
     } else {
         fb.flipDirty();
     }
+    notifyHardwareCursorIfAvailable();
     if (dwm_comp.isInitialized()) {
         dwm_comp.notifyFramePresented();
     }
@@ -2337,6 +2552,7 @@ pub fn present() void {
 pub fn presentFull() void {
     if (!use_framebuffer) return;
     fb.flip();
+    notifyHardwareCursorIfAvailable();
     desktop_ctx.present_count += 1;
     desktop_ctx.frame_count += 1;
 }

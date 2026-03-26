@@ -151,6 +151,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
     var alloc: frame.FrameAllocator = undefined;
     alloc.init(boot_info, kernel_end, info_addr);
+    frame.setKernelFrameAllocator(&alloc);
     klog.info("Frame allocator: total_frames=%u, frame_size=%u", .{
         alloc.total_frames, frame.FRAME_SIZE,
     });
@@ -471,14 +472,21 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                 // #endregion
                 const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
                 const queued = mouse.hasEvents();
+                const scene_dirty = needs_ui_paint or hover_changed or queued or mouse.isInterpolating();
+                const cursor_dirty = pixel_moved or mouse.hasCursorMoved();
 
                 // 整帧重绘：双缓冲不能只叠画光标。
                 // 若启用鼠标插值，必须在「仍在插值」时继续合成，否则子步长为 0 时 pixel_moved 为假会死锁。
-                const need_paint = needs_ui_paint or hover_changed or pixel_moved or queued or
-                    mouse.isInterpolating() or mouse.hasCursorMoved();
+                const need_paint = scene_dirty or cursor_dirty;
 
                 if (need_paint) {
-                    display.renderDesktopFrame();
+                    if (@import("build_options").desktop_bisect) {
+                        klog.debug("desktop: pre renderDesktopFrameEx scene_dirty=%u", .{@intFromBool(scene_dirty)});
+                    }
+                    display.renderDesktopFrameEx(scene_dirty);
+                    if (@import("build_options").desktop_bisect) {
+                        klog.debug("desktop: post renderDesktopFrameEx pre-present", .{});
+                    }
                     display.present();
                     // 必须在 present 之后取样：renderDesktopFrame 会排空插值并更新逻辑坐标。
                     last_draw_cx = mouse.getX();
@@ -719,18 +727,55 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             }
             boot_info = bi_mut;
         }
-        alloc.init(boot_info, 0x400000, 0);
+        // 勿用固定 0x400000：链接脚本下映像+BSS+1MiB 栈后 _kernel_end 常 >4MiB，否则页表帧会分配到内核/栈物理页，identity map 约在 8MiB 处失败。
+        // `_kernel_end` 为零尺寸链接器符号：勿用 @intFromPtr(&_)（LoongArch 上可能为 0）；见 arch/loongarch64/mod.zig `linkerKernelEndExclusive`。
+        const la_k_end = (arch.impl.linkerKernelEndExclusive() + frame.FRAME_SIZE - 1) & ~@as(usize, frame.FRAME_SIZE - 1);
+        klog.info("Memory: LoongArch kernel_end=0x%x (_kernel_end aligned)", .{la_k_end});
+        alloc.init(boot_info, la_k_end, 0);
+        frame.setKernelFrameAllocator(&alloc);
         const paging = arch.impl.paging;
         if (vm.createAddressSpace(&alloc)) |ks| {
             loong_kernel_space = ks;
             const kernel_space = &loong_kernel_space.?;
             // 0–2GiB：GOP/ramfb；GPU MMIO 若落在 2–4GiB，`vm.mapDeviceMmioIdentity` 会按需建 identity 非缓存映射
             const identity_pages: usize = (2 * 1024 * 1024 * 1024) / paging.page_size;
+            const id_limit: usize = identity_pages * paging.page_size;
             var i: usize = 0;
             while (i < identity_pages) : (i += 1) {
                 const virt = i * paging.page_size;
                 const flags = vm.MapFlags{ .writable = true, .executable = true };
-                _ = kernel_space.mapPage(virt, virt, flags);
+                if (!kernel_space.mapPage(virt, virt, flags)) {
+                    klog.err("LoongArch: identity map failed at 0x%x (check UEFI mmap / frame pool)", .{virt});
+                    arch.halt();
+                }
+            }
+            // virtio-gpu / 部分固件 GOP 帧缓冲落在 PCI BAR（物理地址 ≥2GiB）；仅 map 低 2GiB 时访问桌面会缺页
+            if (boot_info) |binfo| {
+                if (binfo.fb_info) |fb_i| {
+                    if (fb_i.addr != 0 and fb_i.height > 0 and fb_i.pitch > 0) {
+                        const fb_base = @as(usize, @truncate(fb_i.addr)) & ~@as(usize, paging.page_size - 1);
+                        const fb_bytes = @as(usize, fb_i.pitch) * @as(usize, fb_i.height);
+                        if (fb_bytes != 0) {
+                            const fb_end = fb_base + fb_bytes;
+                            const va_limit = (fb_end + paging.page_size - 1) & ~@as(usize, paging.page_size - 1);
+                            var va = fb_base;
+                            while (va < va_limit) : (va += paging.page_size) {
+                                if (va >= id_limit) {
+                                    const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = true };
+                                    if (!kernel_space.mapPage(va, va, fb_flags)) {
+                                        klog.err("LoongArch: framebuffer map failed at 0x%x (past 2GiB)", .{va});
+                                        arch.halt();
+                                    }
+                                }
+                            }
+                            if (fb_base >= id_limit or fb_end > id_limit) {
+                                klog.info("VM: LoongArch scanout FB 0x%x..0x%x (touched ≥2GiB; extra uncached PTEs)", .{
+                                    fb_base, fb_end,
+                                });
+                            }
+                        }
+                    }
+                }
             }
             kernel_space.activate();
             vm.bindKernelAddressSpace(kernel_space);
@@ -772,6 +817,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     if (builtin.target.cpu.arch != .loongarch64) {
         const k_reserved = ( @intFromPtr(&_kernel_end) + 4095 ) & ~@as(usize, 4095);
         alloc.init(boot_info, k_reserved, info_addr);
+        frame.setKernelFrameAllocator(&alloc);
     }
 
     // QEMU virt：启用自有页表并 identity map，否则 ExitBootServices 后 VirtIO PCI / ECAM 访问不可靠
@@ -832,7 +878,14 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     klog.info("--- Phase 2: Scheduler + Timer ---", .{});
     scheduler.init();
+    if (builtin.target.cpu.arch == .loongarch64) {
+        @import("arch/loongarch64/traps.zig").init();
+    }
     timer.init();
+    if (builtin.target.cpu.arch == .loongarch64) {
+        arch.enableInterrupts();
+        klog.info("LoongArch: CRMD.IE enabled (timer + HWI)", .{});
+    }
 
     klog.info("--- Phase 4: Object / Handle / Process Core ---", .{});
     ob.init();
@@ -925,6 +978,32 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                         .pixel_bgr = if (builtin.target.cpu.arch == .x86_64) (fb_i.pixel_bgr != 0) else true,
                     });
                     const fb_addr = @as(usize, @truncate(use_fb.addr));
+                    if (builtin.target.cpu.arch == .loongarch64) {
+                        const fb_bytes = @as(usize, use_fb.pitch) * @as(usize, use_fb.height);
+                        if (vm.remapIdentityRangeUncached(fb_addr, fb_bytes)) {
+                            klog.info("VM: LoongArch scanout FB 0x%x size 0x%x → uncached (GOP/ramfb visible)", .{
+                                fb_addr, fb_bytes,
+                            });
+                        } else {
+                            klog.warn("VM: LoongArch framebuffer uncached remap failed — desktop may not scan out", .{});
+                        }
+                        const ramfb = @import("hal/loongarch64/ramfb.zig");
+                        if (ramfb.pointRamfbToGuestPhys(
+                            use_fb.addr,
+                            use_fb.width,
+                            use_fb.height,
+                            use_fb.pitch,
+                        )) {
+                            klog.info("ramfb: pointed QEMU scanout to GOP phys 0x%x (%ux%u stride %u)", .{
+                                @as(usize, @truncate(use_fb.addr)),
+                                use_fb.width,
+                                use_fb.height,
+                                use_fb.pitch,
+                            });
+                        } else if (klog.DEBUG_MODE) {
+                            klog.info("ramfb: pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
+                        }
+                    }
                     if (!arch.impl.framebuffer.isReady()) {
                         arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
                     }
@@ -998,10 +1077,17 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                 // #endregion
                 const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
                 const queued = mouse.hasEvents();
-                const need_paint = needs_ui_paint or hover_changed or pixel_moved or queued or
-                    mouse.isInterpolating() or mouse.hasCursorMoved();
+                const scene_dirty = needs_ui_paint or hover_changed or queued or mouse.isInterpolating();
+                const cursor_dirty = pixel_moved or mouse.hasCursorMoved();
+                const need_paint = scene_dirty or cursor_dirty;
                 if (need_paint) {
-                    display.renderDesktopFrame();
+                    if (@import("build_options").desktop_bisect) {
+                        klog.debug("desktop_generic: pre renderDesktopFrameEx scene_dirty=%u", .{@intFromBool(scene_dirty)});
+                    }
+                    display.renderDesktopFrameEx(scene_dirty);
+                    if (@import("build_options").desktop_bisect) {
+                        klog.debug("desktop_generic: post renderDesktopFrameEx pre-present", .{});
+                    }
                     display.present();
                     last_draw_cx = mouse.getX();
                     last_draw_cy = mouse.getY();

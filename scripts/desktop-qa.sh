@@ -10,4 +10,5 @@ zig build kernel
 echo "desktop-qa: OK"
 echo "  Optional: make build MOUSE_DEBUG=true   # serial mouseDbg + ptr overlay"
 echo "  Optional: make build AGENT_NDJSON=true && make run 2>&1 | bash scripts/agent-ingest-serial.sh"
-echo "  Pointer stuck: docs/cn/AeroDesktopRuntime.md §3; try INTEL_IGPU=false or DESKTOP_IDLE_SPIN=true"
+echo "  Pointer stuck: docs/cn/AeroDesktopRuntime.md §3 + §3.1; try INTEL_IGPU=false or DESKTOP_IDLE_SPIN=true"
+echo "  Matrix: vary GOP res (QEMU -vga), display.double_buffer in config; check 'double_buf=' / 'heap back buffer' in log"

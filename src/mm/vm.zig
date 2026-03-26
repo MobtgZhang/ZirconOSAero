@@ -72,6 +72,28 @@ pub fn remapIdentityVirtPageUncached(virt: usize) bool {
     return space.mapPage(va, phys, .{ .writable = true, .executable = false, .no_cache = true });
 }
 
+/// 将 `[virt_base, virt_base+size)` 覆盖到的各页改为 **identity、可写、非缓存**（LoongArch：MAT_WUC）。
+/// UEFI GOP / ramfb 扫描输出通常不经 CPU cache 一致性；若整段 identity 映射为 CC，桌面写入可能留在 cache，QEMU 仍显示固件画面。
+pub fn remapIdentityRangeUncached(virt_base: usize, size: usize) bool {
+    const space = g_kernel_space orelse return true;
+    if (size == 0) return true;
+    const ps = paging.page_size;
+    const end = virt_base + size;
+    const va0 = virt_base & ~@as(usize, ps - 1);
+    const va1 = (end + ps - 1) & ~@as(usize, ps - 1);
+    var va = va0;
+    while (va < va1) : (va += ps) {
+        const phys = space.getPhysical(va) orelse return false;
+        _ = space.unmapPage(va);
+        if (!space.mapPage(va, phys, .{ .writable = true, .executable = false, .no_cache = true }))
+            return false;
+    }
+    if (@hasDecl(paging, "loadCr3")) {
+        paging.loadCr3(space.pml4_phys);
+    }
+    return true;
+}
+
 pub const AddressSpace = struct {
     pml4_phys: u64,
     allocator: *FrameAllocator,

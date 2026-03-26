@@ -12,6 +12,17 @@ pub const FRAME_SIZE: usize = arch.PAGE_SIZE;
 const MAX_PHYS_FRAMES: usize = 1048576; // 4GiB / 4KiB
 const BITMAP_SIZE: usize = (MAX_PHYS_FRAMES + 63) / 64;
 
+/// 供帧缓冲大后备区等路径按需申请连续物理页（如 `framebuffer.init`）。
+pub var kernel_frame_alloc: ?*FrameAllocator = null;
+
+pub fn setKernelFrameAllocator(a: ?*FrameAllocator) void {
+    kernel_frame_alloc = a;
+}
+
+pub fn getKernelFrameAllocator() ?*FrameAllocator {
+    return kernel_frame_alloc;
+}
+
 pub const FrameAllocator = struct {
     bitmap: [BITMAP_SIZE]u64,
     total_frames: usize,
@@ -62,9 +73,12 @@ pub const FrameAllocator = struct {
             const end_excl = multibootReservedEndExclusive(mbi_phys);
             if (addr < end_excl and addr + FRAME_SIZE > mbi_phys) return true;
         }
-        const bitmap_addr = @intFromPtr(&self.bitmap);
-        const bitmap_page = bitmap_addr & ~(FRAME_SIZE - 1);
-        if (addr >= bitmap_page and addr < bitmap_page + FRAME_SIZE) return true;
+        // bitmap 跨多页（16KB 页上约 8 页）；仅保留首帧会导致其余 bitmap 页被 alloc 复用，位图损坏后在 identity map 约 8MB 处失败。
+        const bitmap_begin = @intFromPtr(&self.bitmap);
+        const bitmap_bytes = BITMAP_SIZE * @sizeOf(u64);
+        const bitmap_first = bitmap_begin & ~@as(usize, FRAME_SIZE - 1);
+        const bitmap_past = std.mem.alignForward(usize, bitmap_begin + bitmap_bytes, FRAME_SIZE);
+        if (addr >= bitmap_first and addr < bitmap_past) return true;
         return false;
     }
 
@@ -115,8 +129,33 @@ pub const FrameAllocator = struct {
 
     pub fn allocZeroed(self: *FrameAllocator) ?u64 {
         const phys = self.alloc() orelse return null;
-        const ptr = @as(*[1024]u32, @ptrFromInt(phys));
-        for (ptr) |*p| p.* = 0;
+        const ptr: [*]align(1) u8 = @ptrFromInt(phys);
+        @memset(ptr[0..FRAME_SIZE], 0);
         return phys;
+    }
+
+    /// 分配 `num_frames` 个**连续**空闲物理页，首地址按 `FRAME_SIZE` 对齐。
+    pub fn allocContiguous(self: *FrameAllocator, num_frames: usize) ?u64 {
+        if (num_frames == 0) return null;
+        const limit: usize = MAX_PHYS_FRAMES - num_frames;
+        var start: usize = 0;
+        while (start <= limit) : (start += 1) {
+            var all_free = true;
+            var i: usize = 0;
+            while (i < num_frames) : (i += 1) {
+                if (!self.isFree(start + i)) {
+                    all_free = false;
+                    break;
+                }
+            }
+            if (!all_free) continue;
+            i = 0;
+            while (i < num_frames) : (i += 1) {
+                self.setUsed(start + i);
+            }
+            self.used_frames += num_frames;
+            return @as(u64, @intCast(start * FRAME_SIZE));
+        }
+        return null;
     }
 };

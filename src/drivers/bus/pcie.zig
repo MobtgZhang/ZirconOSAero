@@ -141,6 +141,8 @@ pub const PCI_VENDOR_INTEL: u16 = 0x8086;
 pub const PCI_VENDOR_AMD_ATI: u16 = 0x1002;
 /// Loongson PCI vendor id (display class 0x03 on LS2K/7A 等，见 `video/loongson/dids.zig`)
 pub const PCI_VENDOR_LOONGSON: u16 = 0x0014;
+/// NVIDIA PCI vendor id（显示类 0x03；与 Linux `nouveau` 枚举范围一致，本内核默认 GOP handoff）
+pub const PCI_VENDOR_NVIDIA: u16 = 0x10DE;
 
 /// Decoded PCI BAR (memory or I/O)
 pub const PciBarResource = struct {
@@ -298,6 +300,11 @@ pub fn collectLoongsonDisplayDevices(out: []DisplayGfxPciInfo, max_bus: u8) usiz
     return collectDisplayDevicesByVendor(PCI_VENDOR_LOONGSON, out, max_bus);
 }
 
+/// 扫描 PCI，收集 NVIDIA（10DE）显示控制器（class 0x03）
+pub fn collectNvidiaDisplayDevices(out: []DisplayGfxPciInfo, max_bus: u8) usize {
+    return collectDisplayDevicesByVendor(PCI_VENDOR_NVIDIA, out, max_bus);
+}
+
 /// 选取首个非零 MMIO BAR（通常为寄存器块）
 pub fn firstMmioBar(info: *const DisplayGfxPciInfo) ?PciBarResource {
     for (info.bars) |bar| {
@@ -406,28 +413,36 @@ pub fn findDevicePci0(vendor_id: u16, device_ids: []const u16) ?PciLoc {
     return null;
 }
 
-/// 枚举总线 0 上所有 VirtIO Input PCI（1af4:1052），用于同时挂 mouse + keyboard
+/// 枚举 `bus 0..max_bus` 上所有 VirtIO Input PCI（1af4:1052）；LoongArch/RISC-V 等下设备偶发不在 bus0。
 /// 扫描 func 0..7：多功能设备或部分固件下 virtio 不在 func0。
-pub fn collectVirtioInputDevicesPci0(out: []PciLoc) usize {
+pub fn collectVirtioInputDevices(out: []PciLoc, max_bus: u8) usize {
     if (!supports_pci_config) return 0;
     var n: usize = 0;
-    var d: u8 = 0;
-    while (d < 32) : (d += 1) {
-        var f: u8 = 0;
-        while (f < 8) : (f += 1) {
-            const id = readConfigDword(0, d, f, 0);
-            if (id == 0xFFFFFFFF) continue;
-            const vid: u16 = @truncate(id);
-            const did: u16 = @truncate(id >> 16);
-            if (vid == 0x1AF4 and did == 0x1052) {
-                if (n < out.len) {
-                    out[n] = .{ .bus = 0, .dev = d, .func = f };
-                    n += 1;
+    var b: u8 = 0;
+    while (b <= max_bus) : (b += 1) {
+        var d: u8 = 0;
+        while (d < 32) : (d += 1) {
+            var f: u8 = 0;
+            while (f < 8) : (f += 1) {
+                const id = readConfigDword(b, d, f, 0);
+                if (id == 0xFFFFFFFF) continue;
+                const vid: u16 = @truncate(id);
+                const did: u16 = @truncate(id >> 16);
+                if (vid == 0x1AF4 and did == 0x1052) {
+                    if (n < out.len) {
+                        out[n] = .{ .bus = b, .dev = d, .func = f };
+                        n += 1;
+                    }
                 }
             }
         }
     }
     return n;
+}
+
+/// 仅总线 0（x86 QEMU pc 常用；保持旧调用点行为）。
+pub fn collectVirtioInputDevicesPci0(out: []PciLoc) usize {
+    return collectVirtioInputDevices(out, 0);
 }
 
 fn pciDispatch(irp: *io.Irp) io.IoStatus {

@@ -45,6 +45,7 @@ pub const video = struct {
     pub const framebuffer = @import("video/framebuffer.zig");
     pub const display = @import("video/display.zig");
     pub const intel_igpu = @import("video/intel_igpu.zig");
+    pub const nvidia_gpu = @import("video/nvidia_gpu.zig");
     pub const amd_igpu = @import("video/amd_igpu.zig");
     pub const loongson_igpu = @import("video/loongson_igpu.zig");
     pub const desktop_fb_resolve = @import("video/desktop_fb_resolve.zig");
@@ -87,6 +88,9 @@ pub fn init() void {
     if (builtin.target.cpu.arch == .loongarch64 and bopts_init.loongson_igpu) {
         video.loongson_igpu.init();
     }
+    if (is_x86 and bopts_init.nvidia_gpu) {
+        video.nvidia_gpu.init();
+    }
     if (is_x86 and bopts_init.amd_igpu) {
         video.amd_igpu.init();
     }
@@ -109,13 +113,18 @@ pub fn init() void {
     drivers_initialized = true;
 
     const bopts_log = @import("build_options");
-    klog.info("Drivers: Video ready (VGA=%s, HDMI=%s, Display=%s, LoongsonIGPU=%s, AMDIGPU=%s, IntelIGPU=%s)", .{
+    klog.info("Drivers: Video ready (VGA=%s, HDMI=%s, Display=%s, LoongsonIGPU=%s, NVIDIA=%s, AMDDisplay=%s, IntelIGPU=%s)", .{
         if (video.vga.isInitialized()) "yes" else "no",
         if (video.hdmi.isInitialized()) "yes" else "no",
         if (video.display.isInitialized()) "yes" else "no",
         if (builtin.target.cpu.arch == .loongarch64 and bopts_log.loongson_igpu) blk: {
             if (video.loongson_igpu.isDeferredProbePending()) break :blk "defer";
             if (video.loongson_igpu.isActive()) break :blk "yes";
+            break :blk "no";
+        } else "n/a",
+        if (is_x86 and bopts_log.nvidia_gpu) blk: {
+            if (video.nvidia_gpu.isDeferredProbePending()) break :blk "defer";
+            if (video.nvidia_gpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
         if (is_x86 and bopts_log.amd_igpu) blk: {
@@ -166,9 +175,11 @@ pub fn initInputDrivers() void {
             "n/a",
     });
     const bopts = @import("build_options");
-    klog.info("InputDiag: MOUSE_DEBUG=%u AGENT_NDJSON=%u AMD_IGPU=%u amd_defer=%u INTEL_IGPU=%u intel_defer=%u idle_spin=%u — pointer stuck? see docs/cn/AeroDesktopRuntime.md; isolate: make AMD_IGPU=false / INTEL_IGPU=false", .{
+    klog.info("InputDiag: MOUSE_DEBUG=%u AGENT_NDJSON=%u NVIDIA_GPU=%u nvidia_defer=%u AMD_IGPU=%u amd_defer=%u INTEL_IGPU=%u intel_defer=%u idle_spin=%u — pointer stuck? see docs/cn/AeroDesktopRuntime.md; isolate: make AMD_IGPU=false / INTEL_IGPU=false / NVIDIA_GPU=false", .{
         @intFromBool(bopts.mouse_debug),
         @intFromBool(bopts.agent_ndjson),
+        @intFromBool(bopts.nvidia_gpu),
+        @intFromBool(bopts.nvidia_gpu_defer_probe),
         @intFromBool(bopts.amd_igpu),
         @intFromBool(bopts.amd_igpu_defer_probe),
         @intFromBool(bopts.intel_igpu),

@@ -147,8 +147,8 @@ fn mouseWrite(byte: u8) u8 {
 /// 键盘方向键 / VirtIO 键盘等注入的相对位移（兜底路径，不依赖 PS/2 鼠标流）。
 pub fn injectNudge(dx: i32, dy: i32) void {
     if (dx == 0 and dy == 0) return;
-    mouse_state.x += dx;
-    mouse_state.y += dy;
+    mouse_state.x = clampedAddI32(mouse_state.x, dx);
+    mouse_state.y = clampedAddI32(mouse_state.y, dy);
     clampPosition();
     mouse_state.cursor_moved = true;
     pushEvent(.{
@@ -249,6 +249,14 @@ fn processAuxByte(data: u8, allow_first_without_sync_bit: bool) void {
     deliverMouseEvent(event);
 }
 
+fn clampToI32(v: i64) i32 {
+    return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
+}
+
+fn clampedAddI32(a: i32, b: i32) i32 {
+    return clampToI32(@as(i64, a) + @as(i64, b));
+}
+
 /// VirtIO-Input / 其它 HID 总线汇总的相对运动（dx、dy 为设备原始增量，语义与 PS/2 包内一致）
 pub fn deliverMouseEvent(event: MouseEvent) void {
     // 丢弃完全重复的报告（常见于 VirtIO SYN），减轻事件队列与主循环负担。
@@ -265,30 +273,32 @@ pub fn deliverMouseEvent(event: MouseEvent) void {
     var dy_scaled: i32 = @as(i32, event.dy);
 
     if (mouse_state.acceleration_enabled) {
-        const speed_sq = dx_scaled * dx_scaled + dy_scaled * dy_scaled;
+        const dx64 = @as(i64, dx_scaled);
+        const dy64 = @as(i64, dy_scaled);
+        const speed_sq = dx64 * dx64 + dy64 * dy64;
         const thresh = mouse_state.acceleration_threshold;
-        const thresh_sq = thresh * thresh;
+        const thresh_sq = @as(i64, thresh) * @as(i64, thresh);
         if (speed_sq > thresh_sq * 9) {
-            dx_scaled = dx_scaled * 3;
-            dy_scaled = dy_scaled * 3;
+            dx_scaled = clampToI32(dx64 * 3);
+            dy_scaled = clampToI32(dy64 * 3);
         } else if (speed_sq > thresh_sq * 4) {
-            dx_scaled = dx_scaled * 2;
-            dy_scaled = dy_scaled * 2;
+            dx_scaled = clampToI32(dx64 * 2);
+            dy_scaled = clampToI32(dy64 * 2);
         } else if (speed_sq > thresh_sq) {
-            dx_scaled = dx_scaled + @divTrunc(dx_scaled, 2);
-            dy_scaled = dy_scaled + @divTrunc(dy_scaled, 2);
+            dx_scaled = clampToI32(dx64 + @divTrunc(dx64, 2));
+            dy_scaled = clampToI32(dy64 + @divTrunc(dy64, 2));
         }
     }
 
-    dx_scaled = @divTrunc(dx_scaled * mouse_state.sensitivity, 10);
-    dy_scaled = @divTrunc(dy_scaled * mouse_state.sensitivity, 10);
+    dx_scaled = clampToI32(@divTrunc(@as(i64, dx_scaled) * @as(i64, mouse_state.sensitivity), 10));
+    dy_scaled = clampToI32(@divTrunc(@as(i64, dy_scaled) * @as(i64, mouse_state.sensitivity), 10));
     // 低灵敏度或 @divTrunc 会把 ±1 打成 0，指针表现为「完全不动」
     if (dx_scaled == 0 and event.dx != 0) dx_scaled = std.math.sign(event.dx);
     if (dy_scaled == 0 and event.dy != 0) dy_scaled = std.math.sign(event.dy);
 
     if (mouse_state.smoothing_enabled) {
-        dx_scaled = @divTrunc(dx_scaled * 3 + mouse_state.prev_dx, 4);
-        dy_scaled = @divTrunc(dy_scaled * 3 + mouse_state.prev_dy, 4);
+        dx_scaled = clampToI32(@divTrunc(@as(i64, dx_scaled) * 3 + @as(i64, mouse_state.prev_dx), 4));
+        dy_scaled = clampToI32(@divTrunc(@as(i64, dy_scaled) * 3 + @as(i64, mouse_state.prev_dy), 4));
     }
     mouse_state.prev_dx = dx_scaled;
     mouse_state.prev_dy = dy_scaled;
@@ -297,8 +307,8 @@ pub fn deliverMouseEvent(event: MouseEvent) void {
     mouse_state.velocity_y = dy_scaled;
 
     if (mouse_state.interpolation_enabled and mouse_state.interpolation_steps > 1) {
-        mouse_state.raw_x += dx_scaled;
-        mouse_state.raw_y += dy_scaled;
+        mouse_state.raw_x = clampedAddI32(mouse_state.raw_x, dx_scaled);
+        mouse_state.raw_y = clampedAddI32(mouse_state.raw_y, dy_scaled);
         clampRawPosition();
 
         mouse_state.sub_x = @divTrunc(mouse_state.raw_x - mouse_state.x, mouse_state.interpolation_steps);
@@ -307,8 +317,8 @@ pub fn deliverMouseEvent(event: MouseEvent) void {
 
         interpolateStep();
     } else {
-        mouse_state.x += dx_scaled;
-        mouse_state.y += dy_scaled;
+        mouse_state.x = clampedAddI32(mouse_state.x, dx_scaled);
+        mouse_state.y = clampedAddI32(mouse_state.y, dy_scaled);
         mouse_state.raw_x = mouse_state.x;
         mouse_state.raw_y = mouse_state.y;
         clampPosition();
@@ -349,8 +359,8 @@ pub fn interpolateStep() void {
         mouse_state.x = mouse_state.raw_x;
         mouse_state.y = mouse_state.raw_y;
     } else {
-        mouse_state.x += mouse_state.sub_x;
-        mouse_state.y += mouse_state.sub_y;
+        mouse_state.x = clampedAddI32(mouse_state.x, mouse_state.sub_x);
+        mouse_state.y = clampedAddI32(mouse_state.y, mouse_state.sub_y);
     }
 
     clampPosition();

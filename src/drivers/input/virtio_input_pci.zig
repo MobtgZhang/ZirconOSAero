@@ -259,23 +259,28 @@ fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [LINUX_INPUT_EVENT_SZ]
                     .scroll = 0,
                 });
             } else if (code == REL_WHEEL) {
-                inst.acc_scroll += val;
+                const sum = @as(i64, inst.acc_scroll) + @as(i64, val);
+                inst.acc_scroll = @intCast(std.math.clamp(sum, std.math.minInt(i32), std.math.maxInt(i32)));
             }
         },
         EV_ABS => {
             if (code == ABS_X) {
                 inst.has_pointer_ev = true;
                 if (inst.tab_have_x) {
-                    const d = val - inst.tab_x;
-                    inst.acc_dx += d;
+                    const d64 = @as(i64, val) - @as(i64, inst.tab_x);
+                    const d = std.math.clamp(d64, -32768, 32767);
+                    const sum = @as(i64, inst.acc_dx) + d;
+                    inst.acc_dx = @intCast(std.math.clamp(sum, -32768, 32767));
                 }
                 inst.tab_x = val;
                 inst.tab_have_x = true;
             } else if (code == ABS_Y) {
                 inst.has_pointer_ev = true;
                 if (inst.tab_have_y) {
-                    const d = val - inst.tab_y;
-                    inst.acc_dy += d;
+                    const d64 = @as(i64, val) - @as(i64, inst.tab_y);
+                    const d = std.math.clamp(d64, -32768, 32767);
+                    const sum = @as(i64, inst.acc_dy) + d;
+                    inst.acc_dy = @intCast(std.math.clamp(sum, -32768, 32767));
                 }
                 inst.tab_y = val;
                 inst.tab_have_y = true;
@@ -547,10 +552,15 @@ pub fn init() void {
     if (!pcie.supports_pci_config) return;
 
     var locs: [MAX_INST + 4]pcie.PciLoc = undefined;
-    const n = pcie.collectVirtioInputDevicesPci0(locs[0..]);
+    const max_bus: u8 = if (builtin.target.cpu.arch == .x86_64) 0 else 7;
+    const n = pcie.collectVirtioInputDevices(locs[0..], max_bus);
 
     if (n == 0) {
-        klog.info("VirtIO-Input PCI: no 1af4:1052 (optional: -device virtio-mouse-pci,virtio-keyboard-pci)", .{});
+        if (builtin.target.cpu.arch != .x86_64) {
+            klog.warn("VirtIO-Input PCI: no 1af4:1052 on non-x86 — 指针依赖 VirtIO；QEMU 请加 virtio-mouse-pci（Makefile 与 docs/cn/AeroDesktopRuntime.md）", .{});
+        } else {
+            klog.info("VirtIO-Input PCI: no 1af4:1052 (optional: -device virtio-mouse-pci,virtio-keyboard-pci)", .{});
+        }
         // #region agent log
         if (@import("build_options").agent_ndjson) {
             const ag = @import("../../debug/agent_ndjson.zig");

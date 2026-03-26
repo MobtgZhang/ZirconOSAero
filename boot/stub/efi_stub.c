@@ -39,6 +39,10 @@ typedef struct {
 	UINT32 fb_height;
 	UINT8 fb_bpp;
 	UINT8 _pad[3];
+	UINT32 mmap_count;
+	UINT32 mmap_entry_size;
+	UINT32 mmap_off_from_handoff;
+	UINT32 _mmap_pad;
 } EfiHandoff;
 
 static const EFI_GUID gop_guid = { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } };

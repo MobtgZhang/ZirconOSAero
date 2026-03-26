@@ -19,7 +19,7 @@ const Attr = menu.Attr;
 const ZIRCON_LOONGARCH_EFI_MAGIC: u32 = 0x6372697A;
 const HANDOFF_PHYS: usize = 0x100000;
 
-/// 与 `src/arch/loongarch64/boot.zig` 中 `EfiHandoff` 布局一致（含 GOP 字段）
+/// 与 `src/arch/loongarch64/boot.zig` 中 `EfiHandoff` 布局一致（v2 GOP / v3 mmap）
 const EfiHandoff = extern struct {
     magic: u32,
     version: u32,
@@ -31,7 +31,49 @@ const EfiHandoff = extern struct {
     fb_height: u32 = 0,
     fb_bpp: u8 = 0,
     _pad: [3]u8 = [_]u8{0} ** 3,
+    mmap_count: u32 = 0,
+    mmap_entry_size: u32 = 0,
+    mmap_off_from_handoff: u32 = 0,
+    _mmap_pad: u32 = 0,
 };
+
+/// 与内核 `boot.MmapEntry` 布局一致
+const KernelMmapEntry = extern struct {
+    base_addr: u64,
+    length: u64,
+    type: u32,
+    reserved: u32,
+};
+
+const MMAP_STORE_OFF: usize = 0x200;
+
+fn efiToKernelMmapType(mt: uefi.tables.MemoryType) u32 {
+    return switch (mt) {
+        .conventional_memory => 1,
+        .acpi_reclaim_memory => 3,
+        .unusable_memory, .reserved_memory_type => 5,
+        else => 2,
+    };
+}
+
+fn fillHandoffMmap(page: [*]u8, mmap_slice: uefi.tables.MemoryMapSlice) struct { count: u32, esz: u32 } {
+    const max_n = (4096 - MMAP_STORE_OFF) / @sizeOf(KernelMmapEntry);
+    @memset((page + MMAP_STORE_OFF)[0 .. 4096 - MMAP_STORE_OFF], 0);
+    var it = mmap_slice.iterator();
+    var n: u32 = 0;
+    while (it.next()) |d| {
+        if (n >= max_n) break;
+        const dst: *KernelMmapEntry = @ptrCast(@alignCast(page + MMAP_STORE_OFF + @as(usize, n) * @sizeOf(KernelMmapEntry)));
+        dst.* = .{
+            .base_addr = d.physical_start,
+            .length = d.number_of_pages * 4096,
+            .type = efiToKernelMmapType(d.type),
+            .reserved = 0,
+        };
+        n += 1;
+    }
+    return .{ .count = n, .esz = @sizeOf(KernelMmapEntry) };
+}
 
 /// 与 `build.conf` / x86 多引导默认 `RESOLUTION` 一致
 const PREFERRED_FB_WIDTH: u32 = 1024;
@@ -111,6 +153,10 @@ fn handoffForSelectedEntry(idx: usize) EfiHandoff {
         .fb_height = 0,
         .fb_bpp = 0,
         ._pad = [_]u8{0} ** 3,
+        .mmap_count = 0,
+        .mmap_entry_size = 0,
+        .mmap_off_from_handoff = 0,
+        ._mmap_pad = 0,
     };
 }
 
@@ -507,13 +553,22 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
         return;
     };
     const hp: *EfiHandoff = @ptrCast(ho_ptr);
-    hp.* = hand;
+    const page_u8: [*]u8 = @ptrCast(ho_ptr);
 
     var mmap_buf: [32768]u8 align(@alignOf(uefi.tables.MemoryDescriptor)) = undefined;
     const mmap = bs.getMemoryMap(@as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) catch {
         puts(out, "    [!!] Failed to get memory map\r\n");
         return;
     };
+
+    const mf = fillHandoffMmap(page_u8, mmap);
+    hand.mmap_count = mf.count;
+    hand.mmap_entry_size = mf.esz;
+    hand.mmap_off_from_handoff = MMAP_STORE_OFF;
+    if (mf.count > 0) {
+        hand.version = 3;
+    }
+    hp.* = hand;
 
     puts(out, "    [*] Exiting boot services...\r\n");
 

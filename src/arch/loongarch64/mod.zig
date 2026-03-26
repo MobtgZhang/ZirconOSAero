@@ -2,12 +2,34 @@ pub const boot = @import("boot.zig");
 pub const paging = @import("paging.zig");
 pub const framebuffer = @import("../../hal/loongarch64/framebuffer.zig");
 const uart = @import("../../hal/loongarch64/uart.zig");
+const traps = @import("traps.zig");
+const liointc = @import("../../hal/loongarch64/liointc.zig");
 
 pub const name: []const u8 = "loongarch64";
 pub const PAGE_SIZE: usize = 16384;
 
-// 入口 _start 在 crt0.S：设置 $sp 后调用 kernel_main（见 docs/cn/Boot.md）
 extern fn kernel_main(magic: u32, info_addr: usize) callconv(.c) noreturn;
+
+/// `link/loongarch64.ld` 中 `PROVIDE(_kernel_end = .)` 为 **零尺寸** 符号；在部分 Zig 版本上
+/// `@intFromPtr(&extern const _kernel_end: u8)` 会得到 0，帧分配器不保留内核映像，identity map 约在 8MiB 处失败。
+/// 使用 `la.local` 与 `crt0.S` 中 `stack_top` 一致，由链接器填入正确 PC 相对地址。
+pub fn linkerKernelEndExclusive() usize {
+    return asm volatile ("la.local %[out], _kernel_end"
+        : [out] "=r" (-> usize),
+    );
+}
+
+/// CSR.TCFG：EN|PERIOD|VAL<<2（见 Linux `LOONGARCH_CSR_TCFG`）
+const CSR_TCFG: comptime_int = 0x41;
+const CSR_TINTCLR: comptime_int = 0x44;
+const TCFG_EN: u64 = 1;
+const TCFG_PERIOD: u64 = 2;
+/// QEMU virt 约 1GHz 量级；与调度 100Hz 对齐
+const TIMER_CPU_HZ: u64 = 1_000_000_000;
+const TIMER_TICK_HZ: u64 = 100;
+
+/// CSR.ECFG IM 域：INT_HWI0..7 = 2..9 → 位掩码 0x3FC
+const IM_HWI: u64 = 0x3FC;
 
 pub fn consoleWrite(s: []const u8) void {
     uart.write(s);
@@ -27,7 +49,6 @@ pub fn serialReadByte() ?u8 {
     return uart.readByte();
 }
 
-/// 约等于 ms 毫秒的忙等待（用于启动菜单倒计时，无定时器时）
 pub fn stallApproxMs(ms: u32) void {
     var i: u64 = 0;
     const loops = @as(u64, ms) * 50000;
@@ -57,17 +78,29 @@ pub fn reset() noreturn {
 pub fn sendEoi(_: u8) void {}
 
 pub fn initTimer() void {
-    const freq: u64 = 100_000_000;
-    const interval = freq / 100;
-    asm volatile ("csrwr %[val], 0x41"
+    asm volatile ("csrwr %[v], %[c]"
         :
-        : [val] "r" (interval | 0x3)
+        : [v] "r" (@as(u64, 1)),
+          [c] "i" (CSR_TINTCLR),
+    );
+    const ticks = TIMER_CPU_HZ / TIMER_TICK_HZ;
+    const tcfg = TCFG_EN | TCFG_PERIOD | (ticks << 2);
+    asm volatile ("csrwr %[v], %[c]"
+        :
+        : [v] "r" (tcfg),
+          [c] "i" (CSR_TCFG),
     );
 }
 
-pub fn initPic() void {}
+pub fn initPic() void {
+    liointc.init();
+    traps.ecfgEnableInterruptMask(IM_HWI);
+}
 
-pub fn unmaskIrq(_: u8) void {}
+pub fn unmaskIrq(irq: u8) void {
+    _ = irq;
+    traps.ecfgEnableInterruptMask(@as(u64, 1) << 11); // INT_TI
+}
 
 pub fn enableInterrupts() void {
     var crmd: u64 = asm ("csrrd %[result], 0x0"

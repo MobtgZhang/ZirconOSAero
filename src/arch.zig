@@ -159,10 +159,21 @@ pub fn waitForInterrupt() void {
             \\sti
             \\hlt
         ),
-        // AArch64 / RISC-V / LoongArch 等走 `kernel_main` 时通常未安装完整陷阱向量、也未
-        // `enableInterrupts()`；此处若用 WFI/idle 且定时器无法唤醒，桌面主循环会永久卡在
-        // 第一次 idle，无法再 `input_hub.pollAll()`，表现为鼠标完全不动。短暂自旋即可让
-        // 轮询路径持续运行（代价是 QEMU 下 CPU 占用略高，直至各架构补齐 IRQ+trap）。
+        // LoongArch：`traps.init` + `enableInterrupts` 后由定时器中断唤醒 idle。
+        .loongarch64 => {
+            const crmd: u64 = asm volatile ("csrrd %[r], 0x0"
+                : [r] "=r" (-> u64),
+            );
+            if ((crmd & 4) != 0) {
+                asm volatile ("idle 0");
+            } else {
+                var i: u32 = 0;
+                while (i < 65536) : (i += 1) {
+                    asm volatile ("" ::: .{ .memory = true });
+                }
+            }
+        },
+        // AArch64 / RISC-V 等：无完整 trap 或未开中断时避免 WFI 卡死主循环轮询。
         else => {
             var i: u32 = 0;
             while (i < 65536) : (i += 1) {
@@ -172,9 +183,12 @@ pub fn waitForInterrupt() void {
     }
 }
 
-/// 桌面主循环空闲：可选 `-Ddesktop_idle_spin=true` 在 x86_64 上不自旋 HLT，对照 IRQ/IF 问题。
+/// 桌面主循环空闲：可选 `-Ddesktop_idle_spin=true` 在 x86_64 / LoongArch 上短自旋而非 HLT/idle，利于 VirtIO-Input 轮询与定时器竞态下的输入响应。
 pub fn waitForInterruptDesktop() void {
-    if (@import("builtin").target.cpu.arch == .x86_64 and @import("build_options").desktop_idle_spin) {
+    const b = @import("builtin");
+    if (@import("build_options").desktop_idle_spin and
+        (b.target.cpu.arch == .x86_64 or b.target.cpu.arch == .loongarch64))
+    {
         var i: u32 = 0;
         while (i < 65536) : (i += 1) {
             asm volatile ("" ::: .{ .memory = true });

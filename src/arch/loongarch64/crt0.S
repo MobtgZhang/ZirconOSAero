@@ -6,9 +6,11 @@
 .align 4
 _start:
 	la.local $sp, stack_top
-	/* UEFI ZBM：约定 a0 = ZIRCON_LOONGARCH_EFI_MAGIC、a1 = handoff 物理地址时保留并传给 kernel_main */
+	/* UEFI：固件可能只保证魔数在 a0 低 32 位；64 位 bne 误判会清空 a1 → handoff 丢失。bstrpick.d = 取低 32 位。 */
+	bstrpick.d $t1, $a0, 31, 0
 	li.d $t0, 0x6372697A
-	bne $a0, $t0, 1f
+	bne $t1, $t0, 1f
+	bstrpick.d $a0, $a0, 31, 0
 	b 2f
 1:
 	li.d $a0, 0

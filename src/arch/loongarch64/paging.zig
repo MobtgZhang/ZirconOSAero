@@ -8,6 +8,7 @@ pub const page_mask: usize = page_size - 1;
 const L0_SHIFT: u6 = 36;
 const L1_SHIFT: u6 = 25;
 const L2_SHIFT: u6 = 14;
+/// 每级 2048 项 → 索引占 **11 位**（勿用 `u9`：512..2047 会截断后与 0..511 别名，identity map 恰在 8MiB 处失败）
 const INDEX_MASK: u64 = 0x7FF;
 
 pub const V: u64 = 1 << 0;
@@ -66,17 +67,17 @@ pub const PageTable = struct {
 pub const VirtAddr = struct {
     value: u64,
 
-    pub fn pml4Index(self: VirtAddr) u9 {
+    pub fn pml4Index(self: VirtAddr) u16 {
         return @truncate((self.value >> L0_SHIFT) & INDEX_MASK);
     }
-    pub fn pdptIndex(self: VirtAddr) u9 {
+    pub fn pdptIndex(self: VirtAddr) u16 {
         return @truncate((self.value >> L1_SHIFT) & INDEX_MASK);
     }
     /// 第三级页表索引（与 `ptIndex` 相同位段；仅用于与 x86 命名对齐的 API）
-    pub fn pdIndex(self: VirtAddr) u9 {
+    pub fn pdIndex(self: VirtAddr) u16 {
         return @truncate((self.value >> L2_SHIFT) & INDEX_MASK);
     }
-    pub fn ptIndex(self: VirtAddr) u9 {
+    pub fn ptIndex(self: VirtAddr) u16 {
         return @truncate((self.value >> L2_SHIFT) & INDEX_MASK);
     }
 };

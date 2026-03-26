@@ -20,11 +20,16 @@ pub fn build(b: *std.Build) void {
         "agent_ndjson",
         "Serial lines AGENT_LOG:{...} NDJSON for host ingest (.cursor/debug-*.log via scripts/agent-ingest-serial.sh)",
     ) orelse false;
+    const desktop_bisect_opt = b.option(
+        bool,
+        "desktop_bisect",
+        "Serial klog.debug before/after renderDesktopFrameEx and present (panic isolation; default off)",
+    ) orelse false;
     const enable_idt_opt = b.option(bool, "enable_idt", "Enable IDT, timer and syscall (x86_64 only)") orelse true;
     const amd_igpu_opt = b.option(
         bool,
         "amd_igpu",
-        "x86_64: probe AMD/ATI integrated GPU (1002:03xx PCI/MMIO + GOP handoff); QEMU pc -vga std has no AMD display — falls back silently",
+        "x86_64: probe AMD/ATI display (1002:03xx PCI/MMIO + GOP handoff); Polaris/RX550 + APU; BAR classify reg vs VRAM; QEMU -vga std has no AMD GPU",
     ) orelse true;
     const amd_igpu_defer_probe_opt = b.option(
         bool,
@@ -50,6 +55,26 @@ pub fn build(b: *std.Build) void {
         bool,
         "intel_kms_experimental",
         "Intel: allow optional MMIO display probe path (default handoff-only; unsafe on some platforms)",
+    ) orelse false;
+    const nvidia_gpu_opt = b.option(
+        bool,
+        "nvidia_gpu",
+        "x86_64: probe NVIDIA display (10DE:03xx PCI/MMIO + GOP handoff); QEMU -vga std has no NVIDIA GPU",
+    ) orelse true;
+    const nvidia_gpu_defer_probe_opt = b.option(
+        bool,
+        "nvidia_gpu_defer_probe",
+        "x86_64: run NVIDIA PCI/BAR probe on first resolveDesktopFramebuffer (after GOP handoff)",
+    ) orelse false;
+    const nvidia_kms_experimental_opt = b.option(
+        bool,
+        "nvidia_kms_experimental",
+        "NVIDIA: optional MMIO peek in diagnostics (default off; no display engine writes)",
+    ) orelse false;
+    const nvidia_hdmi_sync_opt = b.option(
+        bool,
+        "nvidia_hdmi_sync",
+        "NVIDIA: refresh HDMI stub primary connector when probe_ok (default false: avoid overwriting Intel/AMD metadata on hybrid)",
     ) orelse false;
     const desktop_idle_spin_opt = b.option(
         bool,
@@ -114,6 +139,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "debug", debug_mode);
     build_opts.addOption(bool, "mouse_debug", mouse_debug_opt);
     build_opts.addOption(bool, "agent_ndjson", agent_ndjson_opt);
+    build_opts.addOption(bool, "desktop_bisect", desktop_bisect_opt);
     build_opts.addOption(bool, "enable_idt", enable_idt_opt);
     build_opts.addOption(bool, "amd_igpu", amd_igpu_opt);
     build_opts.addOption(bool, "amd_igpu_defer_probe", amd_igpu_defer_probe_opt);
@@ -121,6 +147,10 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "intel_igpu", intel_igpu_opt);
     build_opts.addOption(bool, "intel_igpu_defer_probe", intel_igpu_defer_probe_opt);
     build_opts.addOption(bool, "intel_kms_experimental", intel_kms_experimental_opt);
+    build_opts.addOption(bool, "nvidia_gpu", nvidia_gpu_opt);
+    build_opts.addOption(bool, "nvidia_gpu_defer_probe", nvidia_gpu_defer_probe_opt);
+    build_opts.addOption(bool, "nvidia_kms_experimental", nvidia_kms_experimental_opt);
+    build_opts.addOption(bool, "nvidia_hdmi_sync", nvidia_hdmi_sync_opt);
     build_opts.addOption(bool, "loongson_igpu", loongson_igpu_opt);
     build_opts.addOption(bool, "loongson_igpu_defer_probe", loongson_igpu_defer_probe_opt);
     build_opts.addOption(bool, "loongson_kms_experimental", loongson_kms_experimental_opt);
@@ -203,6 +233,7 @@ pub fn build(b: *std.Build) void {
         kernel.addAssemblyFile(b.path("src/arch/riscv64/start.S"));
     } else if (mem.eql(u8, arch_opt, "loongarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/loongarch64/crt0.S"));
+        kernel.addAssemblyFile(b.path("src/arch/loongarch64/exc_vec.S"));
     }
 
     b.installArtifact(kernel);

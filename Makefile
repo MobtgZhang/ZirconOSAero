@@ -45,6 +45,12 @@ INTEL_IGPU   ?= true
 INTEL_IGPU_DEFER_PROBE ?= false
 # Intel 显示 MMIO 可选探测（默认关，仅 GOP handoff）
 INTEL_KMS_EXPERIMENTAL ?= false
+# x86_64：NVIDIA 10DE 显示类 PCI/MMIO + GOP handoff（nouveau 风格阶段一；QEMU pc + -vga std 无 10de，见 QEMU_COMMON_X86 注释）
+NVIDIA_GPU ?= true
+NVIDIA_GPU_DEFER_PROBE ?= false
+NVIDIA_KMS_EXPERIMENTAL ?= false
+# 混合显卡时默认 false：不向 HDMI 桩写主连接器，避免覆盖 Intel/AMD 元数据；单 NVIDIA 可 make NVIDIA_HDMI_SYNC=true
+NVIDIA_HDMI_SYNC ?= false
 # 桌面主循环不自旋 HLT（避免部分环境下 HLT 唤醒过稀导致 VirtIO/PS2 轮询「像卡住」）；QEMU CPU 占用略升
 DESKTOP_IDLE_SPIN ?= true
 # loongarch64：龙芯 0014 显示 PCI/MMIO（阶段一透传 GOP/ramfb）；其它 ARCH 下应为 false
@@ -166,6 +172,8 @@ THEME_DIR := $(THEME_DIR_MAP_$(DESKTOP))
 # grab-on-hover=on：指针移入窗口即抓取，REL 型 virtio-mouse 在未抓取时 QEMU 往往不发位移；设 QEMU_GTK_EXTRA= 可关闭。
 # virtio-tablet-pci：GTK 未抓取时常走 ABS，驱动已把 ABS 差分转为位移（与 mouse 并存，MAX_INST≥3）。
 QEMU_GTK_EXTRA ?= ,grab-on-hover=on
+# x86 pc：默认 -vga std（Bochs/Cirrus 类，PCI 上无 10DE / 无 virtio-gpu）。验证 NVIDIA 驱动探测需真机或自行附加 -device 含 10DE:0300；
+# 虚拟 VirtIO 显示为 1af4:1050（virtio-gpu-pci），与本 NVIDIA 路径不同。
 QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
 	-display gtk,zoom-to-fit=on,show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
 	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci
@@ -267,6 +275,10 @@ show-config:
 		echo "║  INTEL_IGPU   = $(INTEL_IGPU)  (true=probe Intel 8086 display PCI)"; \
 		echo "║  INTEL_IGPU_DEFER_PROBE = $(INTEL_IGPU_DEFER_PROBE)  (true=probe after GOP resolve)"; \
 		echo "║  INTEL_KMS_EXPERIMENTAL = $(INTEL_KMS_EXPERIMENTAL)"; \
+		echo "║  NVIDIA_GPU   = $(NVIDIA_GPU)  (false=skip NVIDIA 10DE display PCI probe)"; \
+		echo "║  NVIDIA_GPU_DEFER_PROBE = $(NVIDIA_GPU_DEFER_PROBE)  (true=probe after GOP resolve)"; \
+		echo "║  NVIDIA_KMS_EXPERIMENTAL = $(NVIDIA_KMS_EXPERIMENTAL)"; \
+		echo "║  NVIDIA_HDMI_SYNC = $(NVIDIA_HDMI_SYNC)  (true=sync HDMI stub on NVIDIA probe)"; \
 		echo "║  DESKTOP_IDLE_SPIN = $(DESKTOP_IDLE_SPIN)  (true=no HLT in desktop loop)"; \
 	fi
 	@echo "║  FIRMWARE_DIR = $(FIRMWARE_DIR)"
@@ -350,6 +362,7 @@ help:
 	@echo "  make DESKTOP=none                        Text/CMD mode"
 	@echo "  make AMD_IGPU=false MOUSE_DEBUG=true     对照指针：排除 AMD 探测 + VirtIO 串口跟踪"
 	@echo "  make INTEL_IGPU=false                    x86：关闭 Intel 8086 显示 PCI 探测（默认与 AMD 并存，解析链 Intel 先于 AMD）"
+	@echo "  make NVIDIA_GPU=false                    x86：关闭 NVIDIA 10DE 显示 PCI 探测（解析链：龙芯→NVIDIA→Intel→AMD）"
 	@echo "  make DESKTOP_IDLE_SPIN=true              桌面循环不 HLT（调试 IRQ/鼠标）"
 	@echo "  make run-riscv64 RISCV64_QEMU_VIRTIO_GPU=1  RISC-V QEMU 使用 virtio-gpu（易现 Display not active）"
 	@echo ""
@@ -398,6 +411,10 @@ build:
 		-Dintel_igpu=$(INTEL_IGPU) \
 		-Dintel_igpu_defer_probe=$(INTEL_IGPU_DEFER_PROBE) \
 		-Dintel_kms_experimental=$(INTEL_KMS_EXPERIMENTAL) \
+		-Dnvidia_gpu=$(NVIDIA_GPU) \
+		-Dnvidia_gpu_defer_probe=$(NVIDIA_GPU_DEFER_PROBE) \
+		-Dnvidia_kms_experimental=$(NVIDIA_KMS_EXPERIMENTAL) \
+		-Dnvidia_hdmi_sync=$(NVIDIA_HDMI_SYNC) \
 		-Dloongson_igpu=$(LOONGSON_IGPU) \
 		-Dloongson_igpu_defer_probe=$(LOONGSON_IGPU_DEFER_PROBE) \
 		-Dloongson_kms_experimental=$(LOONGSON_KMS_EXPERIMENTAL) \

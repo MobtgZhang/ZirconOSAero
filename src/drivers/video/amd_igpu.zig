@@ -1,21 +1,26 @@
-//! AMD/ATI 集成显卡：PCI 枚举、MMIO 映射、固件 GOP handoff（与 `intel_igpu.zig` 对称）。
-//! R7 及以下 APU 的 DID→族见 `amd/dids.zig`、`amd/family_detect.zig`；完整 KMS 为后续里程碑。
+//! AMD/ATI 显示控制器：PCI 枚举、BAR 分类、MMIO 映射、固件 GOP handoff（独显 RX550 / Polaris 与 APU 共用）。
+//! DID→族见 `amd/dids.zig`、`amd/family_detect.zig`；KMS 见 `amd/display_dc_stub.zig`。
 
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const klog = @import("../../rtl/klog.zig");
 const vm = @import("../../mm/vm.zig");
 const pcie = @import("../bus/pcie.zig");
+const hdmi = @import("hdmi.zig");
 
 const amd_types = @import("amd/types.zig");
 const family_detect = @import("amd/family_detect.zig");
 const display_handoff = @import("amd/display_handoff.zig");
-const gmc_stub = @import("amd/gmc_stub.zig");
+const gmc = @import("amd/gmc.zig");
+const policy = @import("amd/policy.zig");
+const pcie_bars = @import("amd/pcie_bars.zig");
+const pcie_caps = @import("amd/pcie_caps.zig");
+const pci_dump = @import("amd/pci_dump.zig");
 
 /// 与 multiboot / UEFI handoff 及 Intel 路径共用布局
 pub const DesktopFb = @import("intel_igpu.zig").DesktopFb;
 
-const max_pci_devices: usize = 4;
+const max_pci_devices: usize = 8;
 const max_scan_bus: u8 = 7;
 
 var probe_ok: bool = false;
@@ -25,6 +30,8 @@ var primary: ?pcie.DisplayGfxPciInfo = null;
 var mmio_phys: u64 = 0;
 var mmio_size: u64 = 0;
 var mmio_virt: usize = 0;
+var vram_aperture_phys: u64 = 0;
+var vram_aperture_size: u64 = 0;
 var family: amd_types.AmdGpuFamily = .unknown;
 var display_result: amd_types.DisplayInitResult = .failed;
 
@@ -58,41 +65,67 @@ fn runPciProbeOnce() void {
     var buf: [max_pci_devices]pcie.DisplayGfxPciInfo = undefined;
     const n = pcie.collectAmdDisplayDevices(buf[0..], max_scan_bus);
     if (n == 0) {
-        if (klog.DEBUG_MODE) klog.info("AMD iGPU: no display-class 1002 device in bus 0..%u", .{max_scan_bus});
+        if (klog.DEBUG_MODE) klog.info("AMD display: no display-class 1002 device in bus 0..%u", .{max_scan_bus});
         return;
     }
 
-    primary = buf[0];
+    const pi = policy.pickPrimaryAmdDisplayIndex(buf[0..n], family_detect.familyFromDeviceId);
+    if (n > 1 and klog.DEBUG_MODE) {
+        klog.info("AMD display: %u adapter(s), primary index %u", .{ n, pi });
+    }
+
+    primary = buf[pi];
     probe_ok = true;
     const dev = primary.?;
 
     family = family_detect.familyFromDeviceId(dev.device_id);
 
-    const mmio = pcie.firstMmioBar(&dev) orelse {
-        klog.warn("AMD iGPU: no MMIO BAR (DID=0x%x)", .{dev.device_id});
+    pcie_caps.logPciCommandSummary(dev.loc);
+    pcie_caps.logStandardCapabilities(dev.loc);
+    pcie_caps.logExpansionRomRegister(dev.loc);
+
+    const classified = pcie_bars.classifyAmdDisplayBars(&dev);
+    pcie_bars.logBarSummary(&dev, classified);
+    vram_aperture_phys = if (classified.vram) |v| v.base else 0;
+    vram_aperture_size = if (classified.vram) |v| v.size else 0;
+
+    const mmio = pcie_bars.registerMmioBar(&dev) orelse {
+        klog.warn("AMD display: no MMIO BAR (DID=0x%x)", .{dev.device_id});
+        pci_dump.logDeviceDump(&dev, "no MMIO BAR");
         probe_ok = false;
         primary = null;
+        vram_aperture_phys = 0;
+        vram_aperture_size = 0;
         return;
     };
 
     mmio_phys = mmio.base;
     mmio_size = mmio.size;
     if (mmio_size == 0 or mmio_phys == 0) {
-        klog.warn("AMD iGPU: invalid MMIO BAR", .{});
+        klog.warn("AMD display: invalid MMIO BAR", .{});
+        pci_dump.logDeviceDump(&dev, "invalid MMIO BAR");
         probe_ok = false;
         primary = null;
+        vram_aperture_phys = 0;
+        vram_aperture_size = 0;
         return;
     }
 
     mmio_virt = @intCast(mmio_phys);
     mmio_mapped = vm.mapDeviceMmioIdentity(mmio_phys, mmio_size);
     if (!mmio_mapped) {
-        klog.warn("AMD iGPU: mapDeviceMmioIdentity failed (phys=0x%x size=0x%x)", .{ mmio_phys, mmio_size });
+        klog.warn("AMD display: mapDeviceMmioIdentity failed (phys=0x%x size=0x%x)", .{ mmio_phys, mmio_size });
+        pci_dump.logDeviceDump(&dev, "MMIO map failed");
+        probe_ok = false;
+        primary = null;
+        vram_aperture_phys = 0;
+        vram_aperture_size = 0;
+        return;
     }
 
     display_result = display_handoff.initForFamily(family, mmio_virt, build_options.amd_kms_experimental);
 
-    klog.info("AMD iGPU: DID=0x%x rev=0x%x family=%u bus=%u dev=%u fn=%u MMIO=0x%x size=0x%x", .{
+    klog.info("AMD display: DID=0x%x rev=0x%x family=%u bus=%u dev=%u fn=%u MMIO=0x%x size=0x%x VRAM_AP=0x%x", .{
         dev.device_id,
         dev.revision_id,
         @intFromEnum(family),
@@ -101,8 +134,9 @@ fn runPciProbeOnce() void {
         dev.loc.func,
         mmio_phys,
         mmio_size,
+        vram_aperture_phys,
     });
-    klog.info("AMD iGPU: display_init=%u (handoff path when GOP present)", .{@intFromEnum(display_result)});
+    klog.info("AMD display: display_init=%u (GOP handoff when firmware enabled)", .{@intFromEnum(display_result)});
 }
 
 pub fn ensureDeferredProbeCompleted() void {
@@ -114,7 +148,16 @@ pub fn ensureDeferredProbeCompleted() void {
 pub fn resolveDesktopFramebuffer(boot: DesktopFb) DesktopFb {
     ensureDeferredProbeCompleted();
     if (!build_options.amd_igpu or !probe_ok) return boot;
-    _ = gmc_stub.installFramebufferGmcStub(mmio_phys, @truncate(boot.addr), @as(usize, boot.pitch) * @as(usize, boot.height));
+    const dev = primary.?;
+    hdmi.syncAmdDisplayConnector(dev.device_id, @intFromEnum(family));
+    hdmi.syncFramebufferMode(boot.width, boot.height, boot.bpp);
+    _ = gmc.installFramebufferGmcStub(.{
+        .reg_mmio_phys = mmio_phys,
+        .vram_aperture_phys = vram_aperture_phys,
+        .vram_aperture_size = vram_aperture_size,
+        .fb_phys = @truncate(boot.addr),
+        .fb_size = @as(usize, boot.pitch) * @as(usize, boot.height),
+    });
     return boot;
 }
 
@@ -126,6 +169,8 @@ pub fn shutdown() void {
     mmio_phys = 0;
     mmio_size = 0;
     mmio_virt = 0;
+    vram_aperture_phys = 0;
+    vram_aperture_size = 0;
     family = .unknown;
     display_result = .failed;
 }
@@ -136,7 +181,7 @@ pub fn init() void {
     if (!pcie.supports_pci_config) return;
 
     if (build_options.amd_igpu_defer_probe) {
-        klog.info("AMD iGPU: PCI/BAR probe deferred until framebuffer resolve (amd_igpu_defer_probe)", .{});
+        klog.info("AMD display: PCI/BAR probe deferred until framebuffer resolve (amd_igpu_defer_probe)", .{});
         return;
     }
     runPciProbeOnce();

@@ -69,6 +69,8 @@ UEFI 固件
     跳转到内核入口
 ```
 
+**x86_64 UEFI 与中断**：ZBM 与 BIOS 路径相同，向内核递交 **Multiboot2**（含内存映射等标签）。当前内核仍用 **8259 PIC + PIT** 做 tick 与 PS/2 IRQ，**未**解析 ACPI RSDP / 未启用 **IOAPIC/Local APIC**；在仅提供 APIC 路由的固件或裸机上若出现键鼠/定时器异常，需后续在 handoff 中传递 RSDP 并迁移中断子系统（与 LoongArch 的 CSR 向量 + PCH/EXTIOI 路径独立）。
+
 ### ZBM 核心模块 (boot/zbm/zbm.zig)
 
 - BCD (Boot Configuration Data) 管理
@@ -250,3 +252,5 @@ _start64 (64-bit long mode)
 - **EDK2 Shell**（`make fetch-firmware` / `fetch-loongarch-boot-efi`）可作固件内辅助或备用，**不是**主引导方案。
 - **ZBM**：Zig **无法**直接 `zig build-exe -target loongarch64-uefi` 出 PE（`UnsupportedCoffArchitecture`）。使用 **`boot/zbm/uefi/main_loongarch64.zig`** → `zbm_loongarch64.o`，再经 **GNU-EFI**（`make fetch-gnu-efi` 提供 crt0/lds）与 **`objcopy --target=efi-app-loongarch64`** 得到 `BOOTLOONGARCH64.EFI`。交叉 GCC 可选，可用 **`zig cc`**；**`llvm-objcopy`** 或 **`loongarch64-linux-gnu-objcopy`** 二选一。
 - **`make run-loongarch64`**（`LOONGARCH64_QEMU_MODE=uefi`）需 **`build-esp`** 与 **`QEMU_EFI.fd`**。
+- **Handoff v3**：ZBM 在 `ExitBootServices` 前将 **EFI 内存映射** 打包进 handoff 页（`mmap_off_from_handoff`，通常为 **0x200**），内核 `boot.parse` 用于帧分配器；v2 仍为 GOP 帧缓冲字段。
+- **中断**：内核安装 **CSR.EENTRY** 向量（`exc_vec.S`）、**CSR 定时器**（~100Hz tick）、**QEMU virt PCH PIC**（`0x10000000`）与 **ECFG.IM**，供调度 tick 与（可选）设备 HWI；键鼠在非 x86 上仍以 **VirtIO-Input 轮询**为主（Makefile 已含 `virtio-mouse-pci`）。

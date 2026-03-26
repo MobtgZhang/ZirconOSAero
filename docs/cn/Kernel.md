@@ -262,6 +262,7 @@ console, serial, keyboard, disk, framebuffer, mouse, audio 等。
 | framebuffer.zig | 图形 framebuffer |
 | display.zig | 桌面显示管理器，支持多种 Windows 风格主题 |
 | dwm.zig | Desktop Window Manager 合成器 |
+| amd_igpu.zig、`amd/*` | AMD/ATI 显示（含 RX550 / Polaris12）：PCI BAR 区分寄存器与 VRAM、多块卡时按芯片族选 primary、GOP handoff；构建选项 `amd_igpu`、`amd_igpu_defer_probe`、`amd_kms_experimental`。KMS/DC 占位见 `amd/display_dc_stub.zig`，GMC 规划见 `amd/gmc.zig`。 |
 
 支持的桌面主题：Classic、Luna、Aero、Modern、Fluent、SunValley
 

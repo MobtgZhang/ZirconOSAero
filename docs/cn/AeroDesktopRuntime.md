@@ -26,7 +26,7 @@
 | 启动日志 | **`Input:`** 行：`VirtIO_Input_PCI=active|inactive`，**`PS2_hw=ok|no`**。 |
 | 启动日志 | **`InputDiag:`** 行：当前 `MOUSE_DEBUG` / `AGENT_NDJSON` / `AMD_IGPU` / `amd_defer` / `INTEL_IGPU` / `intel_defer` / `idle_spin` 开关摘要。 |
 | 启动日志 | 进入桌面后 **`Desktop: fb … mouse=(x,y) bounds=`**：若坐标长期卡角点且 bounds 与 GOP 不一致，可能被 `clampPosition` 钉死。 |
-| 模拟器 | Makefile 中各架构的 `virtio-mouse-pci` / `virtio-keyboard-pci` 是否与当前 `ARCH` 一致；**勿删掉** `QEMU_COMMON_X86` 中的 virtio-input（见 `Makefile` 注释）。 |
+| 模拟器 | Makefile 中各架构的 **`virtio-mouse-pci`** / `virtio-keyboard-pci` 是否与当前 `ARCH` 一致；**勿删掉** `QEMU_COMMON_X86` 中的 virtio-input（见 `Makefile` 注释）。`DESKTOP_IDLE_SPIN` 在 Makefile 默认 **`true`**（与 `build.zig` `-Ddesktop_idle_spin` 一致），桌面循环短自旋而非 `hlt`，利于 QEMU 下 VirtIO/PS/2 轮询。 |
 | 隔离 AMD | **`make AMD_IGPU=false`**（或 `zig build -Damd_igpu=false`）重建：排除 AMD PCI/BAR 探测路径。 |
 | 隔离 Intel | **`make INTEL_IGPU=false`**（默认已为 false）；若开启过 Intel，可关以排除 8086 探测。 |
 | 可选 `MOUSE_DEBUG=true` | 串口 `mouseDbg`：`desktop tick` 是否递增、`virtio inst` 的 `used.idx` 是否随操作变化；`syncDeliver total` 是否增长。 |
@@ -105,9 +105,11 @@
 
 ## 9. 双缓冲、大块后备与软件光标层
 
-- **配置**：`config` 中 `display.double_buffer` 为 `false` 时直接绘制屏前缓冲；为 `true` 时优先使用静态后备（≤10MiB 帧），更大则尝试 **`FrameAllocator.allocContiguous`** 申请连续物理页（须已在 `main` 中 `setKernelFrameAllocator`）。
-- **Present**：双缓冲下 `present()` 仍对整幅后备做 `memcpy` 到 GOP，避免脏矩形漏画指针区；单缓冲下绘制即屏前，`flipDirty` 主要清脏标记。
-- **软件光标层**：场景先合成至绘制缓冲，再在顶层做 save-under（保存指针下像素 → 移动时恢复旧区 → 在新位置绘制）。仅指针移动且壳层无脏时跳过壁纸/窗口重绘；形态变化（如箭头/手型）会回退整场景路径。`display.hardware_cursor` 仅为预留钩子（`notifyHardwareCursorIfAvailable`），供未来接显示控制器 sprite，不涉及任何专有图形栈 API。
+- **配置**：`config` 中 `display.double_buffer` 为 `false` 时直接绘制屏前缓冲；为 `true` 时优先使用静态后备（≤10MiB 帧），更大则尝试 **`FrameAllocator.allocContiguous`** 申请连续物理页（须已在 `main` 中 `setKernelFrameAllocator`）。**其它键**（`src/config/desktop.conf`）：`triple_buffer`（乒乓第二离屏槽，默认关）、`present_full_flip`（双缓冲时默认整幅 `memcpy`；为 `false` 时用脏矩形 `flipDirty`，须保证光标区已 `mark dirty`）、`seed_gop_to_back`（初始化时把 GOP 拷入离屏槽，默认关）、`fall_back_single_on_alloc_fail`（超大帧堆分配失败时退化为单缓冲直写 GOP，默认开）。
+- **单缓冲语义**：`double_buffer=false` 时 `getDrawBuffer()` 即 GOP；`flipDirty()` **不执行 memcpy**，仅清空脏矩形计数（绘制已在屏前完成）。
+- **Present**：双缓冲且 `present_full_flip=true`（默认）时 `present()` 整幅提交；否则 `flipDirty()`。单缓冲下 `flipDirty` 仅清脏标记。
+- **软件光标层**：实现集中在 **`src/drivers/video/cursor_plane.zig`**（save-under）；`display.renderDesktopFrameEx` 在场景合成之后调用。仅指针移动且壳层无脏时走快速路径；形态变化会回退整场景路径。`display.hardware_cursor` 仅为预留钩子（`notifyHardwareCursorIfAvailable`），仅接公开硬件文档路径，非 WDDM 专有 API。
+- **诊断行**：进入桌面后串口有 **`DesktopPointerDiag:`**（`double_buf` / `triple_buf` / `virtio_input` / `ps2_hw` / `present_full_flip` 等），与 §3.1「坐标变 vs 画面不变」对照使用。
 - **轻量多缓冲语义**：指针下的像素快照等价于 ideas.md 中「与主帧分离的叠加」的**软件实现**，非 WDDM/DXGI 的 Flip 链。
 
 ### 9.1 与 `mdcs/ideas.md`（硬件游标）的边界
@@ -122,6 +124,6 @@ Win7 参考模型中，任务栏与指针一样属于「提交到扫描输出前
 
 1. `make clean build MOUSE_DEBUG=true`（或 `AGENT_NDJSON=true`）  
 2. `make run 2>&1 \| tee /tmp/zircon-serial.log`  
-3. 在日志中搜索：`Input:`、`InputDiag:`、`VirtIO-Input PCI`、`Desktop: fb`  
+3. 在日志中搜索：`Input:`、`InputDiag:`、`DesktopPointerDiag:`、`FramebufferMem:`、`VirtIO-Input PCI`、`Desktop: fb`  
 4. 若怀疑 HLT：`make run DESKTOP_IDLE_SPIN=true`  
 5. 若遇 **`KERNEL PANIC: integer overflow`** 且需二分：`zig build … -Ddesktop_bisect=true`（或 Makefile 传入等价选项），查看最后一组 `desktop: pre/post renderDesktopFrameEx` 日志。

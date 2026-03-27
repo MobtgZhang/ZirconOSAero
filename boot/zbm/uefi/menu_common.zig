@@ -2,9 +2,13 @@
 //!
 //! 供 main.zig (x86/aarch64) 与 main_loongarch64.zig 共用。
 //! 包含 C stub 改进：updateSelectionOnly 无闪烁、WaitForEvent、扩展按键、100ms 轮询。
+//! 另：`SimpleTextInputEx`（UEFI 扩展键盘）在 QEMU EDK2 / 多平台上比 `SimpleTextInput`
+//! 更常正确产生方向键扫描码；无 Ex 时仍回退 ConIn。
 const std = @import("std");
 const uefi = std.os.uefi;
 const unicode = std.unicode;
+
+const KeyInput = uefi.protocol.SimpleTextInput.Key.Input;
 
 pub const ZBM_VERSION = "6.1";
 pub const DEFAULT_TIMEOUT: u32 = 10;
@@ -40,7 +44,8 @@ const SCAN_DOWN_EXT = 0x50;
 const UNICODE_UP: u21 = 0x2191;
 const UNICODE_DOWN: u21 = 0x2193;
 
-const MENU_ENTRY_ROW = 7;
+/// 与 `displayBootManagerMenu` 中「Choose / 快捷键 / DESKTOP 提示 / 空行」之后的条目首行对齐。
+const MENU_ENTRY_ROW = 8;
 
 fn rowBelowMenu() usize {
     return MENU_ENTRY_ROW + entry_count;
@@ -51,15 +56,21 @@ pub var entry_count: usize = 0;
 pub var selected: usize = 0;
 pub var countdown: u32 = DEFAULT_TIMEOUT;
 pub var timer_active: bool = true;
+/// 与 `build.conf` DESKTOP / `zig build -Ddesktop=` 一致，仅用于菜单提示（非运行时改配置）。
+pub var build_desktop_theme_runtime: []const u8 = "aero";
+
+/// `runMenuLoop` 内通过 `locateProtocol` 填充；`waitForKey` / 高级选项共用。
+var g_text_in_ex: ?*uefi.protocol.SimpleTextInputEx = null;
 
 pub fn initBootEntries(comptime desktop_theme_name: []const u8, kernel_path: []const u8) void {
     entry_count = 0;
+    build_desktop_theme_runtime = desktop_theme_name;
     if (comptime std.mem.eql(u8, desktop_theme_name, "none")) {
-        addEntry("ZirconOSAero (NT 6.1)", kernel_path, "console=serial,vga debug=0 shell=cmd", true);
-        addEntry("ZirconOSAero (NT 6.1) [Debug Mode]", kernel_path, "console=serial,vga debug=1 verbose=1 shell=cmd", false);
+        addEntry("ZirconOSAero (CMD / text — default)", kernel_path, "console=serial,vga debug=0 shell=cmd", true);
+        addEntry("ZirconOSAero [CMD Debug]", kernel_path, "console=serial,vga debug=1 verbose=1 shell=cmd", false);
     } else {
-        addEntry("ZirconOSAero (NT 6.1)", kernel_path, "console=serial,vga debug=0 desktop=" ++ desktop_theme_name, true);
-        addEntry("ZirconOSAero (NT 6.1) [Debug Mode]", kernel_path, "console=serial,vga debug=1 verbose=1 desktop=" ++ desktop_theme_name, false);
+        addEntry("ZirconOSAero (Desktop - " ++ desktop_theme_name ++ ")", kernel_path, "console=serial,vga debug=0 desktop=" ++ desktop_theme_name, true);
+        addEntry("ZirconOSAero [Desktop Debug - " ++ desktop_theme_name ++ "]", kernel_path, "console=serial,vga debug=1 verbose=1 desktop=" ++ desktop_theme_name, false);
     }
     addEntry("ZirconOSAero [Safe Mode]", kernel_path, "safe_mode=1 debug=0 minimal=1", false);
     addEntry("ZirconOSAero [Safe Mode with Networking]", kernel_path, "safe_mode=1 network=1", false);
@@ -92,6 +103,7 @@ pub fn runMenuLoop(
     debug_mode: bool,
 ) MenuResult {
     bs = b;
+    g_text_in_ex = b.locateProtocol(uefi.protocol.SimpleTextInputEx, null) catch null;
     var last_selected: usize = std.math.maxInt(usize);
     var poll_count: u32 = 0;
 
@@ -107,7 +119,7 @@ pub fn runMenuLoop(
 
         if (cin) |con_in_ptr| {
             const con_in: *uefi.protocol.SimpleTextInput = @ptrCast(@alignCast(@constCast(con_in_ptr)));
-            if (tryReadKey(con_in)) |key| {
+            if (tryReadKeyUnified(con_in)) |key| {
                 timer_active = false;
 
                 const is_up = key.scan_code == SCAN_UP or key.scan_code == SCAN_UP_EXT or
@@ -172,30 +184,46 @@ pub fn runMenuLoop(
     return .{ .selected = selected };
 }
 
-fn readKey(cin: *uefi.protocol.SimpleTextInput) ?uefi.protocol.SimpleTextInput.Key.Input {
-    return cin.readKeyStroke() catch return null;
+fn readKeyStrokeSimple(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
+    return cin.readKeyStroke() catch null;
 }
 
-/// 非阻塞读键；部分固件需先 `checkEvent(wait_for_key)` 后 `readKeyStroke` 才返回方向键。
-fn tryReadKey(cin: *uefi.protocol.SimpleTextInput) ?uefi.protocol.SimpleTextInput.Key.Input {
-    if (readKey(cin)) |k| return k;
+/// 先尝试 `SimpleTextInputEx`（方向键在 AArch64 QEMU 等环境更可靠），再回退 ConIn。
+fn tryReadKeyUnified(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
+    if (g_text_in_ex) |ex| {
+        if (ex.readKeyStroke()) |full| {
+            return full.input;
+        } else |_| {}
+        if (bs.checkEvent(ex.wait_for_key_ex) catch false) {
+            if (ex.readKeyStroke()) |full| return full.input else |_| {}
+        }
+    }
+    if (readKeyStrokeSimple(cin)) |k| return k;
     if (bs.checkEvent(cin.wait_for_key) catch false) {
-        return readKey(cin);
+        return readKeyStrokeSimple(cin);
     }
     return null;
 }
 
 fn waitForKey(b: *uefi.tables.BootServices, cin: *uefi.protocol.SimpleTextInput) void {
     while (true) {
-        if (tryReadKey(cin)) |_| return;
-        _ = b.waitForEvent(&.{cin.wait_for_key}) catch {
-            _ = b.stall(10_000) catch {};
-        };
+        if (tryReadKeyUnified(cin)) |_| return;
+
+        if (g_text_in_ex) |ex| {
+            const evs = [_]uefi.Event{ ex.wait_for_key_ex, cin.wait_for_key };
+            _ = b.waitForEvent(evs[0..]) catch {
+                _ = b.stall(10_000) catch {};
+            };
+        } else {
+            _ = b.waitForEvent(&.{cin.wait_for_key}) catch {
+                _ = b.stall(10_000) catch {};
+            };
+        }
     }
 }
 
 fn bootMenuTimerRow() usize {
-    return 11 + entry_count;
+    return 12 + entry_count;
 }
 
 /// 描述行：有计时器时在计时器下方隔一空行；无计时器时在计时器行位置
@@ -283,12 +311,18 @@ fn updateSelectionOnly(out: anytype, old_sel: usize, new_sel: usize) void {
 
 fn displayEntryDescription(out: anytype, index: usize) void {
     switch (index) {
-        0 => puts(out, "Start ZirconOS normally."),
-        1 => puts(out, "Start with debug logging and serial output enabled."),
-        2 => puts(out, "Start with minimal drivers and services."),
-        3 => puts(out, "Start in safe mode with network support."),
-        4 => puts(out, "Start the Recovery Console for system repair."),
-        5 => puts(out, "Launch the command-line shell."),
+        0 => {
+            if (std.mem.eql(u8, build_desktop_theme_runtime, "none")) {
+                puts(out, "Text/CMD shell (DESKTOP=none in build.conf).");
+            } else {
+                puts(out, "Graphical desktop; theme matches build (DESKTOP in build.conf).");
+            }
+        },
+        1 => puts(out, "Same as first entry with verbose kernel log on serial."),
+        2 => puts(out, "Minimal drivers and services."),
+        3 => puts(out, "Safe mode with network support."),
+        4 => puts(out, "Recovery / repair console."),
+        5 => puts(out, "CMD/text only (no Aero desktop)."),
         else => {},
     }
 }
@@ -305,7 +339,12 @@ pub fn displayBootManagerMenu(out: anytype, arch_name: []const u8, debug_mode: b
     puts(out, "\r\n");
     puts(out, "    Choose an operating system to start:\r\n");
     _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
-    puts(out, "    (Use the arrow keys to highlight your choice, then press ENTER.)\r\n");
+    puts(out, "    Keys: arrows or w/s or j/k | 1-");
+    printDecimal(out, @intCast(entry_count));
+    puts(out, " = instant boot that line | Enter = boot selection\r\n");
+    puts(out, "    Build DESKTOP=");
+    putsRuntime(out, build_desktop_theme_runtime);
+    puts(out, " — highlighted entry boots after timer (default is first line).\r\n");
     puts(out, "\r\n");
 
     for (0..entry_count) |i| {

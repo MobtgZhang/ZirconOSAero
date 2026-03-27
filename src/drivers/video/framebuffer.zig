@@ -132,13 +132,18 @@ var config_ready: bool = false;
 var total_draw_calls: u64 = 0;
 var total_flips: u64 = 0;
 
-// ── Double Buffering (back buffer) ──
-// All draw calls write to this off-screen buffer; flip() copies it to the
-// visible framebuffer in one shot, eliminating partial-frame flickering.
+// ── Double / triple off-screen buffering ──
+// 双缓冲：单离屏槽 + GOP。三缓冲（乒乓）：两离屏槽 + GOP；present 后切换 draw_slot（概念见 mdcs/ideas.md，自研非 DXGI）。
+// 单缓冲（double_buffer_active=false）：getDrawBuffer() 即 GOP；flipDirty() 仅清 dirty 计数、不做 memcpy（屏前直绘 + 软件光标 save-under 同面）。
 const BACK_BUF_MAX: usize = 10 * 1024 * 1024; // 10 MB – covers up to 1920×1080@32bpp
-var back_buf: [BACK_BUF_MAX]u8 = undefined;
+var back_buf: [BACK_BUF_MAX]u8 align(1) = undefined;
 var double_buffer_active: bool = false;
-/// `allocContiguous` 后备时使用；与 `back_buffer_size`（字节）一致时为堆分配缓冲。
+/// 第二离屏槽；flip 提交后 draw_slot 翻转。
+var triple_buffer_active: bool = false;
+var draw_slot: u32 = 0;
+/// 单槽字节数 (= pitch*height)。
+var bytes_per_slot: usize = 0;
+/// `allocContiguous` 后备时使用；可能容纳 1 或 2 槽。
 var back_buffer_heap_nframes: usize = 0;
 
 // ── IOCTL Codes ──
@@ -154,21 +159,28 @@ pub const IOCTL_FB_GET_STATS: u32 = 0x0009001C;
 
 // ── Internal Helpers ──
 
+fn activeDrawSlotOffset() usize {
+    if (triple_buffer_active) return @as(usize, draw_slot) * bytes_per_slot;
+    return 0;
+}
+
+fn drawBufferBytePtr() [*]u8 {
+    const off = activeDrawSlotOffset();
+    if (back_buffer_addr != 0) {
+        return @ptrFromInt(back_buffer_addr + off);
+    }
+    return @as([*]u8, @ptrCast(&back_buf)) + off;
+}
+
 fn getDrawBuffer() [*]volatile u8 {
     if (double_buffer_active) {
-        if (back_buffer_addr != 0) {
-            return @volatileCast(@as([*]u8, @ptrFromInt(back_buffer_addr)));
-        }
-        return @volatileCast(@as([*]u8, @ptrCast(&back_buf)));
+        return @volatileCast(drawBufferBytePtr());
     }
     return @ptrFromInt(fb_config.address);
 }
 
 fn backBufSrcPtr() [*]const u8 {
-    if (back_buffer_addr != 0) {
-        return @ptrFromInt(back_buffer_addr);
-    }
-    return &back_buf;
+    return drawBufferBytePtr();
 }
 
 /// Pre-pack a color into the native pixel word so that solid fills can write
@@ -702,6 +714,49 @@ fn fillCircleQuarter(cx: i32, cy: i32, radius: i32, quarter: u2, color: u32) voi
     }
 }
 
+/// Filled circle centered at `(cx, cy)` with integer radius (bounding box `2r×2r`).
+pub fn fillCircle(cx: i32, cy: i32, radius: i32, color: u32) void {
+    if (radius <= 0) return;
+    const d = 2 * radius;
+    fillRoundedRect(cx - radius, cy - radius, d, d, radius, color);
+}
+
+/// Aero-style orb sheen: blend `sheen_rgb` toward the top and upper-left inside the disk.
+/// Ref: public Win7 Aero orb appearance (gloss + sphere read); clean-room pixel recipe.
+pub fn aeroSheenDisk(cx: i32, cy: i32, radius: i32, sheen_rgb: u32) void {
+    if (radius <= 0) return;
+    const r64 = @as(i64, radius);
+    const r2 = r64 * r64;
+    const top = cy - radius;
+    const span: i32 = @max(1, 2 * radius);
+
+    var py = cy - radius;
+    while (py <= cy + radius) : (py += 1) {
+        const dy64 = @as(i64, py - cy);
+        const from_top: i32 = py - top;
+        const base_a: u32 = @intCast(@min(95, @max(0, @divTrunc(from_top * 95, span))));
+        if (base_a == 0) continue;
+
+        var px = cx - radius;
+        while (px <= cx + radius) : (px += 1) {
+            const dx64 = @as(i64, px - cx);
+            if (dx64 * dx64 + dy64 * dy64 > r2) continue;
+            if (px < 0 or py < 0) continue;
+            const ux: u32 = @intCast(px);
+            const uy: u32 = @intCast(py);
+            if (ux >= fb_config.width or uy >= fb_config.height) continue;
+
+            var a: u32 = base_a;
+            if (px <= cx and py <= cy + @divTrunc(radius, 4)) {
+                a +|= 42;
+            }
+            if (a > 155) a = 155;
+            blendPixel(ux, uy, sheen_rgb, @intCast(a));
+        }
+    }
+    markDirtyRegion(cx - radius, cy - radius, 2 * radius + 1, 2 * radius + 1);
+}
+
 // ── 3D-style border effects ──
 
 pub fn draw3DRect(x: i32, y: i32, w: i32, h: i32, highlight: u32, shadow: u32) void {
@@ -939,10 +994,13 @@ pub fn addSpecularBand(x: i32, y: i32, w: i32, band_h: i32, intensity: u32) void
 
 pub fn flip() void {
     if (double_buffer_active) {
-        const size = @as(usize, fb_config.pitch) * @as(usize, fb_config.height);
+        const size = bytes_per_slot;
         const dst: [*]u8 = @ptrFromInt(fb_config.address);
         const src = backBufSrcPtr();
         @memcpy(dst[0..size], src[0..size]);
+        if (triple_buffer_active) {
+            draw_slot ^= 1;
+        }
     }
     dirty_count = 0;
     total_flips += 1;
@@ -1064,6 +1122,68 @@ pub fn isDoubleBuffered() bool {
     return double_buffer_active;
 }
 
+pub fn isTripleBuffered() bool {
+    return triple_buffer_active;
+}
+
+/// 离屏槽数量（不含 GOP）：0 = 单缓冲直写屏前，1 = 双缓冲，2 = 三缓冲乒乓。
+pub fn getOffscreenSlotCount() u32 {
+    if (!double_buffer_active) return 0;
+    return if (triple_buffer_active) 2 else 1;
+}
+
+/// 离屏区域总预留字节（所有槽之和）。
+pub fn getOffscreenReservedBytes() usize {
+    if (!double_buffer_active or bytes_per_slot == 0) return 0;
+    return bytes_per_slot * @as(usize, getOffscreenSlotCount());
+}
+
+/// 可选：把当前 GOP 内容拷入离屏槽（配置 `display.seed_gop_to_back`）。
+pub fn seedDrawBufferFromVisibleIfConfigured() void {
+    if (!double_buffer_active or fb_config.address == 0 or bytes_per_slot == 0) return;
+    if (!config_mod.isSeedDrawBufferFromGopEnabled()) return;
+    const size = bytes_per_slot;
+    const src: [*]const u8 = @ptrFromInt(fb_config.address);
+    const nslots: u32 = if (triple_buffer_active) 2 else 1;
+    var s: u32 = 0;
+    while (s < nslots) : (s += 1) {
+        const off = @as(usize, s) * size;
+        const dst: [*]u8 = if (back_buffer_addr != 0)
+            @ptrFromInt(back_buffer_addr + off)
+        else
+            @as([*]u8, @ptrCast(&back_buf)) + off;
+        @memcpy(dst[0..size], src[0..size]);
+    }
+}
+
+/// 桌面启动摘要：与 AeroDesktopRuntime §3.1 对照「坐标 vs 像素」排查。
+pub fn logDesktopPointerDiagnostics(virtio_input_active: bool, ps2_hw_ok: bool) void {
+    if (!config_ready) return;
+    klog.info("DesktopPointerDiag: double_buf=%s triple_buf=%s offscreen_slots=%u reserved_B=%u present_full_flip=%s seed_gop=%s fall_back_alloc=%s virtio_input=%s ps2_hw=%s — see docs/cn/AeroDesktopRuntime.md §3.1", .{
+        if (double_buffer_active) "ON" else "OFF",
+        if (triple_buffer_active) "ON" else "OFF",
+        getOffscreenSlotCount(),
+        @as(u32, @truncate(getOffscreenReservedBytes())),
+        if (config_mod.isPresentFullFlipEnabled()) "ON" else "OFF",
+        if (config_mod.isSeedDrawBufferFromGopEnabled()) "ON" else "OFF",
+        if (config_mod.allowSingleBufferOnLargeAllocFail()) "ON" else "OFF",
+        if (virtio_input_active) "active" else "inactive",
+        if (ps2_hw_ok) "ok" else "no",
+    });
+}
+
+/// 帧缓冲 + 离屏内存一行摘要（回归 / QA）。
+pub fn logFramebufferMemorySummary() void {
+    if (!config_ready) return;
+    const vis = @as(usize, fb_config.pitch) * @as(usize, fb_config.height);
+    klog.info("FramebufferMem: visible_B=%u offscreen_B=%u total_managed_B=%u flips=%u", .{
+        @as(u32, @truncate(vis)),
+        @as(u32, @truncate(getOffscreenReservedBytes())),
+        @as(u32, @truncate(vis + getOffscreenReservedBytes())),
+        @as(u32, @truncate(total_flips)),
+    });
+}
+
 // ── IRP Dispatch ──
 
 fn fbDispatch(irp: *io.Irp) io.IoStatus {
@@ -1159,37 +1279,105 @@ pub fn getTotalFlips() u64 {
 
 // ── Initialization ──
 
+fn zeroHeapBack(total_bytes: usize) void {
+    const p: [*]u8 = @ptrFromInt(back_buffer_addr);
+    @memset(p[0..total_bytes], 0);
+    if (back_buffer_size > total_bytes) {
+        @memset(p[total_bytes..back_buffer_size], 0);
+    }
+}
+
 pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr: bool) void {
     const required = @as(usize, pitch) * @as(usize, height);
     back_buffer_addr = 0;
     back_buffer_size = 0;
     back_buffer_heap_nframes = 0;
     double_buffer_active = false;
+    triple_buffer_active = false;
+    draw_slot = 0;
+    bytes_per_slot = 0;
 
-    const want_db = config_mod.isDoubleBufferEnabled();
-    if (want_db and required > 0 and addr != 0) {
-        if (required <= BACK_BUF_MAX) {
+    const want_db_base = config_mod.isDoubleBufferEnabled() and required > 0 and addr != 0;
+    var want_triple = want_db_base and config_mod.isTripleBufferEnabled();
+    const allow_single_on_fail = config_mod.allowSingleBufferOnLargeAllocFail();
+
+    if (want_db_base) {
+        bytes_per_slot = required;
+        const total_for_triple = required * 2;
+
+        if (required <= BACK_BUF_MAX and (!want_triple or total_for_triple <= BACK_BUF_MAX)) {
             double_buffer_active = true;
-        } else if (frame_mod.getKernelFrameAllocator()) |fa| {
-            const nframes = (required + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
-            if (fa.allocContiguous(nframes)) |base_phys| {
-                back_buffer_addr = @as(usize, @truncate(base_phys));
-                back_buffer_heap_nframes = nframes;
-                back_buffer_size = nframes * frame_mod.FRAME_SIZE;
-                double_buffer_active = true;
-                const p: [*]u8 = @ptrFromInt(back_buffer_addr);
-                @memset(p[0..required], 0);
-                if (back_buffer_size > required) {
-                    @memset(p[required..back_buffer_size], 0);
+            triple_buffer_active = want_triple and total_for_triple <= BACK_BUF_MAX;
+            const zbytes = if (triple_buffer_active) total_for_triple else required;
+            @memset(back_buf[0..zbytes], 0);
+        } else if (required <= BACK_BUF_MAX and want_triple and total_for_triple > BACK_BUF_MAX) {
+            if (frame_mod.getKernelFrameAllocator()) |fa| {
+                const nframes2 = (total_for_triple + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
+                if (fa.allocContiguous(nframes2)) |base_phys| {
+                    back_buffer_addr = @as(usize, @truncate(base_phys));
+                    back_buffer_heap_nframes = nframes2;
+                    back_buffer_size = nframes2 * frame_mod.FRAME_SIZE;
+                    double_buffer_active = true;
+                    triple_buffer_active = true;
+                    zeroHeapBack(total_for_triple);
+                    klog.info("Framebuffer: heap ping-pong %u pages phys=0x%x (%u bytes 2 slots)", .{
+                        nframes2, back_buffer_addr, total_for_triple,
+                    });
+                } else {
+                    klog.warn("Framebuffer: triple allocContiguous failed; trying single back buffer", .{});
+                    want_triple = false;
                 }
-                klog.info("Framebuffer: heap back buffer %u pages phys=0x%x (%u bytes)", .{
-                    nframes, back_buffer_addr, required,
-                });
             } else {
-                klog.warn("Framebuffer: allocContiguous failed (%u bytes); double_buf=OFF", .{required});
+                klog.warn("Framebuffer: triple needs heap; no allocator — single static back", .{});
+                want_triple = false;
             }
-        } else {
-            klog.warn("Framebuffer: no kernel frame allocator; large FB double_buf=OFF", .{});
+            if (!double_buffer_active and !want_triple) {
+                double_buffer_active = true;
+                triple_buffer_active = false;
+                @memset(back_buf[0..required], 0);
+            }
+        } else if (required > BACK_BUF_MAX) {
+            if (frame_mod.getKernelFrameAllocator()) |fa| {
+                if (want_triple) {
+                    const nframes2 = (total_for_triple + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
+                    if (fa.allocContiguous(nframes2)) |base_phys| {
+                        back_buffer_addr = @as(usize, @truncate(base_phys));
+                        back_buffer_heap_nframes = nframes2;
+                        back_buffer_size = nframes2 * frame_mod.FRAME_SIZE;
+                        double_buffer_active = true;
+                        triple_buffer_active = true;
+                        zeroHeapBack(total_for_triple);
+                        klog.info("Framebuffer: heap ping-pong %u pages phys=0x%x (%u bytes)", .{
+                            nframes2, back_buffer_addr, total_for_triple,
+                        });
+                    } else {
+                        klog.warn("Framebuffer: large FB triple alloc failed; trying single back", .{});
+                        want_triple = false;
+                    }
+                }
+                if (!double_buffer_active) {
+                    const nframes = (required + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
+                    if (fa.allocContiguous(nframes)) |base_phys| {
+                        back_buffer_addr = @as(usize, @truncate(base_phys));
+                        back_buffer_heap_nframes = nframes;
+                        back_buffer_size = nframes * frame_mod.FRAME_SIZE;
+                        double_buffer_active = true;
+                        triple_buffer_active = false;
+                        zeroHeapBack(required);
+                        klog.info("Framebuffer: heap back buffer %u pages phys=0x%x (%u bytes)", .{
+                            nframes, back_buffer_addr, required,
+                        });
+                    } else if (allow_single_on_fail) {
+                        klog.warn("Framebuffer: allocContiguous failed (%u bytes); strategy=single_buffer_direct (GOP)", .{required});
+                    } else {
+                        klog.err("Framebuffer: allocContiguous failed and fall_back_single_on_alloc_fail=false; double_buf=OFF", .{});
+                    }
+                }
+            } else if (allow_single_on_fail) {
+                klog.warn("Framebuffer: no kernel frame allocator; large FB strategy=single_buffer_direct", .{});
+            } else {
+                klog.err("Framebuffer: no allocator and fall_back_single_on_alloc_fail=false; double_buf=OFF", .{});
+            }
         }
     }
 
@@ -1206,27 +1394,37 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
 
     config_ready = (addr != 0 and width > 0 and height > 0 and bpp > 0);
 
+    seedDrawBufferFromVisibleIfConfigured();
+
     driver_idx = io.registerDriver("\\Driver\\Framebuf", fbDispatch) orelse {
         klog.err("Framebuffer: Failed to register IO driver (rendering still works)", .{});
-        klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s", .{
-            width, height, bpp, pitch, addr, if (double_buffer_active) "ON" else "OFF",
+        klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
+            width, height, bpp, pitch, addr,
+            if (double_buffer_active) "ON" else "OFF",
+            if (triple_buffer_active) "ON" else "OFF",
         });
         return;
     };
 
     device_idx = io.createDevice("\\Device\\Framebuf0", .framebuffer, driver_idx) orelse {
         klog.err("Framebuffer: Failed to create IO device (rendering still works)", .{});
-        klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s", .{
-            width, height, bpp, pitch, addr, if (double_buffer_active) "ON" else "OFF",
+        klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
+            width, height, bpp, pitch, addr,
+            if (double_buffer_active) "ON" else "OFF",
+            if (triple_buffer_active) "ON" else "OFF",
         });
         return;
     };
 
     driver_initialized = true;
 
-    klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s", .{
-        width, height, bpp, pitch, addr, if (double_buffer_active) "ON" else "OFF",
+    klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s offscreen_B=%u", .{
+        width, height, bpp, pitch, addr,
+        if (double_buffer_active) "ON" else "OFF",
+        if (triple_buffer_active) "ON" else "OFF",
+        @as(u32, @truncate(getOffscreenReservedBytes())),
     });
+    logFramebufferMemorySummary();
 }
 
 // ── Embedded 8x16 bitmap font (ASCII 32-126 + fallback) ──

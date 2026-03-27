@@ -218,6 +218,10 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
         width,
         height,
     });
+    video.framebuffer.logDesktopPointerDiagnostics(
+        input.virtio_input_pci.isActive(),
+        if (is_x86) input.mouse.isHardwareInitialized() else false,
+    );
 }
 
 pub fn isInitialized() bool {

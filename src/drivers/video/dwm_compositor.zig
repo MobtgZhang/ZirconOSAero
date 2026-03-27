@@ -78,6 +78,7 @@ var wallpaper_surface_id: u16 = 0;
 
 var aero_cfg: AeroConfig = .{};
 
+/// 逻辑表面 ID（元数据）；实际像素指针由 `cursor_plane.zig` 在 `display.renderDesktopFrameEx` 末尾叠加。
 var cursor_surface_id: u16 = 0;
 var compositor_initialized: bool = false;
 
@@ -199,6 +200,7 @@ fn allocateDesktopSurface() void {
 }
 
 fn allocateCursorSurface() void {
+    // 与 display 软件光标层对齐的占位表面（z_order 最高）；合成像素仍走 cursor_plane + save-under。
     const id = createSurface(0, 0, 14, 20, 0);
     if (id) |cid| {
         cursor_surface_id = cid;

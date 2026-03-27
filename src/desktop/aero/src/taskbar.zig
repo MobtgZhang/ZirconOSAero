@@ -70,7 +70,14 @@ pub fn getButtons() []const TaskButton {
 pub fn isClickOnStartButton(x: i32, y: i32, screen_h: i32) bool {
     const tb_y = screen_h - cfg.height;
     if (y < tb_y or y >= screen_h) return false;
-    return x >= 0 and x < theme.Layout.start_btn_width;
+    const slot_w = theme.Layout.start_btn_width;
+    const r = @divTrunc(theme.Layout.start_btn_orb_size, 2);
+    const cx = @divTrunc(slot_w, 2);
+    const cy = tb_y + @divTrunc(cfg.height, 2);
+    const dx = x - cx;
+    const dy = y - cy;
+    const hit_r = r + 2;
+    return dx * dx + dy * dy <= hit_r * hit_r;
 }
 
 pub fn isClickOnTaskbar(x: i32, y: i32, screen_h: i32) bool {

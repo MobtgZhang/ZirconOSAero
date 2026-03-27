@@ -27,6 +27,7 @@ pub const Present: u64 = Valid;
 pub const Write: u64 = AP_RW_EL1;
 pub const User: u64 = AP_RW_ALL;
 pub const WriteThrough: u64 = 0;
+/// 当前用作 PTE AttrIdx=1。须与 `MAIR_EL1` 条目一致；未初始化 MAIR 时勿对 **DRAM** 帧缓冲使用（会成 Device 属性 → 大块 memcpy 可能异常）。
 pub const CacheDisable: u64 = AttrIdx_Device;
 pub const Accessed: u64 = AF;
 pub const Dirty: u64 = 0;

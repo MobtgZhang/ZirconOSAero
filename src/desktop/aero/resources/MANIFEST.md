@@ -9,9 +9,9 @@
 |---------|------|------|
 | 壁纸 | 12 SVG | 原创矢量壁纸，覆盖 8 个主题变体（含 Harmony 风默认）；默认/Harmony 中心光晕与主题 accent 对齐微调 |
 | 图标 | 17 SVG | 48×48，内置 13 枚 + `file`/`user`/`lock`/`shutdown` 辅助；见 `icons/README.md` |
-| 光标 | 14 SVG | 32×32；内置 8 枚在 `resource_loader.zig` 与文件名对齐（手型→`zircon_link`、十字→`zircon_nesw` 等） |
-| Logo | 1 SVG | 与 `theme.zig` accent `#3D8ED8` 同色族 |
-| 开始按钮 | 1 SVG | Start Orb，同上 |
+| 光标 | 14 SVG | 32×32；**全部**在 [`resource_loader.zig`](../src/resource_loader.zig) `registerBuiltinCursors` 登记（含 `zircon_nwse`）；内核帧缓冲仍用 [`aero_cursor_shape.zig`](../../../drivers/video/aero_cursor_shape.zig) 位图，不加载 SVG |
+| Logo | 1 SVG | 与 `theme.zig` accent `#3D8ED8` 同色族；`registerBuiltinBrandAssets` ID 1 |
+| 开始按钮 | 1 SVG | Start Orb；`registerBuiltinBrandAssets` ID 2 |
 | 设计规格 | `DESIGN.md` | 画布、描边、色板、高光、ID 映射 |
 | 视觉验收 | `VISUAL_QA.md` | 四场景截图检查表与构建要点 |
 
@@ -55,14 +55,15 @@
 
 | 目录 | 说明 |
 |------|------|
-| `sounds/sound_scheme.conf` | 主声音方案配置 |
-| `sounds/Desktop.ini` | 声音文件本地化映射 |
-| `sounds/Afternoon/` ~ `sounds/Sonata/` | 13 个声音方案变体 |
+| `sounds/sound_scheme.conf` | 主声音方案配置（`registerBuiltinSoundSchemes` ID 1） |
+| `sounds/Desktop.ini` | 根映射（ID 2） |
+| `sounds/README.md` | 文档（ID 3） |
+| `sounds/Afternoon/Desktop.ini` ~ `sounds/Sonata/Desktop.ini` | 13 个变体目录（ID 4–16）；内核暂无 WAV 播放，仅路径登记 |
 
 ## 使用方式
 
-资源通过 `@embedFile` 嵌入或由渲染代码在运行时按主题配色生成。
-主题通过 `theme_loader.zig` 模块加载 `.theme` INI 文件并映射到内部配色方案。
+- **用户态 Aero 库**：[`resource_loader.zig`](../src/resource_loader.zig) 登记壁纸 / 图标 / 光标 / 主题 / 声音元数据路径 / 品牌 SVG；主题通过 `theme_loader.zig` 加载 `.theme` INI。
+- **内核帧缓冲桌面**：[`renderer_aero.zig`](../../../drivers/video/renderer_aero.zig) 用程序化渐变与 `blendTintRect` 绘制默认与 **Ctrl+Alt+F9** 循环的 12 套壁纸预设，**运行时不对 `wallpapers/*.svg` 做光栅化**；SVG 与 `resource_loader` 条目用于清单一致性与宿主工具。桌面图标 SVG 由 [`icons.zig`](../../../drivers/video/icons.zig) 构建期 `@embedFile` 嵌入。
 
 ## 注意
 

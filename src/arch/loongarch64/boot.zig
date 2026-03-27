@@ -49,6 +49,9 @@ pub const BootInfo = struct {
     boot_mode: BootMode = .normal,
     desktop_theme: DesktopTheme = .none,
     fb_info: ?FramebufferInfo = null,
+    /// 与 `multiboot2_parse.BootInfo` 对齐；LoongArch 无 Multiboot2 handoff，恒为 0。
+    multiboot_handoff_start: usize = 0,
+    multiboot_handoff_end_exclusive: usize = 0,
     /// UEFI handoff v3：`mmap_ptr` 指向 `EfiHandoff` 之后的打包表
     mmap_from_handoff: bool = false,
 

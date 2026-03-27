@@ -1,6 +1,8 @@
 //! Shared Multiboot2 boot info parsing (UEFI ZBM / GRUB 风格信息块).
 //! Reference: https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html
 
+const std = @import("std");
+
 pub const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0x36d76289;
 
 pub const BootInfoHeader = struct {
@@ -101,6 +103,9 @@ pub const BootInfo = struct {
     boot_mode: BootMode = .normal,
     desktop_theme: DesktopTheme = .none,
     fb_info: ?FramebufferInfo = null,
+    /// 仅当本结构由 `parseMultiboot2` 完整解析时有效：Multiboot2 信息块占用区间，供帧分配器保留，避免再次对 handoff 指针解引用（UEFI 回退路径下 `info_addr` 可能不可访问）。
+    multiboot_handoff_start: usize = 0,
+    multiboot_handoff_end_exclusive: usize = 0,
 
     pub fn getMmapEntry(self: BootInfo, i: usize) ?MmapEntry {
         if (i >= self.mmap_entry_count or self.mmap_entry_size < 24) return null;
@@ -182,6 +187,15 @@ pub fn parseMultiboot2(phys_addr: usize) ?BootInfo {
             else => {},
         }
         offset += (tag_size + 7) & ~@as(usize, 7);
+    }
+
+    {
+        var total_sz: usize = @intCast(total);
+        if (total_sz < 8) total_sz = 8;
+        const max_total: usize = 16 * 1024 * 1024;
+        if (total_sz > max_total) total_sz = max_total;
+        info.multiboot_handoff_start = addr;
+        info.multiboot_handoff_end_exclusive = addr + std.mem.alignForward(usize, total_sz, 4096);
     }
 
     return info;

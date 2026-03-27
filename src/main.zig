@@ -150,7 +150,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     }
 
     var alloc: frame.FrameAllocator = undefined;
-    alloc.init(boot_info, kernel_end, info_addr);
+    alloc.init(boot_info, kernel_end);
     frame.setKernelFrameAllocator(&alloc);
     klog.info("Frame allocator: total_frames=%u, frame_size=%u", .{
         alloc.total_frames, frame.FRAME_SIZE,
@@ -405,6 +405,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
             display.renderAeroDesktop();
             display.present();
+            drivers.video.framebuffer.logFramebufferMemorySummary();
             klog.info("Desktop: first frame presented (taskbar+shell+cursor)", .{});
 
             const mouse = @import("drivers/input/mouse.zig");
@@ -731,7 +732,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         // `_kernel_end` 为零尺寸链接器符号：勿用 @intFromPtr(&_)（LoongArch 上可能为 0）；见 arch/loongarch64/mod.zig `linkerKernelEndExclusive`。
         const la_k_end = (arch.impl.linkerKernelEndExclusive() + frame.FRAME_SIZE - 1) & ~@as(usize, frame.FRAME_SIZE - 1);
         klog.info("Memory: LoongArch kernel_end=0x%x (_kernel_end aligned)", .{la_k_end});
-        alloc.init(boot_info, la_k_end, 0);
+        alloc.init(boot_info, la_k_end);
         frame.setKernelFrameAllocator(&alloc);
         const paging = arch.impl.paging;
         if (vm.createAddressSpace(&alloc)) |ks| {
@@ -816,7 +817,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     if (builtin.target.cpu.arch != .loongarch64) {
         const k_reserved = ( @intFromPtr(&_kernel_end) + 4095 ) & ~@as(usize, 4095);
-        alloc.init(boot_info, k_reserved, info_addr);
+        alloc.init(boot_info, k_reserved);
         frame.setKernelFrameAllocator(&alloc);
     }
 
@@ -836,6 +837,32 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             ksp.activate();
             vm.bindKernelAddressSpace(ksp);
             klog.info("VM: AArch64 identity map 0-2GiB (PCI ECAM / VirtIO / RAM)", .{});
+        }
+        // UEFI GOP 在 QEMU AArch64+virtio-gpu 上常为 BLT-only，ZBM 不传 FB tag → 桌面永不启动；用 ramfb 补全。
+        if (boot_info) |*bi| {
+            const fb_ok = if (bi.fb_info) |fb|
+                (fb.addr != 0 and fb.width >= 640 and fb.height >= 480 and fb.pitch > 0 and fb.bpp == 32)
+            else
+                false;
+            if (!fb_ok) {
+                const a64_ramfb = @import("hal/aarch64/ramfb.zig");
+                if (a64_ramfb.setup()) |rf| {
+                    bi.fb_info = .{
+                        .addr = rf.addr,
+                        .pitch = rf.pitch,
+                        .width = rf.width,
+                        .height = rf.height,
+                        .bpp = rf.bpp,
+                        .fb_type = rf.fb_type,
+                        .pixel_bgr = 1,
+                    };
+                    klog.info("Display: AArch64 ramfb %ux%u @0x%x (no linear UEFI GOP from boot loader)", .{
+                        rf.width, rf.height, @as(usize, @truncate(rf.addr)),
+                    });
+                } else {
+                    klog.warn("ramfb(a64): no linear FB and fw_cfg ramfb missing — Aero needs QEMU -device ramfb (see Makefile QEMU_AARCH64_DEVICES)", .{});
+                }
+            }
         }
     } else if (builtin.target.cpu.arch == .riscv64) {
         const paging = arch.impl.paging;
@@ -1004,6 +1031,17 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                             klog.info("ramfb: pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
                         }
                     }
+                    if (builtin.target.cpu.arch == .aarch64) {
+                        // 勿对 ramfb/GOP RAM 调用 `remapIdentityRangeUncached`：AArch64 上 `no_cache` 当前映射为
+                        // PTE AttrIdx=1，而内核未编程 MAIR_EL1；固件下索引 1 多为 Device 内存，对 RAM 做 memcpy 会 Data Abort。
+                        // 保持 Phase 1 identity 映射的 Normal WB 即可；QEMU ramfb 区域仍为常规 DRAM。
+                        const a64r = @import("hal/aarch64/ramfb.zig");
+                        if (a64r.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
+                            klog.info("ramfb(a64): QEMU scanout → guest phys 0x%x", .{@as(usize, @truncate(use_fb.addr))});
+                        } else if (klog.DEBUG_MODE) {
+                            klog.info("ramfb(a64): pointRamfbToGuestPhys skipped", .{});
+                        }
+                    }
                     if (!arch.impl.framebuffer.isReady()) {
                         arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
                     }
@@ -1029,6 +1067,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             }
             display.renderAeroDesktop();
             display.present();
+            drivers.video.framebuffer.logFramebufferMemorySummary();
             const mouse = @import("drivers/input/mouse.zig");
             const input_hub = @import("drivers/input/input_hub.zig");
             const mouse_debug = @import("drivers/input/mouse_debug.zig");

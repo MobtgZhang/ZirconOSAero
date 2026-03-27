@@ -16,6 +16,7 @@ const mat = @import("material.zig");
 const shell_strings = @import("shell_strings.zig");
 const aero_tray = @import("aero_tray.zig");
 const aero_cursor_shape = @import("aero_cursor_shape.zig");
+const cursor_plane = @import("cursor_plane.zig");
 const config = @import("../../config/config.zig");
 
 pub const theme_mod = @import("theme.zig");
@@ -138,6 +139,18 @@ var use_hdmi: bool = false;
 
 /// 与 `theme.getTaskbarHeight()`（40）一致；遗留 `renderTaskbar` 路径仅内部使用。
 const TASKBAR_H: i32 = 40;
+
+/// Aero 开始球几何：左槽 `slot_w` 内水平居中，与任务栏垂直居中；`r` 为半径（直径小于 `tb_h` 以留边）。
+fn aeroTaskbarStartOrb(tb_y: i32, tb_h: i32) struct { cx: i32, cy: i32, r: i32, slot_w: i32 } {
+    const slot_w: i32 = 48;
+    const r: i32 = 15;
+    return .{
+        .cx = @divTrunc(slot_w, 2),
+        .cy = tb_y + @divTrunc(tb_h, 2),
+        .r = r,
+        .slot_w = slot_w,
+    };
+}
 const TITLEBAR_H: i32 = 26;
 const START_BTN_W: i32 = 108;
 const ICON_GRID_X: i32 = 75;
@@ -236,6 +249,7 @@ pub const IOCTL_DISPLAY_ENUMERATE: u32 = 0x000A0018;
 // ── Display Initialization ──
 
 pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr: bool) void {
+    // 合成顺序契约（整帧）：renderer_aero / 壳层 → 软件 CursorPlane → present()/flip。
     fb.init(fb_addr, width, height, pitch, bpp, pixel_bgr);
     use_framebuffer = true;
 
@@ -265,7 +279,7 @@ pub fn initTextMode() void {
 
 pub fn clearFramebuffer() void {
     if (!use_framebuffer or !fb.isInitialized()) return;
-    softwareCursorInvalidate();
+    cursor_plane.invalidate();
     fb.clearScreen(0x00000000);
 }
 
@@ -594,6 +608,7 @@ pub fn renderDesktopFrame() void {
 pub fn renderDesktopFrameEx(scene_dirty: bool) void {
     if (!use_framebuffer or !fb.isInitialized()) return;
 
+    // 合成顺序：场景（壁纸/窗口/DWM 效果）→ 任务栏等壳层（renderer_aero 内）→ CursorPlane（save-under + 绘制）→ 调用方 present。
     // 合成前再排空一轮输入，避免 IRQ/轮询与取样之间存在竞态导致本帧光标滞后一整帧。
     const input_hub = @import("../../drivers/input/input_hub.zig");
     input_hub.pollAll();
@@ -615,11 +630,11 @@ pub fn renderDesktopFrameEx(scene_dirty: bool) void {
 
     if (scene_dirty) {
         renderSceneWithoutSoftwareCursor();
-        softwareCursorComposeAfterScene(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
+        cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     } else {
-        if (!softwareCursorMoveOnly(desktop_ctx.cursor_x, desktop_ctx.cursor_y)) {
+        if (!cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
             renderSceneWithoutSoftwareCursor();
-            softwareCursorComposeAfterScene(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
+            cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
         }
     }
     mouse.clearCursorMoved();
@@ -706,15 +721,13 @@ fn isStartButtonClick(click_x: i32, click_y: i32, scr_w: i32, scr_h: i32) bool {
     _ = scr_w;
     const tb_h = getTaskbarHeight();
     const tb_y = scr_h - tb_h;
-    if (click_y >= scr_h) return false;
+    if (click_y >= scr_h or click_y < tb_y) return false;
 
-    // 与 `renderDesktopAeroTaskbar`：球体略高出任务栏顶缘
-    const orb_x: i32 = 4;
-    const orb_raise: i32 = 6;
-    const orb_y = tb_y - orb_raise;
-    const orb_sz: i32 = 38;
-    return click_x >= orb_x - 4 and click_x < orb_x + orb_sz + 8 and
-        click_y >= orb_y - 2 and click_y < tb_y + tb_h;
+    const o = aeroTaskbarStartOrb(tb_y, tb_h);
+    const dx = click_x - o.cx;
+    const dy = click_y - o.cy;
+    const hit_r = o.r + 2;
+    return dx * dx + dy * dy <= hit_r * hit_r;
 }
 
 fn taskMgrWindowContains(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
@@ -1075,7 +1088,7 @@ pub fn handleMouseRelease() void {
 pub fn renderAeroDesktop() void {
     syncAeroGlassFastPath();
     renderer_aero.renderFrameEx(false);
-    softwareCursorComposeAfterScene(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
+    cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
 }
 
 /// Harmony-style wallpaper (Zircon brand: deep blue + soft bloom + edge vignette; Aero 7 氛围)
@@ -1123,22 +1136,29 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     const tile: i32 = 34;
     const pill_h: i32 = tile;
 
-    const orb_x: i32 = 4;
-    const orb_raise: i32 = 6;
-    const orb_y = tb_y - orb_raise;
-    const orb_sz: i32 = 38;
-    fb.fillRoundedRect(orb_x - 1, orb_y - 1, orb_sz + 2, orb_sz + 2, 19, rgb(0x10, 0x30, 0x55));
-    fb.fillRoundedRect(orb_x, orb_y, orb_sz, orb_sz, 18, rgb(0x22, 0x46, 0x7A));
-    fb.drawGradientV(orb_x + 1, orb_y + 1, orb_sz - 2, @divTrunc(orb_sz - 2, 2), rgb(0x60, 0x94, 0xD0), rgb(0x28, 0x50, 0x88));
-    fb.blendTintRect(orb_x + 5, orb_y + 3, orb_sz - 10, 11, rgb(0xF5, 0xFC, 0xFF), 72, 255);
-    renderZirconLogo(orb_x + 12, orb_y + 12);
+    const orb = aeroTaskbarStartOrb(tb_y, tb_h);
+    // 阴影 + 球体 + 高光（Aero 玻璃球体感）
+    fb.fillCircle(orb.cx, orb.cy + 1, orb.r + 1, rgb(0x04, 0x12, 0x28));
+    fb.fillCircle(orb.cx, orb.cy, orb.r + 1, rgb(0x10, 0x2C, 0x50));
+    fb.fillCircle(orb.cx, orb.cy, orb.r, rgb(0x1C, 0x44, 0x78));
+    fb.aeroSheenDisk(orb.cx, orb.cy, orb.r - 1, rgb(0xF4, 0xFA, 0xFF));
+    renderZirconLogo(orb.cx - 7, orb.cy - 7);
 
     const ql_ids = [_]icons.IconId{ .browser, .terminal, .documents };
-    var qx: i32 = orb_x + orb_sz + 6;
+    var qx: i32 = orb.slot_w + 6;
     const ql_y = tb_y + @divTrunc(tb_h - icon_px, 2);
+    const ql_pad: i32 = 3;
     for (ql_ids) |iid| {
+        const bg_w = icon_px + 2 * ql_pad;
+        const bg_h = icon_px + 2 * ql_pad;
+        const bg_x = qx - ql_pad;
+        const bg_y = ql_y - ql_pad;
+        fb.fillRoundedRect(bg_x, bg_y, bg_w, bg_h, 6, rgb(0x16, 0x2A, 0x42));
+        fb.drawGradientV(bg_x + 1, bg_y + 1, bg_w - 2, @max(1, bg_h - 3), rgb(0x42, 0x5E, 0x82), rgb(0x12, 0x22, 0x36));
+        fb.blendTintRect(bg_x + 1, bg_y + 1, bg_w - 2, @divTrunc(bg_h - 2, 2), rgb(0xA8, 0xD0, 0xF5), 45, 170);
+        fb.drawRect(bg_x, bg_y, bg_w, bg_h, rgb(0x58, 0x7C, 0xA0));
         icons.drawThemedIcon(iid, qx, ql_y, icon_s, .aero);
-        qx += icon_px + 4;
+        qx += icon_px + 2 * ql_pad + 6;
     }
     fb.drawVLine(qx + 2, tb_y + 6, tb_h - 12, rgb(0x58, 0x78, 0x98));
 
@@ -1149,14 +1169,18 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     };
     var ax = qx + 8;
     const ay = tb_y + @divTrunc(tb_h - pill_h, 2);
+    const pill_r: i32 = 8;
     for (app_items) |app| {
         if (app.active) {
-            fb.fillRoundedRect(ax, ay, tile, pill_h, 6, rgb(0x58, 0x88, 0xC0));
-            fb.fillRect(ax + 2, ay + 2, tile - 4, @divTrunc(pill_h, 2) - 2, rgb(0x78, 0xA8, 0xD8));
-            fb.drawRect(ax, ay, tile, pill_h, rgb(0x98, 0xC0, 0xE8));
+            fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x38, 0x5C, 0x88));
+            fb.drawGradientV(ax + 2, ay + 2, tile - 4, pill_h - 4, rgb(0x82, 0xB0, 0xE0), rgb(0x38, 0x5C, 0x88));
+            fb.blendTintRect(ax + 2, ay + 2, tile - 4, @divTrunc(pill_h - 4, 2), rgb(0xE0, 0xF2, 0xFF), 50, 200);
+            fb.drawRect(ax, ay, tile, pill_h, rgb(0xA0, 0xCC, 0xF0));
         } else {
-            fb.fillRoundedRect(ax, ay, tile, pill_h, 6, rgb(0x28, 0x40, 0x5C));
-            fb.drawRect(ax, ay, tile, pill_h, rgb(0x42, 0x5C, 0x78));
+            fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x1A, 0x2E, 0x46));
+            fb.drawGradientV(ax + 2, ay + 2, tile - 4, pill_h - 4, rgb(0x3A, 0x54, 0x72), rgb(0x12, 0x20, 0x34));
+            fb.blendTintRect(ax + 2, ay + 2, tile - 4, @divTrunc(pill_h - 4, 2), rgb(0x88, 0xB0, 0xD8), 38, 160);
+            fb.drawRect(ax, ay, tile, pill_h, rgb(0x46, 0x64, 0x84));
         }
         const ix = ax + @divTrunc(tile - app_icon_px, 2);
         const iy = ay + @divTrunc(pill_h - app_icon_px, 2);
@@ -2279,8 +2303,8 @@ pub fn renderContextMenu() void {
 
     fb.drawRect(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, t.window_border);
 
-    const text_color: u32 = rgb(0xFF, 0xFF, 0xFF);
-    const sep_color: u32 = rgb(0x60, 0x60, 0x70);
+    const text_color: u32 = t.titlebar_text;
+    const sep_color: u32 = rgb(0xB8, 0xB8, 0xC0);
 
     var iy: i32 = ctx_menu_y + 4;
     for (ctx_menu_items) |item| {
@@ -2375,48 +2399,12 @@ pub fn renderCursor(x: i32, y: i32) void {
     }
 }
 
-// ── Software cursor layer（save-under：与场景分离的快速路径；概念见 mdcs/ideas.md） ──
+// ── Software cursor：实现位于 `cursor_plane.zig`（与主帧合成的概念分离，见 mdcs/ideas.md） ──
 
-const sw_cursor_max_bytes: usize = 48 * 48 * 4;
-var sw_cursor_saved: [sw_cursor_max_bytes]u8 align(1) = undefined;
-var sw_cursor_saved_len: usize = 0;
-var sw_cursor_sx: i32 = 0;
-var sw_cursor_sy: i32 = 0;
-var sw_cursor_sw: i32 = 0;
-var sw_cursor_sh: i32 = 0;
-var sw_cursor_placed: bool = false;
-var sw_cursor_saved_kind: aero_cursor_shape.CursorKind = .arrow;
-
-fn softwareCursorExtent(cx: i32, cy: i32) fb.Rect {
-    const margin: i32 = 8;
-    if (!fb.isInitialized()) return .{ .x = 0, .y = 0, .w = 40, .h = 44 };
-    const w_i32: i32 = @intCast(fb.getWidth());
-    const h_i32: i32 = @intCast(fb.getHeight());
-    const max_x = if (w_i32 > 0) w_i32 - 1 else 0;
-    const max_y = if (h_i32 > 0) h_i32 - 1 else 0;
-    const cxx = std.math.clamp(cx, 0, max_x);
-    const cyy = std.math.clamp(cy, 0, max_y);
-    return .{ .x = cxx - margin, .y = cyy - margin, .w = 40, .h = 44 };
-}
-
-fn markCursorDirtyUnionFromPoints(ax: i32, ay: i32, bx: i32, by: i32) void {
-    const ra = softwareCursorExtent(ax, ay);
-    const rb = softwareCursorExtent(bx, by);
-    const ux = @min(ra.x, rb.x);
-    const uy = @min(ra.y, rb.y);
-    const rx: i64 = @max(@as(i64, ra.x) + ra.w, @as(i64, rb.x) + rb.w);
-    const ry: i64 = @max(@as(i64, ra.y) + ra.h, @as(i64, rb.y) + rb.h);
-    const rw = rx - @as(i64, ux);
-    const rh = ry - @as(i64, uy);
-    if (rw <= 0 or rh <= 0) return;
-    if (rw > std.math.maxInt(i32) or rh > std.math.maxInt(i32)) return;
-    fb.markDirtyRegion(ux, uy, @intCast(rw), @intCast(rh));
-}
-
-/// 拖拽等局部 `flipDirty` 路径：并入旧/新指针矩形，避免漏拷贝光标区。
+/// 拖拽等局部 `flipDirty` 路径：并入旧/新指针矩形，避免漏拷贝光标区（与 dwm_compositor 表面脏标记互补）。
 pub fn markCursorMotionDirtyRegions() void {
     if (!use_framebuffer or !fb.isInitialized()) return;
-    markCursorDirtyUnionFromPoints(
+    cursor_plane.markMotionDirty(
         desktop_ctx.smooth_cursor.prev_x,
         desktop_ctx.smooth_cursor.prev_y,
         desktop_ctx.cursor_x,
@@ -2425,55 +2413,11 @@ pub fn markCursorMotionDirtyRegions() void {
 }
 
 pub fn softwareCursorInvalidate() void {
-    sw_cursor_placed = false;
-    sw_cursor_saved_len = 0;
+    cursor_plane.invalidate();
 }
 
-fn softwareCursorComposeAfterScene(cx: i32, cy: i32) void {
-    if (!use_framebuffer or !fb.isInitialized()) return;
-    if (!desktop_ctx.cursor_visible) {
-        softwareCursorInvalidate();
-        return;
-    }
-    const ext = softwareCursorExtent(cx, cy);
-    sw_cursor_saved_len = fb.copyDrawBufferRectBytes(ext.x, ext.y, ext.w, ext.h, &sw_cursor_saved);
-    sw_cursor_sx = ext.x;
-    sw_cursor_sy = ext.y;
-    sw_cursor_sw = ext.w;
-    sw_cursor_sh = ext.h;
-    sw_cursor_saved_kind = desktop_cursor_kind;
-    renderCursor(cx, cy);
-    sw_cursor_placed = sw_cursor_saved_len > 0;
-    markCursorDirtyUnionFromPoints(cx, cy, cx, cy);
-}
-
-fn softwareCursorMoveOnly(cx: i32, cy: i32) bool {
-    if (!use_framebuffer or !fb.isInitialized()) return false;
-    if (!desktop_ctx.cursor_visible) return false;
-    if (!sw_cursor_placed) return false;
-    if (desktop_cursor_kind != sw_cursor_saved_kind) return false;
-
-    const prev_x = desktop_ctx.smooth_cursor.prev_x;
-    const prev_y = desktop_ctx.smooth_cursor.prev_y;
-    fb.pasteDrawBufferRectBytes(sw_cursor_sx, sw_cursor_sy, sw_cursor_sw, sw_cursor_sh, sw_cursor_saved[0..sw_cursor_saved_len]);
-
-    const ext = softwareCursorExtent(cx, cy);
-    sw_cursor_saved_len = fb.copyDrawBufferRectBytes(ext.x, ext.y, ext.w, ext.h, &sw_cursor_saved);
-    if (sw_cursor_saved_len == 0) {
-        softwareCursorInvalidate();
-        return false;
-    }
-    sw_cursor_sx = ext.x;
-    sw_cursor_sy = ext.y;
-    sw_cursor_sw = ext.w;
-    sw_cursor_sh = ext.h;
-    sw_cursor_saved_kind = desktop_cursor_kind;
-    renderCursor(cx, cy);
-    markCursorDirtyUnionFromPoints(prev_x, prev_y, cx, cy);
-    return true;
-}
-
-/// 预留：由显示控制器硬件实现指针 sprite（独立寄存器文档）；禁用配置时不做事。
+/// 预留：仅接 **公开** 硬件/固件文档中的 sprite/overlay（如 SoC 显示控制器、厂商数据手册），
+/// 非 WDDM `DxgkDdiSetPointerShape` 等专有栈。`display.hardware_cursor=false` 时不做事。
 pub fn notifyHardwareCursorIfAvailable() void {
     if (!config.isHardwareCursorEnabled()) return;
 }
@@ -2535,9 +2479,13 @@ pub fn renderLoginScreen(width: u32, height: u32, top_color: u32, bottom_color: 
 
 pub fn present() void {
     if (!use_framebuffer) return;
-    // 双缓冲：整帧 memcpy；单缓冲时直接写屏前，flipDirty 仅清脏区标记。
+    // 双缓冲：`present_full_flip` 默认整幅 memcpy（避免漏画光标区）；关则用脏矩形 flipDirty（须完整 mark dirty）。
     if (fb.isDoubleBuffered()) {
-        fb.flip();
+        if (config.isPresentFullFlipEnabled()) {
+            fb.flip();
+        } else {
+            fb.flipDirty();
+        }
     } else {
         fb.flipDirty();
     }

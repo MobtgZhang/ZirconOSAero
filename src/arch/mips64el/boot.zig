@@ -49,6 +49,8 @@ pub const BootInfo = struct {
     boot_mode: BootMode = .normal,
     desktop_theme: DesktopTheme = .none,
     fb_info: ?FramebufferInfo = null,
+    multiboot_handoff_start: usize = 0,
+    multiboot_handoff_end_exclusive: usize = 0,
 
     pub fn getMmapEntry(_: BootInfo, i: usize) ?MmapEntry {
         if (i < static_mmap.len) return static_mmap[i];

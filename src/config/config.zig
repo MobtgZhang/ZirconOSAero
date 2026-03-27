@@ -3,6 +3,7 @@
 //! Default configs are embedded at compile time; runtime overrides can be
 //! loaded from VFS once the filesystem is available.
 
+const builtin = @import("builtin");
 const parser = @import("parser.zig");
 const defaults = @import("config_defaults");
 const klog = @import("../rtl/klog.zig");
@@ -321,6 +322,31 @@ pub fn isVsyncEnabled() bool {
 
 pub fn isDoubleBufferEnabled() bool {
     return desktop_config.getBoolOr("display", "double_buffer", true);
+}
+
+/// 第二幅离屏后备（乒乓）；总表面数 = GOP + 2×离屏。默认关；大帧需连续物理页或静态区可容纳 2×frame。
+pub fn isTripleBufferEnabled() bool {
+    return desktop_config.getBoolOr("display", "triple_buffer", false);
+}
+
+/// 双缓冲时默认整幅 `memcpy` 到 GOP；为 false 时用脏矩形 `flipDirty`（须保证光标区已 mark dirty）。
+/// LoongArch64 + UEFI/GOP 在 QEMU 上整幅 flip 代价高，默认改为脏矩形以减轻鼠标拖动卡顿（仍可在 desktop.conf 写 `present_full_flip=true`）。
+pub fn isPresentFullFlipEnabled() bool {
+    const arch_default: bool = switch (builtin.target.cpu.arch) {
+        .loongarch64 => false,
+        else => true,
+    };
+    return desktop_config.getBoolOr("display", "present_full_flip", arch_default);
+}
+
+/// 初始化时把当前可见 GOP 拷入离屏绘制缓冲（两槽均拷）；默认关。首帧前常与 `clearFramebuffer` 二选一。
+pub fn isSeedDrawBufferFromGopEnabled() bool {
+    return desktop_config.getBoolOr("display", "seed_gop_to_back", false);
+}
+
+/// 超大帧 `allocContiguous` 失败时退化为单缓冲直写 GOP；为 false 则仅告警并保持关双缓冲。
+pub fn allowSingleBufferOnLargeAllocFail() bool {
+    return desktop_config.getBoolOr("display", "fall_back_single_on_alloc_fail", true);
 }
 
 pub fn isHardwareCursorEnabled() bool {

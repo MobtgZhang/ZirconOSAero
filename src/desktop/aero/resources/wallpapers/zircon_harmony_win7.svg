@@ -3,13 +3,13 @@
     <!-- Win7 "Harmony"-style deep blue atmosphere (original homage, not a Microsoft asset) -->
     <linearGradient id="skyDeep" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#0A1E3D"/>
-      <stop offset="35%" stop-color="#102E55"/>
-      <stop offset="70%" stop-color="#143A68"/>
+      <stop offset="32%" stop-color="#102E55"/>
+      <stop offset="62%" stop-color="#143A68"/>
       <stop offset="100%" stop-color="#081830"/>
     </linearGradient>
-    <radialGradient id="centerBloom" cx="50%" cy="38%" r="55%">
-      <stop offset="0%" stop-color="#3D8ED8" stop-opacity="0.32"/>
-      <stop offset="45%" stop-color="#1A5088" stop-opacity="0.11"/>
+    <radialGradient id="centerBloom" cx="50%" cy="38%" r="58%">
+      <stop offset="0%" stop-color="#3D8ED8" stop-opacity="0.36"/>
+      <stop offset="42%" stop-color="#1A5088" stop-opacity="0.13"/>
       <stop offset="100%" stop-color="#0A1E3D" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="logoGlow" cx="50%" cy="42%" r="25%">
@@ -28,9 +28,9 @@
     <filter id="wide" x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur stdDeviation="42"/>
     </filter>
-    <radialGradient id="vignette" cx="50%" cy="50%" r="75%">
-      <stop offset="60%" stop-color="#000000" stop-opacity="0"/>
-      <stop offset="100%" stop-color="#000510" stop-opacity="0.35"/>
+    <radialGradient id="vignette" cx="50%" cy="50%" r="78%">
+      <stop offset="58%" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000510" stop-opacity="0.38"/>
     </radialGradient>
   </defs>
 

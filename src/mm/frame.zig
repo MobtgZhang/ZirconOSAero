@@ -27,13 +27,22 @@ pub const FrameAllocator = struct {
     bitmap: [BITMAP_SIZE]u64,
     total_frames: usize,
     used_frames: usize,
+    mb_handoff_start: usize = 0,
+    mb_handoff_end_exclusive: usize = 0,
 
-    pub fn init(self: *FrameAllocator, boot_info: ?boot_mod.BootInfo, kernel_end: usize, mbi_phys: usize) void {
+    pub fn init(self: *FrameAllocator, boot_info: ?boot_mod.BootInfo, kernel_end: usize) void {
         for (&self.bitmap) |*b| b.* = 0;
         self.total_frames = 0;
         self.used_frames = 0;
+        self.mb_handoff_start = 0;
+        self.mb_handoff_end_exclusive = 0;
 
         const info = boot_info orelse return;
+
+        if (info.multiboot_handoff_end_exclusive > info.multiboot_handoff_start) {
+            self.mb_handoff_start = info.multiboot_handoff_start;
+            self.mb_handoff_end_exclusive = info.multiboot_handoff_end_exclusive;
+        }
 
         var i: usize = 0;
         while (i < info.mmap_entry_count) : (i += 1) {
@@ -48,30 +57,21 @@ pub const FrameAllocator = struct {
 
             var f = start_frame;
             while (f < end_frame and f < MAX_PHYS_FRAMES) : (f += 1) {
-                if (self.isReserved(f, kernel_end, mbi_phys)) continue;
+                if (self.isReserved(f, kernel_end)) continue;
                 self.setFree(@as(usize, @intCast(f)));
                 self.total_frames += 1;
             }
         }
     }
 
-    /// Multiboot2 信息块首字段为 `total_size`（字节）；保留 `[mbi_phys, …)` 向上取整到页，避免 ZBM 多页 MBI 被帧分配器覆盖。
-    fn multibootReservedEndExclusive(mbi_phys: usize) usize {
-        const hdr: *align(1) const volatile u32 = @ptrFromInt(mbi_phys);
-        var total: usize = hdr.*;
-        if (total < 8) total = 8;
-        const max_total: usize = 16 * 1024 * 1024;
-        if (total > max_total) total = max_total;
-        return mbi_phys + std.mem.alignForward(usize, total, FRAME_SIZE);
-    }
-
-    fn isReserved(self: *FrameAllocator, frame: u64, kernel_end: usize, mbi_phys: usize) bool {
+    fn isReserved(self: *FrameAllocator, frame: u64, kernel_end: usize) bool {
         const addr = frame * FRAME_SIZE;
         if (addr < 0x100000) return true;
         if (addr < kernel_end) return true;
-        if (mbi_phys != 0) {
-            const end_excl = multibootReservedEndExclusive(mbi_phys);
-            if (addr < end_excl and addr + FRAME_SIZE > mbi_phys) return true;
+        if (self.mb_handoff_end_exclusive > self.mb_handoff_start) {
+            const hs = self.mb_handoff_start;
+            const he = self.mb_handoff_end_exclusive;
+            if (addr < he and addr + FRAME_SIZE > hs) return true;
         }
         // bitmap 跨多页（16KB 页上约 8 页）；仅保留首帧会导致其余 bitmap 页被 alloc 复用，位图损坏后在 identity map 约 8MB 处失败。
         const bitmap_begin = @intFromPtr(&self.bitmap);

@@ -306,8 +306,9 @@ pub const DwmDefaults = struct {
 pub const Layout = struct {
     pub const taskbar_height: i32 = 40;
     pub const titlebar_height: i32 = 26;
-    pub const start_btn_width: i32 = 108;
-    pub const start_btn_orb_size: i32 = 36;
+    /// 左槽宽度（与内核 `display.aeroTaskbarStartOrb` 的 `slot_w` 一致）
+    pub const start_btn_width: i32 = 48;
+    pub const start_btn_orb_size: i32 = 30;
     /// Aero Peek strip at the far right (click/hover → show desktop)
     pub const show_desktop_peek_width: i32 = 14;
     /// Notification area: clock column (time + stacked date)

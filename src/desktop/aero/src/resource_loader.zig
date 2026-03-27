@@ -5,6 +5,8 @@
 //!   resources/cursors/       — Animated cursor sprites (SVG)
 //!   resources/themes/        — .theme configuration files
 //!   resources/sounds/        — Event sound schemes（当前仅元数据路径登记，无播放栈）
+//!   resources/logo.svg       — 品牌标识（登记路径；内核任务栏为过程绘制）
+//!   resources/start_orb.svg  — Start 球矢量（登记路径）
 //!
 //! At init time, the loader registers known built-in resource entries
 //! so the compositor and shell can reference them by path or ID.
@@ -13,7 +15,8 @@ pub const MAX_WALLPAPERS: usize = 24;
 pub const MAX_ICONS: usize = 64;
 pub const MAX_CURSORS: usize = 24;
 pub const MAX_THEME_FILES: usize = 16;
-pub const MAX_SOUND_SCHEMES: usize = 16;
+pub const MAX_SOUND_SCHEMES: usize = 24;
+pub const MAX_BRAND_ASSETS: usize = 8;
 pub const PATH_MAX: usize = 128;
 
 pub const ResourceEntry = struct {
@@ -37,6 +40,9 @@ var theme_file_count: usize = 0;
 
 var sound_schemes: [MAX_SOUND_SCHEMES]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_SOUND_SCHEMES;
 var sound_scheme_count: usize = 0;
+
+var brand_assets: [MAX_BRAND_ASSETS]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_BRAND_ASSETS;
+var brand_asset_count: usize = 0;
 
 var initialized: bool = false;
 
@@ -93,6 +99,15 @@ fn addSoundScheme(path: []const u8, id: u16) void {
     sound_scheme_count += 1;
 }
 
+fn addBrandAsset(path: []const u8, id: u16) void {
+    if (brand_asset_count >= MAX_BRAND_ASSETS) return;
+    var e = &brand_assets[brand_asset_count];
+    e.path_len = setPath(&e.path, path);
+    e.id = id;
+    e.loaded = true;
+    brand_asset_count += 1;
+}
+
 pub fn init() void {
     if (initialized) return;
 
@@ -101,12 +116,14 @@ pub fn init() void {
     cursor_count = 0;
     theme_file_count = 0;
     sound_scheme_count = 0;
+    brand_asset_count = 0;
 
     registerBuiltinWallpapers();
     registerBuiltinIcons();
     registerBuiltinCursors();
     registerBuiltinThemeFiles();
     registerBuiltinSoundSchemes();
+    registerBuiltinBrandAssets();
 
     initialized = true;
 }
@@ -161,6 +178,7 @@ fn registerBuiltinCursors() void {
     addCursor("resources/cursors/zircon_working.svg", 11);
     addCursor("resources/cursors/zircon_unavail.svg", 12);
     addCursor("resources/cursors/zircon_up.svg", 13);
+    addCursor("resources/cursors/zircon_nwse.svg", 14);
 }
 
 fn registerBuiltinThemeFiles() void {
@@ -177,8 +195,27 @@ fn registerBuiltinThemeFiles() void {
 /// 声音方案仅登记路径（内核暂无 WAV 播放器；供清单与后续音频栈对齐）。
 fn registerBuiltinSoundSchemes() void {
     addSoundScheme("resources/sounds/sound_scheme.conf", 1);
-    addSoundScheme("resources/sounds/README.md", 2);
-    addSoundScheme("resources/sounds/Desktop.ini", 3);
+    addSoundScheme("resources/sounds/Desktop.ini", 2);
+    addSoundScheme("resources/sounds/README.md", 3);
+    addSoundScheme("resources/sounds/Afternoon/Desktop.ini", 4);
+    addSoundScheme("resources/sounds/Calligraphy/Desktop.ini", 5);
+    addSoundScheme("resources/sounds/Characters/Desktop.ini", 6);
+    addSoundScheme("resources/sounds/Cityscape/Desktop.ini", 7);
+    addSoundScheme("resources/sounds/Delta/Desktop.ini", 8);
+    addSoundScheme("resources/sounds/Festival/Desktop.ini", 9);
+    addSoundScheme("resources/sounds/Garden/Desktop.ini", 10);
+    addSoundScheme("resources/sounds/Heritage/Desktop.ini", 11);
+    addSoundScheme("resources/sounds/Landscape/Desktop.ini", 12);
+    addSoundScheme("resources/sounds/Quirky/Desktop.ini", 13);
+    addSoundScheme("resources/sounds/Raga/Desktop.ini", 14);
+    addSoundScheme("resources/sounds/Savanna/Desktop.ini", 15);
+    addSoundScheme("resources/sounds/Sonata/Desktop.ini", 16);
+}
+
+/// Shell 品牌图（内核帧缓冲任务栏仍为过程绘制；此处供清单与宿主工具引用路径）。
+fn registerBuiltinBrandAssets() void {
+    addBrandAsset("resources/logo.svg", 1);
+    addBrandAsset("resources/start_orb.svg", 2);
 }
 
 // ── Public query API ──
@@ -203,6 +240,10 @@ pub fn getSoundSchemeCount() usize {
     return sound_scheme_count;
 }
 
+pub fn getBrandAssetCount() usize {
+    return brand_asset_count;
+}
+
 pub fn getWallpapers() []const ResourceEntry {
     return wallpapers[0..wallpaper_count];
 }
@@ -221,6 +262,10 @@ pub fn getThemeFiles() []const ResourceEntry {
 
 pub fn getSoundSchemes() []const ResourceEntry {
     return sound_schemes[0..sound_scheme_count];
+}
+
+pub fn getBrandAssets() []const ResourceEntry {
+    return brand_assets[0..brand_asset_count];
 }
 
 pub fn findWallpaperById(id: u16) ?*const ResourceEntry {
@@ -246,6 +291,13 @@ pub fn findCursorById(id: u16) ?*const ResourceEntry {
 
 pub fn findSoundSchemeById(id: u16) ?*const ResourceEntry {
     for (sound_schemes[0..sound_scheme_count]) |*e| {
+        if (e.id == id) return e;
+    }
+    return null;
+}
+
+pub fn findBrandAssetById(id: u16) ?*const ResourceEntry {
+    for (brand_assets[0..brand_asset_count]) |*e| {
         if (e.id == id) return e;
     }
     return null;

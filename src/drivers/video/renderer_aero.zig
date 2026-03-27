@@ -175,7 +175,8 @@ pub fn wallpaperPresetIndex() u8 {
 fn renderBackground(w: i32, h: i32) void {
     // 首帧仅渐变壁纸，避免大块 blendTint 拖长「首屏可见」时间；后续整屏重绘再画预设。
     if (display.getPresentCount() == 0) {
-        fb.drawGradientV(0, 0, w, h, rgb(0x08, 0x1E, 0x42), rgb(0x04, 0x12, 0x28));
+        // 与 `zircon_harmony_win7.svg` skyDeep 起止色一致，缩短首帧与完整 Harmony 的视觉跳变
+        fb.drawGradientV(0, 0, w, h, rgb(0x0A, 0x1E, 0x3D), rgb(0x08, 0x18, 0x30));
     } else {
         renderWallpaperByPreset(w, h, aero_wallpaper_preset);
     }
@@ -252,17 +253,38 @@ fn renderWallpaperByPreset(w: i32, h: i32, preset: u8) void {
 }
 
 pub fn renderHarmonyWallpaper(w: i32, h: i32) void {
-    fb.drawGradientV(0, 0, w, h, rgb(0x08, 0x1E, 0x42), rgb(0x04, 0x12, 0x28));
-    fb.blendTintRect(@divTrunc(w, 4), @divTrunc(h, 10), @divTrunc(w, 2), @divTrunc(h * 2, 5), rgb(0x28, 0x58, 0x90), 20, 255);
+    // 程序化近似 `zircon_harmony_win7.svg`：skyDeep、centerBloom、logoGlow、四格窗格、暗角
+    fb.drawGradientV(0, 0, w, h, rgb(0x0A, 0x1E, 0x3D), rgb(0x08, 0x18, 0x30));
+    fb.blendTintRect(0, @divTrunc(h * 20, 100), w, @divTrunc(h * 22, 100), rgb(0x10, 0x2E, 0x55), 14, 255);
+
     const mx = @divTrunc(w, 2);
-    const my = @divTrunc(h * 2, 5);
-    fb.blendTintRect(mx - 200, my - 130, 400, 300, rgb(0x38, 0x68, 0xA0), 16, 255);
-    fb.blendTintRect(@divTrunc(w, 8), @divTrunc(h, 6), @divTrunc(w, 3), @divTrunc(h, 4), rgb(0x50, 0x78, 0xA8), 12, 255);
-    const vstrip: i32 = 28;
-    fb.blendTintRect(0, 0, w, vstrip, rgb(0x00, 0x04, 0x12), 38, 255);
-    fb.blendTintRect(0, h - vstrip, w, vstrip, rgb(0x00, 0x02, 0x0A), 48, 255);
-    fb.blendTintRect(0, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
-    fb.blendTintRect(w - vstrip, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
+    const my = @divTrunc(h * 38, 100);
+
+    fb.blendTintRect(mx - @divTrunc(w, 3), my - @divTrunc(h, 3), @divTrunc(w * 2, 3), @divTrunc(h * 2, 3), rgb(0x3D, 0x8E, 0xD8), 20, 255);
+    fb.blendTintRect(mx - @divTrunc(w, 4), my - @divTrunc(h, 5), @divTrunc(w, 2), @divTrunc(h * 2, 5), rgb(0x1A, 0x50, 0x88), 12, 255);
+    fb.blendTintRect(mx - 140, my - 100, 280, 200, rgb(0xB0, 0xD8, 0xFF), 8, 255);
+
+    // 对角柔光带（对应 SVG streakL 氛围，压低不透明度避免发灰）
+    fb.blendTintRect(@divTrunc(w, 10), @divTrunc(h, 8), @divTrunc(w * 4, 5), @divTrunc(h, 3), rgb(0x88, 0xC8, 0xFF), 6, 255);
+
+    // 大椭圆氛围块（对应 SVG 三处柔光椭圆）
+    fb.blendTintRect(@divTrunc(w, 6), @divTrunc(h, 5), @divTrunc(w, 4), @divTrunc(h, 6), rgb(0x1E, 0x50, 0x90), 8, 255);
+    fb.blendTintRect(@divTrunc(w * 3, 4), @divTrunc(h, 4), @divTrunc(w, 3), @divTrunc(h, 5), rgb(0x20, 0x58, 0xA0), 7, 255);
+    fb.blendTintRect(@divTrunc(w, 2), @divTrunc(h * 3, 4), @divTrunc(w, 3), @divTrunc(h, 6), rgb(0x18, 0x30, 0x60), 9, 255);
+
+    // 四色窗格中心装饰（与 SVG 四 pane 同色，尺寸随分辨率缩放）
+    const pane: i32 = @max(28, @divTrunc(@min(w, h), 18));
+    fb.blendTintRect(mx - pane * 2, my - pane * 2, pane, pane, rgb(0xE8, 0x78, 0x28), 50, 255);
+    fb.blendTintRect(mx + pane, my - pane * 2, pane, pane, rgb(0x5C, 0xB8, 0x5C), 50, 255);
+    fb.blendTintRect(mx - pane * 2, my + pane, pane, pane, rgb(0x3A, 0x8F, 0xD8), 52, 255);
+    fb.blendTintRect(mx + pane, my + pane, pane, pane, rgb(0xE8, 0xC8, 0x30), 50, 255);
+
+    const vstrip: i32 = 32;
+    const vin: u32 = rgb(0x00, 0x05, 0x10);
+    fb.blendTintRect(0, 0, w, vstrip, vin, 42, 255);
+    fb.blendTintRect(0, h - vstrip, w, vstrip, vin, 52, 255);
+    fb.blendTintRect(0, 0, vstrip, h, vin, 34, 255);
+    fb.blendTintRect(w - vstrip, 0, vstrip, h, vin, 34, 255);
 }
 
 fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32) void {

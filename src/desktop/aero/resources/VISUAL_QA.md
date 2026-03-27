@@ -13,6 +13,10 @@
 | 7 | 壁纸预设 | **Ctrl+Alt+F9** 循环 12 套程序化背景（与 `resource_loader` 壁纸条目对应）；首帧仍为快速渐变 |
 | 8 | 光标形态 | 开始菜单项上为手形（箭头位图）、Explorer 地址栏为竖线光标、拖标题栏为四向移动 |
 
-**构建检查**：`resource_loader` 中 `addIcon` / `addCursor` / `addThemeFile` 路径与 `resources/` 内文件名一致，`zig build` 无缺失嵌入路径。
+**构建检查**：`resource_loader` 中 `addIcon` / `addCursor` / `addThemeFile` / `addSoundScheme` / `addBrandAsset` 路径与 `resources/` 内文件名一致，`zig build` 无缺失嵌入路径。
+
+**内核壁纸**：QEMU 默认背景来自 `renderer_aero.zig` 的 `renderHarmonyWallpaper` 等程序化绘制，与 `wallpapers/*.svg` 为概念对齐而非像素一致。
+
+**桌面右键菜单**（帧缓冲）：`display.zig` `renderContextMenu` 使用主题 `titlebar_text`（黑）于浅底，避免白字低对比。
 
 **图标一致**：内核 `src/drivers/video/icons.zig` 中 `IconId` 数值与 `resource_loader` / `DESIGN.md` 内置 ID（1–17）一致；帧缓冲回退位图与 Aero SVG 同源路径。

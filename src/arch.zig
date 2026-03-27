@@ -183,12 +183,19 @@ pub fn waitForInterrupt() void {
     }
 }
 
-/// 桌面主循环空闲：可选 `-Ddesktop_idle_spin=true` 在 x86_64 / LoongArch 上短自旋而非 HLT/idle，利于 VirtIO-Input 轮询与定时器竞态下的输入响应。
+/// 桌面主循环空闲：
+/// - **LoongArch64**：始终短自旋。QEMU/UEFI 下 VirtIO 等设备 IRQ 经 PCH/LIOINTC 唤醒 `idle 0` 不可靠时，会退化为仅定时器 ~100Hz 唤醒，表现为鼠标「动一下卡一下」。
+/// - **x86_64**：`-Ddesktop_idle_spin=true`（默认）时用短自旋代替 `sti;hlt`，便于 VirtIO/8042 轮询。
 pub fn waitForInterruptDesktop() void {
     const b = @import("builtin");
-    if (@import("build_options").desktop_idle_spin and
-        (b.target.cpu.arch == .x86_64 or b.target.cpu.arch == .loongarch64))
-    {
+    if (b.target.cpu.arch == .loongarch64) {
+        var i: u32 = 0;
+        while (i < 65536) : (i += 1) {
+            asm volatile ("" ::: .{ .memory = true });
+        }
+        return;
+    }
+    if (@import("build_options").desktop_idle_spin and b.target.cpu.arch == .x86_64) {
         var i: u32 = 0;
         while (i < 65536) : (i += 1) {
             asm volatile ("" ::: .{ .memory = true });

@@ -185,11 +185,13 @@ QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -
 QEMU_COMMON_RISCV64 := -M virt -cpu rv64 -m $(QEMU_MEM) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on
 
-# 与 LoongArch UEFI 路径类似：virtio-gpu + virtio-input（进内核后）；usb-kbd 供 UEFI/ZBM 菜单 ConIn
+# ramfb：EDK2 下 GOP 常为 BLT-only，ZBM 无法传线性 FB；内核用 fw_cfg 写 etc/ramfb（hal/aarch64/ramfb.zig）
+# 与 virtio-gpu 并存时 GTK 可能多控制台；无 ramfb 时 AArch64 Aero 无扫描缓冲会退回 CMD。
 QEMU_AARCH64_DEVICES := \
 	-drive if=none,id=zircon-esp-a64,file=$(BUILD_DIR)/esp-aarch64.img,format=raw \
 	-device virtio-blk-pci,drive=zircon-esp-a64,bootindex=0 \
 	-device virtio-gpu-pci,id=zircon_vgpu \
+	-device ramfb,id=zircon_ramfb \
 	-device virtio-tablet-pci,display=zircon_vgpu \
 	-device virtio-keyboard-pci,display=zircon_vgpu \
 	-device qemu-xhci,id=xhci_a64 \

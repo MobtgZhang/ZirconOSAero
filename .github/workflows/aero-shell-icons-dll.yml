@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Regenerate ICO + zircon_shell32_res.dll (zig cc -target x86_64-windows-gnu + MinGW windres).
+name: Aero shell icon DLL
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/desktop/aero/resources/icons/**"
+      - "src/desktop/aero/resources/win32/**"
+      - "scripts/build/build-aero-icons.sh"
+      - "scripts/build/build-zircon-icon-dll.sh"
+      - "build.zig"
+
+jobs:
+  build-dll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.15.2
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.15.2/zig-linux-x86_64-0.15.2.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$(pwd)/zig-linux-x86_64-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Install MinGW windres, Inkscape, ImageMagick
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mingw-w64 inkscape imagemagick
+
+      - name: zig build aero-shell-icons-dll
+        run: zig build aero-shell-icons-dll
+
+      - name: zig build aero-shell-icons-la-bundle
+        run: zig build aero-shell-icons-la-bundle
+
+      - name: Probe loongarch64-windows-gnu shared (Tier 2, expected fail until toolchain matures)
+        continue-on-error: true
+        run: zig build aero-loongarch-windows-pe-probe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zircon_shell32_res-dll
+          path: zig-out/assets/zircon_shell32_res.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zircon-shell-icons-la-bundle
+          path: zig-out/assets/loongarch64/

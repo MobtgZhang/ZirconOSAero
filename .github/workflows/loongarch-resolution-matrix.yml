@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# LoongArch64: compile kernel + ZBM for representative resolutions (see scripts/test_loongarch_resolution_matrix.sh).
+name: LoongArch resolution matrix
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "boot/zbm/**"
+      - "src/arch/loongarch64/**"
+      - "src/hal/loongarch64/**"
+      - "src/main.zig"
+      - "build.zig"
+      - "scripts/test_loongarch_resolution_matrix.sh"
+      - ".github/workflows/loongarch-resolution-matrix.yml"
+  pull_request:
+    paths:
+      - "boot/zbm/**"
+      - "src/arch/loongarch64/**"
+      - "src/hal/loongarch64/**"
+      - "src/main.zig"
+      - "build.zig"
+      - "scripts/test_loongarch_resolution_matrix.sh"
+      - ".github/workflows/loongarch-resolution-matrix.yml"
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.15.2
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.15.2/zig-linux-x86_64-0.15.2.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$(pwd)/zig-linux-x86_64-0.15.2" >> "$GITHUB_PATH"
+
+      - name: LoongArch resolution compile matrix (--quick)
+        run: bash scripts/test_loongarch_resolution_matrix.sh --quick

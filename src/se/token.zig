@@ -94,6 +94,12 @@ pub fn checkHandleAccess(table: *const ob.HandleTable, handle: ob.Handle, requir
     return table.checkAccess(handle, required);
 }
 
+/// Whether `desired_access` is allowed for a generic file object (DACs simplified).
+pub fn canOpenFileForAccess(tok: *const Token, desired_access: ob.ACCESS_MASK) bool {
+    const object_grants: u32 = ob.GENERIC_READ | ob.GENERIC_WRITE | ob.GENERIC_EXECUTE | ob.SYNCHRONIZE;
+    return checkAccess(tok, desired_access, object_grants);
+}
+
 pub fn init() void {
     next_token_id = 1;
     klog.info("Security: Reference Monitor initialized", .{});

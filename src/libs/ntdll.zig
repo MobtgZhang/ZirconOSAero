@@ -2,13 +2,17 @@
 //! Phase 8 Enhanced: Complete Native API set with file/memory/section/sync APIs,
 //! system information queries, RTL utilities, and debug support.
 
+const std = @import("std");
 const klog = @import("../rtl/klog.zig");
 const process = @import("../ps/process.zig");
 const ob = @import("../ob/object.zig");
 const ipc = @import("../lpc/ipc.zig");
 const port = @import("../lpc/port.zig");
 const vfs = @import("../fs/vfs.zig");
-const heap_mod = @import("../mm/heap.zig");
+const vm = @import("../mm/vm.zig");
+const io = @import("../io/io.zig");
+const registry = @import("../registry/registry.zig");
+const token = @import("../se/token.zig");
 
 pub const NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
@@ -29,6 +33,8 @@ pub const STATUS_WAIT_0: NTSTATUS = 0;
 pub const STATUS_ABANDONED_WAIT_0: NTSTATUS = 128;
 pub const STATUS_ALERTED: NTSTATUS = 257;
 pub const STATUS_INFO_LENGTH_MISMATCH: NTSTATUS = -1073741820;
+/// 0xC0000003 — invalid `SYSTEM_INFORMATION_CLASS` / info class.
+pub const STATUS_INVALID_INFO_CLASS: NTSTATUS = -1073741821;
 
 pub const HANDLE = u64;
 pub const INVALID_HANDLE_VALUE: HANDLE = 0xFFFFFFFFFFFFFFFF;
@@ -71,8 +77,50 @@ pub const SystemPerformanceInformation: u32 = 2;
 pub const SystemTimeOfDayInformation: u32 = 3;
 pub const SystemProcessInformation: u32 = 5;
 pub const SystemModuleInformation: u32 = 11;
-/// Wine/ReactOS–aligned class for `RTL_OSVERSIONINFOEXW` (public SDK omits full enum).
+/// `RTL_OSVERSIONINFOEXW` / `VER_PLATFORM_*` — values aligned with public SDK headers (clean-room).
 pub const SystemVersionInformation: u32 = 57;
+
+pub const ProcessBasicInformation: u32 = 0;
+pub const ThreadBasicInformation: u32 = 0;
+
+pub const KeyValuePartialInformation: u32 = 2;
+
+/// x64 `PROCESS_BASIC_INFORMATION` (MSDN). Size must be 48.
+const PROCESS_BASIC_INFORMATION = extern struct {
+    exit_status: NTSTATUS,
+    _pad0: u32,
+    peb_base_address: u64,
+    affinity_mask: u64,
+    base_priority: i32,
+    _pad1: u32,
+    unique_process_id: u64,
+    inherited_from_unique_process_id: u64,
+};
+comptime {
+    std.debug.assert(@sizeOf(PROCESS_BASIC_INFORMATION) == 48);
+}
+
+fn desiredAccessToObMask(access: u32) ob.ACCESS_MASK {
+    var m: ob.ACCESS_MASK = 0;
+    if ((access & 0x80000000) != 0) m |= ob.GENERIC_READ;
+    if ((access & 0x40000000) != 0) m |= ob.GENERIC_WRITE;
+    if ((access & 0x20000000) != 0) m |= ob.GENERIC_EXECUTE;
+    if ((access & 0x10000000) != 0) m |= ob.GENERIC_ALL;
+    if (m == 0) m = ob.GENERIC_READ | ob.GENERIC_WRITE;
+    return m;
+}
+
+fn ioStatusFromVfsIo(s: io.IoStatus) NTSTATUS {
+    return switch (s) {
+        .success => STATUS_SUCCESS,
+        .not_found => STATUS_OBJECT_NAME_NOT_FOUND,
+        .access_denied => STATUS_ACCESS_DENIED,
+        .buffer_overflow => STATUS_BUFFER_TOO_SMALL,
+        .end_of_file => STATUS_END_OF_FILE,
+        .not_implemented => STATUS_NOT_IMPLEMENTED,
+        else => STATUS_INVALID_PARAMETER,
+    };
+}
 
 // ── Process APIs ──
 
@@ -102,19 +150,44 @@ pub fn NtTerminateProcess(process_handle: HANDLE, exit_status: NTSTATUS) NTSTATU
     return STATUS_INVALID_PARAMETER;
 }
 
-pub fn NtQueryInformationProcess(process_handle: HANDLE, info_buf: []u8) NTSTATUS {
+/// Ref: learn.microsoft.com `NtQueryInformationProcess` — `ProcessInformationClass`, lengths, optional `ReturnLength`.
+pub fn NtQueryInformationProcess(
+    process_handle: HANDLE,
+    process_information_class: u32,
+    process_information: ?*anyopaque,
+    process_information_length: u32,
+    return_length: ?*u32,
+) NTSTATUS {
     const pid: u32 = @intCast(process_handle & 0xFFFFFFFF);
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_PARAMETER;
-    if (info_buf.len < 16) return STATUS_BUFFER_TOO_SMALL;
-    writeU32(info_buf[0..4], proc.pid);
-    writeU32(info_buf[4..8], proc.parent_pid);
-    info_buf[8] = @intFromEnum(proc.state);
-    info_buf[9] = if (proc.is_system) 1 else 0;
-    return STATUS_SUCCESS;
+
+    switch (process_information_class) {
+        ProcessBasicInformation => {
+            const need: u32 = @intCast(@sizeOf(PROCESS_BASIC_INFORMATION));
+            if (return_length) |rl| rl.* = need;
+            if (process_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const buf = process_information orelse return STATUS_INVALID_PARAMETER;
+            const out: *PROCESS_BASIC_INFORMATION = @ptrCast(@alignCast(buf));
+            out.exit_status = 0;
+            out._pad0 = 0;
+            out.peb_base_address = 0;
+            out.affinity_mask = 1;
+            out.base_priority = 0;
+            out._pad1 = 0;
+            out.unique_process_id = proc.pid;
+            out.inherited_from_unique_process_id = proc.parent_pid;
+            return STATUS_SUCCESS;
+        },
+        else => {
+            if (return_length) |rl| rl.* = 0;
+            return STATUS_INVALID_INFO_CLASS;
+        },
+    }
 }
 
-pub fn NtSetInformationProcess(_: HANDLE, _: u32, _: []const u8) NTSTATUS {
-    return STATUS_SUCCESS;
+pub fn NtSetInformationProcess(_: HANDLE, process_information_class: u32, _: ?*const anyopaque, _: u32) NTSTATUS {
+    if (process_information_class == 0) return STATUS_SUCCESS;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 // ── Thread APIs ──
@@ -129,8 +202,16 @@ pub fn NtTerminateThread(_: HANDLE, _: NTSTATUS) NTSTATUS {
     return STATUS_SUCCESS;
 }
 
-pub fn NtQueryInformationThread(_: HANDLE, _: []u8) NTSTATUS {
-    return STATUS_NOT_IMPLEMENTED;
+pub fn NtQueryInformationThread(
+    _: HANDLE,
+    thread_information_class: u32,
+    _: ?*anyopaque,
+    _: u32,
+    return_length: ?*u32,
+) NTSTATUS {
+    if (return_length) |rl| rl.* = 0;
+    if (thread_information_class == ThreadBasicInformation) return STATUS_NOT_IMPLEMENTED;
+    return STATUS_INVALID_INFO_CLASS;
 }
 
 // ── File APIs ──
@@ -140,69 +221,187 @@ pub fn NtCreateFile(
     access: u32,
     obj_attrs: ?*OBJECT_ATTRIBUTES,
     io_status: *IO_STATUS_BLOCK,
-    _: u64,
-    _: u32,
-    _: u32,
-    _: u32,
-    _: u32,
+    allocation_size: u64,
+    file_attributes: u32,
+    share_access: u32,
+    create_disposition: u32,
+    create_options: u32,
+    ea_buffer: ?*anyopaque,
+    ea_length: u32,
 ) NTSTATUS {
-    _ = access;
+    _ = allocation_size;
+    _ = file_attributes;
+    _ = share_access;
+    _ = create_disposition;
+    _ = create_options;
+    _ = ea_buffer;
+    _ = ea_length;
+
     io_status.status = STATUS_SUCCESS;
     io_status.information = 0;
+    file_handle.* = INVALID_HANDLE_VALUE;
+
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const want = desiredAccessToObMask(access);
+    if (!token.canOpenFileForAccess(&proc.security_token, want)) {
+        io_status.status = STATUS_ACCESS_DENIED;
+        return STATUS_ACCESS_DENIED;
+    }
 
     if (obj_attrs) |attrs| {
         if (attrs.object_name) |name| {
             const path = name.buffer[0..name.length];
-            const f = vfs.open(path, .read_write);
-            if (f) |_| {
-                file_handle.* = @intCast(vfs.getFileCount());
-                io_status.information = 1;
-                return STATUS_SUCCESS;
-            }
-            return STATUS_OBJECT_NAME_NOT_FOUND;
+            const f = vfs.open(path, .read_write) orelse {
+                io_status.status = STATUS_OBJECT_NAME_NOT_FOUND;
+                return STATUS_OBJECT_NAME_NOT_FOUND;
+            };
+            const h = proc.handle_table.allocHandle(@intFromPtr(f), want, .file) orelse {
+                _ = vfs.close(f);
+                io_status.status = STATUS_INSUFFICIENT_RESOURCES;
+                return STATUS_INSUFFICIENT_RESOURCES;
+            };
+            file_handle.* = h;
+            io_status.information = 1; // FILE_CREATED / FILE_OPENED — simplified
+            return STATUS_SUCCESS;
         }
     }
-    file_handle.* = INVALID_HANDLE_VALUE;
+    io_status.status = STATUS_INVALID_PARAMETER;
     return STATUS_INVALID_PARAMETER;
 }
 
-pub fn NtOpenFile(file_handle: *HANDLE, _: u32, obj_attrs: ?*OBJECT_ATTRIBUTES, io_status: *IO_STATUS_BLOCK, _: u32, _: u32) NTSTATUS {
+pub fn NtOpenFile(
+    file_handle: *HANDLE,
+    access: u32,
+    obj_attrs: ?*OBJECT_ATTRIBUTES,
+    io_status: *IO_STATUS_BLOCK,
+    share_access: u32,
+    open_options: u32,
+) NTSTATUS {
+    _ = share_access;
+    _ = open_options;
     io_status.status = STATUS_SUCCESS;
+    io_status.information = 0;
+    file_handle.* = INVALID_HANDLE_VALUE;
+
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const want = desiredAccessToObMask(access);
+    if (!token.canOpenFileForAccess(&proc.security_token, want)) {
+        io_status.status = STATUS_ACCESS_DENIED;
+        return STATUS_ACCESS_DENIED;
+    }
+
     if (obj_attrs) |attrs| {
         if (attrs.object_name) |name| {
             const path = name.buffer[0..name.length];
-            const f = vfs.open(path, .read);
-            if (f) |_| {
-                file_handle.* = @intCast(vfs.getFileCount());
-                return STATUS_SUCCESS;
-            }
-            return STATUS_OBJECT_NAME_NOT_FOUND;
+            const f = vfs.open(path, .read) orelse {
+                io_status.status = STATUS_OBJECT_NAME_NOT_FOUND;
+                return STATUS_OBJECT_NAME_NOT_FOUND;
+            };
+            const h = proc.handle_table.allocHandle(@intFromPtr(f), want, .file) orelse {
+                _ = vfs.close(f);
+                io_status.status = STATUS_INSUFFICIENT_RESOURCES;
+                return STATUS_INSUFFICIENT_RESOURCES;
+            };
+            file_handle.* = h;
+            io_status.information = 1;
+            return STATUS_SUCCESS;
         }
     }
-    file_handle.* = INVALID_HANDLE_VALUE;
+    io_status.status = STATUS_INVALID_PARAMETER;
     return STATUS_INVALID_PARAMETER;
 }
 
-pub fn NtReadFile(_: HANDLE, _: HANDLE, _: u64, _: u64, io_status: *IO_STATUS_BLOCK, buffer: []u8, _: ?*u64) NTSTATUS {
-    io_status.status = STATUS_SUCCESS;
-    io_status.information = 0;
-    _ = buffer;
-    return STATUS_SUCCESS;
+pub fn NtReadFile(
+    file_handle: HANDLE,
+    _: HANDLE,
+    _: u64,
+    _: u64,
+    io_status: *IO_STATUS_BLOCK,
+    buffer: ?[*]u8,
+    length: u32,
+    file_offset: ?*const u64,
+    _: ?*u32,
+) NTSTATUS {
+    _ = file_offset;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(file_handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse {
+        io_status.* = .{ .status = STATUS_INVALID_HANDLE, .information = 0 };
+        return STATUS_INVALID_HANDLE;
+    };
+    if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
+    const f: *vfs.FileObject = @ptrFromInt(ent.object_ptr);
+    const buf = buffer orelse return STATUS_INVALID_PARAMETER;
+    var irp = io.Irp{
+        .major_function = .read,
+        .buffer_ptr = @intFromPtr(buf),
+        .buffer_size = length,
+    };
+    _ = vfs.dispatchFileObjectIrp(f, &irp);
+    io_status.status = ioStatusFromVfsIo(irp.status);
+    io_status.information = irp.bytes_transferred;
+    return io_status.status;
 }
 
-pub fn NtWriteFile(_: HANDLE, _: HANDLE, _: u64, _: u64, io_status: *IO_STATUS_BLOCK, buffer: []const u8, _: ?*u64) NTSTATUS {
-    io_status.status = STATUS_SUCCESS;
-    io_status.information = buffer.len;
-    return STATUS_SUCCESS;
+pub fn NtWriteFile(
+    file_handle: HANDLE,
+    _: HANDLE,
+    _: u64,
+    _: u64,
+    io_status: *IO_STATUS_BLOCK,
+    buffer: ?[*]const u8,
+    length: u32,
+    file_offset: ?*const u64,
+    _: ?*u32,
+) NTSTATUS {
+    _ = file_offset;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(file_handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse {
+        io_status.* = .{ .status = STATUS_INVALID_HANDLE, .information = 0 };
+        return STATUS_INVALID_HANDLE;
+    };
+    if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
+    const f: *vfs.FileObject = @ptrFromInt(ent.object_ptr);
+    const buf = buffer orelse return STATUS_INVALID_PARAMETER;
+    var irp = io.Irp{
+        .major_function = .write,
+        .buffer_ptr = @intFromPtr(buf),
+        .buffer_size = length,
+    };
+    _ = vfs.dispatchFileObjectIrp(f, &irp);
+    io_status.status = ioStatusFromVfsIo(irp.status);
+    io_status.information = irp.bytes_transferred;
+    return io_status.status;
 }
 
 pub fn NtClose(handle: HANDLE) NTSTATUS {
-    _ = handle;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(handle);
+    const ent = proc.handle_table.lookupMut(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type == .file) {
+        const f: *vfs.FileObject = @ptrFromInt(ent.object_ptr);
+        var irp = io.Irp{ .major_function = .close };
+        _ = vfs.dispatchFileObjectIrp(f, &irp);
+    }
+    if (!proc.handle_table.closeHandle(h)) return STATUS_INVALID_HANDLE;
     return STATUS_SUCCESS;
 }
 
-pub fn NtQueryDirectoryFile(_: HANDLE, _: HANDLE, _: u64, _: u64, io_status: *IO_STATUS_BLOCK, _: []u8, _: u32, _: bool) NTSTATUS {
-    io_status.status = STATUS_SUCCESS;
+pub fn NtQueryDirectoryFile(
+    _: HANDLE,
+    _: HANDLE,
+    _: u64,
+    _: u64,
+    io_status: *IO_STATUS_BLOCK,
+    _: ?*anyopaque,
+    _: u32,
+    _: u32,
+    _: ?*u32,
+    _: bool,
+) NTSTATUS {
+    io_status.status = STATUS_NOT_IMPLEMENTED;
+    io_status.information = 0;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -282,7 +481,7 @@ pub fn NtRequestWaitReplyPort(
     reply: *ipc.Message,
 ) NTSTATUS {
     const pid = process.getCurrentPid();
-    const result = ipc.requestWaitReply(pid, @intCast(port_handle), opcode, data);
+    const result = port.requestWaitReplyPort(pid, @intCast(port_handle), opcode, data);
     if (result) |msg| {
         reply.* = msg;
         return STATUS_SUCCESS;
@@ -290,33 +489,105 @@ pub fn NtRequestWaitReplyPort(
     return STATUS_INVALID_PARAMETER;
 }
 
-pub fn NtConnectPort(_: *HANDLE, _: []const u8) NTSTATUS {
+pub fn NtConnectPort(port_handle: *HANDLE, name: []const u8) NTSTATUS {
+    const pid = process.getCurrentPid();
+    const p = port.connectPort(pid, name) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    port_handle.* = p.id;
     return STATUS_SUCCESS;
 }
 
 // ── Memory APIs ──
 
-pub fn NtAllocateVirtualMemory(_: HANDLE, base_address: *u64, _: u64, size: *u64, _: u32, _: u32) NTSTATUS {
-    _ = base_address;
-    _ = size;
+fn processHandleToPid(h: HANDLE) ?u32 {
+    if (h == INVALID_HANDLE_VALUE or h == 0) return process.getCurrentPid();
+    return @intCast(h & 0xFFFFFFFF);
+}
+
+pub const MEM_COMMIT: u32 = 0x1000;
+pub const MEM_RESERVE: u32 = 0x2000;
+pub const MEM_RELEASE: u32 = 0x8000;
+pub const PAGE_READWRITE: u32 = 0x04;
+
+pub fn NtAllocateVirtualMemory(
+    process_handle: HANDLE,
+    base_address: *u64,
+    zero_bits: u64,
+    region_size: *u64,
+    allocation_type: u32,
+    protect: u32,
+) NTSTATUS {
+    _ = zero_bits;
+    _ = protect;
+    const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
+    const space = proc.address_space orelse return STATUS_NO_MEMORY;
+
+    const commit = (allocation_type & MEM_COMMIT) != 0;
+    const reserve = (allocation_type & MEM_RESERVE) != 0;
+    if (!commit and !reserve) return STATUS_INVALID_PARAMETER;
+
+    const page_size: u64 = 4096;
+    var size = region_size.*;
+    if (size == 0) return STATUS_INVALID_PARAMETER;
+    size = (size + page_size - 1) & ~(page_size - 1);
+    const num_pages = @as(usize, @intCast(size / page_size));
+
+    var base = base_address.*;
+    if (base == 0) {
+        base = 0x0000_0000_4000_0000;
+        while (space.getPhysical(base) != null) {
+            base += page_size;
+        }
+    }
+    if (base & (page_size - 1) != 0) return STATUS_INVALID_PARAMETER;
+
+    const flags = vm.MapFlags{ .writable = true, .user = true, .executable = false };
+    if (!vm.mapRange(space, base, num_pages, flags)) return STATUS_NO_MEMORY;
+    base_address.* = base;
+    region_size.* = size;
     return STATUS_SUCCESS;
 }
 
-pub fn NtFreeVirtualMemory(_: HANDLE, _: *u64, _: *u64, _: u32) NTSTATUS {
+pub fn NtFreeVirtualMemory(
+    process_handle: HANDLE,
+    base_address: *u64,
+    region_size: *u64,
+    free_type: u32,
+) NTSTATUS {
+    if ((free_type & MEM_RELEASE) == 0) return STATUS_INVALID_PARAMETER;
+    const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
+    const space = proc.address_space orelse return STATUS_NO_MEMORY;
+
+    const page_size: u64 = 4096;
+    var size = region_size.*;
+    if (size == 0) return STATUS_INVALID_PARAMETER;
+    size = (size + page_size - 1) & ~(page_size - 1);
+    const num_pages = @as(usize, @intCast(size / page_size));
+    vm.unmapRange(space, base_address.*, num_pages);
     return STATUS_SUCCESS;
 }
 
-pub fn NtQueryVirtualMemory(_: HANDLE, _: u64, _: u32, _: []u8) NTSTATUS {
-    return STATUS_NOT_IMPLEMENTED;
+pub fn NtQueryVirtualMemory(
+    _: HANDLE,
+    _: u64,
+    memory_information_class: u32,
+    _: ?*anyopaque,
+    _: u32,
+    return_length: ?*u32,
+) NTSTATUS {
+    if (return_length) |rl| rl.* = 0;
+    if (memory_information_class == 0) return STATUS_NOT_IMPLEMENTED;
+    return STATUS_INVALID_INFO_CLASS;
 }
 
-pub fn NtProtectVirtualMemory(_: HANDLE, _: *u64, _: *u64, _: u32, _: *u32) NTSTATUS {
+pub fn NtProtectVirtualMemory(_: HANDLE, _: *u64, _: *u64, _: u32, _: ?*u32) NTSTATUS {
     return STATUS_SUCCESS;
 }
 
 // ── System Information ──
 
-pub const SYSTEM_BASIC_INFO = struct {
+pub const SYSTEM_BASIC_INFO = extern struct {
     reserved: u32 = 0,
     timer_resolution: u32 = 100000,
     page_size: u32 = 4096,
@@ -328,26 +599,38 @@ pub const SYSTEM_BASIC_INFO = struct {
     maximum_user_address: u64 = 0x7FFFFFFEFFFF,
     active_processors: u64 = 1,
     number_of_processors: u8 = 1,
+    _pad: [7]u8 = .{0} ** 7,
 };
+comptime {
+    std.debug.assert(@sizeOf(SYSTEM_BASIC_INFO) == 64);
+}
 
 pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u32) NTSTATUS {
     const osv = @import("../config/os_version.zig");
     switch (info_class) {
         SystemBasicInformation => {
-            if (buffer.len < @sizeOf(SYSTEM_BASIC_INFO)) {
-                return_length.* = @sizeOf(SYSTEM_BASIC_INFO);
-                return STATUS_INFO_LENGTH_MISMATCH;
-            }
-            return_length.* = @sizeOf(SYSTEM_BASIC_INFO);
+            const need = @sizeOf(SYSTEM_BASIC_INFO);
+            return_length.* = need;
+            if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const sample = SYSTEM_BASIC_INFO{};
+            const src = std.mem.asBytes(&sample);
+            @memcpy(buffer[0..need], src);
             return STATUS_SUCCESS;
         },
         SystemTimeOfDayInformation => {
             return_length.* = 0;
-            return STATUS_SUCCESS;
+            return STATUS_NOT_IMPLEMENTED;
         },
-        SystemProcessInformation => {
+        SystemProcessInformation,
+        SystemProcessorInformation,
+        SystemPerformanceInformation,
+        => {
             return_length.* = 0;
-            return STATUS_SUCCESS;
+            return STATUS_NOT_IMPLEMENTED;
+        },
+        SystemModuleInformation => {
+            return_length.* = 0;
+            return STATUS_NOT_IMPLEMENTED;
         },
         SystemVersionInformation => {
             return_length.* = osv.rtl_osversioninfoexw_bytes;
@@ -359,27 +642,91 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
         },
         else => {
             return_length.* = 0;
-            return STATUS_NOT_IMPLEMENTED;
+            return STATUS_INVALID_INFO_CLASS;
         },
     }
 }
 
-// ── Registry APIs (stub) ──
+// ── Registry APIs ──
 
-pub fn NtOpenKey(_: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES) NTSTATUS {
-    return STATUS_OBJECT_NAME_NOT_FOUND;
+pub fn NtOpenKey(key_handle: *HANDLE, desired_access: u32, object_attributes: ?*OBJECT_ATTRIBUTES) NTSTATUS {
+    _ = desired_access;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const attrs = object_attributes orelse return STATUS_INVALID_PARAMETER;
+    const uname = attrs.object_name orelse return STATUS_INVALID_PARAMETER;
+    if (uname.length == 0) return STATUS_OBJECT_NAME_NOT_FOUND;
+    const path = uname.buffer[0..uname.length];
+    const idx = registry.openKeyByNtPath(path) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    const hdr = registry.keyHeaderPtr(idx) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    const mask = ob.GENERIC_READ;
+    const h = proc.handle_table.allocHandle(@intFromPtr(hdr), mask, .key) orelse return STATUS_INSUFFICIENT_RESOURCES;
+    key_handle.* = h;
+    return STATUS_SUCCESS;
 }
 
-pub fn NtQueryValueKey(_: HANDLE, _: []const u8, _: u32, _: []u8, _: *u32) NTSTATUS {
-    return STATUS_OBJECT_NAME_NOT_FOUND;
+fn queryValueKeyPartial(
+    rk: *const registry.RegKey,
+    value_name: ?*const UNICODE_STRING,
+    key_value_information: ?*anyopaque,
+    length: u32,
+    result_length: *u32,
+) NTSTATUS {
+    const vname = value_name orelse return STATUS_INVALID_PARAMETER;
+    if (vname.length == 0) return STATUS_OBJECT_NAME_NOT_FOUND;
+    const name_ascii = vname.buffer[0..vname.length];
+    const val = rk.findValue(name_ascii) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    const data_len: u32 = val.data_len;
+    const need: u32 = 12 + data_len;
+    result_length.* = need;
+    if (length < need) return STATUS_BUFFER_TOO_SMALL;
+    const out: [*]u8 = @ptrCast(key_value_information orelse return STATUS_INVALID_PARAMETER);
+    writeU32(out[0..4], 0);
+    writeU32(out[4..8], @intFromEnum(val.value_type));
+    writeU32(out[8..12], data_len);
+    @memcpy(out[12..][0..data_len], val.data[0..data_len]);
+    return STATUS_SUCCESS;
+}
+
+/// Ref: `NtQueryValueKey` — `KEY_VALUE_INFORMATION_CLASS`, `ResultLength`.
+pub fn NtQueryValueKey(
+    key_handle: HANDLE,
+    value_name: ?*const UNICODE_STRING,
+    key_value_information_class: u32,
+    key_value_information: ?*anyopaque,
+    length: u32,
+    result_length: *u32,
+) NTSTATUS {
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(key_handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .key) return STATUS_INVALID_PARAMETER;
+    const hdr: *ob.ObjectHeader = @ptrFromInt(ent.object_ptr);
+    const rk = registry.regKeyFromHeader(hdr);
+    return switch (key_value_information_class) {
+        KeyValuePartialInformation => queryValueKeyPartial(rk, value_name, key_value_information, length, result_length),
+        else => blk: {
+            result_length.* = 0;
+            break :blk STATUS_INVALID_INFO_CLASS;
+        },
+    };
 }
 
 pub fn NtSetValueKey(_: HANDLE, _: []const u8, _: u32, _: u32, _: []const u8) NTSTATUS {
     return STATUS_SUCCESS;
 }
 
-pub fn NtCreateKey(_: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES, _: u32, _: ?[]const u8, _: u32) NTSTATUS {
-    return STATUS_SUCCESS;
+pub fn NtCreateKey(
+    key_handle: ?*HANDLE,
+    _: u32,
+    _: ?*OBJECT_ATTRIBUTES,
+    _: u32,
+    _: ?[]const u8,
+    _: u32,
+    _: ?*u32,
+) NTSTATUS {
+    if (key_handle) |kh| kh.* = INVALID_HANDLE_VALUE;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 // ── RTL Functions ──
@@ -467,9 +814,14 @@ pub fn RtlNtStatusToDosError(status: NTSTATUS) u32 {
         STATUS_INFO_LENGTH_MISMATCH => 24,
         STATUS_END_OF_FILE => 38,
         STATUS_INVALID_HANDLE => 6,
+        STATUS_INVALID_INFO_CLASS => 87,
+        STATUS_INSUFFICIENT_RESOURCES => 8,
         else => 317,
     };
 }
+
+/// Same mapping as `RtlNtStatusToWin32Error` (Win32 name).
+pub const RtlNtStatusToWin32Error = RtlNtStatusToDosError;
 
 pub fn RtlGetCurrentPeb() u64 {
     return 0;
@@ -505,7 +857,7 @@ pub fn init() void {
     klog.info("ntdll: Memory APIs: NtAllocateVirtualMemory, NtFreeVirtualMemory, NtCreateSection", .{});
     klog.info("ntdll: IPC APIs: NtCreatePort, NtConnectPort, NtRequestWaitReplyPort", .{});
     klog.info("ntdll: System APIs: NtQuerySystemInformation (incl. SystemVersionInformation), NtQueryVirtualMemory", .{});
-    klog.info("ntdll: Registry APIs: NtOpenKey, NtCreateKey, NtQueryValueKey (stub)", .{});
-    klog.info("ntdll: RTL: RtlGetVersion, RtlNtStatusToDosError, memory utils", .{});
+    klog.info("ntdll: Registry APIs: NtOpenKey (NT path), NtQueryValueKey (partial), NtCreateKey (not impl)", .{});
+    klog.info("ntdll: RTL: RtlGetVersion, RtlNtStatusToDosError / RtlNtStatusToWin32Error, memory utils", .{});
     klog.info("ntdll: Debug: DbgPrint, DbgBreakPoint", .{});
 }

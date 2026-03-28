@@ -84,6 +84,12 @@ pub fn findPort(name: []const u8) ?*Port {
     return null;
 }
 
+pub fn findPortById(id: u32) ?*Port {
+    ensureInit();
+    if (id == 0 or id > port_count) return null;
+    return &ports[id - 1];
+}
+
 pub fn connectPort(client_pid: u32, name: []const u8) ?*Port {
     ensureInit();
 
@@ -122,5 +128,19 @@ pub fn requestWaitReply(
 
     _ = ipc.send(client_pid, server.owner_pid, opcode, data);
 
+    return ipc.receive(client_pid);
+}
+
+/// Client-side: `port_id` is the handle returned by `createPort` / `connectPort` (1-based id).
+pub fn requestWaitReplyPort(
+    client_pid: u32,
+    port_id: u32,
+    opcode: u32,
+    data: ?*const [ipc.MSG_DATA_SIZE]u8,
+) ?ipc.Message {
+    const client_port = findPortById(port_id) orelse return null;
+    if (client_port.connected_port == 0) return null;
+    const server_port = findPortById(client_port.connected_port) orelse return null;
+    _ = ipc.send(client_pid, server_port.owner_pid, opcode, data);
     return ipc.receive(client_pid);
 }

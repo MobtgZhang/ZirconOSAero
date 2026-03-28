@@ -9,7 +9,9 @@
 //!
 //! Layout inspired by the NT registry; **no code copied** from ReactOS or Windows (see THIRD_PARTY.md).
 
+const std = @import("std");
 const klog = @import("../rtl/klog.zig");
+const ob = @import("../ob/object.zig");
 
 pub const ValueType = enum(u8) {
     none = 0,
@@ -64,6 +66,7 @@ pub const RegValue = struct {
 };
 
 pub const RegKey = struct {
+    header: ob.ObjectHeader = .{ .obj_type = .key },
     name: [MAX_KEY_NAME]u8 = [_]u8{0} ** MAX_KEY_NAME,
     name_len: u16 = 0,
     hive: HiveType = .hklm,
@@ -244,9 +247,81 @@ pub fn openKey(hive: HiveType, path: []const u8) ?u16 {
     return null;
 }
 
+/// Root key index for a hive (`HKEY_*` style name, no parent).
+pub fn getHiveRootIndex(hive: HiveType) ?u16 {
+    var i: usize = 0;
+    while (i < key_count) : (i += 1) {
+        if (!keys[i].active) continue;
+        if (keys[i].hive != hive) continue;
+        if (!keys[i].has_parent) return @intCast(i);
+    }
+    return null;
+}
+
+fn findDirectChild(parent_idx: u16, name: []const u8) ?u16 {
+    if (parent_idx >= key_count or !keys[parent_idx].active) return null;
+    const parent = &keys[parent_idx];
+    var i: u16 = 0;
+    while (i < parent.subkey_count) : (i += 1) {
+        const sk = parent.subkey_indices[i];
+        if (sk < key_count and keys[sk].active) {
+            if (strEq(keys[sk].name[0..keys[sk].name_len], name)) return sk;
+        }
+    }
+    return null;
+}
+
+/// Walk subkeys from `root_idx` using backslash-separated relative path (no leading '\').
+pub fn openKeyPathFromRoot(root_idx: u16, rel_path: []const u8) ?u16 {
+    var cur = root_idx;
+    var rest = rel_path;
+    while (rest.len > 0) {
+        if (rest[0] == '\\') {
+            rest = rest[1..];
+            continue;
+        }
+        const slash = std.mem.indexOfScalar(u8, rest, '\\');
+        const segment = if (slash) |s| rest[0..s] else rest;
+        if (segment.len > 0) {
+            cur = findDirectChild(cur, segment) orelse return null;
+        }
+        rest = if (slash) |s| rest[s + 1 ..] else "";
+    }
+    return cur;
+}
+
+const nt_machine_prefix = "\\Registry\\Machine\\";
+const nt_user_prefix = "\\Registry\\User\\";
+
+/// Resolve `\Registry\Machine\...` / `\Registry\User\...` style paths (NT Native API).
+pub fn openKeyByNtPath(full_path: []const u8) ?u16 {
+    if (full_path.len >= nt_machine_prefix.len and
+        std.mem.eql(u8, full_path[0..nt_machine_prefix.len], nt_machine_prefix))
+    {
+        const root = getHiveRootIndex(.hklm) orelse return null;
+        return openKeyPathFromRoot(root, full_path[nt_machine_prefix.len..]);
+    }
+    if (full_path.len >= nt_user_prefix.len and
+        std.mem.eql(u8, full_path[0..nt_user_prefix.len], nt_user_prefix))
+    {
+        const root = getHiveRootIndex(.hkcu) orelse return null;
+        return openKeyPathFromRoot(root, full_path[nt_user_prefix.len..]);
+    }
+    return null;
+}
+
 pub fn getKey(idx: u16) ?*const RegKey {
     if (idx >= key_count or !keys[idx].active) return null;
     return &keys[idx];
+}
+
+pub fn regKeyFromHeader(h: *ob.ObjectHeader) *RegKey {
+    return @fieldParentPtr("header", h);
+}
+
+pub fn keyHeaderPtr(idx: u16) ?*ob.ObjectHeader {
+    if (idx >= key_count or !keys[idx].active) return null;
+    return &keys[idx].header;
 }
 
 pub fn getKeyCount() usize {

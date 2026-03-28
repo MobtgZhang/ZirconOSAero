@@ -3,6 +3,7 @@
 //! Manages mount points, file objects, and directory enumeration.
 
 const ob = @import("../ob/object.zig");
+const io = @import("../io/io.zig");
 const klog = @import("../rtl/klog.zig");
 
 pub const MAX_PATH: usize = 260;
@@ -305,4 +306,54 @@ pub fn getFileCount() usize {
 
 pub fn isInitialized() bool {
     return vfs_initialized;
+}
+
+fn fileStatusToIoStatus(s: FileStatus) io.IoStatus {
+    return switch (s) {
+        .success => .success,
+        .not_found => .not_found,
+        .access_denied => .access_denied,
+        .buffer_too_small => .buffer_overflow,
+        .end_of_file => .end_of_file,
+        .invalid_parameter => .invalid_device,
+        else => .not_implemented,
+    };
+}
+
+/// Route an IRP to `FileObject` operations (I/O manager – VFS bridge; Phase 3).
+pub fn dispatchFileObjectIrp(file: *FileObject, irp: *io.Irp) io.IoStatus {
+    switch (irp.major_function) {
+        .read => {
+            if (irp.buffer_ptr == 0 or irp.buffer_size == 0) {
+                irp.status = .invalid_device;
+                return irp.status;
+            }
+            const buf: [*]u8 = @ptrFromInt(irp.buffer_ptr);
+            const rr = read(file, buf[0..irp.buffer_size]);
+            irp.bytes_transferred = rr.bytes_read;
+            irp.status = fileStatusToIoStatus(rr.status);
+            return irp.status;
+        },
+        .write => {
+            if (irp.buffer_ptr == 0) {
+                irp.status = .invalid_device;
+                return irp.status;
+            }
+            const buf: [*]const u8 = @ptrFromInt(irp.buffer_ptr);
+            const wr = write(file, buf[0..irp.buffer_size]);
+            irp.bytes_transferred = wr.bytes_written;
+            irp.status = fileStatusToIoStatus(wr.status);
+            return irp.status;
+        },
+        .close => {
+            _ = close(file);
+            irp.bytes_transferred = 0;
+            irp.status = .success;
+            return .success;
+        },
+        else => {
+            irp.status = .not_implemented;
+            return .not_implemented;
+        },
+    }
 }

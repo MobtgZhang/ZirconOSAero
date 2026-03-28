@@ -3,6 +3,7 @@
 //! IRP-style I/O request routing through device stacks
 //!
 //! Phase 3 roadmap (LPC, registry, Nt* alignment): [docs/cn/ExecutivePhase3_Milestones.md](../../docs/cn/ExecutivePhase3_Milestones.md).
+//! VFS file operations: [`vfs.dispatchFileObjectIr`](../fs/vfs.zig) builds a minimal `Irp` for read/write/close from `ntdll`.
 
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");

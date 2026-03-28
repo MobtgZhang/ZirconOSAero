@@ -158,4 +158,21 @@ pub const FrameAllocator = struct {
         }
         return null;
     }
+
+    /// 将 `[phys_start, phys_start + byte_len)` 内已在位图中标为「空闲」的页改为已用（如 QEMU ramfb 固定物理区）。
+    pub fn markPhysRangeUsed(self: *FrameAllocator, phys_start: usize, byte_len: usize) void {
+        if (byte_len == 0) return;
+        const ps = FRAME_SIZE;
+        var addr = phys_start & ~(ps - 1);
+        const end = phys_start + byte_len;
+        while (addr < end) {
+            const frame_idx: usize = addr / ps;
+            if (frame_idx >= MAX_PHYS_FRAMES) break;
+            if (self.isFree(frame_idx)) {
+                self.setUsed(frame_idx);
+                self.used_frames += 1;
+            }
+            addr += ps;
+        }
+    }
 };

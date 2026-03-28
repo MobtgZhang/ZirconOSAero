@@ -15,9 +15,6 @@ fn panicImpl(msg: []const u8, _: ?usize) noreturn {
 extern const stack_top: u8;
 extern const _kernel_end: u8;
 
-/// agent_ndjson：桌面循环心跳序号（x86 / generic 二选一，同映像共用）
-var agent_desktop_h4_tick: u32 = 0;
-
 comptime {
     switch (builtin.target.cpu.arch) {
         .aarch64 => _ = @import("arch/aarch64/mod.zig"),
@@ -28,7 +25,9 @@ comptime {
     }
 }
 
-pub export fn kernel_main(magic: u32, info_addr: usize) callconv(.c) noreturn {
+/// UEFI/汇编以 64 位寄存器传参；首参截断为 u32 供 Multiboot2 magic 比对（与 LoongArch handoff 习惯一致）。
+pub export fn kernel_main(magic_arg: usize, info_addr: usize) callconv(.c) noreturn {
+    const magic = @as(u32, @truncate(magic_arg));
     switch (builtin.target.cpu.arch) {
         .x86_64 => startX86_64(magic, info_addr),
         else => startGeneric(magic, info_addr),
@@ -66,7 +65,6 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const wow64_mod = @import("subsystems/win32/wow64.zig");
     const sys_config = @import("config/config.zig");
     const drivers = @import("drivers/mod.zig");
-    const display = drivers.video.display;
     const audio = @import("drivers/audio/audio.zig");
     const registry = @import("registry/registry.zig");
 
@@ -90,10 +88,11 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     klog.info("--- Phase 0: Loading System Configuration ---", .{});
     sys_config.init();
 
-    klog.info("Config: hostname=%s, version=%s, arch=%s", .{
+    klog.info("Config: hostname=%s, version=%s, nt_product_arch=%s host_cpu=%s", .{
         sys_config.getHostname(),
         sys_config.getVersion(),
-        sys_config.getArch(),
+        sys_config.getNtProductArch(),
+        sys_config.hostCpuArchName(),
     });
     klog.info("Config: heap=%uKB, max_procs=%u, tick=%uHz", .{
         sys_config.getHeapSizeKb(),
@@ -214,19 +213,19 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const min_pages = (kernel_end / paging.page_size) + 4096;
     const min_512mb: usize = 131072; // 512MB / 4KB = 131072 pages
     const identity_pages: usize = if (min_pages < min_512mb) min_512mb else if (min_pages < 262144) min_pages else 262144;
+    const id_bytes: u64 = @as(u64, @intCast(identity_pages)) * @as(u64, @intCast(paging.page_size));
     klog.info("VM: Identity mapping %u pages (%uMB)", .{
         identity_pages, identity_pages * paging.page_size / (1024 * 1024),
     });
-    var i: usize = 0;
-    while (i < identity_pages) : (i += 1) {
-        const virt = i * paging.page_size;
-        const flags = vm.MapFlags{ .writable = true, .executable = true };
-        if (!kernel_space.mapPage(virt, virt, flags)) {
-            klog.err("Identity map failed at 0x%x", .{virt});
-            arch.halt();
-        }
-    }
-    klog.info("VM: Identity mapping 0-%uMB OK", .{identity_pages * paging.page_size / (1024 * 1024)});
+    const id_st = vm.mapIdentityByteRange(&kernel_space, 0, id_bytes, .{ .writable = true, .executable = true }) orelse {
+        klog.err("VM: Identity map failed (mapIdentityByteRange)", .{});
+        arch.halt();
+    };
+    klog.info("VM: Identity 0-%uMB OK (huge2m=%u leaf=%u)", .{
+        identity_pages * paging.page_size / (1024 * 1024),
+        id_st.x86_huge_2m,
+        id_st.leaf_pages,
+    });
 
     // Map framebuffer region if it lies outside the identity-mapped area
     if (boot_info) |binfo| {
@@ -239,14 +238,16 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                 if (fb_base >= id_limit or fb_end > id_limit) {
                     const start_page = if (fb_base >= id_limit) fb_base / paging.page_size else identity_pages;
                     const end_page = (fb_end + paging.page_size - 1) / paging.page_size;
-                    var pg = start_page;
-                    while (pg < end_page) : (pg += 1) {
-                        const addr = pg * paging.page_size;
-                        const fb_flags = vm.MapFlags{ .writable = true, .no_cache = true };
-                        _ = kernel_space.mapPage(addr, addr, fb_flags);
-                    }
+                    const map_lo = start_page * paging.page_size;
+                    const map_hi = end_page * paging.page_size;
+                    const fb_len = map_hi - map_lo;
+                    const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = true };
+                    _ = vm.mapIdentityByteRange(&kernel_space, map_lo, fb_len, fb_flags) orelse {
+                        klog.err("VM: Framebuffer spill map failed 0x%x len 0x%x", .{ map_lo, fb_len });
+                        arch.halt();
+                    };
                     klog.info("VM: Framebuffer mapped 0x%x-0x%x (%u pages)", .{
-                        start_page * paging.page_size, end_page * paging.page_size, end_page - start_page,
+                        map_lo, map_hi, end_page - start_page,
                     });
                 }
             }
@@ -354,154 +355,16 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
     // ═══ Desktop / CMD / Text Mode Selection ═══
     if (boot_mode == .desktop or (boot_mode == .normal and has_gfx_fb and desktop_theme != .none)) {
-        klog.info("Desktop: Preparing %s theme...", .{desktopThemeName(desktop_theme)});
-
-        arch.impl.framebuffer.setConsoleEnabled(false);
-
-        if (boot_info) |binfo| {
-            if (binfo.fb_info) |fb_i| {
-                if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) {
-                    const use_fb = drivers.video.desktop_fb_resolve.resolveDesktopFramebuffer(.{
-                        .addr = fb_i.addr,
-                        .width = fb_i.width,
-                        .height = fb_i.height,
-                        .pitch = fb_i.pitch,
-                        .bpp = fb_i.bpp,
-                        .pixel_bgr = fb_i.pixel_bgr != 0,
-                    });
-                    const fb_addr = @as(usize, @truncate(use_fb.addr));
-
-                    if (!arch.impl.framebuffer.isReady()) {
-                        arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
-                    }
-                    arch.impl.framebuffer.setConsoleEnabled(false);
-
-                    drivers.initDesktopMode(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp, use_fb.pixel_bgr);
-                    user32_mod.syncScreenFromFramebuffer();
-                    display.syncCursorFromMouse();
-                    display.clearFramebuffer();
-                }
-            }
-        }
-
-        display.setTheme(.aero);
-
-        display.initAeroDwm();
-        klog.info("Desktop: DWM Aero compositor initialized (glass+shadow+smooth_cursor)", .{});
-
-        if (drivers.isDesktopReady()) {
-            klog.info("Desktop: Rendering %s theme", .{desktopThemeName(desktop_theme)});
-
-            // 桌面会话：登记等价于 dwm.exe 的壳进程 + 主 UI 线程号（便于内核统计与后续调度扩展）。
-            const ps_proc = @import("ps/process.zig");
-            if (ps_proc.createSystemProcess(&alloc, "dwm.exe")) |shell| {
-                const ui_tid = ps_proc.allocTid() orelse 0;
-                ps_proc.registerDesktopSession(shell.pid, ui_tid);
-                ps_proc.setCurrentProcess(shell.pid);
-                klog.info("Desktop: session shell PID=%u UI_TID=%u (dwm.exe)", .{ shell.pid, ui_tid });
-            } else {
-                klog.warn("Desktop: could not register dwm.exe shell process (table full?)", .{});
-            }
-
-            display.renderAeroDesktop();
-            display.present();
-            drivers.video.framebuffer.logFramebufferMemorySummary();
-            klog.info("Desktop: first frame presented (taskbar+shell+cursor)", .{});
-
-            const mouse = @import("drivers/input/mouse.zig");
-            const input_hub = @import("drivers/input/input_hub.zig");
-            const mouse_debug = @import("drivers/input/mouse_debug.zig");
-            const virtio_input_pci = @import("drivers/input/virtio_input_pci.zig");
-            var prev_buttons: u8 = 0;
-            // 与当前逻辑坐标对齐，否则 (0,0) 与初值 -32768 比较会误判「指针移动」，
-            // 在首次 present 后立即再画一整帧（第二帧关闭毛玻璃盒式模糊快速路径，易触发重负载路径）。
-            var last_draw_cx: i32 = mouse.getX();
-            var last_draw_cy: i32 = mouse.getY();
-
-            while (true) {
-                // VirtIO-Input PCI + PS/2 8042 一并排空（QEMU 可加 `-device virtio-mouse-pci`）
-                input_hub.pollAll();
-                const nudge = arch.takeCursorNudge();
-                if (nudge.dx != 0 or nudge.dy != 0) mouse.injectNudge(nudge.dx, nudge.dy);
-
-                var needs_ui_paint = false;
-                var hover_changed = false;
-
-                while (mouse.popEvent()) |event| {
-                    const cur_buttons = event.buttons;
-
-                    hover_changed = display.handleMouseMove(mouse.getX(), mouse.getY()) or hover_changed;
-
-                    if (event.scroll != 0) {
-                        needs_ui_paint = true;
-                    }
-
-                    if (cur_buttons != prev_buttons) {
-                        if (cur_buttons & 0x01 != 0 and prev_buttons & 0x01 == 0) {
-                            if (display.handleClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
-                        }
-                        if (cur_buttons & 0x01 == 0 and prev_buttons & 0x01 != 0) {
-                            display.handleMouseRelease();
-                            // 松手后必须再合成一帧，恢复任务栏毛玻璃 / 结束拖动态，否则需等指针移动才刷新。
-                            needs_ui_paint = true;
-                        }
-                        if (cur_buttons & 0x02 != 0 and prev_buttons & 0x02 == 0) {
-                            if (display.handleRightClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
-                        }
-                    }
-
-                    prev_buttons = cur_buttons;
-                }
-
-                // 再排空一轮：避免 IRQ 在 pop 循环与取样之间写入的包直到下一 tick 才被读。
-                input_hub.pollAll();
-                hover_changed = display.handleMouseMove(mouse.getX(), mouse.getY()) or hover_changed;
-
-                if (display.handleDesktopHotkeys()) needs_ui_paint = true;
-
-                const mx = mouse.getX();
-                const my = mouse.getY();
-                mouse_debug.desktopHeartbeat(mx, my, virtio_input_pci.isActive());
-                // #region agent log
-                if (@import("build_options").agent_ndjson) {
-                    agent_desktop_h4_tick +%= 1;
-                    if (agent_desktop_h4_tick % 72 == 0) {
-                        const ag = @import("debug/agent_ndjson.zig");
-                        ag.emit("H4", "main.zig:desktop", "heartbeat", "pre", @intFromBool(virtio_input_pci.isActive()), @as(u64, @intCast(agent_desktop_h4_tick)), 0, 0, mx, my);
-                    }
-                }
-                // #endregion
-                const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
-                const queued = mouse.hasEvents();
-                const scene_dirty = needs_ui_paint or hover_changed or queued or mouse.isInterpolating();
-                const cursor_dirty = pixel_moved or mouse.hasCursorMoved();
-
-                // 整帧重绘：双缓冲不能只叠画光标。
-                // 若启用鼠标插值，必须在「仍在插值」时继续合成，否则子步长为 0 时 pixel_moved 为假会死锁。
-                const need_paint = scene_dirty or cursor_dirty;
-
-                if (need_paint) {
-                    if (@import("build_options").desktop_bisect) {
-                        klog.debug("desktop: pre renderDesktopFrameEx scene_dirty=%u", .{@intFromBool(scene_dirty)});
-                    }
-                    display.renderDesktopFrameEx(scene_dirty);
-                    if (@import("build_options").desktop_bisect) {
-                        klog.debug("desktop: post renderDesktopFrameEx pre-present", .{});
-                    }
-                    display.present();
-                    // 必须在 present 之后取样：renderDesktopFrame 会排空插值并更新逻辑坐标。
-                    last_draw_cx = mouse.getX();
-                    last_draw_cy = mouse.getY();
-                } else if (mouse.hasCursorMoved()) {
-                    mouse.clearCursorMoved();
-                }
-
-                for (0..16) |_| input_hub.pollAll();
-                arch.waitForInterruptDesktop();
-            }
-        } else {
-            klog.err("Desktop: isDesktopReady=false (need multiboot framebuffer + initDesktopMode); text mode", .{});
-        }
+        enterDesktopSession(
+            &alloc,
+            boot_info,
+            desktop_theme,
+            false,
+            true,
+            true,
+            "desktop",
+            "Desktop: isDesktopReady=false (need multiboot framebuffer + initDesktopMode); text mode",
+        );
     }
 
     // Non-desktop mode: now initialize the framebuffer console for text output
@@ -518,7 +381,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     // ═══ Text Mode Fallback ═══
     klog.info("", .{});
     klog.info("=== ZirconOS v1.0 Kernel Ready ===", .{});
-    klog.info("Architecture : x86_64", .{});
+    klog.info("Architecture : %s", .{arch.impl.name});
     klog.info("Processes    : %u", .{@import("ps/process.zig").getProcessCount()});
     klog.info("Sessions     : %u", .{smss.getSessionCount()});
     klog.info("Heap         : %u/%u bytes used", .{ heap.usedBytes(), heap.totalBytes() });
@@ -562,6 +425,265 @@ fn desktopThemeName(theme: @import("arch.zig").impl.boot.DesktopTheme) []const u
         .none => "none",
         .aero => "aero",
     };
+}
+
+fn initDesktopFramebufferFromHandoff(
+    binfo: *const arch.impl.boot.BootInfo,
+    comptime extended_scanout_setup: bool,
+) void {
+    const drivers = @import("drivers/mod.zig");
+    const display = drivers.video.display;
+    const user32_mod = @import("subsystems/win32/user32.zig");
+
+    const fb_i = binfo.fb_info orelse return;
+    if (fb_i.width == 0 or fb_i.height == 0 or fb_i.bpp == 0) return;
+
+    const use_fb = drivers.video.desktop_fb_resolve.resolveDesktopFramebuffer(.{
+        .addr = fb_i.addr,
+        .width = fb_i.width,
+        .height = fb_i.height,
+        .pitch = fb_i.pitch,
+        .bpp = fb_i.bpp,
+        .pixel_bgr = if (extended_scanout_setup)
+            (if (builtin.target.cpu.arch == .x86_64) (fb_i.pixel_bgr != 0) else true)
+        else
+            (fb_i.pixel_bgr != 0),
+    });
+    const fb_addr = @as(usize, @truncate(use_fb.addr));
+
+    if (extended_scanout_setup) {
+        if (builtin.target.cpu.arch == .loongarch64) {
+            const vm = @import("mm/vm.zig");
+            const ramfb_la = @import("hal/loongarch64/ramfb.zig");
+            const fb_bytes = @as(usize, use_fb.pitch) * @as(usize, use_fb.height);
+            if (vm.remapIdentityRangeUncached(fb_addr, fb_bytes)) {
+                klog.info("VM: LoongArch scanout FB 0x%x size 0x%x → MAT_WUC (GOP/ramfb scanout)", .{
+                    fb_addr, fb_bytes,
+                });
+            } else {
+                klog.warn("VM: LoongArch framebuffer uncached remap failed — desktop may not scan out", .{});
+            }
+            if (ramfb_la.pointRamfbToGuestPhys(
+                use_fb.addr,
+                use_fb.width,
+                use_fb.height,
+                use_fb.pitch,
+            )) {
+                klog.info("ramfb: pointed QEMU scanout to GOP phys 0x%x (%ux%u stride %u)", .{
+                    @as(usize, @truncate(use_fb.addr)),
+                    use_fb.width,
+                    use_fb.height,
+                    use_fb.pitch,
+                });
+            } else if (klog.DEBUG_MODE) {
+                klog.info("ramfb: pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
+            }
+        }
+        if (builtin.target.cpu.arch == .aarch64) {
+            const a64r = @import("hal/aarch64/ramfb.zig");
+            if (a64r.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
+                klog.info("ramfb(a64): QEMU scanout → guest phys 0x%x", .{@as(usize, @truncate(use_fb.addr))});
+            } else if (klog.DEBUG_MODE) {
+                klog.info("ramfb(a64): pointRamfbToGuestPhys skipped", .{});
+            }
+        }
+        if (builtin.target.cpu.arch == .riscv64) {
+            const rvr = @import("hal/riscv64/ramfb.zig");
+            if (rvr.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
+                klog.info("ramfb(rv): QEMU scanout → guest phys 0x%x", .{@as(usize, @truncate(use_fb.addr))});
+            } else if (klog.DEBUG_MODE) {
+                klog.info("ramfb(rv): pointRamfbToGuestPhys skipped", .{});
+            }
+        }
+    }
+
+    if (!arch.impl.framebuffer.isReady()) {
+        arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
+    }
+    arch.impl.framebuffer.setConsoleEnabled(false);
+    drivers.initDesktopMode(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp, use_fb.pixel_bgr);
+    user32_mod.syncScreenFromFramebuffer();
+    display.syncCursorFromMouse();
+    display.clearFramebuffer();
+}
+
+fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
+    const drivers = @import("drivers/mod.zig");
+    const display = drivers.video.display;
+    const startmenu_mod = @import("drivers/video/startmenu.zig");
+    const builtin_apps_mod = @import("drivers/video/builtin_apps.zig");
+    const mouse = @import("drivers/input/mouse.zig");
+    const input_hub = @import("drivers/input/input_hub.zig");
+    const mouse_debug = @import("drivers/input/mouse_debug.zig");
+    const virtio_input_pci = @import("drivers/input/virtio_input_pci.zig");
+    const scheduler = @import("ke/scheduler.zig");
+
+    var prev_buttons: u8 = 0;
+    var last_draw_cx: i32 = mouse.getX();
+    var last_draw_cy: i32 = mouse.getY();
+    const desktop_extra_input_polls: u32 = if (builtin.target.cpu.arch == .loongarch64) 32 else 16;
+
+    while (true) {
+        input_hub.pollAll();
+        const nudge = arch.takeCursorNudge();
+        if (nudge.dx != 0 or nudge.dy != 0) mouse.injectNudge(nudge.dx, nudge.dy);
+
+        var needs_ui_paint = false;
+        var move_paint = display.MouseMovePaintHint{};
+        var pop_count: u32 = 0;
+
+        while (mouse.popEvent()) |event| {
+            pop_count +%= 1;
+            const cur_buttons = event.buttons;
+
+            move_paint = display.MouseMovePaintHint.merge(move_paint, display.handleMouseMove(mouse.getX(), mouse.getY()));
+
+            if (event.scroll != 0) {
+                needs_ui_paint = true;
+            }
+
+            if (cur_buttons != prev_buttons) {
+                if (cur_buttons & 0x01 != 0 and prev_buttons & 0x01 == 0) {
+                    if (display.handleClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
+                }
+                if (cur_buttons & 0x01 == 0 and prev_buttons & 0x01 != 0) {
+                    display.handleMouseRelease();
+                    needs_ui_paint = true;
+                }
+                if (cur_buttons & 0x02 != 0 and prev_buttons & 0x02 == 0) {
+                    if (display.handleRightClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
+                }
+            }
+
+            prev_buttons = cur_buttons;
+        }
+
+        input_hub.pollAll();
+        move_paint = display.MouseMovePaintHint.merge(move_paint, display.handleMouseMove(mouse.getX(), mouse.getY()));
+
+        if (display.handleDesktopHotkeys()) needs_ui_paint = true;
+        if (startmenu_mod.feedSearchFromKeyboard()) needs_ui_paint = true;
+        if (builtin_apps_mod.pollKeyboardToFocused()) needs_ui_paint = true;
+
+        const mx = mouse.getX();
+        const my = mouse.getY();
+        mouse_debug.desktopHeartbeat(mx, my, virtio_input_pci.isActive());
+        const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
+        const scene_dirty = needs_ui_paint or move_paint.needs_full_scene;
+        const interpolating = mouse.isInterpolating();
+        const startmenu_repaint = move_paint.needs_startmenu_repaint;
+        const drag_repaint = move_paint.needs_drag_repaint;
+        const caption_chrome_only = move_paint.needs_caption_chrome_only;
+        const cursor_dirty = pixel_moved or mouse.hasCursorMoved() or move_paint.cursor_shape_changed;
+
+        const need_paint = scene_dirty or cursor_dirty or caption_chrome_only or drag_repaint or startmenu_repaint or interpolating;
+
+        mouse_debug.setEventsPoppedLastTick(pop_count);
+
+        if (need_paint) {
+            const bisect = @import("build_options").desktop_bisect;
+            const t0 = if (bisect) scheduler.getTicks() else 0;
+            if (bisect) {
+                klog.debug("%s: pre renderDesktopFrameEx scene_dirty=%u caption=%u drag=%u sm=%u fb_w=%u", .{
+                    bisect_log_prefix,
+                    @intFromBool(scene_dirty),
+                    @intFromBool(caption_chrome_only),
+                    @intFromBool(drag_repaint),
+                    @intFromBool(startmenu_repaint),
+                    display.desktopFramebufferWidth(),
+                });
+            }
+            display.renderDesktopFrameEx(scene_dirty, caption_chrome_only, drag_repaint, startmenu_repaint);
+            if (bisect) {
+                klog.debug("%s: post renderDesktopFrameEx pre-present ticks=%u", .{
+                    bisect_log_prefix,
+                    @as(u32, @truncate(scheduler.getTicks() - t0)),
+                });
+            }
+            display.present();
+            last_draw_cx = mouse.getX();
+            last_draw_cy = mouse.getY();
+        } else if (mouse.hasCursorMoved()) {
+            mouse.clearCursorMoved();
+        }
+
+        for (0..desktop_extra_input_polls) |_| input_hub.pollAll();
+        arch.waitForInterruptDesktop();
+    }
+}
+
+fn enterDesktopSession(
+    alloc: *@import("mm/frame.zig").FrameAllocator,
+    boot_info_opt: ?arch.impl.boot.BootInfo,
+    desktop_theme: arch.impl.boot.DesktopTheme,
+    comptime extended_scanout: bool,
+    comptime verbose_dwm_klog: bool,
+    comptime log_dwm_session: bool,
+    comptime bisect_prefix: []const u8,
+    comptime not_ready_msg: []const u8,
+) void {
+    const drivers = @import("drivers/mod.zig");
+    const display = drivers.video.display;
+
+    klog.info("Desktop: Preparing %s theme...", .{desktopThemeName(desktop_theme)});
+    arch.impl.framebuffer.setConsoleEnabled(false);
+
+    if (boot_info_opt) |binfo| {
+        if (binfo.fb_info) |fb_i| {
+            if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) {
+                initDesktopFramebufferFromHandoff(&binfo, extended_scanout);
+            }
+        }
+    }
+
+    display.setTheme(.aero);
+    display.initAeroDwm();
+    if (verbose_dwm_klog) {
+        klog.info("Desktop: DWM Aero compositor initialized (glass+shadow+smooth_cursor)", .{});
+    } else {
+        klog.info("Desktop: DWM Aero compositor initialized", .{});
+    }
+
+    if (!drivers.isDesktopReady()) {
+        klog.err("%s", .{not_ready_msg});
+        return;
+    }
+
+    klog.info("Desktop: Rendering %s theme", .{desktopThemeName(desktop_theme)});
+
+    const ps_proc = @import("ps/process.zig");
+    if (ps_proc.createSystemProcess(alloc, "dwm.exe")) |shell| {
+        const ui_tid = ps_proc.allocTid() orelse 0;
+        ps_proc.registerDesktopSession(shell.pid, ui_tid);
+        ps_proc.setCurrentProcess(shell.pid);
+        if (log_dwm_session) {
+            klog.info("Desktop: session shell PID=%u UI_TID=%u (dwm.exe)", .{ shell.pid, ui_tid });
+        }
+    } else {
+        if (log_dwm_session) {
+            klog.warn("Desktop: could not register dwm.exe shell process (table full?)", .{});
+        }
+    }
+
+    display.renderAeroDesktop();
+    display.present();
+    // LoongArch + ramfb：部分 QEMU 组合在首帧像素落盘后再 point 一次 fw_cfg，主窗更易绑定到实际扫描缓冲（AeroDesktopRuntime.md）。
+    if (extended_scanout and builtin.target.cpu.arch == .loongarch64) {
+        const fb_drv = drivers.video.framebuffer;
+        const gaddr = fb_drv.getAddress();
+        fb_drv.fenceScanoutVisibleWrites();
+        const ramfb_la = @import("hal/loongarch64/ramfb.zig");
+        const gw = fb_drv.getWidth();
+        const gh = fb_drv.getHeight();
+        const gp = fb_drv.getPitch();
+        if (gw > 0 and gh > 0 and gp > 0) {
+            _ = ramfb_la.pointRamfbToGuestPhys(@as(u64, @truncate(gaddr)), gw, gh, gp);
+        }
+    }
+    drivers.video.framebuffer.logFramebufferMemorySummary();
+    klog.info("Desktop: first frame presented (taskbar+shell+cursor)", .{});
+
+    runDesktopMainLoop(bisect_prefix);
 }
 
 // ── ZBM 串口菜单（与 boot/zbm/uefi/main_loongarch64.zig 样式对齐：箭头、边框、描述、ENTER/ESC）──
@@ -651,8 +773,6 @@ fn showZbmStyleBootMenu() void {
 
 fn startGeneric(magic: u32, info_addr: usize) noreturn {
     const boot = arch.impl.boot;
-    const drivers = @import("drivers/mod.zig");
-    const display = drivers.video.display;
     const vm = @import("mm/vm.zig");
     var loong_kernel_space: ?vm.AddressSpace = null;
     const frame = @import("mm/frame.zig");
@@ -686,6 +806,23 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     arch.initSerial();
 
+    // 极早 handoff 诊断（UEFI→kernel）：区分「未进内核」与「进内核后崩溃」；与 ZBM 写入的 mb2_phys 对照。
+    switch (builtin.target.cpu.arch) {
+        .aarch64 => {
+            const ab = @import("arch/aarch64/boot.zig");
+            klog.info("HandoffDiag(a64): multiboot_magic=0x%x reg_x1=0x%x vec_mb2_phys=0x%x", .{
+                magic, info_addr, ab.uefiVectorMb2PhysForDiag(),
+            });
+        },
+        .riscv64 => {
+            const rb = @import("arch/riscv64/boot.zig");
+            klog.info("HandoffDiag(rv): multiboot_magic=0x%x reg_a1=0x%x vec_mb2_phys=0x%x (UART MMIO 0x10000000)", .{
+                magic, info_addr, rb.uefiVectorMb2PhysForDiag(),
+            });
+        },
+        else => {},
+    }
+
     klog.info("========================================", .{});
     klog.info("  ZirconOS v1.0 (NT-style Hybrid Microkernel)", .{});
     klog.info("  Architecture: %s", .{arch.impl.name});
@@ -705,25 +842,75 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     var boot_info = boot.parse(magic, info_addr);
 
+    if (builtin.target.cpu.arch == .aarch64) {
+        if (boot_info) |bi| {
+            klog.info("BootHandoff(a64): mmap_entries=%u mem_upper_kb=%u multiboot_fb=%s", .{
+                bi.mmap_entry_count,
+                bi.mem_upper_kb,
+                if (bi.fb_info != null) "yes" else "no",
+            });
+        } else {
+            klog.warn("BootHandoff(a64): boot.parse returned null", .{});
+        }
+    }
+    if (builtin.target.cpu.arch == .riscv64) {
+        if (boot_info) |bi| {
+            klog.info("BootHandoff(rv): mmap_entries=%u mem_upper_kb=%u multiboot_fb=%s", .{
+                bi.mmap_entry_count,
+                bi.mem_upper_kb,
+                if (bi.fb_info != null) "yes" else "no",
+            });
+        } else {
+            klog.warn("BootHandoff(rv): boot.parse returned null", .{});
+        }
+    }
+
     var alloc: frame.FrameAllocator = undefined;
     // LoongArch：尽早初始化 alloc + VM，map 2GB 以覆盖 GOP framebuffer（可能 >512MB）
     if (builtin.target.cpu.arch == .loongarch64) {
+        // 首选分辨率：`sys_config` 嵌入的 desktop.conf `[resolution]`（由 sync_resolution_config 与 build.conf 对齐）；无效时回退 build_options。
+        const bo_w = @import("build_options").kernel_preferred_fb_width;
+        const bo_h = @import("build_options").kernel_preferred_fb_height;
+        const cw64 = sys_config.getResolutionWidth();
+        const ch64 = sys_config.getResolutionHeight();
+        var pref_w: u32 = if (cw64 >= 320 and cw64 <= 16384) @truncate(cw64) else bo_w;
+        var pref_h: u32 = if (ch64 >= 240 and ch64 <= 16384) @truncate(ch64) else bo_h;
+        if (pref_w == 0) pref_w = if (bo_w != 0) bo_w else 1024;
+        if (pref_h == 0) pref_h = if (bo_h != 0) bo_h else 768;
+
+        var loong_discarded_gop: ?boot.FramebufferInfo = null;
+
         // QEMU GTK 往往只扫「固件 GOP」窗口；若 ZBM 已将 GOP SetMode 到 ≥1024×768，handoff 与该窗口同源，应直接使用。
-        // 否则丢弃过小/非线性 GOP，由 ramfb.setup() 写 0xF000000（部分 QEMU 配置下窗口仍不跟 ramfb，见文档）。
+        // 否则丢弃过小/非线性 GOP，由 ramfb.setupWithDims 写 0xF000000（部分 QEMU 配置下窗口仍不跟 ramfb，见文档）。
         if (boot_info) |bi_in| {
             var bi_mut = bi_in;
-            const gop_ok = if (bi_mut.fb_info) |fb|
-                (fb.width >= 1024 and fb.height >= 768 and fb.addr != 0 and fb.bpp == 32)
-            else
-                false;
-            if (!gop_ok) {
-                if (bi_mut.fb_info != null) {
-                    klog.info("Display: GOP handoff not ≥1024x768; using ramfb @ RAMFB_PHYS", .{});
+            const gop_ok = if (bi_mut.fb_info) |fb| blk: {
+                if (fb.addr == 0 or fb.bpp != 32) break :blk false;
+                if (fb.width < 1024 or fb.height < 768) break :blk false;
+                // 与 build.conf / ZBM 首选一致：固件 GOP 常仅为 1024×768；低于首选则改用 ramfb+fw_cfg（常为 1920×1080）
+                if (pref_w != 0 and pref_h != 0 and (fb.width < pref_w or fb.height < pref_h)) {
+                    klog.info("Display: GOP %ux%u below build preferred %ux%u; ramfb @ RAMFB_PHYS", .{
+                        fb.width, fb.height, pref_w, pref_h,
+                    });
+                    break :blk false;
                 }
+                break :blk true;
+            } else false;
+            if (!gop_ok) {
+                if (bi_mut.fb_info) |fb| {
+                    const skipped_as_below_pref = pref_w != 0 and pref_h != 0 and
+                        (fb.width < pref_w or fb.height < pref_h);
+                    if (!skipped_as_below_pref) {
+                        klog.info("Display: GOP %ux%u not used (min/resolution/bpp); ramfb @ RAMFB_PHYS", .{
+                            fb.width, fb.height,
+                        });
+                    }
+                }
+                loong_discarded_gop = bi_mut.fb_info;
                 bi_mut.fb_info = null;
             } else {
-                klog.info("Display: using UEFI GOP %ux%u (same as QEMU primary scanout)", .{
-                    bi_mut.fb_info.?.width, bi_mut.fb_info.?.height,
+                klog.info("Display: using UEFI GOP %ux%u (meets preferred %ux%u)", .{
+                    bi_mut.fb_info.?.width, bi_mut.fb_info.?.height, pref_w, pref_h,
                 });
             }
             boot_info = bi_mut;
@@ -734,6 +921,25 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         klog.info("Memory: LoongArch kernel_end=0x%x (_kernel_end aligned)", .{la_k_end});
         alloc.init(boot_info, la_k_end);
         frame.setKernelFrameAllocator(&alloc);
+
+        const ramfb = @import("hal/loongarch64/ramfb.zig");
+        // QEMU ramfb 扫描使用固定 GPA 0x0F000000..；若在此之后才对 `markPhysRangeUsed`，
+        // `createAddressSpace` 的页表帧可能已分配到该区间，与屏缓冲重叠 → 缺页/花屏/「无法进桌面」。
+        // 仅 1024×768 等与 GOP 一致时保留 handoff、不走 ramfb，故以往不易触发。
+        const need_ramfb_scanout = if (boot_info) |b|
+            (b.fb_info == null or b.fb_info.?.addr == 0)
+        else
+            true;
+        if (need_ramfb_scanout) {
+            const ramfb_rsv = ramfb.framebufferReservedBytesDims(pref_w, pref_h);
+            if (ramfb_rsv > 0) {
+                alloc.markPhysRangeUsed(ramfb.RAMFB_PHYS, ramfb_rsv);
+                klog.info("LoongArch: ramfb scanout reserved %u bytes @0x%x (before page tables)", .{
+                    @as(u32, @truncate(ramfb_rsv)), ramfb.RAMFB_PHYS,
+                });
+            }
+        }
+
         const paging = arch.impl.paging;
         if (vm.createAddressSpace(&alloc)) |ks| {
             loong_kernel_space = ks;
@@ -741,15 +947,14 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             // 0–2GiB：GOP/ramfb；GPU MMIO 若落在 2–4GiB，`vm.mapDeviceMmioIdentity` 会按需建 identity 非缓存映射
             const identity_pages: usize = (2 * 1024 * 1024 * 1024) / paging.page_size;
             const id_limit: usize = identity_pages * paging.page_size;
-            var i: usize = 0;
-            while (i < identity_pages) : (i += 1) {
-                const virt = i * paging.page_size;
-                const flags = vm.MapFlags{ .writable = true, .executable = true };
-                if (!kernel_space.mapPage(virt, virt, flags)) {
-                    klog.err("LoongArch: identity map failed at 0x%x (check UEFI mmap / frame pool)", .{virt});
-                    arch.halt();
-                }
-            }
+            const id_bytes_la: u64 = @as(u64, @intCast(id_limit));
+            const la_id_st = vm.mapIdentityByteRange(kernel_space, 0, id_bytes_la, .{ .writable = true, .executable = true }) orelse {
+                klog.err("LoongArch: identity map failed (mapIdentityByteRange)", .{});
+                arch.halt();
+            };
+            klog.info("VM: LoongArch identity stats la32m=%u leaf=%u", .{
+                la_id_st.la_blocks_32m, la_id_st.leaf_pages,
+            });
             // virtio-gpu / 部分固件 GOP 帧缓冲落在 PCI BAR（物理地址 ≥2GiB）；仅 map 低 2GiB 时访问桌面会缺页
             if (boot_info) |binfo| {
                 if (binfo.fb_info) |fb_i| {
@@ -759,15 +964,14 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                         if (fb_bytes != 0) {
                             const fb_end = fb_base + fb_bytes;
                             const va_limit = (fb_end + paging.page_size - 1) & ~@as(usize, paging.page_size - 1);
-                            var va = fb_base;
-                            while (va < va_limit) : (va += paging.page_size) {
-                                if (va >= id_limit) {
-                                    const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = true };
-                                    if (!kernel_space.mapPage(va, va, fb_flags)) {
-                                        klog.err("LoongArch: framebuffer map failed at 0x%x (past 2GiB)", .{va});
-                                        arch.halt();
-                                    }
-                                }
+                            const map_lo = @max(fb_base, id_limit);
+                            if (map_lo < va_limit) {
+                                const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = true };
+                                const spill_len = @as(u64, @intCast(va_limit - map_lo));
+                                _ = vm.mapIdentityByteRange(kernel_space, @as(u64, @intCast(map_lo)), spill_len, fb_flags) orelse {
+                                    klog.err("LoongArch: framebuffer spill map failed 0x%x", .{map_lo});
+                                    arch.halt();
+                                };
                             }
                             if (fb_base >= id_limit or fb_end > id_limit) {
                                 klog.info("VM: LoongArch scanout FB 0x%x..0x%x (touched ≥2GiB; extra uncached PTEs)", .{
@@ -782,10 +986,9 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             vm.bindKernelAddressSpace(kernel_space);
             klog.info("VM: LoongArch identity map 0-2GB (covers GOP fb; BAR>2G via mapDeviceMmioIdentity)", .{});
         }
-        const ramfb = @import("hal/loongarch64/ramfb.zig");
         const has_gop_fb = if (boot_info) |b| (b.fb_info != null and b.fb_info.?.addr != 0) else false;
         if (!has_gop_fb) {
-            if (ramfb.setup()) |fb_i| {
+            if (ramfb.setupWithDims(pref_w, pref_h)) |fb_i| {
                 var bi = boot_info orelse boot.BootInfo{};
                 bi.fb_info = .{
                     .addr = fb_i.addr,
@@ -796,12 +999,26 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                     .fb_type = fb_i.fb_type,
                 };
                 boot_info = bi;
+                const rsv = ramfb.framebufferReservedBytesDims(fb_i.width, fb_i.height);
+                if (rsv > 0) {
+                    alloc.markPhysRangeUsed(@as(usize, @truncate(fb_i.addr)), rsv);
+                }
                 klog.info("ramfb: %ux%u@%u addr=0x%x", .{
-                    fb_i.width, fb_i.height, fb_i.bpp,
+                    fb_i.width,                       fb_i.height, fb_i.bpp,
                     @as(usize, @truncate(fb_i.addr)),
                 });
             } else {
-                klog.warn("ramfb: setup failed, no framebuffer", .{});
+                klog.warn("ramfb: setupWithDims failed — no framebuffer (check QEMU -device ramfb and fw_cfg etc/ramfb; see docs/cn/AeroDesktopRuntime.md LoongArch GOP vs ramfb)", .{});
+                if (loong_discarded_gop) |dg| {
+                    if (dg.addr != 0 and dg.bpp == 32 and dg.width >= 1024 and dg.height >= 768) {
+                        var bi = boot_info orelse boot.BootInfo{};
+                        bi.fb_info = dg;
+                        boot_info = bi;
+                        klog.warn("LoongArch: restored UEFI GOP %ux%u (ramfb/fw_cfg failed; desktop at firmware res)", .{
+                            dg.width, dg.height,
+                        });
+                    }
+                }
             }
         } else {
             klog.info("Display: using GOP framebuffer from handoff (same surface as firmware)", .{});
@@ -816,7 +1033,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     }
 
     if (builtin.target.cpu.arch != .loongarch64) {
-        const k_reserved = ( @intFromPtr(&_kernel_end) + 4095 ) & ~@as(usize, 4095);
+        const k_reserved = (@intFromPtr(&_kernel_end) + 4095) & ~@as(usize, 4095);
         alloc.init(boot_info, k_reserved);
         frame.setKernelFrameAllocator(&alloc);
     }
@@ -829,10 +1046,36 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             virt_qemu_kernel_space = ks;
             const ksp = &virt_qemu_kernel_space.?;
             const npg = (2 * 1024 * 1024 * 1024) / paging.page_size;
+            const id_limit: usize = npg * paging.page_size;
             var ip: usize = 0;
             while (ip < npg) : (ip += 1) {
                 const v = ip * paging.page_size;
                 _ = ksp.mapPage(v, v, .{ .writable = true, .executable = true });
+            }
+            // virtio-gpu / GOP 帧缓冲可落在 PCI BAR（物理 ≥2GiB）；勿对 AArch64 用 no_cache（MAIR_EL1 未配全）
+            if (boot_info) |binfo| {
+                if (binfo.fb_info) |fb_i| {
+                    if (fb_i.addr != 0 and fb_i.height > 0 and fb_i.pitch > 0) {
+                        const fb_base = @as(usize, @truncate(fb_i.addr)) & ~@as(usize, paging.page_size - 1);
+                        const fb_bytes = @as(usize, fb_i.pitch) * @as(usize, fb_i.height);
+                        if (fb_bytes != 0) {
+                            const fb_end = fb_base + fb_bytes;
+                            const va_limit = (fb_end + paging.page_size - 1) & ~@as(usize, paging.page_size - 1);
+                            const map_lo = @max(fb_base, id_limit);
+                            if (map_lo < va_limit) {
+                                const spill_len = @as(u64, @intCast(va_limit - map_lo));
+                                const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = false };
+                                _ = vm.mapIdentityByteRange(ksp, @as(u64, @intCast(map_lo)), spill_len, fb_flags) orelse {
+                                    klog.err("AArch64: framebuffer spill map failed 0x%x", .{map_lo});
+                                    arch.halt();
+                                };
+                            }
+                            if (fb_base >= id_limit or fb_end > id_limit) {
+                                klog.info("VM: AArch64 scanout FB spill 0x%x..0x%x", .{ fb_base, fb_end });
+                            }
+                        }
+                    }
+                }
             }
             ksp.activate();
             vm.bindKernelAddressSpace(ksp);
@@ -856,6 +1099,10 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                         .fb_type = rf.fb_type,
                         .pixel_bgr = 1,
                     };
+                    const rsv = a64_ramfb.framebufferReservedBytes();
+                    if (rsv > 0) {
+                        alloc.markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
+                    }
                     klog.info("Display: AArch64 ramfb %ux%u @0x%x (no linear UEFI GOP from boot loader)", .{
                         rf.width, rf.height, @as(usize, @truncate(rf.addr)),
                     });
@@ -871,6 +1118,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             const ksp = &virt_qemu_kernel_space.?;
             const flags = vm.MapFlags{ .writable = true, .executable = true };
             const n_low = (2 * 1024 * 1024 * 1024) / paging.page_size;
+            const id_limit: usize = n_low * paging.page_size;
             var ip: usize = 0;
             while (ip < n_low) : (ip += 1) {
                 const v = ip * paging.page_size;
@@ -882,9 +1130,62 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                 const v = 0x80000000 + ip * paging.page_size;
                 _ = ksp.mapPage(v, v, flags);
             }
+            if (boot_info) |binfo| {
+                if (binfo.fb_info) |fb_i| {
+                    if (fb_i.addr != 0 and fb_i.height > 0 and fb_i.pitch > 0) {
+                        const fb_base = @as(usize, @truncate(fb_i.addr)) & ~@as(usize, paging.page_size - 1);
+                        const fb_bytes = @as(usize, fb_i.pitch) * @as(usize, fb_i.height);
+                        if (fb_bytes != 0) {
+                            const fb_end = fb_base + fb_bytes;
+                            const va_limit = (fb_end + paging.page_size - 1) & ~@as(usize, paging.page_size - 1);
+                            const map_lo = @max(fb_base, id_limit);
+                            if (map_lo < va_limit) {
+                                const spill_len = @as(u64, @intCast(va_limit - map_lo));
+                                const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = false };
+                                _ = vm.mapIdentityByteRange(ksp, @as(u64, @intCast(map_lo)), spill_len, fb_flags) orelse {
+                                    klog.err("RISC-V64: framebuffer spill map failed 0x%x", .{map_lo});
+                                    arch.halt();
+                                };
+                            }
+                            if (fb_base >= id_limit or fb_end > id_limit) {
+                                klog.info("VM: RISC-V64 scanout FB spill 0x%x..0x%x", .{ fb_base, fb_end });
+                            }
+                        }
+                    }
+                }
+            }
             ksp.activate();
             vm.bindKernelAddressSpace(ksp);
-            klog.info("VM: RISC-V64 identity map low 2GiB + RAM@0x80000000 (512MiB)", .{});
+            klog.info("VM: RISC-V64 identity map low 2GiB + RAM@0x80000000 (512MiB); fw_cfg for ramfb @0x10100000 mapped in low 2GiB", .{});
+        }
+        if (boot_info) |*bi| {
+            const fb_ok = if (bi.fb_info) |fb|
+                (fb.addr != 0 and fb.width >= 640 and fb.height >= 480 and fb.pitch > 0 and fb.bpp == 32)
+            else
+                false;
+            if (!fb_ok) {
+                const rv_ramfb = @import("hal/riscv64/ramfb.zig");
+                if (rv_ramfb.setup()) |rf| {
+                    bi.fb_info = .{
+                        .addr = rf.addr,
+                        .pitch = rf.pitch,
+                        .width = rf.width,
+                        .height = rf.height,
+                        .bpp = rf.bpp,
+                        .fb_type = rf.fb_type,
+                        .pixel_bgr = 1,
+                    };
+                    const rsv = rv_ramfb.framebufferReservedBytes();
+                    if (rsv > 0) {
+                        alloc.markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
+                    }
+                    klog.info("Display: RISC-V64 ramfb %ux%u @0x%x (no linear UEFI GOP from boot loader)", .{
+                        rf.width, rf.height, @as(usize, @truncate(rf.addr)),
+                    });
+                } else {
+                    klog.warn("ramfb(rv): no linear FB and fw_cfg ramfb missing — add -device ramfb (see Makefile QEMU_RISCV64_EXTRA)", .{});
+                }
+            }
         }
     }
     if (boot_info) |info| {
@@ -991,154 +1292,16 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     });
 
     if (boot_mode == .desktop or (boot_mode == .normal and has_gfx_fb and desktop_theme != .none)) {
-        klog.info("Desktop: Preparing %s theme...", .{desktopThemeName(desktop_theme)});
-        arch.impl.framebuffer.setConsoleEnabled(false);
-        if (boot_info) |binfo| {
-            if (binfo.fb_info) |fb_i| {
-                if (fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) {
-                    const use_fb = drivers.video.desktop_fb_resolve.resolveDesktopFramebuffer(.{
-                        .addr = fb_i.addr,
-                        .width = fb_i.width,
-                        .height = fb_i.height,
-                        .pitch = fb_i.pitch,
-                        .bpp = fb_i.bpp,
-                        .pixel_bgr = if (builtin.target.cpu.arch == .x86_64) (fb_i.pixel_bgr != 0) else true,
-                    });
-                    const fb_addr = @as(usize, @truncate(use_fb.addr));
-                    if (builtin.target.cpu.arch == .loongarch64) {
-                        const fb_bytes = @as(usize, use_fb.pitch) * @as(usize, use_fb.height);
-                        if (vm.remapIdentityRangeUncached(fb_addr, fb_bytes)) {
-                            klog.info("VM: LoongArch scanout FB 0x%x size 0x%x → uncached (GOP/ramfb visible)", .{
-                                fb_addr, fb_bytes,
-                            });
-                        } else {
-                            klog.warn("VM: LoongArch framebuffer uncached remap failed — desktop may not scan out", .{});
-                        }
-                        const ramfb = @import("hal/loongarch64/ramfb.zig");
-                        if (ramfb.pointRamfbToGuestPhys(
-                            use_fb.addr,
-                            use_fb.width,
-                            use_fb.height,
-                            use_fb.pitch,
-                        )) {
-                            klog.info("ramfb: pointed QEMU scanout to GOP phys 0x%x (%ux%u stride %u)", .{
-                                @as(usize, @truncate(use_fb.addr)),
-                                use_fb.width,
-                                use_fb.height,
-                                use_fb.pitch,
-                            });
-                        } else if (klog.DEBUG_MODE) {
-                            klog.info("ramfb: pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
-                        }
-                    }
-                    if (builtin.target.cpu.arch == .aarch64) {
-                        // 勿对 ramfb/GOP RAM 调用 `remapIdentityRangeUncached`：AArch64 上 `no_cache` 当前映射为
-                        // PTE AttrIdx=1，而内核未编程 MAIR_EL1；固件下索引 1 多为 Device 内存，对 RAM 做 memcpy 会 Data Abort。
-                        // 保持 Phase 1 identity 映射的 Normal WB 即可；QEMU ramfb 区域仍为常规 DRAM。
-                        const a64r = @import("hal/aarch64/ramfb.zig");
-                        if (a64r.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
-                            klog.info("ramfb(a64): QEMU scanout → guest phys 0x%x", .{@as(usize, @truncate(use_fb.addr))});
-                        } else if (klog.DEBUG_MODE) {
-                            klog.info("ramfb(a64): pointRamfbToGuestPhys skipped", .{});
-                        }
-                    }
-                    if (!arch.impl.framebuffer.isReady()) {
-                        arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
-                    }
-                    arch.impl.framebuffer.setConsoleEnabled(false);
-                    // LoongArch ramfb / UEFI GOP：线性缓冲通常为 BGRx；x86 Multiboot 用元数据 pixel_bgr
-                    drivers.initDesktopMode(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp, use_fb.pixel_bgr);
-                    user32_mod.syncScreenFromFramebuffer();
-                    display.syncCursorFromMouse();
-                    display.clearFramebuffer();
-                }
-            }
-        }
-        display.setTheme(.aero);
-        display.initAeroDwm();
-        klog.info("Desktop: DWM Aero compositor initialized", .{});
-        if (drivers.isDesktopReady()) {
-            klog.info("Desktop: Rendering %s theme", .{desktopThemeName(desktop_theme)});
-            const ps_proc = @import("ps/process.zig");
-            if (ps_proc.createSystemProcess(&alloc, "dwm.exe")) |shell| {
-                const ui_tid = ps_proc.allocTid() orelse 0;
-                ps_proc.registerDesktopSession(shell.pid, ui_tid);
-                ps_proc.setCurrentProcess(shell.pid);
-            }
-            display.renderAeroDesktop();
-            display.present();
-            drivers.video.framebuffer.logFramebufferMemorySummary();
-            const mouse = @import("drivers/input/mouse.zig");
-            const input_hub = @import("drivers/input/input_hub.zig");
-            const mouse_debug = @import("drivers/input/mouse_debug.zig");
-            const virtio_input_pci = @import("drivers/input/virtio_input_pci.zig");
-            var prev_buttons: u8 = 0;
-            var last_draw_cx: i32 = mouse.getX();
-            var last_draw_cy: i32 = mouse.getY();
-            while (true) {
-                input_hub.pollAll();
-                const nudge2 = arch.takeCursorNudge();
-                if (nudge2.dx != 0 or nudge2.dy != 0) mouse.injectNudge(nudge2.dx, nudge2.dy);
-                var needs_ui_paint = false;
-                var hover_changed = false;
-                while (mouse.popEvent()) |event| {
-                    const cur_buttons = event.buttons;
-                    hover_changed = display.handleMouseMove(mouse.getX(), mouse.getY()) or hover_changed;
-                    if (event.scroll != 0) needs_ui_paint = true;
-                    if (cur_buttons != prev_buttons) {
-                        if (cur_buttons & 0x01 != 0 and prev_buttons & 0x01 == 0) {
-                            if (display.handleClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
-                        }
-                        if (cur_buttons & 0x01 == 0 and prev_buttons & 0x01 != 0) {
-                            display.handleMouseRelease();
-                            needs_ui_paint = true;
-                        }
-                        if (cur_buttons & 0x02 != 0 and prev_buttons & 0x02 == 0) {
-                            if (display.handleRightClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
-                        }
-                    }
-                    prev_buttons = cur_buttons;
-                }
-                input_hub.pollAll();
-                hover_changed = display.handleMouseMove(mouse.getX(), mouse.getY()) or hover_changed;
-                if (display.handleDesktopHotkeys()) needs_ui_paint = true;
-                const mx = mouse.getX();
-                const my = mouse.getY();
-                mouse_debug.desktopHeartbeat(mx, my, virtio_input_pci.isActive());
-                // #region agent log
-                if (@import("build_options").agent_ndjson) {
-                    agent_desktop_h4_tick +%= 1;
-                    if (agent_desktop_h4_tick % 72 == 0) {
-                        const ag = @import("debug/agent_ndjson.zig");
-                        ag.emit("H4", "main.zig:desktop_generic", "heartbeat", "pre", @intFromBool(virtio_input_pci.isActive()), @as(u64, @intCast(agent_desktop_h4_tick)), 0, 0, mx, my);
-                    }
-                }
-                // #endregion
-                const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
-                const queued = mouse.hasEvents();
-                const scene_dirty = needs_ui_paint or hover_changed or queued or mouse.isInterpolating();
-                const cursor_dirty = pixel_moved or mouse.hasCursorMoved();
-                const need_paint = scene_dirty or cursor_dirty;
-                if (need_paint) {
-                    if (@import("build_options").desktop_bisect) {
-                        klog.debug("desktop_generic: pre renderDesktopFrameEx scene_dirty=%u", .{@intFromBool(scene_dirty)});
-                    }
-                    display.renderDesktopFrameEx(scene_dirty);
-                    if (@import("build_options").desktop_bisect) {
-                        klog.debug("desktop_generic: post renderDesktopFrameEx pre-present", .{});
-                    }
-                    display.present();
-                    last_draw_cx = mouse.getX();
-                    last_draw_cy = mouse.getY();
-                } else if (mouse.hasCursorMoved()) {
-                    mouse.clearCursorMoved();
-                }
-                for (0..16) |_| input_hub.pollAll();
-                arch.waitForInterruptDesktop();
-            }
-        } else {
-            klog.err("Desktop: isDesktopReady=false", .{});
-        }
+        enterDesktopSession(
+            &alloc,
+            boot_info,
+            desktop_theme,
+            true,
+            false,
+            false,
+            "desktop_generic",
+            "Desktop: isDesktopReady=false",
+        );
     }
 
     cmd_mod.runBootSequence();

@@ -2,6 +2,7 @@
 //! Manages kernel objects with unified header, handle table, namespace,
 //! reference counting, waitable objects, and lifecycle management.
 
+const std = @import("std");
 const klog = @import("../rtl/klog.zig");
 
 pub const ObjectType = enum(u16) {
@@ -110,6 +111,12 @@ pub const HandleTable = struct {
     }
 
     pub fn allocHandle(self: *HandleTable, object_ptr: u64, access: ACCESS_MASK, obj_type: ObjectType) ?Handle {
+        if (object_ptr == 0) return null;
+        // One reference per handle; balanced in closeHandle via release().
+        referenceObject(object_ptr);
+        const hdr = @as(*ObjectHeader, @ptrFromInt(object_ptr));
+        hdr.handle_count += 1;
+
         for (self.entries[0..], 0..) |*entry, i| {
             if (entry.object_ptr == 0) {
                 entry.object_ptr = object_ptr;
@@ -119,6 +126,9 @@ pub const HandleTable = struct {
                 return @intCast(i);
             }
         }
+        // Roll back on table full
+        if (hdr.handle_count > 0) hdr.handle_count -= 1;
+        _ = dereferenceObject(object_ptr);
         return null;
     }
 
@@ -192,6 +202,7 @@ pub fn init() void {
     registerType(.directory, "Directory");
     registerType(.symbolic_link, "SymbolicLink");
     registerType(.timer_obj, "Timer");
+    registerType(.key, "Key");
 
     ob_initialized = true;
     klog.info("Object Manager: %u types registered", .{type_count});
@@ -364,4 +375,16 @@ pub fn isObjectSignaled(object_ptr: u64) bool {
     if (object_ptr == 0) return false;
     const hdr = @as(*const ObjectHeader, @ptrFromInt(object_ptr));
     return hdr.signal_state;
+}
+
+test "handle table alloc increments ref_count and handle_count" {
+    var hdr = ObjectHeader{ .obj_type = .event, .ref_count = 1 };
+    var table = HandleTable.init(1);
+    const h = table.allocHandle(@intFromPtr(&hdr), GENERIC_READ, .event);
+    try std.testing.expect(h != null);
+    try std.testing.expectEqual(@as(u32, 2), hdr.ref_count);
+    try std.testing.expectEqual(@as(u32, 1), hdr.handle_count);
+    try std.testing.expect(table.closeHandle(h.?));
+    try std.testing.expectEqual(@as(u32, 1), hdr.ref_count);
+    try std.testing.expectEqual(@as(u32, 0), hdr.handle_count);
 }

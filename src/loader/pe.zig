@@ -2,6 +2,11 @@
 //! Phase 7-11 Enhanced: DLL loading, import resolution, relocation,
 //! section mapping, process context (PEB/TEB), image management,
 //! and PE32 (32-bit) support for WOW64 compatibility.
+//!
+//! **对齐要点（公开规范，clean-room）**：Microsoft PE COFF / PE 格式说明中的
+//! `SizeOfHeaders`、`SectionAlignment`、`FileAlignment`、节 `VirtualAddress`/`VirtualSize`。
+//! 将映像提交到用户地址空间时，须通过 `mm/vm.AddressSpace.mapPage*` 按页对齐映射，
+//! 并与 `mm/vm.VirtualCommitPhase`（Reserve/Commit 分阶段） eventual 一致；不得假设与 Windows 加载器实现相同的数据结构布局。
 
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
@@ -718,18 +723,18 @@ fn initSystemDlls() void {
         img.addExport("NtCreateProcess", 0x1000, 1);
         img.addExport("NtTerminateProcess", 0x1020, 2);
         img.addExport("NtCreateThread", 0x1040, 3);
-        img.addExport("NtCreateFile", 0x1060, 4);
-        img.addExport("NtReadFile", 0x1080, 5);
-        img.addExport("NtWriteFile", 0x10A0, 6);
+        img.addExport("NtCreateFile", 0x1060, 11);
+        img.addExport("NtReadFile", 0x1080, 9);
+        img.addExport("NtWriteFile", 0x10A0, 9);
         img.addExport("NtClose", 0x10C0, 7);
         img.addExport("NtCreatePort", 0x10E0, 8);
         img.addExport("NtRequestWaitReplyPort", 0x1100, 9);
         img.addExport("NtAllocateVirtualMemory", 0x1120, 10);
         img.addExport("NtFreeVirtualMemory", 0x1140, 11);
         img.addExport("NtQuerySystemInformation", 0x1160, 12);
-        img.addExport("NtQueryInformationProcess", 0x1180, 13);
-        img.addExport("NtSetInformationProcess", 0x11A0, 14);
-        img.addExport("NtOpenFile", 0x11C0, 15);
+        img.addExport("NtQueryInformationProcess", 0x1180, 5);
+        img.addExport("NtSetInformationProcess", 0x11A0, 4);
+        img.addExport("NtOpenFile", 0x11C0, 6);
         img.addExport("NtCreateEvent", 0x11E0, 16);
         img.addExport("NtWaitForSingleObject", 0x1200, 17);
         img.addExport("RtlInitUnicodeString", 0x2000, 100);

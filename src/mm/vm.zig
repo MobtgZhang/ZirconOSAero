@@ -2,9 +2,60 @@
 //! NT style: provides address space, map/unmap, permissions
 //! Kernel provides mechanism; policy is in user-space services
 
+const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const paging = arch.impl.paging;
 const FrameAllocator = @import("frame.zig").FrameAllocator;
+
+/// `mapIdentityByteRange` 统计：x86_64 填 `x86_huge_2m`，LoongArch 填 `la_blocks_32m`，其余为 `leaf_pages`。
+pub const IdentityMapStats = struct {
+    x86_huge_2m: usize = 0,
+    la_blocks_32m: usize = 0,
+    leaf_pages: usize = 0,
+};
+
+/// 按架构快速建立 **identity** 映射 `[range_start, range_start+range_len)`（`virt==phys`）。
+/// - x86_64：优先 2MiB 大页，头尾不足 2MiB 用 4KiB（`mapPage` 遇大页会按需拆分）。
+/// - LoongArch：优先 32MiB 整块填第三级表（2048×16KiB），余量逐 `mapPage`。
+/// - 其它架构：逐叶映射。
+pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u64, flags: MapFlags) ?IdentityMapStats {
+    if (range_len == 0) return IdentityMapStats{};
+    const ps: u64 = @intCast(paging.page_size);
+    var va = range_start & ~(ps - 1);
+    const range_end = range_start + range_len;
+    var st = IdentityMapStats{};
+    const pflags = flags.toPagingFlags();
+
+    while (va < range_end) {
+        if (builtin.cpu.arch == .x86_64 and @hasDecl(paging, "map2MiBPage") and @hasDecl(paging, "HUGE_PAGE_SIZE")) {
+            const huge: u64 = paging.HUGE_PAGE_SIZE;
+            if ((va % huge) == 0 and va + huge <= range_end) {
+                if (paging.map2MiBPage(space.pml4_phys, va, va, pflags, allocFrameCb, space.allocator)) {
+                    st.x86_huge_2m += 1;
+                    va += huge;
+                    continue;
+                }
+            }
+        }
+        if (builtin.cpu.arch == .loongarch64 and
+            @hasDecl(paging, "mapIdentity32MiBlock") and
+            @hasDecl(paging, "identity_bulk_bytes"))
+        {
+            const blk: u64 = paging.identity_bulk_bytes;
+            if ((va % blk) == 0 and va + blk <= range_end) {
+                if (paging.mapIdentity32MiBlock(space.pml4_phys, va, pflags, allocFrameCb, space.allocator)) {
+                    st.la_blocks_32m += 1;
+                    va += blk;
+                    continue;
+                }
+            }
+        }
+        if (!space.mapPage(va, va, flags)) return null;
+        st.leaf_pages += 1;
+        va += ps;
+    }
+    return st;
+}
 
 pub const MapFlags = struct {
     writable: bool = false,
@@ -20,6 +71,25 @@ pub const MapFlags = struct {
         if (self.no_cache) f |= paging.CacheDisable;
         return f;
     }
+};
+
+/// NT 6.1 虚拟分配阶段（公开文档：`ZwAllocateVirtualMemory` / `VirtualAlloc` 的 MEM_RESERVE vs MEM_COMMIT）。
+/// - **Reserved**：VA 区间计入地址空间，无页表 Present / 无物理页。
+/// - **Committed**：页表项有效并具备后备（匿名页或段视图）。
+/// 当前内核中 `mapPage` / `mapPageAlloc` / `mapRange` 表示已提交映射；独占式 VAD + 先 reserve 再按需 commit 为后续里程碑。
+pub const VirtualCommitPhase = enum(u8) {
+    reserved = 0,
+    committed = 1,
+};
+
+/// 与 `NtAllocateVirtualMemory` 常见失败分类的语义对应（返回值仍用 `NtStatus` 在 syscall 层映射）。
+pub const VirtualAllocFailureKind = enum(u8) {
+    none = 0,
+    invalid_parameter = 1,
+    no_memory = 2,
+    conflicting_addresses = 3,
+    access_denied = 4,
+    not_committed = 5,
 };
 
 /// 当前内核地址空间（供 PCI MMIO / VirtIO 等在驱动层做 identity map）
@@ -120,7 +190,7 @@ pub const AddressSpace = struct {
 
     pub fn unmapPage(self: *AddressSpace, virt: u64) ?u64 {
         const phys = self.getPhysical(virt) orelse return null;
-        _ = paging.unmapPage(self.pml4_phys, virt);
+        _ = paging.unmapPage(self.pml4_phys, virt, allocFrameCb, @ptrCast(self.allocator));
         return phys;
     }
 

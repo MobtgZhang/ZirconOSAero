@@ -54,6 +54,11 @@ fn pushChar(c: u8) void {
     ring_tail = next;
 }
 
+/// 与 Evdev 解码路径共用输入环（屏幕键盘、自动化测试）。
+pub fn injectSyntheticChar(c: u8) void {
+    pushChar(c);
+}
+
 pub fn readChar() ?u8 {
     if (ring_head == ring_tail) return null;
     const c = ring[ring_head];

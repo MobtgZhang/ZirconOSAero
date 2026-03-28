@@ -32,6 +32,9 @@ const BTN_LEFT: u16 = 0x0110;
 const BTN_RIGHT: u16 = 0x0111;
 const BTN_MIDDLE: u16 = 0x0112;
 
+/// QEMU `virtio-tablet` 等常见 ABS 上界（Linux evdev 惯例）；无能力查询时的默认标度。
+const ABS_AXIS_MAX_DEFAULT: i32 = 32767;
+
 const VIRTIO_F_VERSION_1: u32 = 1;
 
 const STATUS_ACK: u8 = 1;
@@ -78,6 +81,8 @@ const VirtioInputInst = struct {
     tab_have_y: bool = false,
     tab_x: i32 = 0,
     tab_y: i32 = 0,
+    /// 本 SYN 报告周期内收到过 ABS 轴更新（在 EV_SYN 上映射到像素位移）。
+    abs_frame_dirty: bool = false,
     /// 本 PCI 实例是否发过指针类事件（REL/ABS 坐标/鼠标键）；纯键盘实例的空 SYN 不调用 mouse.deliver。
     has_pointer_ev: bool = false,
 };
@@ -183,6 +188,7 @@ fn availRingIndex(inst: *VirtioInputInst, i: u16) *volatile u16 {
 
 fn usedRingElem(inst: *VirtioInputInst, i: u16) struct { id: u32, len: u32 } {
     const qs = inst.queue_size;
+    if (qs == 0) return .{ .id = 0, .len = 0 };
     const p = @intFromPtr(&inst.ring_page) + inst.used_off + 4 + @as(usize, @intCast(@as(u32, i) % @as(u32, qs))) * 8;
     const id = @as(*volatile u32, @ptrFromInt(p)).*;
     const ln = @as(*volatile u32, @ptrFromInt(p + 4)).*;
@@ -191,6 +197,18 @@ fn usedRingElem(inst: *VirtioInputInst, i: u16) struct { id: u32, len: u32 } {
 
 fn descTable(inst: *VirtioInputInst) [*]VirtqDesc {
     return @as([*]VirtqDesc, @ptrFromInt(@intFromPtr(&inst.ring_page) + inst.desc_off));
+}
+
+/// 将 evdev ABS 值映射到像素坐标 [0 .. extent-1]（VirtIO Input / QEMU tablet 常用 0..32767）。
+fn mapAbsToPixel(abs_val: i32, extent_px: i32) i32 {
+    if (extent_px <= 1) return 0;
+    const maxv: i32 = ABS_AXIS_MAX_DEFAULT;
+    const v = std.math.clamp(abs_val, 0, maxv);
+    // `extent_px - 1` 在 i32 上若遇异常 extent 可能 Debug 溢出；用 i64 与 `framebuffer`/`material` 注释同源。
+    const ext1 = @as(i64, extent_px) - 1;
+    const num = @as(i64, v) * ext1;
+    const den = @as(i64, maxv);
+    return @intCast(@divTrunc(num, den));
 }
 
 fn kickQueue0(inst: *VirtioInputInst) void {
@@ -208,6 +226,24 @@ fn kickQueue0(inst: *VirtioInputInst) void {
 }
 
 fn syncDeliver(inst: *VirtioInputInst) void {
+    if (inst.abs_frame_dirty) {
+        if (inst.tab_have_x and inst.tab_have_y) {
+            const sw = mouse.getScreenWidth();
+            const sh = mouse.getScreenHeight();
+            if (sw > 0 and sh > 0) {
+                const px = mapAbsToPixel(inst.tab_x, sw);
+                const py = mapAbsToPixel(inst.tab_y, sh);
+                const adx = @as(i64, px) - @as(i64, mouse.getX());
+                const ady = @as(i64, py) - @as(i64, mouse.getY());
+                const sx = @as(i64, inst.acc_dx) + adx;
+                const sy = @as(i64, inst.acc_dy) + ady;
+                inst.acc_dx = @intCast(std.math.clamp(sx, -32768, 32767));
+                inst.acc_dy = @intCast(std.math.clamp(sy, -32768, 32767));
+            }
+        }
+        inst.abs_frame_dirty = false;
+    }
+
     const idle = inst.acc_dx == 0 and inst.acc_dy == 0 and inst.acc_scroll == 0 and inst.hid_buttons == 0;
     if (idle and !inst.has_pointer_ev) return;
 
@@ -264,24 +300,15 @@ fn parseLinuxInput(inst: *VirtioInputInst, le_pkt: *const [LINUX_INPUT_EVENT_SZ]
             }
         },
         EV_ABS => {
+            // 平板 ABS 为「设备归一化坐标」，须在 EV_SYN 时按当前屏大小映射为像素再求位移（勿把原始 ABS 差分当像素）。
             if (code == ABS_X) {
                 inst.has_pointer_ev = true;
-                if (inst.tab_have_x) {
-                    const d64 = @as(i64, val) - @as(i64, inst.tab_x);
-                    const d = std.math.clamp(d64, -32768, 32767);
-                    const sum = @as(i64, inst.acc_dx) + d;
-                    inst.acc_dx = @intCast(std.math.clamp(sum, -32768, 32767));
-                }
+                inst.abs_frame_dirty = true;
                 inst.tab_x = val;
                 inst.tab_have_x = true;
             } else if (code == ABS_Y) {
                 inst.has_pointer_ev = true;
-                if (inst.tab_have_y) {
-                    const d64 = @as(i64, val) - @as(i64, inst.tab_y);
-                    const d = std.math.clamp(d64, -32768, 32767);
-                    const sum = @as(i64, inst.acc_dy) + d;
-                    inst.acc_dy = @intCast(std.math.clamp(sum, -32768, 32767));
-                }
+                inst.abs_frame_dirty = true;
                 inst.tab_y = val;
                 inst.tab_have_y = true;
             }
@@ -330,14 +357,18 @@ fn failDevice(inst: *VirtioInputInst, st: u8) void {
 
 fn pollOne(inst: *VirtioInputInst, inst_i: u8) void {
     if (!inst.active) return;
+    const qs: u32 = inst.queue_size;
+    if (qs == 0) return;
 
     if (inst.isr_base != 0) {
         _ = mmio_r8(inst.isr_base, 0);
     }
 
     // 每轮重读 used.idx；勿在热路径写串口（agent_ndjson），否则易与 QEMU 串口背压叠加成假死。
-    const qs: u32 = inst.queue_size;
-    const max_iters: u32 = @max(64, @as(u32, qs) * 64);
+    // qs*128 用 u64 再饱和到 u32，避免异常/损坏 queue_size 在 Debug 下触发 u32 乘法 integer overflow。
+    const prod64 = @as(u64, qs) *% 128;
+    const capped: u32 = @intCast(@min(prod64, @as(u64, std.math.maxInt(u32))));
+    const max_iters: u32 = @max(128, capped);
     var iter: u32 = 0;
     while (iter < max_iters) : (iter += 1) {
         fullMemoryFence();
@@ -366,8 +397,11 @@ fn pollOne(inst: *VirtioInputInst, inst_i: u8) void {
 
 pub fn poll() void {
     if (!pcie.supports_pci_config) return;
-    for (&instances, 0..) |*inst, j| {
-        pollOne(inst, @truncate(j));
+    // 两轮：一批 used 元数据在处理中途可见时，第二轮可继续排空，减少跨主循环 tick 的阶跃。
+    for (0..2) |_| {
+        for (&instances, 0..) |*inst, j| {
+            pollOne(inst, @truncate(j));
+        }
     }
 }
 
@@ -552,7 +586,8 @@ pub fn init() void {
     if (!pcie.supports_pci_config) return;
 
     var locs: [MAX_INST + 4]pcie.PciLoc = undefined;
-    const max_bus: u8 = if (builtin.target.cpu.arch == .x86_64) 0 else 7;
+    // x86_64：默认 QEMU `pc` 在 bus0；若用户挂 pci-bridge 或换机型，VirtIO Input 可能落在 bus1–2。
+    const max_bus: u8 = if (builtin.target.cpu.arch == .x86_64) 2 else 7;
     const n = pcie.collectVirtioInputDevices(locs[0..], max_bus);
 
     if (n == 0) {
@@ -599,4 +634,17 @@ pub fn isActive() bool {
         if (inst.active) return true;
     }
     return false;
+}
+
+/// 显示分辨率或指针边界变化后调用：丢弃 ABS 基线，避免 tablet 与 `mouse` 坐标脱节。
+pub fn resetPointerBaseline() void {
+    for (&instances) |*inst| {
+        inst.tab_have_x = false;
+        inst.tab_have_y = false;
+        inst.abs_frame_dirty = false;
+        inst.acc_dx = 0;
+        inst.acc_dy = 0;
+        inst.acc_scroll = 0;
+        inst.has_pointer_ev = false;
+    }
 }

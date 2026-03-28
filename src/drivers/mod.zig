@@ -1,7 +1,7 @@
 //! ZirconOS Driver Module Root
 //! Centralized kernel-mode driver load order (NT 6.x–style: bus → class → PnP stack).
-//! Reference: WDM driver model, ReactOS `drivers/` tree, Windows Driver Kit (KMDF concepts
-//! mapped onto this kernel’s `io.Irp` + `registerDriver` / `createDevice`).
+//! Reference: WDM driver model (Microsoft Learn / WDK), KMDF concepts mapped onto this kernel’s
+//! `io.Irp` + `registerDriver` / `createDevice`.
 //!
 //! Categories:
 //!   bus/      - PCI/PCIe configuration (Type 1 host access)
@@ -196,15 +196,22 @@ pub fn initAudioDrivers() void {
     });
 }
 
+/// GOP/桌面表面逻辑尺寸变化时统一更新指针边界、VirtIO ABS 基线与 DWM 光标状态（未来 `IOCTL_DISPLAY_SET_MODE` 亦应调用）。
+pub fn notifyDisplayGeometryChanged(width: u32, height: u32) void {
+    input.mouse.setScreenBounds(@intCast(width), @intCast(height));
+    input.virtio_input_pci.resetPointerBaseline();
+    if (is_x86) {
+        input.mouse.reassertStreamEnable();
+    }
+    video.display.syncCursorFromMouse();
+}
+
 pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr: bool) void {
     video.display.initDesktopMode(fb_addr, width, height, pitch, bpp, pixel_bgr);
     video.hdmi.syncFramebufferMode(width, height, bpp);
 
-    input.mouse.setScreenBounds(@intCast(width), @intCast(height));
     input.mouse.setPosition(@intCast(width / 2), @intCast(height / 2));
-    if (is_x86) {
-        input.mouse.reassertStreamEnable();
-    }
+    notifyDisplayGeometryChanged(width, height);
 
     klog.info("Drivers: Desktop display mode enabled (%ux%u@%ubpp)", .{ width, height, bpp });
     klog.info("Desktop: fb %ux%u pitch=%u bpp=%u BGR=%u mouse=(%d,%d) bounds=%ux%u", .{

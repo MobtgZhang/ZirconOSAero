@@ -2,7 +2,7 @@
 //! 表面标志语义见 `src/config/dwm_surface_spec.zig`、`docs/cn/DesktopManagerSpec.md`。
 
 const klog = @import("../../rtl/klog.zig");
-const nt61 = @import("dwm_nt61_defaults");
+const zircon_aero = @import("zircon_aero_defaults");
 const fb = @import("framebuffer.zig");
 const material = @import("material.zig");
 
@@ -51,19 +51,19 @@ pub const SurfaceFlags = struct {
 };
 
 pub const AeroConfig = struct {
-    glass_enabled: bool = nt61.KernelDwm.glass_enabled,
-    glass_opacity: u8 = nt61.KernelDwm.glass_opacity,
-    blur_radius: u8 = nt61.KernelDwm.glass_blur_radius,
-    blur_passes: u8 = nt61.KernelDwm.glass_blur_passes,
-    saturation: u8 = nt61.KernelDwm.glass_saturation,
-    tint_color: u32 = nt61.KernelDwm.glass_tint_color,
-    tint_opacity: u8 = nt61.KernelDwm.glass_tint_opacity,
-    specular_intensity: u8 = nt61.KernelDwm.specular_intensity,
-    shadow_layers: u8 = nt61.KernelCompositor.shadow_layers,
-    shadow_offset: u8 = nt61.KernelCompositor.shadow_offset,
-    peek_enabled: bool = nt61.KernelCompositor.peek_enabled,
-    flip3d_enabled: bool = nt61.KernelCompositor.flip3d_enabled,
-    animation_speed: u16 = nt61.KernelCompositor.animation_speed,
+    glass_enabled: bool = zircon_aero.KernelDwm.glass_enabled,
+    glass_opacity: u8 = zircon_aero.KernelDwm.glass_opacity,
+    blur_radius: u8 = zircon_aero.KernelDwm.glass_blur_radius,
+    blur_passes: u8 = zircon_aero.KernelDwm.glass_blur_passes,
+    saturation: u8 = zircon_aero.KernelDwm.glass_saturation,
+    tint_color: u32 = zircon_aero.KernelDwm.glass_tint_color,
+    tint_opacity: u8 = zircon_aero.KernelDwm.glass_tint_opacity,
+    specular_intensity: u8 = zircon_aero.KernelDwm.specular_intensity,
+    shadow_layers: u8 = zircon_aero.KernelCompositor.shadow_layers,
+    shadow_offset: u8 = zircon_aero.KernelCompositor.shadow_offset,
+    peek_enabled: bool = zircon_aero.KernelCompositor.peek_enabled,
+    flip3d_enabled: bool = zircon_aero.KernelCompositor.flip3d_enabled,
+    animation_speed: u16 = zircon_aero.KernelCompositor.animation_speed,
 };
 
 const MAX_SURFACES: usize = 128;

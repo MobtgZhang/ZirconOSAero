@@ -64,8 +64,9 @@ pub const MouseState = struct {
     acceleration_enabled: bool = false,
     acceleration_threshold: i32 = 3,
     acceleration_curve: i32 = 5,
-    interpolation_enabled: bool = false,
-    interpolation_steps: u8 = 1,
+    /// 子步插值：单轮 `input_hub.pollAll` 内合并后的位移拆成多帧，减轻阶跃感。
+    interpolation_enabled: bool = true,
+    interpolation_steps: u8 = 3,
     interpolation_idx: u8 = 0,
     smoothing_enabled: bool = false,
     cursor_moved: bool = false,
@@ -84,6 +85,12 @@ var partial_packet_base_tick: u64 = 0;
 /// 半包起始时的 `poll_invocations`（tick 不前进时仍能丢弃错位半包）。
 var partial_packet_start_poll: u64 = 0;
 var poll_invocations: u64 = 0;
+
+/// 单轮 `input_hub.pollAll` 内合并相对运动（VirtIO 多包 REL_X/REL_Y），再一次性缩放/入队。
+var motion_coalesce_active: bool = false;
+var motion_coalesce_dx: i32 = 0;
+var motion_coalesce_dy: i32 = 0;
+var motion_coalesce_has: bool = false;
 
 var mouse_state: MouseState = .{};
 var driver_idx: u32 = 0;
@@ -147,13 +154,15 @@ fn mouseWrite(byte: u8) u8 {
 /// 键盘方向键 / VirtIO 键盘等注入的相对位移（兜底路径，不依赖 PS/2 鼠标流）。
 pub fn injectNudge(dx: i32, dy: i32) void {
     if (dx == 0 and dy == 0) return;
-    mouse_state.x = clampedAddI32(mouse_state.x, dx);
-    mouse_state.y = clampedAddI32(mouse_state.y, dy);
+    const cdx = std.math.clamp(dx, -32768, 32767);
+    const cdy = std.math.clamp(dy, -32768, 32767);
+    mouse_state.x = clampedAddI32(mouse_state.x, cdx);
+    mouse_state.y = clampedAddI32(mouse_state.y, cdy);
     clampPosition();
     mouse_state.cursor_moved = true;
     pushEvent(.{
-        .dx = @truncate(dx),
-        .dy = @truncate(dy),
+        .dx = @truncate(cdx),
+        .dy = @truncate(cdy),
         .buttons = mouse_state.buttons,
     });
 }
@@ -257,8 +266,54 @@ fn clampedAddI32(a: i32, b: i32) i32 {
     return clampToI32(@as(i64, a) + @as(i64, b));
 }
 
+pub fn beginMotionCoalesce() void {
+    motion_coalesce_active = true;
+    motion_coalesce_dx = 0;
+    motion_coalesce_dy = 0;
+    motion_coalesce_has = false;
+}
+
+fn flushMotionCoalesce() void {
+    if (!motion_coalesce_has) return;
+    motion_coalesce_has = false;
+    const dx = motion_coalesce_dx;
+    const dy = motion_coalesce_dy;
+    motion_coalesce_dx = 0;
+    motion_coalesce_dy = 0;
+    deliverMouseEventUncoalesced(.{
+        .dx = @truncate(std.math.clamp(dx, -32768, 32767)),
+        .dy = @truncate(std.math.clamp(dy, -32768, 32767)),
+        .buttons = mouse_state.buttons,
+        .scroll = 0,
+    });
+}
+
+pub fn endMotionCoalesce() void {
+    flushMotionCoalesce();
+    motion_coalesce_active = false;
+}
+
 /// VirtIO-Input / 其它 HID 总线汇总的相对运动（dx、dy 为设备原始增量，语义与 PS/2 包内一致）
 pub fn deliverMouseEvent(event: MouseEvent) void {
+    if (motion_coalesce_active) {
+        if (event.scroll != 0 or event.buttons != mouse_state.buttons) {
+            flushMotionCoalesce();
+            deliverMouseEventUncoalesced(event);
+            return;
+        }
+        if (event.dx == 0 and event.dy == 0 and event.scroll == 0 and event.buttons == mouse_state.buttons) {
+            return;
+        }
+        motion_coalesce_dx = clampToI32(@as(i64, motion_coalesce_dx) + @as(i64, event.dx));
+        motion_coalesce_dy = clampToI32(@as(i64, motion_coalesce_dy) + @as(i64, event.dy));
+        motion_coalesce_has = true;
+        return;
+    }
+
+    deliverMouseEventUncoalesced(event);
+}
+
+fn deliverMouseEventUncoalesced(event: MouseEvent) void {
     // 丢弃完全重复的报告（常见于 VirtIO SYN），减轻事件队列与主循环负担。
     if (event.dx == 0 and event.dy == 0 and event.scroll == 0 and event.buttons == mouse_state.buttons) {
         return;
@@ -311,8 +366,12 @@ pub fn deliverMouseEvent(event: MouseEvent) void {
         mouse_state.raw_y = clampedAddI32(mouse_state.raw_y, dy_scaled);
         clampRawPosition();
 
-        mouse_state.sub_x = @divTrunc(mouse_state.raw_x - mouse_state.x, mouse_state.interpolation_steps);
-        mouse_state.sub_y = @divTrunc(mouse_state.raw_y - mouse_state.y, mouse_state.interpolation_steps);
+        // i64 差分：极端 clamp/插值状态下 raw 与 display 可能短暂不同向，避免 i32 减法在 Debug 下溢出 panic。
+        const rdx = @as(i64, mouse_state.raw_x) - @as(i64, mouse_state.x);
+        const rdy = @as(i64, mouse_state.raw_y) - @as(i64, mouse_state.y);
+        const st = @as(i64, mouse_state.interpolation_steps);
+        mouse_state.sub_x = clampToI32(@divTrunc(rdx, st));
+        mouse_state.sub_y = clampToI32(@divTrunc(rdy, st));
         mouse_state.interpolation_idx = mouse_state.interpolation_steps;
 
         interpolateStep();
@@ -452,6 +511,16 @@ pub fn getX() i32 {
 
 pub fn getY() i32 {
     return mouse_state.y;
+}
+
+/// 当前指针钳位用的逻辑宽度（与 `setScreenBounds` / 桌面 GOP 一致）。
+pub fn getScreenWidth() i32 {
+    return mouse_state.screen_width;
+}
+
+/// 当前指针钳位用的逻辑高度。
+pub fn getScreenHeight() i32 {
+    return mouse_state.screen_height;
 }
 
 pub fn isLeftPressed() bool {

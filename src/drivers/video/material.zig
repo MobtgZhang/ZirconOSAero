@@ -304,16 +304,28 @@ pub fn applyRoundedClip(x: i32, y: i32, w: i32, h: i32, radius: u8) void {
 
 // ── Effect Helpers ──
 
+/// 扫描线终点 `min(start + extent, fb_lim)`；禁止对负坐标做 `i32→u32` 再与 `extent` 相加（Debug 会 integer overflow）。
+fn rectScanEnd(start: u32, extent: u32, fb_lim: u32) u32 {
+    const e = @as(u64, start) + @as(u64, extent);
+    const lim = @as(u64, fb_lim);
+    return @intCast(@min(e, lim));
+}
+
 fn applyNoiseOverlay(x: i32, y: i32, w: i32, h: i32, intensity: u8) void {
     const w_u: u32 = @intCast(if (w < 0) 0 else w);
     const h_u: u32 = @intCast(if (h < 0) 0 else h);
     const fb_w: u32 = fb.getWidth();
     const fb_h: u32 = fb.getHeight();
 
-    var py: u32 = @intCast(if (y < 0) 0 else y);
-    while (py < @as(u32, @intCast(y)) + h_u and py < fb_h) : (py += 1) {
-        var px: u32 = @intCast(if (x < 0) 0 else x);
-        while (px < @as(u32, @intCast(x)) + w_u and px < fb_w) : (px += 1) {
+    const x0: u32 = @intCast(if (x < 0) 0 else x);
+    const y0: u32 = @intCast(if (y < 0) 0 else y);
+    const x_end = rectScanEnd(x0, w_u, fb_w);
+    const y_end = rectScanEnd(y0, h_u, fb_h);
+
+    var py: u32 = y0;
+    while (py < y_end) : (py += 1) {
+        var px: u32 = x0;
+        while (px < x_end) : (px += 1) {
             const noise = pseudoNoise(px, py);
             const noise_val: i32 = @as(i32, @intCast(noise)) - 128;
             const scaled = @divTrunc(noise_val * @as(i32, intensity), 255);
@@ -342,10 +354,15 @@ fn applyLuminosityTint(x: i32, y: i32, w: i32, h: i32, tint: u32, opacity: u8, l
     const w_u: u32 = @intCast(if (w < 0) 0 else w);
     const h_u: u32 = @intCast(if (h < 0) 0 else h);
 
-    var py: u32 = @intCast(if (y < 0) 0 else y);
-    while (py < @as(u32, @intCast(y)) + h_u and py < fb_h) : (py += 1) {
-        var px: u32 = @intCast(if (x < 0) 0 else x);
-        while (px < @as(u32, @intCast(x)) + w_u and px < fb_w) : (px += 1) {
+    const x0: u32 = @intCast(if (x < 0) 0 else x);
+    const y0: u32 = @intCast(if (y < 0) 0 else y);
+    const x_end = rectScanEnd(x0, w_u, fb_w);
+    const y_end = rectScanEnd(y0, h_u, fb_h);
+
+    var py: u32 = y0;
+    while (py < y_end) : (py += 1) {
+        var px: u32 = x0;
+        while (px < x_end) : (px += 1) {
             const pixel = fb.getPixel32(px, py);
             const pr: u32 = (pixel >> 0) & 0xFF;
             const pg: u32 = (pixel >> 8) & 0xFF;
@@ -371,10 +388,15 @@ fn applyDesaturate(x: i32, y: i32, w: i32, h: i32, amount: u8) void {
     const w_u: u32 = @intCast(if (w < 0) 0 else w);
     const h_u: u32 = @intCast(if (h < 0) 0 else h);
 
-    var py: u32 = @intCast(if (y < 0) 0 else y);
-    while (py < @as(u32, @intCast(y)) + h_u and py < fb_h) : (py += 1) {
-        var px: u32 = @intCast(if (x < 0) 0 else x);
-        while (px < @as(u32, @intCast(x)) + w_u and px < fb_w) : (px += 1) {
+    const x0: u32 = @intCast(if (x < 0) 0 else x);
+    const y0: u32 = @intCast(if (y < 0) 0 else y);
+    const x_end = rectScanEnd(x0, w_u, fb_w);
+    const y_end = rectScanEnd(y0, h_u, fb_h);
+
+    var py: u32 = y0;
+    while (py < y_end) : (py += 1) {
+        var px: u32 = x0;
+        while (px < x_end) : (px += 1) {
             const pixel = fb.getPixel32(px, py);
             const r_val: u32 = (pixel >> 0) & 0xFF;
             const g_val: u32 = (pixel >> 8) & 0xFF;
@@ -400,10 +422,15 @@ fn applyLuminosityNormalize(x: i32, y: i32, w: i32, h: i32, target_lum: u8) void
     const h_u: u32 = @intCast(if (h < 0) 0 else h);
     const tl: u32 = @intCast(target_lum);
 
-    var py: u32 = @intCast(if (y < 0) 0 else y);
-    while (py < @as(u32, @intCast(y)) + h_u and py < fb_h) : (py += 1) {
-        var px: u32 = @intCast(if (x < 0) 0 else x);
-        while (px < @as(u32, @intCast(x)) + w_u and px < fb_w) : (px += 1) {
+    const x0: u32 = @intCast(if (x < 0) 0 else x);
+    const y0: u32 = @intCast(if (y < 0) 0 else y);
+    const x_end = rectScanEnd(x0, w_u, fb_w);
+    const y_end = rectScanEnd(y0, h_u, fb_h);
+
+    var py: u32 = y0;
+    while (py < y_end) : (py += 1) {
+        var px: u32 = x0;
+        while (px < x_end) : (px += 1) {
             const pixel = fb.getPixel32(px, py);
             const r_val: u32 = (pixel >> 0) & 0xFF;
             const g_val: u32 = (pixel >> 8) & 0xFF;

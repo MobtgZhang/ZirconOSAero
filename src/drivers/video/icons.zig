@@ -6,7 +6,7 @@ fn rgb(r: u32, g: u32, b: u32) u32 {
     return b | (g << 8) | (r << 16);
 }
 
-/// 与 `src/desktop/aero/src/resource_loader.zig` 内置图标 ID 一致（1–17）；14+ 为壳层辅助并在 loader 中登记路径。
+/// 与 `src/desktop/aero/src/resource_loader.zig` 内置图标 ID 一致（1–25）；14–17 为辅助；18–25 为驱动器/状态等扩展。
 pub const IconId = enum(u8) {
     computer = 1,
     documents = 2,
@@ -25,6 +25,14 @@ pub const IconId = enum(u8) {
     user = 15,
     lock = 16,
     shutdown = 17,
+    recycle_bin_full = 18,
+    drive_fixed = 19,
+    drive_removable = 20,
+    drive_optical = 21,
+    printer = 22,
+    info = 23,
+    warning = 24,
+    err = 25,
 };
 
 pub const ThemeStyle = enum(u8) {
@@ -51,6 +59,14 @@ pub const SvgIconPaths = struct {
     user: []const u8,
     lock: []const u8,
     shutdown: []const u8,
+    recycle_bin_full: []const u8,
+    drive_fixed: []const u8,
+    drive_removable: []const u8,
+    drive_optical: []const u8,
+    printer: []const u8,
+    info: []const u8,
+    warning: []const u8,
+    err: []const u8,
 };
 
 pub fn getSvgPaths(style: ThemeStyle) SvgIconPaths {
@@ -74,16 +90,32 @@ pub fn getSvgPaths(style: ThemeStyle) SvgIconPaths {
         .user = p ++ "user.svg",
         .lock = p ++ "lock.svg",
         .shutdown = p ++ "shutdown.svg",
+        .recycle_bin_full = p ++ "recycle_bin_full.svg",
+        .drive_fixed = p ++ "drive_fixed.svg",
+        .drive_removable = p ++ "drive_removable.svg",
+        .drive_optical = p ++ "drive_optical.svg",
+        .printer = p ++ "printer.svg",
+        .info = p ++ "info.svg",
+        .warning = p ++ "warning.svg",
+        .err = p ++ "error.svg",
     };
 }
 
-/// 16×16 位图仅覆盖 1–13；辅助 ID 映射到最接近的内置形。
+/// 16×16 位图仅覆盖 1–13；辅助与扩展 ID 映射到最接近的内置字形。
 pub fn bitmapIconId(id: IconId) IconId {
     return switch (id) {
         .file => .folder,
         .user => .computer,
         .lock => .settings,
         .shutdown => .recycle_bin,
+        .recycle_bin_full => .recycle_bin,
+        .drive_fixed => .computer,
+        .drive_removable => .folder,
+        .drive_optical => .computer,
+        .printer => .settings,
+        .info => .settings,
+        .warning => .documents,
+        .err => .recycle_bin,
         else => id,
     };
 }

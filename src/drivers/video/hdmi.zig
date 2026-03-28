@@ -1,6 +1,6 @@
 //! HDMI Display Output Driver (NT-style Miniport)
 //! Manages HDMI/DVI/DisplayPort output for digital display connections.
-//! Reference: ReactOS drivers/video/ and WDDM display driver model
+//! Reference: WDK / Microsoft Learn — display driver model and EDID concepts (clean-room stub).
 //!
 //! HDMI output requires a display controller (e.g. Intel HD Graphics, AMD,
 //! or a virtual GPU in QEMU/VirtualBox). This driver provides the HDMI

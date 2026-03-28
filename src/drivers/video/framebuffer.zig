@@ -3,6 +3,7 @@
 //! Original ZirconOS implementation; registers `\\Driver\\Framebuf` / `\\Device\\Framebuf0`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 const cjk_font = @import("cjk_font.zig");
@@ -606,6 +607,16 @@ pub fn drawTextTransparentUi(x: i32, y: i32, text: []const u8, fg: u32) void {
     drawTextTransparent(x, y, text, fg);
 }
 
+/// `drawTextTransparentUi` 在矩形内水平垂直居中（字宽与 `textWidth` / UTF-8 路径一致）。
+pub fn drawTextTransparentUiCenteredInRect(rx: i32, ry: i32, rw: i32, rh: i32, text: []const u8, fg: u32) void {
+    if (rw <= 0 or rh <= 0) return;
+    const tw = textWidth(text);
+    var tx = rx + @divTrunc(rw - tw, 2);
+    if (tx < rx) tx = rx;
+    const ty = ry + @divTrunc(rh - @as(i32, CHAR_H), 2);
+    drawTextTransparentUi(tx, ty, text, fg);
+}
+
 /// 2× / 3× scaled glyphs for taskbar and status lines (clearer than 8×16 on large panels).
 pub fn drawCharTransparentScaled(x: i32, y: i32, ch: u8, fg: u32, scale: u32) void {
     if (scale < 1) return;
@@ -616,8 +627,8 @@ pub fn drawCharTransparentScaled(x: i32, y: i32, ch: u8, fg: u32, scale: u32) vo
         var dx: u32 = 0;
         while (dx < CHAR_W) : (dx += 1) {
             if ((bits >> @intCast(7 - dx)) & 1 != 0) {
-                const px = x + @as(i32, @intCast(dx * scale));
-                const py = y + @as(i32, @intCast(dy * scale));
+                const px = x + @as(i32, @intCast(@as(u64, dx) *% @as(u64, scale)));
+                const py = y + @as(i32, @intCast(@as(u64, dy) *% @as(u64, scale)));
                 fillRect(px, py, @as(i32, @intCast(scale)), @as(i32, @intCast(scale)), fg);
             }
         }
@@ -627,9 +638,10 @@ pub fn drawCharTransparentScaled(x: i32, y: i32, ch: u8, fg: u32, scale: u32) vo
 pub fn drawTextTransparentScaled(x: i32, y: i32, text: []const u8, fg: u32, scale: u32) void {
     if (scale < 1) return;
     var cx = x;
-    const adv: i32 = @as(i32, @intCast(CHAR_W * scale));
+    const adv: i32 = @as(i32, @intCast(@as(u64, CHAR_W) *% @as(u64, scale)));
+    const fb_w_i64: i64 = @intCast(fb_config.width);
     for (text) |ch| {
-        if (cx + adv > @as(i32, @intCast(fb_config.width))) break;
+        if (@as(i64, cx) + @as(i64, adv) > fb_w_i64) break;
         drawCharTransparentScaled(cx, y, ch, fg, scale);
         cx += adv;
     }
@@ -770,6 +782,7 @@ pub fn draw3DRect(x: i32, y: i32, w: i32, h: i32, highlight: u32, shadow: u32) v
 // ── Aero Glass Blur (Multi-pass Box Blur) ──
 // Three passes of separable box blur approximate a Gaussian blur.
 // Operates directly on the framebuffer using a static line buffer.
+// 每像素内层循环随 radius 增长；中长期可改滑动窗口累和或降采样 blur 再上采样（自研，见 DesktopManagerSpec §8）。
 
 const BLUR_MAX_LINE: usize = 4096;
 var blur_line: [BLUR_MAX_LINE]u32 = [_]u32{0} ** BLUR_MAX_LINE;
@@ -992,12 +1005,26 @@ pub fn addSpecularBand(x: i32, y: i32, w: i32, band_h: i32, intensity: u32) void
 
 // ── Buffer Management ──
 
+/// 大块 memcpy 到屏前/ramfb 后做内存栅栏，避免弱序模型下设备侧先看到旧像素（LoongArch 上尤为明显）。
+fn fenceScanoutAfterMemcpy() void {
+    fenceScanoutVisibleWrites();
+}
+
+/// 任意写入客户机线性帧缓冲（含直接绘制到 scanout）之后可调用，保证 Store 对设备可见（当前实现：LoongArch `dbar 0`）。
+pub fn fenceScanoutVisibleWrites() void {
+    switch (builtin.target.cpu.arch) {
+        .loongarch64 => asm volatile ("dbar 0" ::: .{ .memory = true }),
+        else => {},
+    }
+}
+
 pub fn flip() void {
     if (double_buffer_active) {
         const size = bytes_per_slot;
         const dst: [*]u8 = @ptrFromInt(fb_config.address);
         const src = backBufSrcPtr();
         @memcpy(dst[0..size], src[0..size]);
+        fenceScanoutAfterMemcpy();
         if (triple_buffer_active) {
             draw_slot ^= 1;
         }
@@ -1013,6 +1040,7 @@ pub fn flipDirty() void {
             const size = @as(usize, fb_config.pitch) * @as(usize, fb_config.height);
             const dst: [*]u8 = @ptrFromInt(fb_config.address);
             @memcpy(dst[0..size], src[0..size]);
+            fenceScanoutAfterMemcpy();
         } else {
             const bytes_pp: usize = @as(usize, fb_config.bpp) / 8;
             const dst_base: [*]u8 = @ptrFromInt(fb_config.address);
@@ -1027,10 +1055,11 @@ pub fn flipDirty() void {
                 const row_bytes = @as(usize, rx1 - rx0) * bytes_pp;
                 var py: u32 = ry0;
                 while (py < ry1) : (py += 1) {
-                    const off = @as(usize, py) * @as(usize, fb_config.pitch) + @as(usize, rx0) * bytes_pp;
+                    const off = pixelByteOffset(rx0, py, @intCast(bytes_pp));
                     @memcpy(dst_base[off .. off + row_bytes], src[off .. off + row_bytes]);
                 }
             }
+            fenceScanoutAfterMemcpy();
         }
     }
     dirty_count = 0;
@@ -1057,8 +1086,15 @@ pub fn copyDrawBufferRectBytes(dx: i32, dy: i32, w: i32, h: i32, dst: []u8) usiz
     const fw: i32 = @intCast(fb_config.width);
     const fh: i32 = @intCast(fb_config.height);
     if (x0 >= fw or y0 >= fh) return 0;
-    if (x0 + cw > fw) cw = fw - x0;
-    if (y0 + ch > fh) ch = fh - y0;
+    // i64 边界：`x0 + cw` 在 i32 上先加再比会在 Debug 下溢出 panic（与 material.rectScanEnd 注释同源）。
+    {
+        const x0i = @as(i64, x0);
+        const y0i = @as(i64, y0);
+        const fwi = @as(i64, fw);
+        const fhi = @as(i64, fh);
+        if (x0i + @as(i64, cw) > fwi) cw = @intCast(fwi - x0i);
+        if (y0i + @as(i64, ch) > fhi) ch = @intCast(fhi - y0i);
+    }
     if (cw <= 0 or ch <= 0) return 0;
 
     const row_bytes: usize = @as(usize, @intCast(cw)) * bytes_pp;
@@ -1098,8 +1134,14 @@ pub fn pasteDrawBufferRectBytes(dx: i32, dy: i32, w: i32, h: i32, src: []const u
     const fw: i32 = @intCast(fb_config.width);
     const fh: i32 = @intCast(fb_config.height);
     if (x0 >= fw or y0 >= fh) return;
-    if (x0 + cw > fw) cw = fw - x0;
-    if (y0 + ch > fh) ch = fh - y0;
+    {
+        const x0i = @as(i64, x0);
+        const y0i = @as(i64, y0);
+        const fwi = @as(i64, fw);
+        const fhi = @as(i64, fh);
+        if (x0i + @as(i64, cw) > fwi) cw = @intCast(fwi - x0i);
+        if (y0i + @as(i64, ch) > fhi) ch = @intCast(fhi - y0i);
+    }
     if (cw <= 0 or ch <= 0) return;
 
     const row_bytes: usize = @as(usize, @intCast(cw)) * bytes_pp;
@@ -1169,6 +1211,14 @@ pub fn logDesktopPointerDiagnostics(virtio_input_active: bool, ps2_hw_ok: bool) 
         if (config_mod.allowSingleBufferOnLargeAllocFail()) "ON" else "OFF",
         if (virtio_input_active) "active" else "inactive",
         if (ps2_hw_ok) "ok" else "no",
+    });
+}
+
+/// GOP 几何一行摘要（排查 LoongArch UEFI / Multiboot 与盒式模糊成本：`w*h`）。
+pub fn logDesktopGopSummary() void {
+    if (!config_ready) return;
+    klog.info("DesktopGOP: %ux%u pitch=%u bpp=%u (see DesktopManagerSpec blur tuning)", .{
+        fb_config.width, fb_config.height, fb_config.pitch, fb_config.bpp,
     });
 }
 

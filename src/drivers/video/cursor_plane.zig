@@ -60,6 +60,17 @@ pub fn invalidate() void {
     sw_cursor_saved_len = 0;
 }
 
+/// 局部重绘（如标题栏热态）之前：若上一帧已叠加软件指针，先把 save-under 贴回绘制缓冲，避免留下光标轨迹。
+pub fn restoreSaveUnderIfPlaced() void {
+    if (!fb.isInitialized()) return;
+    if (!sw_cursor_placed or sw_cursor_saved_len == 0) {
+        invalidate();
+        return;
+    }
+    fb.pasteDrawBufferRectBytes(sw_cursor_sx, sw_cursor_sy, sw_cursor_sw, sw_cursor_sh, sw_cursor_saved[0..sw_cursor_saved_len]);
+    invalidate();
+}
+
 /// 旧/新指针位置并入脏矩形（供 `flipDirty` 与局部提交路径）。
 pub fn markMotionDirty(ax: i32, ay: i32, bx: i32, by: i32) void {
     if (!fb.isInitialized()) return;
@@ -85,12 +96,13 @@ pub fn composeAfterScene(cursor_visible: bool, cx: i32, cy: i32, kind: aero_curs
     markDirtyUnionFromPoints(cx, cy, cx, cy);
 }
 
-/// 仅指针移动：恢复 save-under、在新位置保存并绘制。返回 false 时调用方应整场景重绘。
+/// 仅指针移动或 **光标形态变化**（箭头/I-beam 等）：先恢复 save-under，再在新位置按当前形态 copy+draw。
+/// 各形态位图同为 14×20，`softwareCursorExtent` 一致，故无需整场景重绘。
+/// 返回 false 时调用方应整场景重绘。
 pub fn moveOnly(cursor_visible: bool, cx: i32, cy: i32, prev_x: i32, prev_y: i32, kind: aero_cursor_shape.CursorKind, draw: CursorDrawFn) bool {
     if (!fb.isInitialized()) return false;
     if (!cursor_visible) return false;
     if (!sw_cursor_placed) return false;
-    if (kind != sw_cursor_saved_kind) return false;
 
     fb.pasteDrawBufferRectBytes(sw_cursor_sx, sw_cursor_sy, sw_cursor_sw, sw_cursor_sh, sw_cursor_saved[0..sw_cursor_saved_len]);
 

@@ -1,6 +1,6 @@
 //! VGA Display Driver (NT-style Miniport)
 //! Manages VGA hardware for text and graphics modes.
-//! Reference: ReactOS drivers/video/miniport/vga/
+//! Reference: WDK display miniport model; VGA text/graphics modes per hardware documentation.
 //!
 //! Provides mode setting, text output, and basic graphics primitives
 //! for VGA-compatible hardware. Registers with the I/O Manager as

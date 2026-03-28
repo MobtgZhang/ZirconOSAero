@@ -1,6 +1,6 @@
 //! Aero（Windows 7 / NT 6.1）桌面渲染器
 //!
-//! 与 ideas/Win7B.md、ideas/win7Desktop.md 中的 DWM 数据流对齐（概念模型）：
+//! 与 docs/cn/DesktopManagerSpec.md 及 Microsoft Learn「Desktop Window Manager」数据流对齐（概念模型）：
 //!
 //! ```text
 //! 壁纸 / 桌面 ──→ Shell 图标、小工具 ──→ 顶层窗（Explorer 等离屏面）──→ 任务栏
@@ -20,12 +20,14 @@ const startmenu = @import("startmenu.zig");
 const dwm_comp = @import("dwm_compositor.zig");
 const mat = @import("material.zig");
 const display = @import("display.zig");
+const builtin_apps = @import("builtin_apps.zig");
 const shell_strings = @import("shell_strings.zig");
+const wallpaper_bitmap = @import("wallpaper_bitmap.zig");
 const rgb = theme.rgb;
 
 pub fn initDwm() void {
     if (dwm.isInitialized()) return;
-    // 与 display.initAeroDwm 相同参数（`dwm_nt61_defaults` 单一源；正常启动路径下 display 已 init）。
+    // 与 display.initAeroDwm 相同参数（`zircon_aero_defaults` 单一源；正常启动路径下 display 已 init）。
     const cfg = dwm.DwmConfig{};
     dwm.init(cfg);
 
@@ -58,7 +60,7 @@ pub fn renderFrameEx(draw_cursor: bool) void {
     const tb_h = theme.getTaskbarHeight();
 
     const drag_state = display.getDragState();
-    const any_drag = drag_state.explorer_active or drag_state.taskmgr_active;
+    const any_drag = drag_state.explorer_active or drag_state.taskmgr_active or drag_state.builtin_active;
 
     if (any_drag) {
         renderDragFrame(w, h, t, tb_h, drag_state, draw_cursor);
@@ -71,11 +73,130 @@ pub fn renderFrame() void {
     renderFrameEx(true);
 }
 
+/// 仅 Explorer + 任务管理器标题栏带（毛玻璃/渐变 + 三键热态），供 `display.renderDesktopFrameEx` 局部刷新；不画壁纸与窗体客户区。
+/// 当前壁纸预设是否支持「开始菜单脏区」局部修补（与 `patchHarmonyWallpaperRegion` 一致）。
+pub fn startMenuRepaintCanPatchWallpaper() bool {
+    return true;
+}
+
+/// 开始菜单悬停变化时：仅修补壁纸条带 + 与脏区相交的壳层，再重画菜单（避免整帧 `renderFullFrame`）。
+pub fn redrawStartMenuRegionOnly(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
+    if (!startmenu.isVisible()) return;
+
+    const mb = startmenu.getPaintBounds(w, h);
+    var dirty = display.ShellRect{ .x = mb.x, .y = mb.y, .w = mb.w, .h = mb.h };
+    dirty = display.rectInflate(dirty, 8);
+    dirty = display.rectClampToScreen(dirty, w, h);
+    if (dirty.w <= 0 or dirty.h <= 0) return;
+
+    display.patchHarmonyWallpaperRegion(w, h, dirty.x, dirty.y, dirty.w, dirty.h);
+
+    const ib = display.desktopIconStripBounds(w, h);
+    if (display.rectsOverlap(dirty, ib)) {
+        display.renderDesktopIcons(w, h, t);
+        dirty = display.rectUnion(dirty, ib);
+    }
+
+    const wr = display.getWindowRect(w, h);
+    const win_r = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
+    if (display.rectsOverlap(dirty, win_r)) {
+        renderExplorerWindow(w, h, t);
+        dirty = display.rectUnion(dirty, win_r);
+    }
+
+    display.initTaskMgrPosition(w, h);
+    const tm = display.getTaskMgrPos();
+    const tm_r = display.ShellRect{ .x = tm.x, .y = tm.y, .w = 320, .h = 260 };
+    if (display.rectsOverlap(dirty, tm_r)) {
+        display.renderTaskManagerWin(w, h, t);
+        dirty = display.rectUnion(dirty, tm_r);
+    }
+
+    if (builtin_apps.anyWindowOpen()) {
+        const bu_b = builtin_apps.openSlotsBoundsUnion();
+        const bu = display.ShellRect{ .x = bu_b.x, .y = bu_b.y, .w = bu_b.w, .h = bu_b.h };
+        if (bu.w > 0 and bu.h > 0 and display.rectsOverlap(dirty, bu)) {
+            builtin_apps.renderShellHostedApps(w, h, t, .normal);
+            dirty = display.rectUnion(dirty, bu);
+        }
+    }
+
+    const tb_r = display.taskbarBoundsRect(w, h);
+    if (display.rectsOverlap(dirty, tb_r)) {
+        renderTaskbar(w, h, t, tb_h);
+        dirty = display.rectUnion(dirty, tb_r);
+    }
+
+    startmenu.render(w, h);
+    display.renderContextMenu();
+
+    dirty = display.rectClampToScreen(dirty, w, h);
+    if (dirty.w > 0 and dirty.h > 0) {
+        fb.markDirtyRegion(dirty.x, dirty.y, dirty.w, dirty.h);
+    }
+    display.incFrameCount();
+}
+
+pub fn redrawCaptionBandsOnly() void {
+    if (!fb.isInitialized()) return;
+    theme.setTheme(.aero);
+    if (!dwm.isInitialized()) initDwm();
+
+    const scr_w: i32 = @intCast(fb.getWidth());
+    const scr_h: i32 = @intCast(fb.getHeight());
+    const t = theme.getActiveTheme();
+    const aero_tb_h: i32 = display.AERO_TITLEBAR_H;
+
+    const wr = display.getWindowRect(scr_w, scr_h);
+    redrawExplorerCaptionBand(wr.x, wr.y, wr.w, aero_tb_h, t);
+
+    display.initTaskMgrPosition(scr_w, scr_h);
+    const tm_w: i32 = 320;
+    const tm_pos = display.getTaskMgrPos();
+    redrawTaskMgrCaptionBand(tm_pos.x, tm_pos.y, tm_w, aero_tb_h, t);
+
+    var dirty = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = aero_tb_h };
+    const tm_dirty = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_w, .h = aero_tb_h };
+    dirty = display.rectUnion(dirty, tm_dirty);
+
+    if (display.isContextMenuVisible()) {
+        display.renderContextMenu();
+        dirty = display.rectUnion(dirty, display.getContextMenuPaintRect());
+    }
+
+    const u = display.rectClampToScreen(dirty, scr_w, scr_h);
+    if (u.w > 0 and u.h > 0) {
+        fb.markDirtyRegion(u.x, u.y, u.w, u.h);
+    }
+    display.incFrameCount();
+}
+
+fn redrawExplorerCaptionBand(win_x: i32, win_y: i32, win_w: i32, aero_tb_h: i32, t: *const theme.ThemeColors) void {
+    if (dwm.isGlassEnabled()) {
+        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+    } else {
+        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+    }
+    drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);
+    display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
+}
+
+fn redrawTaskMgrCaptionBand(win_x: i32, win_y: i32, tm_w: i32, th: i32, t: *const theme.ThemeColors) void {
+    if (dwm.isGlassEnabled()) {
+        dwm.renderGlassEffect(win_x, win_y, tm_w, th, t.titlebar_active_left, .caption);
+    } else {
+        fb.drawGradientH(win_x, win_y, tm_w, th, t.titlebar_active_left, t.titlebar_active_right);
+    }
+    display.drawAeroCaptionButtons(win_x, win_y, tm_w, th, t, display.getTaskMgrCaptionBtnHover());
+    fb.drawTextTransparent(win_x + 8, win_y + 5, "Zircon Task Manager", t.titlebar_text);
+}
+
 fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_cursor: bool) void {
     renderBackground(w, h);
     display.renderDesktopIcons(w, h, t);
     renderExplorerWindow(w, h, t);
     display.renderTaskManagerWin(w, h, t);
+    builtin_apps.renderShellHostedApps(w, h, t, .normal);
     renderTaskbar(w, h, t, tb_h);
 
     if (startmenu.isVisible()) {
@@ -89,20 +210,72 @@ fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_
     fb.markFullScreenDirty();
 }
 
+fn dragFrameDirtyUnion(scr_w: i32, scr_h: i32, ds: display.DragState, pad: i32) ?display.ShellRect {
+    var acc: ?display.ShellRect = null;
+    if (ds.explorer_active) {
+        const wr = display.getWindowRect(scr_w, scr_h);
+        const cur = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
+        var u = display.rectUnion(ds.explorer_prev, cur);
+        u = display.rectInflate(u, pad);
+        u = display.rectClampToScreen(u, scr_w, scr_h);
+        acc = u;
+    }
+    if (ds.taskmgr_active) {
+        const tm_pos = display.getTaskMgrPos();
+        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = 320, .h = 260 };
+        var u = display.rectUnion(ds.taskmgr_prev, cur);
+        u = display.rectInflate(u, pad);
+        u = display.rectClampToScreen(u, scr_w, scr_h);
+        acc = if (acc) |a| display.rectUnion(a, u) else u;
+    }
+    if (ds.builtin_active) {
+        if (builtin_apps.topDraggedWindowRect()) |br| {
+            const cur = display.ShellRect{ .x = br.x, .y = br.y, .w = br.w, .h = br.h };
+            var u = display.rectUnion(ds.builtin_prev, cur);
+            u = display.rectInflate(u, pad);
+            u = display.rectClampToScreen(u, scr_w, scr_h);
+            acc = if (acc) |a| display.rectUnion(a, u) else u;
+        }
+    }
+    return acc;
+}
+
 fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: display.DragState, draw_cursor: bool) void {
+    const dirty_pad: i32 = 14;
+    const dirty_u = dragFrameDirtyUnion(w, h, ds, dirty_pad);
+
     patchDragBackground(w, h);
 
-    display.renderDesktopIcons(w, h, t);
+    const icon_b = display.desktopIconStripBounds(w, h);
+    const tb_b = display.taskbarBoundsRect(w, h);
+    const paint_icons = if (dirty_u) |du| display.rectsOverlap(du, icon_b) else true;
+    const paint_taskbar = if (dirty_u) |du| display.rectsOverlap(du, tb_b) else true;
+
+    if (paint_icons) {
+        display.renderDesktopIcons(w, h, t);
+    }
 
     if (ds.explorer_active) {
-        renderExplorerWindowFast(w, h, t);
+        renderExplorerWindowDragLight(w, h, t);
     } else {
         renderExplorerWindow(w, h, t);
     }
-    display.renderTaskManagerWin(w, h, t);
+    if (ds.taskmgr_active) {
+        display.renderTaskManagerWinDragLight(w, h, t);
+    } else {
+        display.renderTaskManagerWin(w, h, t);
+    }
 
-    renderTaskbar(w, h, t, tb_h);
-    fb.markDirtyRegion(0, h - tb_h, w, tb_h);
+    if (ds.builtin_active) {
+        builtin_apps.renderShellHostedApps(w, h, t, .drag_light);
+    } else {
+        builtin_apps.renderShellHostedApps(w, h, t, .normal);
+    }
+
+    if (paint_taskbar) {
+        renderTaskbar(w, h, t, tb_h);
+        fb.markDirtyRegion(0, h - tb_h, w, tb_h);
+    }
 
     if (startmenu.isVisible()) {
         startmenu.render(w, h);
@@ -130,8 +303,43 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
         u = display.rectClampToScreen(u, w, h);
         fb.markDirtyRegion(u.x, u.y, u.w, u.h);
     }
+    if (ds.builtin_active) {
+        if (builtin_apps.topDraggedWindowRect()) |br| {
+            const cur = display.ShellRect{ .x = br.x, .y = br.y, .w = br.w, .h = br.h };
+            var u = display.rectUnion(ds.builtin_prev, cur);
+            u = display.rectInflate(u, 14);
+            u = display.rectClampToScreen(u, w, h);
+            fb.markDirtyRegion(u.x, u.y, u.w, u.h);
+        }
+    }
 
     display.markCursorMotionDirtyRegions();
+}
+
+/// 拖动态：仅标题栏玻璃 + 窗框 + 单色客户区，避免每帧重绘导航/列表。
+fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
+    const wr = display.getWindowRect(scr_w, scr_h);
+    const win_w = wr.w;
+    const win_h = wr.h;
+    const win_x = wr.x;
+    const win_y = wr.y;
+    const aero_tb_h: i32 = display.AERO_TITLEBAR_H;
+
+    fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
+    fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
+    if (dwm.isGlassEnabled()) {
+        // 拖动时每帧不重跑标题栏 boxBlur，仅 tint+高光，避免拖窗卡顿。
+        dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+    } else {
+        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+    }
+
+    drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);
+
+    display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
+
+    display.drawAeroWindowFrameBorder(win_x, win_y, win_w, win_h);
+    fb.fillRect(win_x + 2, win_y + aero_tb_h, win_w - 4, win_h - aero_tb_h - 2, rgb(0xFE, 0xFE, 0xFF));
 }
 
 fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
@@ -150,9 +358,7 @@ fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors)
         fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
     }
 
-    icons.drawThemedIcon(.computer, win_x + 6, win_y + 8, 1, .aero);
-    fb.drawTextTransparentUi(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
-    fb.drawTextTransparentUi(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
+    drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);
 
     display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
 
@@ -160,7 +366,7 @@ fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors)
     renderExplorerContent(win_x + 2, win_y + aero_tb_h, win_w - 4, win_h - aero_tb_h - 2, t);
 }
 
-/// 与 `resource_loader` 内置壁纸条目顺序对齐（0=Harmony，1…=各 SVG 主题对应的程序化近似）。
+/// 与 `resource_loader` / `wallpaper_data` 预设顺序对齐（0…11 对应构建期嵌入的 12 张 PNG）。
 var aero_wallpaper_preset: u8 = 0;
 pub const wallpaper_preset_count: u8 = 12;
 
@@ -173,122 +379,42 @@ pub fn wallpaperPresetIndex() u8 {
 }
 
 fn renderBackground(w: i32, h: i32) void {
-    // 首帧仅渐变壁纸，避免大块 blendTint 拖长「首屏可见」时间；后续整屏重绘再画预设。
-    if (display.getPresentCount() == 0) {
-        // 与 `zircon_harmony_win7.svg` skyDeep 起止色一致，缩短首帧与完整 Harmony 的视觉跳变
-        fb.drawGradientV(0, 0, w, h, rgb(0x0A, 0x1E, 0x3D), rgb(0x08, 0x18, 0x30));
-    } else {
-        renderWallpaperByPreset(w, h, aero_wallpaper_preset);
-    }
-}
-
-fn wallpaperVignetteFrame(w: i32, h: i32) void {
-    const vstrip: i32 = 28;
-    fb.blendTintRect(0, 0, w, vstrip, rgb(0x00, 0x04, 0x12), 36, 255);
-    fb.blendTintRect(0, h - vstrip, w, vstrip, rgb(0x00, 0x02, 0x0A), 44, 255);
-    fb.blendTintRect(0, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 30, 255);
-    fb.blendTintRect(w - vstrip, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 30, 255);
+    renderWallpaperByPreset(w, h, aero_wallpaper_preset);
 }
 
 fn renderWallpaperByPreset(w: i32, h: i32, preset: u8) void {
-    switch (preset) {
-        0 => renderHarmonyWallpaper(w, h),
-        1 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x18, 0x48, 0x88), rgb(0x04, 0x14, 0x30));
-            fb.blendTintRect(@divTrunc(w, 3), @divTrunc(h, 5), @divTrunc(w, 3), @divTrunc(h, 3), rgb(0x40, 0x70, 0xA8), 14, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        2 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x28, 0x30, 0x38), rgb(0x10, 0x14, 0x1C));
-            fb.blendTintRect(@divTrunc(w, 5), @divTrunc(h, 6), @divTrunc(w * 2, 3), @divTrunc(h, 4), rgb(0x58, 0x68, 0x78), 22, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        3 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x38, 0x20, 0x58), rgb(0x10, 0x28, 0x48));
-            fb.blendTintRect(@divTrunc(w, 4), @divTrunc(h, 8), @divTrunc(w, 2), @divTrunc(h, 3), rgb(0x50, 0x90, 0xA8), 24, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        4 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x42, 0x28, 0x58), rgb(0x18, 0x10, 0x30));
-            fb.blendTintRect(@divTrunc(w, 6), @divTrunc(h, 4), @divTrunc(w, 3), @divTrunc(h, 2), rgb(0x90, 0x58, 0x78), 18, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        5 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x18, 0x48, 0x30), rgb(0x08, 0x20, 0x14));
-            fb.blendTintRect(@divTrunc(w, 5), @divTrunc(h, 5), @divTrunc(w, 2), @divTrunc(h, 2), rgb(0x40, 0x88, 0x50), 20, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        6 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x50, 0x38, 0x20), rgb(0x18, 0x10, 0x28));
-            fb.blendTintRect(@divTrunc(w, 3), @divTrunc(h, 7), @divTrunc(w, 2), @divTrunc(h, 3), rgb(0xA0, 0x70, 0x40), 16, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        7 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x38, 0x40, 0x28), rgb(0x14, 0x18, 0x10));
-            fb.blendTintRect(@divTrunc(w, 4), @divTrunc(h, 6), @divTrunc(w * 2, 3), @divTrunc(h, 3), rgb(0x70, 0x78, 0x48), 18, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        8 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x30, 0x34, 0x40), rgb(0x0C, 0x10, 0x18));
-            fb.blendTintRect(@divTrunc(w, 5), @divTrunc(h, 8), @divTrunc(w, 3), @divTrunc(h, 4), rgb(0x68, 0x70, 0x88), 20, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        9 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x10, 0x40, 0x58), rgb(0x04, 0x18, 0x28));
-            fb.blendTintRect(@divTrunc(w, 4), @divTrunc(h, 9), @divTrunc(w, 2), @divTrunc(h * 2, 5), rgb(0x28, 0x78, 0x90), 22, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        10 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x28, 0x18, 0x48), rgb(0x08, 0x08, 0x20));
-            fb.blendTintRect(@divTrunc(w, 3), @divTrunc(h, 6), @divTrunc(w, 2), @divTrunc(h, 3), rgb(0x60, 0x40, 0x90), 26, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        11 => {
-            fb.drawGradientV(0, 0, w, h, rgb(0x20, 0x42, 0x50), rgb(0x08, 0x20, 0x28));
-            fb.blendTintRect(@divTrunc(w, 6), @divTrunc(h, 5), @divTrunc(w * 2, 3), @divTrunc(h, 2), rgb(0x48, 0x88, 0x78), 18, 255);
-            wallpaperVignetteFrame(w, h);
-        },
-        else => renderHarmonyWallpaper(w, h),
-    }
-}
-
-pub fn renderHarmonyWallpaper(w: i32, h: i32) void {
-    // 程序化近似 `zircon_harmony_win7.svg`：skyDeep、centerBloom、logoGlow、四格窗格、暗角
-    fb.drawGradientV(0, 0, w, h, rgb(0x0A, 0x1E, 0x3D), rgb(0x08, 0x18, 0x30));
-    fb.blendTintRect(0, @divTrunc(h * 20, 100), w, @divTrunc(h * 22, 100), rgb(0x10, 0x2E, 0x55), 14, 255);
-
-    const mx = @divTrunc(w, 2);
-    const my = @divTrunc(h * 38, 100);
-
-    fb.blendTintRect(mx - @divTrunc(w, 3), my - @divTrunc(h, 3), @divTrunc(w * 2, 3), @divTrunc(h * 2, 3), rgb(0x3D, 0x8E, 0xD8), 20, 255);
-    fb.blendTintRect(mx - @divTrunc(w, 4), my - @divTrunc(h, 5), @divTrunc(w, 2), @divTrunc(h * 2, 5), rgb(0x1A, 0x50, 0x88), 12, 255);
-    fb.blendTintRect(mx - 140, my - 100, 280, 200, rgb(0xB0, 0xD8, 0xFF), 8, 255);
-
-    // 对角柔光带（对应 SVG streakL 氛围，压低不透明度避免发灰）
-    fb.blendTintRect(@divTrunc(w, 10), @divTrunc(h, 8), @divTrunc(w * 4, 5), @divTrunc(h, 3), rgb(0x88, 0xC8, 0xFF), 6, 255);
-
-    // 大椭圆氛围块（对应 SVG 三处柔光椭圆）
-    fb.blendTintRect(@divTrunc(w, 6), @divTrunc(h, 5), @divTrunc(w, 4), @divTrunc(h, 6), rgb(0x1E, 0x50, 0x90), 8, 255);
-    fb.blendTintRect(@divTrunc(w * 3, 4), @divTrunc(h, 4), @divTrunc(w, 3), @divTrunc(h, 5), rgb(0x20, 0x58, 0xA0), 7, 255);
-    fb.blendTintRect(@divTrunc(w, 2), @divTrunc(h * 3, 4), @divTrunc(w, 3), @divTrunc(h, 6), rgb(0x18, 0x30, 0x60), 9, 255);
-
-    // 四色窗格中心装饰（与 SVG 四 pane 同色，尺寸随分辨率缩放）
-    const pane: i32 = @max(28, @divTrunc(@min(w, h), 18));
-    fb.blendTintRect(mx - pane * 2, my - pane * 2, pane, pane, rgb(0xE8, 0x78, 0x28), 50, 255);
-    fb.blendTintRect(mx + pane, my - pane * 2, pane, pane, rgb(0x5C, 0xB8, 0x5C), 50, 255);
-    fb.blendTintRect(mx - pane * 2, my + pane, pane, pane, rgb(0x3A, 0x8F, 0xD8), 52, 255);
-    fb.blendTintRect(mx + pane, my + pane, pane, pane, rgb(0xE8, 0xC8, 0x30), 50, 255);
-
-    const vstrip: i32 = 32;
-    const vin: u32 = rgb(0x00, 0x05, 0x10);
-    fb.blendTintRect(0, 0, w, vstrip, vin, 42, 255);
-    fb.blendTintRect(0, h - vstrip, w, vstrip, vin, 52, 255);
-    fb.blendTintRect(0, 0, vstrip, h, vin, 34, 255);
-    fb.blendTintRect(w - vstrip, 0, vstrip, h, vin, 34, 255);
+    const p = preset % wallpaper_preset_count;
+    wallpaper_bitmap.drawPreset(p, w, h);
 }
 
 fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
     display.renderDesktopAeroTaskbar(scr_w, scr_h, t, tb_h);
+}
+
+fn explorerCaptionMain() []const u8 {
+    return switch (display.getExplorerShellView()) {
+        .computer => "Computer",
+        .libraries => shell_strings.explorerLine("ex_lib_title"),
+    };
+}
+
+fn explorerCaptionSub() []const u8 {
+    return switch (display.getExplorerShellView()) {
+        .computer => "Local Disk (C:)",
+        .libraries => "",
+    };
+}
+
+fn drawExplorerTitlebarChrome(win_x: i32, win_y: i32, aero_tb_h: i32, t: *const theme.ThemeColors) void {
+    icons.drawThemedIcon(.computer, win_x + 6, win_y + 8, 1, .aero);
+    const sub = explorerCaptionSub();
+    if (sub.len == 0) {
+        const ty = win_y + @divTrunc(aero_tb_h - 14, 2);
+        fb.drawTextTransparentUi(win_x + 26, ty, explorerCaptionMain(), t.titlebar_text);
+    } else {
+        fb.drawTextTransparentUi(win_x + 26, win_y + 6, explorerCaptionMain(), t.titlebar_text);
+        fb.drawTextTransparentUi(win_x + 26, win_y + 22, sub, rgb(0xD8, 0xE8, 0xF8));
+    }
 }
 
 fn renderExplorerWindow(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
@@ -314,9 +440,7 @@ fn renderExplorerWindow(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) voi
         fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
     }
 
-    icons.drawThemedIcon(.computer, win_x + 6, win_y + 8, 1, .aero);
-    fb.drawTextTransparentUi(win_x + 26, win_y + 6, "Computer", t.titlebar_text);
-    fb.drawTextTransparentUi(win_x + 26, win_y + 22, "Local Disk (C:)", rgb(0xD8, 0xE8, 0xF8));
+    drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);
 
     display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
 
@@ -325,6 +449,13 @@ fn renderExplorerWindow(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) voi
 }
 
 fn renderExplorerContent(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeColors) void {
+    switch (display.getExplorerShellView()) {
+        .libraries => renderExplorerLibrariesClient(x, y, w, h, t),
+        .computer => renderExplorerComputerClient(x, y, w, h, t),
+    }
+}
+
+fn renderExplorerComputerClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeColors) void {
     _ = t;
     const cmd_h: i32 = display.AERO_EXPLORER_CMD_H;
     const addr_h: i32 = display.AERO_EXPLORER_ADDR_H;
@@ -380,14 +511,17 @@ fn renderExplorerContent(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeCo
     fb.drawVLine(x + nav_w, body_y, body_h, rgb(0xC8, 0xD0, 0xD8));
 
     const nav_items = [_]struct { label: []const u8, indent: i32, sel: bool }{
-        .{ .label = "Favorites", .indent = 0, .sel = false },
-        .{ .label = "  Desktop", .indent = 10, .sel = false },
-        .{ .label = "  Downloads", .indent = 10, .sel = false },
-        .{ .label = "Libraries", .indent = 0, .sel = false },
-        .{ .label = "Computer", .indent = 0, .sel = true },
-        .{ .label = "  C:\\", .indent = 10, .sel = false },
-        .{ .label = "  D:\\", .indent = 10, .sel = false },
-        .{ .label = "Network", .indent = 0, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_nav_fav"), .indent = 0, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_desktop"), .indent = 10, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_downloads"), .indent = 10, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_nav_lib"), .indent = 0, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_documents"), .indent = 10, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_music"), .indent = 10, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_pictures"), .indent = 10, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_nav_comp"), .indent = 0, .sel = true },
+        .{ .label = shell_strings.explorerLine("ex_lib_disk_c"), .indent = 10, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_dvd"), .indent = 10, .sel = false },
+        .{ .label = shell_strings.explorerLine("ex_lib_nav_net"), .indent = 0, .sel = false },
     };
     var ny: i32 = body_y + 4;
     for (nav_items) |item| {
@@ -420,7 +554,7 @@ fn renderExplorerContent(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeCo
     const entries = [_]struct { name: []const u8, date: []const u8, size: []const u8, icon: icons.IconId }{
         .{ .name = "Users", .date = "2026/01/15", .size = "", .icon = .documents },
         .{ .name = "Program Files", .date = "2026/03/20", .size = "", .icon = .documents },
-        .{ .name = "Windows", .date = "2026/02/10", .size = "", .icon = .documents },
+        .{ .name = "ZirconOS", .date = "2026/02/10", .size = "", .icon = .documents },
         .{ .name = "PerfLogs", .date = "2026/01/01", .size = "", .icon = .documents },
         .{ .name = "boot.ini", .date = "2026/01/01", .size = "1 KB", .icon = .text_editor },
         .{ .name = "pagefile.sys", .date = "2026/03/21", .size = "2 GB", .icon = .text_editor },
@@ -452,6 +586,115 @@ fn renderExplorerContent(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeCo
     fb.drawTextTransparent(x + 8, status_y + 3, "6 items | Computer | Aero DWM", rgb(0x40, 0x40, 0x40));
 }
 
+/// Win7「库」视图：命令栏、圆形导航钮、面包屑与搜索、侧栏分区、四库大图标与状态栏。
+fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeColors) void {
+    _ = t;
+    const cmd_h: i32 = display.AERO_EXPLORER_CMD_H;
+    const addr_h: i32 = display.AERO_EXPLORER_ADDR_H;
+
+    fb.drawGradientH(x, y, w, cmd_h, rgb(0xF2, 0xF4, 0xF8), rgb(0xE4, 0xE8, 0xF0));
+    fb.drawHLine(x, y + cmd_h, w, rgb(0xB8, 0xC4, 0xD4));
+    const cmd_ty = y + @divTrunc(cmd_h - 14, 2);
+    const org = shell_strings.explorerLine("ex_lib_organize");
+    const nl = shell_strings.explorerLine("ex_lib_new_lib");
+    fb.drawTextTransparent(x + 8, cmd_ty, org, rgb(0x00, 0x51, 0x9E));
+    fb.drawTextTransparent(x + 8 + fb.textWidth(org) + 18, cmd_ty, nl, rgb(0x00, 0x51, 0x9E));
+
+    const addr_y = y + cmd_h + 1;
+    fb.fillRect(x, addr_y, w, addr_h, rgb(0xF8, 0xF9, 0xFC));
+    fb.drawHLine(x, addr_y + addr_h, w, rgb(0xC0, 0xC8, 0xD4));
+
+    const acy = addr_y + @divTrunc(addr_h, 2);
+    fb.fillCircle(x + 12, acy, 9, rgb(0xE8, 0xEE, 0xF6));
+    fb.drawRect(x + 3, acy - 9, 18, 18, rgb(0xA8, 0xB8, 0xC8));
+    fb.fillCircle(x + 34, acy, 9, rgb(0xE8, 0xEE, 0xF6));
+    fb.drawRect(x + 25, acy - 9, 18, 18, rgb(0xA8, 0xB8, 0xC8));
+
+    const field_x = x + display.AERO_EXPLORER_LIB_ADDR_FIELD_X;
+    const search_w = display.AERO_EXPLORER_LIB_SEARCH_W;
+    const search_x = x + w - 6 - search_w;
+    const field_w = @max(48, search_x - 4 - field_x);
+    fb.fillRect(field_x, addr_y + 3, field_w, 20, rgb(0xFF, 0xFF, 0xFF));
+    fb.drawRect(field_x, addr_y + 3, field_w, 20, rgb(0x9C, 0xA8, 0xB8));
+    icons.drawThemedIcon(.folder, field_x + 4, addr_y + 5, 1, .aero);
+    const crumb = shell_strings.explorerLine("ex_lib_title");
+    fb.drawTextTransparent(field_x + 24, addr_y + @divTrunc(addr_h - 14, 2), crumb, rgb(0x00, 0x00, 0x00));
+
+    fb.fillRect(search_x, addr_y + 3, search_w, 20, rgb(0xFF, 0xFF, 0xFF));
+    fb.drawRect(search_x, addr_y + 3, search_w, 20, rgb(0x9C, 0xA8, 0xB8));
+    const sh = shell_strings.explorerLine("ex_lib_search");
+    fb.drawTextTransparent(search_x + 6, addr_y + @divTrunc(addr_h - 14, 2), sh, rgb(0x78, 0x80, 0x88));
+
+    const body_y = addr_y + addr_h;
+    const status_h: i32 = 22;
+    const body_h = h - cmd_h - 1 - addr_h - status_h - 1;
+    if (body_h <= 10) return;
+
+    const nav_w: i32 = @min(168, @max(104, @divTrunc(w, 4)));
+    fb.fillRect(x, body_y, nav_w, body_h, rgb(0xFC, 0xFC, 0xFE));
+    fb.drawVLine(x + nav_w, body_y, body_h, rgb(0xC8, 0xD0, 0xD8));
+
+    var ny: i32 = body_y + 6;
+    const nav_rows = [_]struct { s: []const u8, indent: i32, heading: bool }{
+        .{ .s = shell_strings.explorerLine("ex_lib_nav_fav"), .indent = 0, .heading = true },
+        .{ .s = shell_strings.explorerLine("ex_lib_desktop"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_downloads"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_recent"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_nav_lib"), .indent = 0, .heading = true },
+        .{ .s = shell_strings.explorerLine("ex_lib_documents"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_music"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_pictures"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_videos"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_nav_comp"), .indent = 0, .heading = true },
+        .{ .s = shell_strings.explorerLine("ex_lib_disk_c"), .indent = 8, .heading = false },
+        .{ .s = "D:", .indent = 8, .heading = false },
+        .{ .s = "E:", .indent = 8, .heading = false },
+        .{ .s = "F:", .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_dvd"), .indent = 8, .heading = false },
+        .{ .s = shell_strings.explorerLine("ex_lib_nav_net"), .indent = 0, .heading = true },
+    };
+    for (nav_rows) |nr| {
+        if (ny + 17 > body_y + body_h) break;
+        const tc: u32 = if (nr.heading) rgb(0x50, 0x58, 0x60) else rgb(0x18, 0x18, 0x18);
+        fb.drawTextTransparent(x + 6 + nr.indent, ny, nr.s, tc);
+        ny += if (nr.heading) @as(i32, 18) else @as(i32, 16);
+    }
+
+    const list_x = x + nav_w + 1;
+    const list_w = w - nav_w - 1;
+    fb.fillRect(list_x, body_y, list_w, body_h, rgb(0xFF, 0xFF, 0xFF));
+
+    fb.drawTextTransparent(list_x + 24, body_y + 16, shell_strings.explorerLine("ex_lib_title"), rgb(0x12, 0x18, 0x22));
+    fb.drawTextTransparent(list_x + 24, body_y + 36, shell_strings.explorerLine("ex_lib_subtitle"), rgb(0x50, 0x58, 0x60));
+
+    const tile: i32 = 88;
+    const gap: i32 = 32;
+    const grid_w = 2 * tile + gap;
+    const gx0 = list_x + @max(24, @divTrunc(list_w - grid_w, 2));
+    const gy0 = body_y + 80;
+    const libs = [_]struct { label: []const u8, icon: icons.IconId }{
+        .{ .label = shell_strings.explorerLine("ex_lib_videos"), .icon = .folder },
+        .{ .label = shell_strings.explorerLine("ex_lib_pictures"), .icon = .pictures },
+        .{ .label = shell_strings.explorerLine("ex_lib_documents"), .icon = .documents },
+        .{ .label = shell_strings.explorerLine("ex_lib_music"), .icon = .music },
+    };
+    for (libs, 0..) |lib, i| {
+        const col: i32 = @intCast(i % 2);
+        const row: i32 = @intCast(i / 2);
+        const ix = gx0 + col * (tile + gap);
+        const iy = gy0 + row * (tile + gap);
+        fb.blendTintRect(ix, iy + 28, tile, 28, rgb(0x58, 0x88, 0xC8), 35, 200);
+        icons.drawThemedIcon(lib.icon, ix + @divTrunc(tile - 32, 2), iy + 8, 2, .aero);
+        const tw = fb.textWidth(lib.label);
+        fb.drawTextTransparent(ix + @divTrunc(tile - tw, 2), iy + tile - 14, lib.label, rgb(0x10, 0x14, 0x1A));
+    }
+
+    const status_y = y + h - status_h;
+    fb.fillRect(x, status_y, w, status_h, rgb(0xE8, 0xEE, 0xF6));
+    fb.drawHLine(x, status_y, w, rgb(0xC0, 0xC8, 0xD4));
+    fb.drawTextTransparent(x + 8, status_y + 4, shell_strings.explorerLine("ex_lib_status"), rgb(0x30, 0x38, 0x42));
+}
+
 fn patchDragBackground(scr_w: i32, scr_h: i32) void {
     const pad: i32 = 10;
     const drag_state = display.getDragState();
@@ -476,6 +719,18 @@ fn patchDragBackground(scr_w: i32, scr_h: i32) void {
             patchHarmonyRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
         }
         display.setTaskMgrDragPrev(cur);
+    }
+    if (drag_state.builtin_active) {
+        if (builtin_apps.topDraggedWindowRect()) |br| {
+            const cur = display.ShellRect{ .x = br.x, .y = br.y, .w = br.w, .h = br.h };
+            var u = display.rectUnion(drag_state.builtin_prev, cur);
+            u = display.rectInflate(u, pad);
+            u = display.rectClampToScreen(u, scr_w, scr_h);
+            if (u.w > 0 and u.h > 0) {
+                patchHarmonyRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
+            }
+        }
+        builtin_apps.advanceBuiltinDragPrev();
     }
 }
 

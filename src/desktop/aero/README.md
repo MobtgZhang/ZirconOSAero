@@ -13,7 +13,7 @@
 - **运行时主题切换**：通过 theme_loader 解析 .theme INI 配置文件
 - **完整 Shell**：登录、桌面、任务栏、开始菜单、窗口装饰、控件
 - **ZirconAero / Win7 壳层元素**：Harmony 风格默认壁纸、通知区布局常量、Aero Peek 显示桌面条、桌面小工具（CPU/网络）状态 API、快捷方式标记
-- **12+ 张原创 SVG 壁纸**：含 `zircon_harmony_win7.svg`（深蓝 + 四色窗格致敬）
+- **12 张分类 PNG 壁纸**：`Architecture/`、`Characters/`、`Landscapes/`、`Nature/`、`Scenes/`；内核经构建期嵌入后由 `wallpaper_bitmap` 绘制（默认 `Landscapes/zircon_harmony.png`）
 - **13 种声音方案**：对应不同场景和氛围
 
 ## 目录结构
@@ -45,22 +45,22 @@ resources/
 ├── themes/               # 8 个 .theme 配置文件
 ├── icons/                # 12 个 48x48 SVG 系统图标
 ├── cursors/              # 14 个 32x32 SVG 光标
-├── wallpapers/           # 11 个原创 SVG 壁纸 + 5 个分类子目录
-└── sounds/               # 声音方案配置 + 13 个方案子目录
+├── wallpapers/           # 12 张 PNG 壁纸（5 个分类子目录）+ 构建嵌入内核
+└── sounds/               # 声音方案配置 + 五主题 WAV（与 wallpapers 分类一致）
 ```
 
 ## 主题变体
 
-| 主题 | 配色 | 壁纸 | 说明 |
-|------|------|------|------|
-| Blue (默认) | 蓝色毛玻璃 | zircon_harmony_win7 | Harmony 风深蓝氛围 + 四色窗格光晕 |
-| Graphite | 灰色中性 | zircon_crystal | 菱形水晶 + 光斑 |
-| Aurora | 青绿极光 | zircon_aurora | 北极光 + 星场 |
-| Characters | 暖色笔触 | zircon_characters | 墨迹笔画 + 印章 |
-| Nature | 紫绿植物 | zircon_nature | 花瓣 + 绿叶 |
-| Scenes | 紫色舞台 | zircon_scenes | 聚光灯 + 幕布 |
-| Landscapes | 灰银极简 | zircon_landscapes | 丘陵 + 溪流 + 雾 |
-| Architecture | 靛蓝建筑 | zircon_architecture | 玻璃幕墙 + 窗格 |
+| 主题 | 配色 | 壁纸（PNG 路径） | 说明 |
+|------|------|------------------|------|
+| Blue (默认) | 蓝色毛玻璃 | `Landscapes/zircon_harmony.png` | 深蓝峡湾山水氛围 |
+| Graphite | 灰色中性 | `Architecture/zircon_crystal.png` | 玻璃水晶立面抽象 |
+| Aurora | 青绿极光 | `Landscapes/zircon_aurora.png` | 北极光景观 |
+| Characters | 暖色笔触 | `Characters/zircon_characters.png` | 水墨意境 |
+| Nature | 紫绿植物 | `Nature/zircon_nature.png` | 花卉绿植 |
+| Scenes | 紫色舞台 | `Scenes/zircon_scenes.png` | 剧场舞台光 |
+| Landscapes | 灰银极简 | `Landscapes/zircon_landscapes.png` | 丘陵溪流晨雾 |
+| Architecture | 靛蓝建筑 | `Architecture/zircon_architecture.png` | 玻璃幕墙都市 |
 
 ## 构建
 
@@ -84,7 +84,7 @@ cd src/desktop/aero && zig build
 6. 绘制多层软阴影
 ```
 
-## 启动流程（参考 ReactOS NT6 桌面模式）
+## 启动流程（参考 NT 6.1 公开文档中的会话/桌面概念）
 
 ```
 1. WinLogon 认证用户并创建桌面会话

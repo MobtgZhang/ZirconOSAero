@@ -75,7 +75,7 @@ DefaultValue=ZirconOS Aero
 Link=
 
 [Control Panel\Desktop]
-Wallpaper=resources\wallpapers\zircon_landscapes.svg
+Wallpaper=resources\wallpapers\Landscapes\zircon_landscapes.png
 TileWallpaper=0
 WallpaperStyle=10
 Pattern=

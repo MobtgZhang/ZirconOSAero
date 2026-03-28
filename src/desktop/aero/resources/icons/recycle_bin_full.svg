@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="fGlass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#C8F0F0"/>
+      <stop offset="50%" stop-color="#5EC8C8"/>
+      <stop offset="100%" stop-color="#1A8A8A"/>
+    </linearGradient>
+    <linearGradient id="fRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3D8ED8"/>
+      <stop offset="100%" stop-color="#0D5C8C"/>
+    </linearGradient>
+    <filter id="fSh"><feDropShadow dx="0" dy="1.5" stdDeviation="1.3" flood-color="#0D5C5C" flood-opacity="0.35"/></filter>
+  </defs>
+  <ellipse cx="24" cy="14" rx="10" ry="2.5" fill="url(#fRim)" stroke="#156575" stroke-width="1.2"/>
+  <path d="M14 16h20v22c0 2-1.5 3.5-3.5 3.5h-13C15.5 41.5 14 40 14 38z"
+        fill="url(#fGlass)" stroke="#156575" stroke-width="1.5" filter="url(#fSh)"/>
+  <path d="M18 12v4M24 12v4M30 12v4" stroke="#156575" stroke-width="1.5" stroke-linecap="round"/>
+  <g opacity="0.92">
+    <rect x="17" y="20" width="8" height="10" rx="1" fill="#E8F8F8" stroke="#156575" stroke-width="0.9"/>
+    <rect x="23" y="22" width="8" height="9" rx="1" fill="#FFFFFF" stroke="#156575" stroke-width="0.9"/>
+    <path d="M19 24h4M20 27h3" stroke="#2ABFBF" stroke-width="1" stroke-linecap="round"/>
+  </g>
+</svg>

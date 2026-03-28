@@ -4,8 +4,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const dwm_nt61_mod = b.createModule(.{
-        .root_source_file = b.path("../../config/dwm_nt61_defaults.zig"),
+    const zircon_aero_defaults_mod = b.createModule(.{
+        .root_source_file = b.path("../../config/zircon_aero_defaults.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    lib_mod.addImport("dwm_nt61_defaults", dwm_nt61_mod);
+    lib_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_mod);
 
     // Static library (.lib) — Windows-compatible archive
     const lib = b.addLibrary(.{
@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    dll_mod.addImport("dwm_nt61_defaults", dwm_nt61_mod);
+    dll_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_mod);
 
     // DLL — Windows-compatible dynamic library (PE format when targeting windows)
     const dll = b.addLibrary(.{
@@ -47,8 +47,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    // main.zig 与 root.zig 同属本模块，theme.zig 的 @import("dwm_nt61_defaults") 解析自此处
-    exe_mod.addImport("dwm_nt61_defaults", dwm_nt61_mod);
+    // main.zig 与 root.zig 同属本模块，theme.zig 的 @import("zircon_aero_defaults") 解析自此处
+    exe_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_mod);
 
     // EXE — Windows PE-compatible executable
     const exe = b.addExecutable(.{
@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_mod.addImport("dwm_nt61_defaults", dwm_nt61_mod);
+    test_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_mod);
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_mod,

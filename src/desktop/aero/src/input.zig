@@ -6,7 +6,7 @@
 //! Enhanced with DWM-style smooth cursor interpolation, sub-pixel
 //! positioning, and velocity-based cursor rendering for silky
 //! movement. Uses linear interpolation between raw input samples.
-//! Reference: ReactOS user32 input handling (win32ss/user/user32/)
+//! Reference: Microsoft Learn — mouse, keyboard, and message input (Win32 desktop apps).
 
 pub const MAX_HOTKEYS: usize = 32;
 pub const MAX_CURSOR_TYPES: usize = 12;

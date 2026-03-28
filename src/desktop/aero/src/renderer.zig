@@ -248,7 +248,7 @@ pub fn drawGlassSurface(rect: Rect) void {
     }
 }
 
-/// Full DWM glass window frame (win7Desktop.md pipeline):
+/// Full DWM glass window frame (DesktopManagerSpec.md / Learn DWM blur model):
 ///   1. Soft shadow → 2. Background blur → 3. Desaturate/tint → 4. Specular highlight → 5. Border
 pub fn renderDwmWindowFrame(frame_rect: Rect, titlebar_h: i32) void {
     drawShadow(frame_rect, theme.WINDOW_SHADOW_SIZE);
@@ -282,7 +282,7 @@ pub fn renderDesktopBackground(rect: Rect) void {
     fillRect(rect, theme.getColors().desktop_background);
 }
 
-/// DWM glass taskbar (win7Desktop.md: taskbar shares glass composition)
+/// DWM glass taskbar (taskbar shares same glass composition as frames)
 pub fn renderGlassTaskbar(rect: Rect) void {
     const gp = theme.getGlassParams();
     if (theme.isGlassEnabled()) {

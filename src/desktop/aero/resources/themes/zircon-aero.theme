@@ -5,7 +5,7 @@
 ; Visual Style: Glass translucency with Gaussian blur, specular highlights, soft shadows
 
 [Theme]
-DisplayName=ZirconAero (Windows 7 style)
+DisplayName=ZirconAero (classic glass desktop)
 ThemeId=zircon_aero
 Version=1.2.0
 Author=ZirconOS Project
@@ -22,7 +22,7 @@ CompositedWindow=1
 Transparency=1
 
 [Desktop]
-Wallpaper=resources\wallpapers\zircon_harmony_win7.svg
+Wallpaper=resources\wallpapers\Landscapes\zircon_harmony.png
 TileWallpaper=0
 WallpaperStyle=10
 Pattern=

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="wFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFE8A0"/>
+      <stop offset="100%" stop-color="#E8B020"/>
+    </linearGradient>
+    <filter id="wSh"><feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="#806010" flood-opacity="0.35"/></filter>
+  </defs>
+  <path d="M24 8L40 38H8z" fill="url(#wFill)" stroke="#156575" stroke-width="1.5" stroke-linejoin="round" filter="url(#wSh)"/>
+  <rect x="21" y="16" width="6" height="12" rx="1" fill="#FFFFFF" stroke="#8A6A10" stroke-width="0.8"/>
+  <rect x="21" y="30" width="6" height="4" rx="1" fill="#FFFFFF" stroke="#8A6A10" stroke-width="0.8"/>
+</svg>

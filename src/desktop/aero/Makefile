@@ -13,7 +13,7 @@ VERSION      := 1.1.0
 ARCH         ?= x86_64
 OPTIMIZE     ?= Debug
 QEMU_MEM     ?= 512M
-RESOLUTION   ?= 1024x768x32
+RESOLUTION   ?= 1920x1080x32
 
 ROOT_DIR     := $(shell cd ../.. && pwd)
 AERO_DIR     := $(shell pwd)
@@ -133,7 +133,7 @@ run-bios:
 
 resources:
 	@echo "[AERO] Resources manifest:"
-	@echo "  Wallpapers: $(shell ls $(AERO_DIR)/resources/wallpapers/*.svg 2>/dev/null | wc -l) SVG files"
+	@echo "  Wallpapers: $(shell find $(AERO_DIR)/resources/wallpapers -name '*.png' 2>/dev/null | wc -l) PNG files"
 	@echo "  Icons:      $(shell ls $(AERO_DIR)/resources/icons/*.svg 2>/dev/null | wc -l) SVG files"
 	@echo "  Cursors:    $(shell ls $(AERO_DIR)/resources/cursors/*.svg 2>/dev/null | wc -l) SVG files"
 	@echo "  Themes:     $(shell ls $(AERO_DIR)/resources/themes/*.theme 2>/dev/null | wc -l) theme files"

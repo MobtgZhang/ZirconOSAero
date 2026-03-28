@@ -1,15 +1,19 @@
 //! Resource Loader — ZirconOS Aero Desktop
 //! Scans and catalogues graphical assets from the resources/ directory tree:
-//!   resources/wallpapers/    — SVG wallpaper backgrounds per theme
-//!   resources/icons/         — Application and system icons (SVG)
+//!   resources/wallpapers/    — PNG wallpaper backgrounds per theme (classified subdirs)
+//!   resources/icons/         — Application and system icons (SVG; logical IDs 1–25)
 //!   resources/cursors/       — Animated cursor sprites (SVG)
 //!   resources/themes/        — .theme configuration files
-//!   resources/sounds/        — Event sound schemes（当前仅元数据路径登记，无播放栈）
+//!   resources/sounds/        — Event sound schemes（元数据 + 五主题 WAV；内核暂无播放栈）
 //!   resources/logo.svg       — 品牌标识（登记路径；内核任务栏为过程绘制）
 //!   resources/start_orb.svg  — Start 球矢量（登记路径）
 //!
 //! At init time, the loader registers known built-in resource entries
 //! so the compositor and shell can reference them by path or ID.
+//!
+//! Shell icon resolution (host / future user-mode): `pe_icon_loader.loadIconFromShellSystem32Dir`
+//! reads `zircon_shell32_res.manifest.json` (`shell_icons_manifest.parseBinaryForm`) to choose ICO bundle vs PE `.rsrc`;
+//! see `docs/cn/NT61_ShellIcons.md` and `zig-out/.../loongarch64/win/System32/`.
 
 pub const MAX_WALLPAPERS: usize = 24;
 pub const MAX_ICONS: usize = 64;
@@ -129,18 +133,18 @@ pub fn init() void {
 }
 
 fn registerBuiltinWallpapers() void {
-    addWallpaper("resources/wallpapers/zircon_default.svg", 1);
-    addWallpaper("resources/wallpapers/zircon_harmony_win7.svg", 9);
-    addWallpaper("resources/wallpapers/zircon_crystal.svg", 2);
-    addWallpaper("resources/wallpapers/zircon_aurora.svg", 3);
-    addWallpaper("resources/wallpapers/zircon_characters.svg", 4);
-    addWallpaper("resources/wallpapers/zircon_nature.svg", 5);
-    addWallpaper("resources/wallpapers/zircon_scenes.svg", 6);
-    addWallpaper("resources/wallpapers/zircon_landscapes.svg", 7);
-    addWallpaper("resources/wallpapers/zircon_architecture.svg", 8);
-    addWallpaper("resources/wallpapers/zircon_ocean.svg", 10);
-    addWallpaper("resources/wallpapers/zircon_nebula.svg", 11);
-    addWallpaper("resources/wallpapers/zircon_landscape.svg", 12);
+    addWallpaper("resources/wallpapers/Nature/zircon_default.png", 1);
+    addWallpaper("resources/wallpapers/Landscapes/zircon_harmony.png", 9);
+    addWallpaper("resources/wallpapers/Architecture/zircon_crystal.png", 2);
+    addWallpaper("resources/wallpapers/Landscapes/zircon_aurora.png", 3);
+    addWallpaper("resources/wallpapers/Characters/zircon_characters.png", 4);
+    addWallpaper("resources/wallpapers/Nature/zircon_nature.png", 5);
+    addWallpaper("resources/wallpapers/Scenes/zircon_scenes.png", 6);
+    addWallpaper("resources/wallpapers/Landscapes/zircon_landscapes.png", 7);
+    addWallpaper("resources/wallpapers/Architecture/zircon_architecture.png", 8);
+    addWallpaper("resources/wallpapers/Nature/zircon_ocean.png", 10);
+    addWallpaper("resources/wallpapers/Scenes/zircon_nebula.png", 11);
+    addWallpaper("resources/wallpapers/Landscapes/zircon_landscape.png", 12);
 }
 
 fn registerBuiltinIcons() void {
@@ -162,6 +166,14 @@ fn registerBuiltinIcons() void {
     addIcon("resources/icons/user.svg", 15);
     addIcon("resources/icons/lock.svg", 16);
     addIcon("resources/icons/shutdown.svg", 17);
+    addIcon("resources/icons/recycle_bin_full.svg", 18);
+    addIcon("resources/icons/drive_fixed.svg", 19);
+    addIcon("resources/icons/drive_removable.svg", 20);
+    addIcon("resources/icons/drive_optical.svg", 21);
+    addIcon("resources/icons/printer.svg", 22);
+    addIcon("resources/icons/info.svg", 23);
+    addIcon("resources/icons/warning.svg", 24);
+    addIcon("resources/icons/error.svg", 25);
 }
 
 fn registerBuiltinCursors() void {
@@ -197,19 +209,11 @@ fn registerBuiltinSoundSchemes() void {
     addSoundScheme("resources/sounds/sound_scheme.conf", 1);
     addSoundScheme("resources/sounds/Desktop.ini", 2);
     addSoundScheme("resources/sounds/README.md", 3);
-    addSoundScheme("resources/sounds/Afternoon/Desktop.ini", 4);
-    addSoundScheme("resources/sounds/Calligraphy/Desktop.ini", 5);
-    addSoundScheme("resources/sounds/Characters/Desktop.ini", 6);
-    addSoundScheme("resources/sounds/Cityscape/Desktop.ini", 7);
-    addSoundScheme("resources/sounds/Delta/Desktop.ini", 8);
-    addSoundScheme("resources/sounds/Festival/Desktop.ini", 9);
-    addSoundScheme("resources/sounds/Garden/Desktop.ini", 10);
-    addSoundScheme("resources/sounds/Heritage/Desktop.ini", 11);
-    addSoundScheme("resources/sounds/Landscape/Desktop.ini", 12);
-    addSoundScheme("resources/sounds/Quirky/Desktop.ini", 13);
-    addSoundScheme("resources/sounds/Raga/Desktop.ini", 14);
-    addSoundScheme("resources/sounds/Savanna/Desktop.ini", 15);
-    addSoundScheme("resources/sounds/Sonata/Desktop.ini", 16);
+    addSoundScheme("resources/sounds/Architecture/Desktop.ini", 4);
+    addSoundScheme("resources/sounds/Characters/Desktop.ini", 5);
+    addSoundScheme("resources/sounds/Landscapes/Desktop.ini", 6);
+    addSoundScheme("resources/sounds/Nature/Desktop.ini", 7);
+    addSoundScheme("resources/sounds/Scenes/Desktop.ini", 8);
 }
 
 /// Shell 品牌图（内核帧缓冲任务栏仍为过程绘制；此处供清单与宿主工具引用路径）。

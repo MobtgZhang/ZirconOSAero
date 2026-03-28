@@ -1,6 +1,6 @@
 # Aero 壳层视觉验收基线
 
-在目标分辨率（建议 1920×1200 或与主壁纸 `zircon_harmony_win7.svg` 一致）下截取以下四张，用于回归对比。路径可放在 `docs/cn/screenshots/aero/`（若仓库忽略二进制，仅本地保留亦可）。
+在目标分辨率（建议 1920×1200 或与主壁纸 `Landscapes/zircon_harmony.png` 源图长宽比一致）下截取以下四张，用于回归对比。路径可放在 `docs/cn/screenshots/aero/`（若仓库忽略二进制，仅本地保留亦可）。
 
 | # | 场景 | 检查要点 |
 |---|------|----------|
@@ -10,12 +10,12 @@
 | 4 | 托盘区 | 托盘图标与壁纸对比度足够，不被 Harmony 背景吞没 |
 | 5 | 非 x86（如 AArch64）+ VirtIO 鼠标 | QEMU 增加 `-device virtio-mouse-pci`（或等价）；指针随移动更新，开始菜单项可 hover |
 | 6 | ZBM 操作系统菜单 | 方向键 / PageUp·PageDown / Home·End / `j`·`k`·`w`·`s` / 数字键 `1`–`8` 可改选；串口-only 固件可能无 ConIn，属固件限制 |
-| 7 | 壁纸预设 | **Ctrl+Alt+F9** 循环 12 套程序化背景（与 `resource_loader` 壁纸条目对应）；首帧仍为快速渐变 |
+| 7 | 壁纸预设 | **Ctrl+Alt+F9** 循环 12 套位图背景（与 `wallpaper_data` / `resource_loader` 预设顺序对应）；构建期由 PNG 嵌入 |
 | 8 | 光标形态 | 开始菜单项上为手形（箭头位图）、Explorer 地址栏为竖线光标、拖标题栏为四向移动 |
 
 **构建检查**：`resource_loader` 中 `addIcon` / `addCursor` / `addThemeFile` / `addSoundScheme` / `addBrandAsset` 路径与 `resources/` 内文件名一致，`zig build` 无缺失嵌入路径。
 
-**内核壁纸**：QEMU 默认背景来自 `renderer_aero.zig` 的 `renderHarmonyWallpaper` 等程序化绘制，与 `wallpapers/*.svg` 为概念对齐而非像素一致。
+**内核壁纸**：QEMU 桌面背景由 `wallpaper_bitmap.zig` 从构建嵌入的 RGBA（`tools/wallpaper_embed.zig` 自 `wallpapers/**/*.png` 生成）经 cover 缩放绘制；与磁盘 PNG 为同源缩放关系。
 
 **桌面右键菜单**（帧缓冲）：`display.zig` `renderContextMenu` 使用主题 `titlebar_text`（黑）于浅底，避免白字低对比。
 

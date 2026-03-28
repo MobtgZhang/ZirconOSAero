@@ -1,6 +1,6 @@
 //! ZirconOS Aero Desktop — DWM Compositor Entry Point
 //!
-//! Implements the Windows 7 DWM architecture from win7Desktop.md:
+//! Aero compositor demo aligned with NT 6.1 DWM concepts (Microsoft Learn + docs/cn/DesktopManagerSpec.md):
 //!   1. Each window renders to its own Redirected Surface (off-screen buffer)
 //!   2. DWM compositor reads all surfaces and alpha-blends by Z-order
 //!   3. Glass effect: multi-pass box blur → desaturate/tint → specular highlight
@@ -78,8 +78,7 @@ pub fn main() !void {
     p(out, "  CJK font      : {s}\n", .{font_loader.getCjkFontName()});
 
     // ── Phase 3: Initialize DWM Compositor ──
-    // Architecture per win7Desktop.md:
-    //   dwm.exe runs in user mode, uses Direct3D 9 for GPU-accelerated compositing
+    // Architecture (public DWM model): user-mode compositor + redirected surfaces; this sample uses CPU paths.
     //   Each window paints to a Redirected Surface (independent GPU texture)
     //   Compositor reads all textures, blends by Z-order with glass effects
     p(out, "\n--- Phase 3: DWM Compositor Init ---\n", .{});
@@ -135,7 +134,7 @@ pub fn main() !void {
     p(out, "  Total surfaces    : {d}\n", .{compositor.getSurfaceCount()});
 
     // ── Phase 5: Render Desktop Frame ──
-    // DWM composition pipeline (from win7Desktop.md):
+    // DWM composition pipeline (see DesktopManagerSpec.md §1):
     //   1. Sort surfaces by Z-order
     //   2. Glass: blur background → desaturate → tint blend → specular highlight
     //   3. Shadow: multi-layer soft drop shadow
@@ -187,7 +186,7 @@ pub fn main() !void {
     }
 
     // ── Phase 8: DWM Rendering Pipeline Summary ──
-    p(out, "\n--- DWM Rendering Pipeline (win7Desktop.md) ---\n", .{});
+    p(out, "\n--- DWM Rendering Pipeline (NT 6.1 concepts) ---\n", .{});
     p(out, "  ┌─────────────────────────────────────────┐\n", .{});
     p(out, "  │ Application → Redirected Surface        │\n", .{});
     p(out, "  │         (each window has its own)       │\n", .{});

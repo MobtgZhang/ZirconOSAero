@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="eFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FF9090"/>
+      <stop offset="100%" stop-color="#D03030"/>
+    </linearGradient>
+    <filter id="eSh"><feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="#601010" flood-opacity="0.4"/></filter>
+  </defs>
+  <circle cx="24" cy="24" r="15" fill="url(#eFill)" stroke="#156575" stroke-width="1.5" filter="url(#eSh)"/>
+  <path d="M17 17l14 14M31 17L17 31" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+</svg>

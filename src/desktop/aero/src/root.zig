@@ -2,7 +2,8 @@
 //! Library root: re-exports all public modules for use by the kernel
 //! display compositor and the standalone desktop shell executable.
 //!
-//! Architecture follows ReactOS NT6 desktop model:
+//! Architecture aligns with NT 6.1-style session/desktop/DWM concepts (Microsoft Learn);
+//! implementation is original Zig — see docs/cn/DesktopManagerSpec.md.
 //!   winlogon → shell (explorer) → DWM compositor → desktop/taskbar/startmenu
 //! Each layer communicates through the exported Zig API below.
 
@@ -18,13 +19,17 @@ pub const controls = @import("controls.zig");
 pub const winlogon = @import("winlogon.zig");
 pub const theme_loader = @import("theme_loader.zig");
 pub const resource_loader = @import("resource_loader.zig");
+pub const icon_resource_ids = @import("icon_resource_ids.zig");
+pub const pe_icon_resource = @import("pe_icon_resource.zig");
+pub const pe_icon_loader = @import("pe_icon_loader.zig");
+pub const shell_icons_manifest = @import("shell_icons_manifest.zig");
 pub const font_loader = @import("font_loader.zig");
 
 // ── Theme identity ──
 
 pub const theme_name = "Aero";
 pub const theme_version = "1.2.0";
-pub const theme_description = "ZirconAero — Windows 7 Aero-style glass (Harmony wallpaper, taskbar, tray, gadgets, DWM blur)";
+pub const theme_description = "ZirconAero — glass desktop (Harmony wallpaper, taskbar, tray, gadgets, compositor blur)";
 
 // ── Available theme variants ──
 

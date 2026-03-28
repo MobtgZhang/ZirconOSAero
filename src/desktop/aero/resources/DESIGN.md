@@ -58,5 +58,17 @@
 | 11 | `music.svg` |
 | 12 | `folder.svg` |
 | 13 | `control_panel.svg` |
+| 14 | `file.svg` |
+| 15 | `user.svg` |
+| 16 | `lock.svg` |
+| 17 | `shutdown.svg` |
+| 18 | `recycle_bin_full.svg` |
+| 19 | `drive_fixed.svg` |
+| 20 | `drive_removable.svg` |
+| 21 | `drive_optical.svg` |
+| 22 | `printer.svg` |
+| 23 | `info.svg` |
+| 24 | `warning.svg` |
+| 25 | `error.svg` |
 
-辅助未注册 ID（文档/打包用）：`file.svg`、`user.svg`、`lock.svg`、`shutdown.svg`。
+详见 `icons/README.md` 与 `win32/ICON_RESOURCE_IDS.md`（PE 资源号 101–125）。

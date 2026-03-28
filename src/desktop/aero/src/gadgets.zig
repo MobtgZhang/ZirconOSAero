@@ -14,6 +14,9 @@ pub const CpuMeterGadget = struct {
 };
 
 var cpu_meter: CpuMeterGadget = .{};
+/// 天气占位（内核帧缓冲路径见路线图；此处供宿主 Aero 库演示）。
+var weather_status: [48]u8 = [_]u8{0} ** 48;
+var weather_status_len: u8 = 0;
 
 pub fn init() void {
     const L = theme.Layout;
@@ -25,6 +28,21 @@ pub fn init() void {
         .visible = true,
     };
     cpu_meter.net_kbps_len = setStr(&cpu_meter.net_kbps_str, "0K/s");
+    weather_status_len = setStr48(&weather_status, "Weather: N/A (offline)");
+}
+
+fn setStr48(dest: *[48]u8, src: []const u8) u8 {
+    const n = @min(src.len, dest.len);
+    for (0..n) |i| dest[i] = src[i];
+    return @intCast(n);
+}
+
+pub fn getWeatherStatus() []const u8 {
+    return weather_status[0..weather_status_len];
+}
+
+pub fn setWeatherStatus(text: []const u8) void {
+    weather_status_len = setStr48(&weather_status, text);
 }
 
 fn setStr(dest: *[16]u8, src: []const u8) u8 {

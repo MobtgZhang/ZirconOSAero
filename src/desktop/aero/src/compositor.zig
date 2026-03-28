@@ -1,5 +1,6 @@
 //! Compositor - ZirconOS Aero Desktop Window Manager (DWM)
 //! 表面标志与内核 `dwm_compositor` 的语义映射见 `src/config/dwm_surface_spec.zig`、`docs/cn/DesktopManagerSpec.md`。
+//! **Shell 层脏区（规格）**：与内核 `display.zig` 对齐时，将开始菜单、桌面上下文菜单、任务栏托盘飞出、拖窗矩形视为独立 damage 源（`markDirty` / `markFullDirty`），便于未来方案 B→A 迁出内核合成而不整帧失效。
 //! Enhanced compositing engine with full alpha blending support,
 //! glass transparency, blur effects, and per-surface opacity.
 //! Each window renders to its own surface; the compositor merges

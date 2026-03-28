@@ -1,73 +1,43 @@
 # ZirconOS Aero Sound Schemes
 
-Original sound scheme definitions for ZirconOS Aero desktop.
+与 **壁纸分类一致** 的五套主题音效（`Architecture`、`Characters`、`Landscapes`、`Nature`、`Scenes`），WAV 由仓库内脚本 **ffmpeg** 合成，原创波形，非任何第三方 OS 随盘素材。
 
-## Structure
+## 目录结构
 
 ```
 sounds/
-├── sound_scheme.conf      # Main sound scheme configuration (event → WAV mappings)
-├── Desktop.ini            # Root-level localized file name mappings
-├── README.md              # This file
-├── Afternoon/             # Afternoon sound scheme variant
-│   └── Desktop.ini
-├── Calligraphy/           # Calligraphy sound scheme variant
-│   └── Desktop.ini
-├── Characters/            # Characters sound scheme variant
-│   └── Desktop.ini
-├── Cityscape/             # Cityscape sound scheme variant
-│   └── Desktop.ini
-├── Delta/                 # Delta sound scheme variant
-│   └── Desktop.ini
-├── Festival/              # Festival sound scheme variant
-│   └── Desktop.ini
-├── Garden/                # Garden sound scheme variant
-│   └── Desktop.ini
-├── Heritage/              # Heritage sound scheme variant
-│   └── Desktop.ini
-├── Landscape/             # Landscape sound scheme variant
-│   └── Desktop.ini
-├── Quirky/                # Quirky sound scheme variant
-│   └── Desktop.ini
-├── Raga/                  # Raga sound scheme variant
-│   └── Desktop.ini
-├── Savanna/               # Savanna sound scheme variant
-│   └── Desktop.ini
-└── Sonata/                # Sonata sound scheme variant
-    └── Desktop.ini
+├── sound_scheme.conf   # 逻辑事件 → 默认 Nature/ 下路径（可改前缀换默认主题）
+├── Desktop.ini         # 根级事件名映射 + 五主题文件夹显示名
+├── README.md
+├── Architecture/       # 每主题：Desktop.ini + 21 个 ZirconOS *.wav
+├── Characters/
+├── Landscapes/
+├── Nature/
+└── Scenes/
 ```
 
-## Sound Scheme Philosophy
+## 事件清单（每主题相同文件名）
 
-- **Crystal glass aesthetic:** Clean tones, subtle resonance, no harshness
-- **Startup/shutdown:** 3-5 second ambient crystal chimes, layered harmonics
-- **Errors/warnings:** Short tonal cues (< 1 second), distinct but not alarming
-- **Navigation:** Micro-interactions (< 0.3 seconds), soft taps and slides
-- **Window events:** Glass movement sounds, subtle whooshes
-- **Device events:** Connection tones with ascending/descending pitch
-- **Tonal palette:** Rooted in C major / A minor
-- **Target loudness:** -18 LUFS (integrated), Peak: -1 dBTP
+含独立 **开机**（`ZirconOS Startup.wav`，较长分层琶音）与 **登录**（`ZirconOS Logon Sound.wav`，较短上行句），以及加长后的 **关机**（`ZirconOS Shutdown.wav`，三低弦混合 + 长渐弱）。其余提示音在时长与和声上相对早期版本更易辨识。
 
-## Desktop.ini Format
+## 重新生成
 
-Each subdirectory contains a `Desktop.ini` file that maps WAV filenames to
-localized display names, following the NT6 shell desktop.ini convention:
+依赖：**python3**、**ffmpeg**（lavfi + loudnorm）。
 
-```ini
-[LocalizedFileNames]
-ZirconOS Default.wav=Default
-ZirconOS Error.wav=Error
+```bash
+python3 tools/soundgen/generate_aero_sounds.py
+# 或
+zig build aero-sounds
 ```
 
-## Implementation Status
+脚本会 **覆盖** 五目录下全部 WAV，并重写各主题 `Desktop.ini`。
 
-WAV audio files are pending generation. The configuration infrastructure
-and event mappings are fully defined in `sound_scheme.conf`.
+## 声学目标
 
-## Copyright Notice
+- 采样率 44.1 kHz，立体声，16-bit PCM；loudnorm 目标约 **-18 LUFS** / **-1.5 dBTP**
+- 五主题通过 `THEME_PARAMS`（`tools/soundgen/generate_aero_sounds.py`）调节音高比例、立体声回声与开机/关机渐弱起点
 
-Copyright (C) 2024-2026 ZirconOS Project
+## Copyright
+
+Copyright (C) 2024-2026 ZirconOS Project  
 Licensed under GNU Lesser General Public License v2.1
-
-All sound designs will be original compositions, not derived from any
-third-party operating system sound assets.

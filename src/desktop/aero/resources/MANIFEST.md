@@ -34,36 +34,37 @@
 | `themes/landscapes.theme` | Landscapes 主题 - 灰银极简风格 |
 | `themes/architecture.theme` | Architecture 主题 - 靛蓝建筑风格 |
 
-## 壁纸
+## 壁纸（PNG，按分类子目录）
 
 | 文件 | 主题 | 说明 |
 |------|------|------|
-| `wallpapers/zircon_harmony_win7.svg` | Blue (默认) | Harmony 风深蓝氛围 + 四色窗格光晕（原创致敬） |
-| `wallpapers/zircon_default.svg` | Blue (备选) | 中心水晶，深蓝渐变背景 |
-| `wallpapers/zircon_aurora.svg` | Aurora | 北极光 + 水晶面片 + 星场 |
-| `wallpapers/zircon_crystal.svg` | Blue/Graphite | 抽象菱形水晶 + 光斑 |
-| `wallpapers/zircon_ocean.svg` | 通用 | 深海光线 + 焦散 |
-| `wallpapers/zircon_nebula.svg` | 通用 | 蓝橙星云尘埃带 |
-| `wallpapers/zircon_landscape.svg` | 通用 | 水晶山峦 + 湖面倒影 |
-| `wallpapers/zircon_characters.svg` | Characters | 暖色墨迹笔触 + 印章 |
-| `wallpapers/zircon_nature.svg` | Nature | 紫色花瓣 + 绿叶 |
-| `wallpapers/zircon_scenes.svg` | Scenes | 紫色舞台聚光灯 |
-| `wallpapers/zircon_landscapes.svg` | Landscapes | 灰银丘陵 + 溪流 |
-| `wallpapers/zircon_architecture.svg` | Architecture | 靛蓝玻璃幕墙建筑 |
+| `wallpapers/Landscapes/zircon_harmony.png` | Blue (默认) | 深蓝峡湾山水氛围（AI 生成） |
+| `wallpapers/Nature/zircon_default.png` | Blue (备选 / high contrast) | 蓝调湖泊山景（AI 生成） |
+| `wallpapers/Landscapes/zircon_aurora.png` | Aurora | 北极光景观（AI 生成） |
+| `wallpapers/Architecture/zircon_crystal.png` | Blue/Graphite | 玻璃水晶立面抽象（AI 生成） |
+| `wallpapers/Nature/zircon_ocean.png` | 通用 | 深海光束（AI 生成） |
+| `wallpapers/Scenes/zircon_nebula.png` | 通用 | 星云（AI 生成） |
+| `wallpapers/Landscapes/zircon_landscape.png` | 通用 | 水晶山峦湖面（AI 生成） |
+| `wallpapers/Characters/zircon_characters.png` | Characters | 水墨意境（AI 生成，无第三方 IP 角色） |
+| `wallpapers/Nature/zircon_nature.png` | Nature | 花卉绿植（AI 生成） |
+| `wallpapers/Scenes/zircon_scenes.png` | Scenes | 剧场舞台光（AI 生成） |
+| `wallpapers/Landscapes/zircon_landscapes.png` | Landscapes | 丘陵溪流晨雾（AI 生成） |
+| `wallpapers/Architecture/zircon_architecture.png` | Architecture | 玻璃幕墙都市黄昏（AI 生成） |
 
 ## 声音方案
 
 | 目录 | 说明 |
 |------|------|
-| `sounds/sound_scheme.conf` | 主声音方案配置（`registerBuiltinSoundSchemes` ID 1） |
-| `sounds/Desktop.ini` | 根映射（ID 2） |
+| `sounds/sound_scheme.conf` | 主声音方案配置（逻辑事件 → `Nature/ZirconOS *.wav`；含独立 `Startup.wav`；ID 1） |
+| `sounds/Desktop.ini` | 根映射 + 五主题文件夹名（ID 2） |
 | `sounds/README.md` | 文档（ID 3） |
-| `sounds/Afternoon/Desktop.ini` ~ `sounds/Sonata/Desktop.ini` | 13 个变体目录（ID 4–16）；内核暂无 WAV 播放，仅路径登记 |
+| `sounds/Architecture` … `sounds/Scenes` | 五主题各 21 个 WAV + `Desktop.ini`（ID 4–8） |
+| `tools/soundgen/generate_aero_sounds.py` | ffmpeg 可复现生成器；`zig build aero-sounds` |
 
 ## 使用方式
 
 - **用户态 Aero 库**：[`resource_loader.zig`](../src/resource_loader.zig) 登记壁纸 / 图标 / 光标 / 主题 / 声音元数据路径 / 品牌 SVG；主题通过 `theme_loader.zig` 加载 `.theme` INI。
-- **内核帧缓冲桌面**：[`renderer_aero.zig`](../../../drivers/video/renderer_aero.zig) 用程序化渐变与 `blendTintRect` 绘制默认与 **Ctrl+Alt+F9** 循环的 12 套壁纸预设，**运行时不对 `wallpapers/*.svg` 做光栅化**；SVG 与 `resource_loader` 条目用于清单一致性与宿主工具。桌面图标 SVG 由 [`icons.zig`](../../../drivers/video/icons.zig) 构建期 `@embedFile` 嵌入。
+- **内核帧缓冲桌面**：[`renderer_aero.zig`](../../../drivers/video/renderer_aero.zig) 通过 [`wallpaper_bitmap.zig`](../../../drivers/video/wallpaper_bitmap.zig) 将构建期嵌入的 RGBA（来源：`tools/wallpaper_embed.zig` 读取上表 PNG）以 **cover** 缩放绘制；**Ctrl+Alt+F9** 循环 12 套预设。磁盘 PNG 与 `resource_loader` 路径供 Aero 库与主题清单一致。桌面图标仍由 [`icons.zig`](../../../drivers/video/icons.zig) `@embedFile` 嵌入。
 
 ## 注意
 

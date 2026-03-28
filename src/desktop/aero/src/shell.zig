@@ -3,7 +3,8 @@
 //! coordinates desktop, taskbar, start menu, and manages window
 //! focus, z-order, session lifecycle, and theme switching.
 //!
-//! Startup sequence mirrors ReactOS explorer.exe NT6 mode:
+//! Startup sequence follows public Win32 shell lifecycle (session → desktop → DWM theme);
+//! see docs/cn/PROCESS_NT61.md and Microsoft Learn (Window Stations and Desktops).
 //! 1. WinLogon authenticates user and creates desktop
 //! 2. Shell initializes resource and font loaders
 //! 3. Shell initializes DWM compositor with default theme

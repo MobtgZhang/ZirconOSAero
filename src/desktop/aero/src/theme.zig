@@ -173,15 +173,15 @@ pub const WallpaperPath = struct {
 pub fn getWallpaperForScheme(cs: ColorScheme) WallpaperPath {
     var wp = WallpaperPath{};
     const src = switch (cs) {
-        .zircon_blue => "resources/wallpapers/zircon_harmony_win7.svg",
-        .zircon_graphite => "resources/wallpapers/zircon_crystal.svg",
-        .zircon_aurora => "resources/wallpapers/zircon_aurora.svg",
-        .zircon_characters => "resources/wallpapers/zircon_characters.svg",
-        .zircon_nature => "resources/wallpapers/zircon_nature.svg",
-        .zircon_scenes => "resources/wallpapers/zircon_scenes.svg",
-        .zircon_landscapes => "resources/wallpapers/zircon_landscapes.svg",
-        .zircon_architecture => "resources/wallpapers/zircon_architecture.svg",
-        .highcontrast => "resources/wallpapers/zircon_default.svg",
+        .zircon_blue => "resources/wallpapers/Landscapes/zircon_harmony.png",
+        .zircon_graphite => "resources/wallpapers/Architecture/zircon_crystal.png",
+        .zircon_aurora => "resources/wallpapers/Landscapes/zircon_aurora.png",
+        .zircon_characters => "resources/wallpapers/Characters/zircon_characters.png",
+        .zircon_nature => "resources/wallpapers/Nature/zircon_nature.png",
+        .zircon_scenes => "resources/wallpapers/Scenes/zircon_scenes.png",
+        .zircon_landscapes => "resources/wallpapers/Landscapes/zircon_landscapes.png",
+        .zircon_architecture => "resources/wallpapers/Architecture/zircon_architecture.png",
+        .highcontrast => "resources/wallpapers/Nature/zircon_default.png",
     };
     const len = @min(src.len, 128);
     for (0..len) |i| {
@@ -280,24 +280,24 @@ pub const button_shadow = rgb(0xA0, 0xA0, 0xA0);
 pub const selection_bg = rgb(0x33, 0x99, 0xFF);
 
 // ── DWM Configuration Defaults ──
-const nt61 = @import("dwm_nt61_defaults");
+const zircon_aero = @import("zircon_aero_defaults");
 
-/// 与 `src/config/dwm_nt61_defaults.zig` / 内核 `initAeroDwm` 数值一致（单一源）
+/// 与 `src/config/zircon_aero_defaults.zig` / 内核 `initAeroDwm` 数值一致（单一源）
 pub const DwmDefaults = struct {
-    pub const glass_enabled: bool = nt61.UserShellDwm.glass_enabled;
-    pub const glass_opacity: u8 = nt61.UserShellDwm.glass_opacity;
-    pub const blur_radius: u8 = nt61.UserShellDwm.blur_radius;
-    pub const blur_passes: u8 = nt61.UserShellDwm.blur_passes;
-    pub const glass_saturation: u8 = nt61.UserShellDwm.glass_saturation;
+    pub const glass_enabled: bool = zircon_aero.UserShellDwm.glass_enabled;
+    pub const glass_opacity: u8 = zircon_aero.UserShellDwm.glass_opacity;
+    pub const blur_radius: u8 = zircon_aero.UserShellDwm.blur_radius;
+    pub const blur_passes: u8 = zircon_aero.UserShellDwm.blur_passes;
+    pub const glass_saturation: u8 = zircon_aero.UserShellDwm.glass_saturation;
     /// 与内核相同的 u32 打包值（勿用本文件 `rgb()` 重算，避免与帧缓冲路径色差）
-    pub const glass_tint_color: u32 = nt61.UserShellDwm.glass_tint_color;
-    pub const glass_tint_opacity: u8 = nt61.UserShellDwm.glass_tint_opacity;
-    pub const animation_enabled: bool = nt61.UserShellDwm.animation_enabled;
-    pub const peek_enabled: bool = nt61.UserShellDwm.peek_enabled;
-    pub const shadow_enabled: bool = nt61.UserShellDwm.shadow_enabled;
-    pub const shadow_size: u8 = nt61.UserShellDwm.shadow_size;
-    pub const shadow_layers: u8 = nt61.UserShellDwm.shadow_layers;
-    pub const vsync: bool = nt61.UserShellDwm.vsync;
+    pub const glass_tint_color: u32 = zircon_aero.UserShellDwm.glass_tint_color;
+    pub const glass_tint_opacity: u8 = zircon_aero.UserShellDwm.glass_tint_opacity;
+    pub const animation_enabled: bool = zircon_aero.UserShellDwm.animation_enabled;
+    pub const peek_enabled: bool = zircon_aero.UserShellDwm.peek_enabled;
+    pub const shadow_enabled: bool = zircon_aero.UserShellDwm.shadow_enabled;
+    pub const shadow_size: u8 = zircon_aero.UserShellDwm.shadow_size;
+    pub const shadow_layers: u8 = zircon_aero.UserShellDwm.shadow_layers;
+    pub const vsync: bool = zircon_aero.UserShellDwm.vsync;
 };
 
 // ── Layout Constants ──

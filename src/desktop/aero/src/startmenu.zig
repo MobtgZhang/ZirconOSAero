@@ -1,7 +1,7 @@
-//! Aero Start Menu
+//! Windows 7-style Start Menu (host Aero library).
 //! Two-column layout: left column has pinned programs and all-programs
-//! link, right column has system links (Computer, Documents, etc.).
-//! Features glass border, search box at bottom, and user avatar header.
+//! link, right column has libraries and system links.
+//! Glass border, search box at bottom, user header.
 
 const theme = @import("theme.zig");
 
@@ -14,7 +14,7 @@ pub const MenuItem = struct {
 };
 
 const MAX_LEFT_ITEMS: usize = 16;
-const MAX_RIGHT_ITEMS: usize = 12;
+const MAX_RIGHT_ITEMS: usize = 16;
 
 var left_items: [MAX_LEFT_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_LEFT_ITEMS;
 var left_count: usize = 0;
@@ -61,13 +61,14 @@ fn addRight(name: []const u8, icon_id: u16) void {
 }
 
 pub const identity = struct {
-    pub const title = "Windows 7 Style — Aero";
+    pub const title = "Start Menu";
     pub const search_placeholder = "Search programs and files";
-    pub const header_sub = "ZirconOS — Glass + DWM";
-    pub const shutdown_label = "Shut Down";
-    pub const logoff_label = "Log Off";
-    pub const user_name = "ZirconOS User";
-    pub const version_tag = "Aero Glass DWM v1.2";
+    pub const header_sub = "Standard user";
+    pub const shutdown_label = "Shut down";
+    pub const logoff_label = "Log off";
+    pub const user_name = "User";
+    /// Reserved for future build stamp; keep empty so shells do not show marketing text.
+    pub const version_tag = "";
     /// Optional zh-CN labels for host shells that localize the start menu
     pub const zh_title = "「开始」菜单";
     pub const zh_search = "搜索程序和文件";
@@ -82,20 +83,28 @@ pub const identity_zh = struct {
 
 fn addDefaultItems() void {
     addLeft("Internet Explorer", 6);
-    addLeft("Windows Media Player", 11);
+    addLeft("Zircon Media Player", 11);
     addLeft("Terminal", 4);
     addLeft("PowerShell", 4);
     addLeft("Notepad", 9);
     addLeft("Calculator", 8);
     addLeft("Paint", 10);
     addLeft("Registry Editor", 7);
+    // 与内核 `startmenu.zig` / `builtin_apps.zig` 左列顺序对齐；点击行为在帧缓冲 Shell 中实现。
 
     addRight("Documents", 2);
+    addRight("Pictures", 10);
+    addRight("Music", 11);
+    addRight("Videos", 12);
+    addRight("Downloads", 12);
+    addRight("Games", 12);
     addRight("Computer", 1);
-    addRight("Control Panel", 13);
     addRight("Network", 5);
-    addRight("Search", 2);
-    addRight("Run...", 1);
+    addRight("Control Panel", 13);
+    addRight("Devices and Printers", 22);
+    addRight("Default Programs", 7);
+    addRight("Help and Support", 7);
+    addRight("Run...", 4);
 }
 
 pub fn toggle() void {

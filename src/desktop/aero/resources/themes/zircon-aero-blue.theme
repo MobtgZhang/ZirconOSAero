@@ -46,7 +46,7 @@ WindowFrame=56 96 168
 WindowText=20 24 32
 
 [Control Panel\Desktop]
-Wallpaper=resources\wallpapers\zircon_aurora.svg
+Wallpaper=resources\wallpapers\Landscapes\zircon_aurora.png
 TileWallpaper=0
 WallpaperStyle=10
 

@@ -1,0 +1,31 @@
+/* ZirconOS Aero — resource-only icon library for Windows hosts / tooling.
+ * Build: scripts/build/build-zircon-icon-dll.sh (requires ICO files under ico/)
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ */
+#include "zircon_icon_ids.h"
+
+ZIR_ICON_COMPUTER ICON "ico/computer.ico"
+ZIR_ICON_DOCUMENTS ICON "ico/documents.ico"
+ZIR_ICON_RECYCLE_BIN ICON "ico/recycle_bin.ico"
+ZIR_ICON_TERMINAL ICON "ico/terminal.ico"
+ZIR_ICON_NETWORK ICON "ico/network.ico"
+ZIR_ICON_BROWSER ICON "ico/browser.ico"
+ZIR_ICON_SETTINGS ICON "ico/settings.ico"
+ZIR_ICON_CALCULATOR ICON "ico/calculator.ico"
+ZIR_ICON_TEXT_EDITOR ICON "ico/text_editor.ico"
+ZIR_ICON_PICTURES ICON "ico/pictures.ico"
+ZIR_ICON_MUSIC ICON "ico/music.ico"
+ZIR_ICON_FOLDER ICON "ico/folder.ico"
+ZIR_ICON_CONTROL_PANEL ICON "ico/control_panel.ico"
+ZIR_ICON_FILE ICON "ico/file.ico"
+ZIR_ICON_USER ICON "ico/user.ico"
+ZIR_ICON_LOCK ICON "ico/lock.ico"
+ZIR_ICON_SHUTDOWN ICON "ico/shutdown.ico"
+ZIR_ICON_RECYCLE_BIN_FULL ICON "ico/recycle_bin_full.ico"
+ZIR_ICON_DRIVE_FIXED ICON "ico/drive_fixed.ico"
+ZIR_ICON_DRIVE_REMOVABLE ICON "ico/drive_removable.ico"
+ZIR_ICON_DRIVE_OPTICAL ICON "ico/drive_optical.ico"
+ZIR_ICON_PRINTER ICON "ico/printer.ico"
+ZIR_ICON_INFO ICON "ico/info.ico"
+ZIR_ICON_WARNING ICON "ico/warning.ico"
+ZIR_ICON_ERROR ICON "ico/error.ico"

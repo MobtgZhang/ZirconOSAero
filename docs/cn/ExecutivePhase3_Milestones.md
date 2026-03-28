@@ -17,12 +17,12 @@
 ## M3.3 — I/O 管理器与驱动栈
 
 - **目标**：IRP 经设备对象分派；与文件系统打开路径协同。
-- **相关源码**：[`src/io/io.zig`](../../src/io/io.zig)、[`src/fs/vfs.zig`](../../src/fs/vfs.zig)。
-- **验收**：至少一条 create/read/close 路径经 `Irp` 结构记录状态。
+- **相关源码**：[`src/io/io.zig`](../../src/io/io.zig)、[`src/fs/vfs.zig`](../../src/fs/vfs.zig)（`dispatchFileObjectIr`）。
+- **验收**：`NtReadFile` / `NtWriteFile` / `NtClose` 经 `Irp` 调用 `vfs.read` / `write` / `close` 并写回 `IO_STATUS_BLOCK`。
 
 ## M3.4 — LPC / 端口与用户态 IPC
 
-- **目标**：命名端口创建、连接与 `RequestWaitReply` 与内核 syscall 一致（见 x86_64 `SYS_CREATE_PORT` / `SYS_CONNECT_PORT`）。
+- **目标**：命名端口创建、连接与 `RequestWaitReply` 与内核 syscall 一致（见 x86_64 `SYS_CREATE_PORT` / `SYS_CONNECT_PORT`）；`NtRequestWaitReplyPort` 使用端口 **id** 解析服务端 `owner_pid`。
 - **相关源码**：[`src/lpc/port.zig`](../../src/lpc/port.zig)、[`src/lpc/ipc.zig`](../../src/lpc/ipc.zig)、[`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig)。
 - **验收**：两进程（或内核自测）经端口名完成一次往返消息。
 
@@ -30,7 +30,7 @@
 
 - **目标**：`NtOpenKey` / `NtQueryValueKey` 等与 [`src/registry/registry.zig`](../../src/registry/registry.zig) 行为一致；错误码与 `NTSTATUS` 约定统一。
 - **相关源码**：[`src/libs/ntdll.zig`](../../src/libs/ntdll.zig)、[`src/registry/registry.zig`](../../src/registry/registry.zig)。
-- **验收**：内置键值可被用户态桩读出；未找到键返回 `STATUS_OBJECT_NAME_NOT_FOUND`。
+- **验收**：`\Registry\Machine\...` 路径可打开；`KeyValuePartialInformation` 可读出内置值；未找到键/值返回 `STATUS_OBJECT_NAME_NOT_FOUND`；缓冲区不足返回 `STATUS_BUFFER_TOO_SMALL`。
 
 ## 依赖顺序
 

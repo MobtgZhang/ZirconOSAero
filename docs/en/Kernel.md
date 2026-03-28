@@ -52,6 +52,12 @@ src/
 └── registry/
 ```
 
+### 1.1 NT 6.1 alignment (Chinese docs)
+
+- [docs/cn/PROCESS_NT61.md](../cn/PROCESS_NT61.md) — phased delivery  
+- [docs/cn/NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md) — API / WDK index  
+- [docs/cn/SyscallABI.md](../cn/SyscallABI.md) — `int 0x80` vs Windows SSDT  
+
 ## 2. Architecture support (`arch/`)
 
 Selected via `src/arch.zig` for the build target.
@@ -109,10 +115,11 @@ Implemented calls (see [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/sys
 |-----|------|
 | AddressSpace | Per-process address space |
 | mapPage | Map virtual to physical |
+| mapIdentityByteRange | Fast boot-time identity: x86_64 uses 2 MiB pages (PDE.PS, Intel SDM Vol.3); LoongArch64 fills 32 MiB L2 tables (2048×16 KiB); tail uses leaf `mapPage` |
 | unmapPage | Unmap |
 | MapFlags | Writable, user, executable, no-cache |
 
-Identity mapping is used; kernel and framebuffer have dedicated mappings.
+Identity mapping is used; kernel and framebuffer have dedicated mappings. Startup logs may report `huge2m` / `leaf` (x86) or `la32m` / `leaf` (LoongArch) counts.
 
 ### 3.3 Kernel heap (`heap.zig`)
 
@@ -209,6 +216,10 @@ User API
   → driver dispatch
   → complete IRP
 ```
+
+### VFS bridge (Phase 3)
+
+Native file read/write/close can be driven through [`vfs.dispatchFileObjectIr`](../../src/fs/vfs.zig), which maps `Irp` major codes to `vfs.read` / `vfs.write` / `vfs.close`. This is invoked from [`ntdll`](../../src/libs/ntdll.zig) after resolving a per-process handle to a `FileObject`.
 
 ## 8. Filesystems (`fs/`)
 

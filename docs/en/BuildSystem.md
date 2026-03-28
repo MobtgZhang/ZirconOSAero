@@ -21,7 +21,7 @@ Persistent build configuration.
 | `BOOTLOADER` | zbm | zbm | Bootloader (ZBM only in this tree) |
 | `DESKTOP` | aero, none | aero | Desktop shell (Aero only) |
 | `OPTIMIZE` | Debug, ReleaseSafe, ReleaseFast, ReleaseSmall | Debug | Optimization |
-| `RESOLUTION` | WxHxdepth | 1024x768x32 | Display |
+| `RESOLUTION` | WxHxdepth | (see `Makefile` / `build.conf`) | **`make build`** runs **`scripts/sync_resolution_config.py`**, which updates **`desktop.conf`**, **`boot.conf`**, **`system.conf`** (`[display]` defaults), **`build/tmp/zircon_pref_fb.h`**, and **`kernel_pref_fb_wh.txt`**. LoongArch GOP vs ramfb: see [AeroDesktopRuntime.md](../cn/AeroDesktopRuntime.md) §4.2.1.1. |
 | `QEMU_MEM` | size | 512M | QEMU RAM (x86, etc.) |
 | `QEMU_MEM_LOONGARCH64` | size | 1536M | `make run-loongarch64`; `qemu-system-loongarch64 -M virt` needs **> 1G** |
 | `LOONGARCH64_FIRMWARE_DIR` | path | `~/Firmware/LoongArchVirtMachine` | `QEMU_EFI.fd` / `QEMU_VARS.fd`; falls back to `firmware/` EDK2 nightly names |
@@ -29,6 +29,12 @@ Persistent build configuration.
 | `ENABLE_IDT` | true, false | true | Enable IDT |
 | `DEBUG_LOG` | true, false | true | Debug logging |
 | `GRUB_MENU` | all, minimal | minimal | GRUB menu layout |
+
+### QEMU UEFI (AArch64 / RISC-V64)
+
+- **Boot path**: EDK2 firmware → FAT ESP with ZBM → `\boot\kernel.elf` → Multiboot2 handoff to `kernel_main`.
+- **Commands**: `make fetch-firmware` (if needed), then `make run-aarch64` or `make run-riscv64`. Each target runs `build-esp` with the correct `ARCH` and attaches `build/esp-aarch64.img` or `build/esp-riscv64.img` (see `ESP_IMG_AARCH64` / `ESP_IMG_RISCV64` in the Makefile).
+- **Zig**: `zig build -Darch=aarch64` / `-Darch=riscv64` produces the kernel and bootloader objects; it does **not** launch QEMU or bundle pflash/BIOS—that stays in Make.
 
 ### Overrides
 
@@ -151,6 +157,19 @@ make fonts
 # or: ./scripts/fonts/fetch-fonts.sh
 ```
 
+### Aero sounds and Win32 shell icon DLL (host-only)
+
+| Target / scenario | Build step | Output / notes |
+|-------------------|------------|----------------|
+| x86_64 (MinGW) PE DLL | `zig build aero-shell-icons-dll` | `zig-out/assets/zircon_shell32_res.dll` (`RT_GROUP_ICON` / `RT_ICON`) |
+| LoongArch64 stand-in (Tier 1) | `zig build aero-shell-icons-la-bundle` | `zig-out/assets/loongarch64/win/System32/*.ico` + `zircon_shell32_res.manifest.json` (`binary_form: ico_bundle`) |
+| LoongArch `windows-gnu` COFF (Tier 2 probe) | `zig build aero-loongarch-windows-pe-probe` | Runs `scripts/build/probe-loongarch-windows-gnu-shared.sh`; **failure is expected** until the toolchain supports it |
+| Future LA PE DLL (reserved) | `-Daero-la-pe-dll` (placeholder) | Wire real steps when upstream is ready; use the bundle row today |
+
+- `zig build aero-sounds`: regenerate Aero WAV packs (**ffmpeg**, **python3**).
+- `zig build aero-shell-icons-dll`: SVG → ICO → **`windres` + `zig cc -target x86_64-windows-gnu -shared`** → **`zig-out/assets/zircon_shell32_res.dll`** (**Inkscape** or **rsvg-convert**, **ImageMagick**, **MinGW windres**). Pass `-Daero-skip-ico-build=true` to reuse existing ICO files. See [NT61_ShellIcons.md](NT61_ShellIcons.md).
+- `zig build aero-shell-icons-la-bundle`: installs shell ICOs plus **`zircon_shell32_res.manifest.json`** under **`zig-out/assets/loongarch64/win/System32/`** (no LoongArch PE DLL; placeholder for Windows-for-LoongArch64-style layouts). Same ICO prerequisites as the DLL step. See [NT61_ShellIcons.md](NT61_ShellIcons.md).
+
 ## 11. Tests
 
 ```bash
@@ -176,3 +195,9 @@ gdb build/tmp/kernel.elf
 ### Serial log
 
 With `DEBUG_LOG=true`, the kernel logs on COM1; QEMU typically forwards serial to the terminal.
+
+**AArch64 / RISC-V64 (QEMU `virt`, UEFI via `Makefile`)**
+
+- **AArch64**: early log goes to the **PL011 UART** at `0x09000000` (see `src/hal/aarch64/uart.zig`). `make run-aarch64` uses `-serial stdio`, which is wired to that UART on `virt`.
+- **RISC-V64**: early log uses the **NS16550 MMIO UART** at `0x10000000` with **SBI legacy putchar as fallback** (see `src/hal/riscv64/uart.zig`). If you see no output after UEFI, compare with `-nographic` or `-serial file:rv.log` while keeping the same `-bios`, disk, and `ramfb` devices as `make run-riscv64`.
+- Handoff diagnostics (`HandoffDiag`, `BootHandoff`) are printed in `src/main.zig` `startGeneric` right after `initSerial()` for these architectures.

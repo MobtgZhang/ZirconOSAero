@@ -15,6 +15,8 @@ ZirconOS is an **NT-style hybrid microkernel operating system** implemented in Z
 | [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/PowerShell/user32/gdi32), WOW64, POSIX |
 | [BuildSystem.md](en/BuildSystem.md) | Build system: `build.conf`, Makefile, `build.zig`, `run.sh` |
 | [Roadmap.md](en/Roadmap.md) | Roadmap: Phase 0–11 milestones, goals, non-goals, risks |
+| [NT61_ShellIcons.md](en/NT61_ShellIcons.md) | Shell icons vs Win7, Zircon PE DLL, Win32 API notes |
+| [BuiltinApps_NT61_Roadmap.md](en/BuiltinApps_NT61_Roadmap.md) | Built-in apps matrix, status, clean-room reference policy |
 
 ### Chinese (中文)
 
@@ -29,6 +31,8 @@ The same documents are available in Chinese under [`cn/`](cn/):
 | [Subsystems.md](cn/Subsystems.md) | 子系统 |
 | [BuildSystem.md](cn/BuildSystem.md) | 构建系统 |
 | [Roadmap.md](cn/Roadmap.md) | 路线图 |
+| [NT61_ShellIcons.md](cn/NT61_ShellIcons.md) | NT 6.1 壳层图标与资源 DLL（中文主文档） |
+| [BuiltinApps_NT61_Roadmap.md](cn/BuiltinApps_NT61_Roadmap.md) | 内置应用路线图（中文主文档） |
 
 ## Repository layout (overview)
 

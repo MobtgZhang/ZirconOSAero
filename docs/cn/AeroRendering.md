@@ -2,7 +2,7 @@
 
 本文记录 **内核帧缓冲路径**（`src/drivers/video/renderer_aero.zig`、`dwm.zig`、`display.zig`）中与 Windows 7 Aero 氛围对齐的默认参数及托盘布局。
 
-**单一数值源**：`src/config/dwm_nt61_defaults.zig`（内核与用户态 Aero 主题共用）。架构与职责见 [DesktopManagerSpec.md](DesktopManagerSpec.md)。
+**单一数值源**：`src/config/zircon_aero_defaults.zig`（内核与用户态 Aero 主题共用）。架构与职责见 [DesktopManagerSpec.md](DesktopManagerSpec.md)。
 
 ## DWM 玻璃（`renderGlassEffect`）
 
@@ -36,4 +36,4 @@
 
 - **光标绘制**：`display.renderDesktopFrame` 每帧从 `drivers/input/mouse.zig` 同步 `cursor_x` / `cursor_y`，**不依赖 x86**；VirtIO-Input 与 PS/2 共用同一逻辑坐标。
 - **QEMU 建议**：非 x86 或无可用时，为虚拟机添加 **`-device virtio-mouse-pci`**（与 `virtio_input_pci.zig` 对齐）；x86 仍可使用默认 PS/2 或同上 VirtIO。
-- **壳层图标 ID**：`icons.zig` 中 `IconId` 与 Aero `resource_loader` 内置图标 ID 1–13 一致，任务栏/开始菜单/桌面使用同一套枚举与 `src/desktop/aero/resources/icons/*.svg` 路径。
+- **壳层图标 ID**：`icons.zig` 中 `IconId` 与 Aero `resource_loader` 注册 ID **1–25** 一致；帧缓冲 16×16 字形仍仅对 **1–13** 有独立像素，其余通过 `bitmapIconId` 映射。矢量源为 `src/desktop/aero/resources/icons/*.svg`；宿主 PE 资源号见 `resources/win32/ICON_RESOURCE_IDS.md`（101–125）。总述与 Win32 兼容说明见 [NT61_ShellIcons.md](NT61_ShellIcons.md)。

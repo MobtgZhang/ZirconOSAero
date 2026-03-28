@@ -9,6 +9,7 @@
 
 ## 仓库内维护
 
+- **壁纸**：仓库内为 **分类子目录下的 PNG**（`Landscapes/`、`Nature/` 等），默认 Harmony 风格对应 `Landscapes/zircon_harmony.png`；须同步 `theme.zig`、`resource_loader.zig`、`desktop.conf` 的 `[wallpaper] path` 及 `.theme` 中 `Wallpaper=`。**不是**微软随系统分发的资源。
 - 逐项清单：`src/desktop/aero/resources/MANIFEST.md`
 - 构建与主题仅引用已审核路径；`other/resources/` 等第三方参考目录不得进入发行配置。
 
@@ -16,10 +17,18 @@
 
 每条记录建议包含：文件名、生成日期、工具/模型名称、许可条款链接、提示词摘要（可选）。
 
+## 批次记录（AI）
+
+| 日期 | 范围 | 来源 | 说明 |
+|------|------|------|------|
+| 2026-03-27 | `src/desktop/aero/resources/wallpapers/**/zircon_*.png`（12 张分类壁纸） | **Cursor 内置图像生成**（使用须遵守 Cursor 服务条款） | 风景/建筑/场景类桌面底图；构建期由 `tools/wallpaper_embed.zig`（zigimg）解码并嵌入内核 `wallpaper_data`；运行时由 `wallpaper_bitmap.zig` 绘制。 |
+| 2026-03-27 | `src/desktop/aero/resources/sounds/{Architecture,Characters,Landscapes,Nature,Scenes}/*.wav`（每主题 21 个系统事件，含独立 Startup） | **仓库内脚本合成**（`tools/soundgen/generate_aero_sounds.py` + 宿主 **ffmpeg** loudnorm/lavfi） | 原创波形；仅五主题目录，与壁纸分类一致；`zig build aero-sounds` 可重现。 |
+
 ## 批次记录（非 AI）
 
 | 日期 | 范围 | 来源 | 说明 |
 |------|------|------|------|
-| 2026-03-24 | `src/desktop/aero/resources/icons/*.svg`、`start_orb.svg`、`logo.svg`、部分 `cursors/*.svg`、`wallpapers/zircon_default.svg`、`zircon_harmony_win7.svg` | **原创重绘**（仓库内人工编写 SVG） | 与 `resources/DESIGN.md` 及 `theme.zig` accent 统一；未使用外部图包或 AI 出图。 |
+| 2026-03-24 | `src/desktop/aero/resources/icons/*.svg`、`start_orb.svg`、`logo.svg`、部分 `cursors/*.svg` | **原创重绘**（仓库内人工编写 SVG） | 与 `resources/DESIGN.md` 及 `theme.zig` accent 统一；未使用外部图包或 AI 出图。（壁纸已改为 2026-03-27 PNG 批次，见上表。） |
+| 2026-03-27 | 扩展图标 `recycle_bin_full`、`drive_*`、`printer`、`info`、`warning`、`error.svg`；`zig build aero-shell-icons-dll` → `zircon_shell32_res.dll` | **原创 SVG** + **宿主机脚本生成 ICO/PE** | 与 Win7 **API 形态**兼容（`LoadLibrary`/`ExtractIconEx` 等），资源号 **101–125** 为 Zircon 自有；非微软资源拷贝。说明见 [NT61_ShellIcons.md](NT61_ShellIcons.md)。 |
 | 2026-03-24 | `src/desktop/aero/src/resource_loader.zig`、`desktop.zig` | 代码 | 修正 `addIcon`/`addCursor`/`addThemeFile` 与磁盘文件名一致；控制面板桌面图标 ID 改为 13。 |
 | 2026-03-25 | `src/drivers/video/display.zig`、`icons.zig`、`mouse.zig`、`drivers/mod.zig`；`boot/zbm/uefi/menu_common.zig` | **原创代码** | 全架构光标与 mouse 坐标同步；`IconId` 与 Aero 1–13 对齐；ZBM 菜单扩展按键与 `WaitForKey` 路径。 |

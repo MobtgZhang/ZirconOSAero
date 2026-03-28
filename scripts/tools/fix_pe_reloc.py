@@ -5,6 +5,10 @@ Minimal PE/COFF fixup for LoongArch64 EFI binaries.
 参考 AevOS (https://github.com/MobtgZhang/AevOS)：objcopy 生成非 x86 EFI 时
 可能产生错误或缺失的 PE 头字段，导致固件返回 LoadImage Unsupported。
 本脚本修正 Optional Header 的 Subsystem 为 IMAGE_SUBSYSTEM_EFI_APPLICATION (10)。
+
+不处理 .reloc / 文本段重定位：LoongArch PE 完整重定位与工具链状态见
+https://github.com/loongson-community/discussions/issues/108
+及同目录说明 scripts/tools/PE_LOONGARCH_UEFI.md。
 """
 import struct
 import sys

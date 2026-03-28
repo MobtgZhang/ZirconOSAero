@@ -28,8 +28,17 @@ done
 
 BUILD_DIR="$(dirname "$OUT")"
 mkdir -p "$BUILD_DIR"
+# 头文件固定由 sync 写在仓库 build/tmp（与 OUT 所在目录无关）
+PREF_DIR="${_REPO_ROOT}/build/tmp"
+PREF_H="${PREF_DIR}/zircon_pref_fb.h"
 
 echo "[ZirconOS] Building C stub (AevOS-style) for LoongArch64 UEFI..."
+
+if [[ ! -f "$PREF_H" ]]; then
+	echo "[ZirconOS] ERROR: missing $PREF_H" >&2
+	echo "  Run: make build   (sync_resolution_config.py generates it from build.conf or RESOLUTION=)" >&2
+	exit 1
+fi
 
 # zig cc 需要 -fPIC 用于 shared object；gcc 可用 -fno-pic（AevOS 风格）
 PIC_FLAG="-fno-pic"
@@ -39,7 +48,8 @@ fi
 $CC -std=c17 -O2 -Wall -Wextra \
 	-ffreestanding -fno-stack-protector $PIC_FLAG -fshort-wchar \
 	-mno-lsx -mno-lasx \
-	-I"$STUB_DIR" -c "$STUB_DIR/efi_stub.c" -o "$BUILD_DIR/efi_stub.o"
+	-I"$PREF_DIR" -I"$STUB_DIR" \
+	-c "$STUB_DIR/efi_stub.c" -o "$BUILD_DIR/efi_stub.o"
 $CC -c "$STUB_DIR/reloc_dummy.S" -o "$BUILD_DIR/reloc_dummy.o"
 
 "$LD" -nostdlib -znocombreloc -shared -Bsymbolic \

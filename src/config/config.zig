@@ -78,8 +78,30 @@ pub fn getProductType() u64 {
     return system_config.getIntOr("system", "product_type", 1);
 }
 
-pub fn getArch() []const u8 {
+/// NT 6.1 兼容层所**宣称**的处理器族（如 `GetNativeSystemInfo` 语义），用于产品/WOW64 叙事；**不是**宿主 CPU。
+/// 嵌入配置键：`nt_product_arch`；若缺省则回退已弃用的 `arch`。
+pub fn getNtProductArch() []const u8 {
+    if (system_config.get("system", "nt_product_arch")) |v| {
+        if (v.len > 0) return v;
+    }
     return system_config.getOr("system", "arch", "x86_64");
+}
+
+/// 与 `getNtProductArch` 相同；保留名称以免旧调用点遗漏。
+pub fn getArch() []const u8 {
+    return getNtProductArch();
+}
+
+/// 本内核映像的编译目标 CPU（`builtin.cpu.arch`），用于日志与诊断。
+pub fn hostCpuArchName() []const u8 {
+    return switch (builtin.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        .riscv64 => "riscv64",
+        .loongarch64 => "loongarch64",
+        .mips64el => "mips64el",
+        else => @tagName(builtin.cpu.arch),
+    };
 }
 
 pub fn getMaxCpus() u64 {
@@ -272,6 +294,24 @@ pub fn getDesktopShell() []const u8 {
     return desktop_config.getOr("desktop", "shell", "explorer");
 }
 
+fn sliceEqIgnoreAsciiCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |ca, i| {
+        const cb = b[i];
+        const la = if (ca >= 'A' and ca <= 'Z') ca + 32 else ca;
+        const lb = if (cb >= 'A' and cb <= 'Z') cb + 32 else cb;
+        if (la != lb) return false;
+    }
+    return true;
+}
+
+/// `desktop.conf` 中 `explorer_lang`：`en` / `en_us` 为英文 Explorer 壳串，否则为中文。
+pub fn isExplorerShellLangZh() bool {
+    const v = desktop_config.getOr("desktop", "explorer_lang", "en");
+    if (sliceEqIgnoreAsciiCase(v, "en") or sliceEqIgnoreAsciiCase(v, "en_us")) return false;
+    return true;
+}
+
 pub fn isAutoLogon() bool {
     return desktop_config.getBoolOr("desktop", "auto_logon", false);
 }
@@ -330,13 +370,9 @@ pub fn isTripleBufferEnabled() bool {
 }
 
 /// 双缓冲时默认整幅 `memcpy` 到 GOP；为 false 时用脏矩形 `flipDirty`（须保证光标区已 mark dirty）。
-/// LoongArch64 + UEFI/GOP 在 QEMU 上整幅 flip 代价高，默认改为脏矩形以减轻鼠标拖动卡顿（仍可在 desktop.conf 写 `present_full_flip=true`）。
+/// LoongArch64：QEMU ramfb/脏矩形路径曾出现屏上黑屏或残影，默认整幅 flip 优先保证可见；若需减负可在 desktop.conf 设 `present_full_flip=false`。
 pub fn isPresentFullFlipEnabled() bool {
-    const arch_default: bool = switch (builtin.target.cpu.arch) {
-        .loongarch64 => false,
-        else => true,
-    };
-    return desktop_config.getBoolOr("display", "present_full_flip", arch_default);
+    return desktop_config.getBoolOr("display", "present_full_flip", true);
 }
 
 /// 初始化时把当前可见 GOP 拷入离屏绘制缓冲（两槽均拷）；默认关。首帧前常与 `clearFramebuffer` 二选一。
@@ -427,4 +463,20 @@ pub fn getSystemFont() []const u8 {
 
 pub fn getSystemFontSize() u64 {
     return desktop_config.getIntOr("fonts", "system_font_size", 8);
+}
+
+// ─── Start menu (`[startmenu]` in desktop.conf) ───
+
+pub fn getStartMenuCornerRadius() u64 {
+    return desktop_config.getIntOr("startmenu", "corner_radius", 8);
+}
+
+pub fn getStartMenuUserDisplayName() []const u8 {
+    const v = desktop_config.getOr("startmenu", "user_display_name", "");
+    if (v.len == 0) return "User";
+    return v;
+}
+
+pub fn getStartMenuAccountSubtitle() []const u8 {
+    return desktop_config.getOr("startmenu", "account_subtitle", "Standard user");
 }

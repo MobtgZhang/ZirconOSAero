@@ -16,7 +16,7 @@
 <p align="center"><em>ZirconOS Boot Manager (ZBM) — Windows 7–style text menu</em></p>
 
 <p align="center">
-  <img src="assets/screenshot-aero.png" alt="Windows 7 Aero desktop" width="70%" />
+  <img src="assets/screenshot-aero.png" alt="ZirconOS Aero desktop" width="70%" />
 </p>
 <p align="center"><em>Shell — Windows 7 Aero（NT 6.1）唯一内置桌面</em></p>
 

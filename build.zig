@@ -1,9 +1,79 @@
 const std = @import("std");
 const mem = std.mem;
 
+const PreferredFbDims = struct { w: u32, h: u32 };
+
+/// PNG sources for `tools/wallpaper_embed.zig` (preset order 0..11).
+const wallpaper_png_inputs = [_][]const u8{
+    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_harmony.png",
+    "src/desktop/aero/resources/wallpapers/Nature/zircon_default.png",
+    "src/desktop/aero/resources/wallpapers/Architecture/zircon_crystal.png",
+    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_aurora.png",
+    "src/desktop/aero/resources/wallpapers/Characters/zircon_characters.png",
+    "src/desktop/aero/resources/wallpapers/Nature/zircon_nature.png",
+    "src/desktop/aero/resources/wallpapers/Scenes/zircon_scenes.png",
+    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_landscapes.png",
+    "src/desktop/aero/resources/wallpapers/Architecture/zircon_architecture.png",
+    "src/desktop/aero/resources/wallpapers/Nature/zircon_ocean.png",
+    "src/desktop/aero/resources/wallpapers/Scenes/zircon_nebula.png",
+    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_landscape.png",
+};
+
+/// Parse `RESOLUTION = WxHxdepth` from build.conf text (first match).
+fn parseResolutionFromBuildConfText(content: []const u8) ?PreferredFbDims {
+    var iter = std.mem.splitScalar(u8, content, '\n');
+    while (iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+        if (!std.mem.startsWith(u8, trimmed, "RESOLUTION")) continue;
+        const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
+        var val = std.mem.trim(u8, trimmed[eq + 1 ..], " \t");
+        if (std.mem.indexOfScalar(u8, val, '#')) |hi| {
+            val = std.mem.trim(u8, val[0..hi], " \t");
+        }
+        var parts = std.mem.splitScalar(u8, val, 'x');
+        const ws = parts.next() orelse continue;
+        const hs = parts.next() orelse continue;
+        const w = std.fmt.parseUnsigned(u32, ws, 10) catch continue;
+        const h = std.fmt.parseUnsigned(u32, hs, 10) catch continue;
+        if (w == 0 or h == 0) continue;
+        return .{ .w = w, .h = h };
+    }
+    return null;
+}
+
+/// `make build` / `sync_resolution` 写入 `build/tmp/kernel_pref_fb_wh.txt`（与 ZIRCON_RESOLUTION / build.conf 一致）。
+fn readPreferredFbFromSyncArtifact(b: *std.Build) ?PreferredFbDims {
+    const path = "build/tmp/kernel_pref_fb_wh.txt";
+    const file = b.build_root.handle.openFile(path, .{}) catch return null;
+    defer file.close();
+    const max_bytes: usize = 128;
+    const raw = file.readToEndAlloc(b.allocator, max_bytes) catch return null;
+    defer b.allocator.free(raw);
+    var iter = std.mem.splitScalar(u8, raw, '\n');
+    const wline = std.mem.trim(u8, iter.next() orelse return null, " \t\r");
+    const hline = std.mem.trim(u8, iter.next() orelse return null, " \t\r");
+    if (wline.len == 0 or hline.len == 0) return null;
+    const w = std.fmt.parseUnsigned(u32, wline, 10) catch return null;
+    const h = std.fmt.parseUnsigned(u32, hline, 10) catch return null;
+    if (w == 0 or h == 0) return null;
+    return .{ .w = w, .h = h };
+}
+
+/// 仅当 `build.conf` 中存在未注释的 `RESOLUTION = WxHxdepth` 时返回 Some；否则 null（与 sync 脚本语义一致）。
+fn tryReadPreferredFbFromBuildConf(b: *std.Build) ?PreferredFbDims {
+    const file = b.build_root.handle.openFile("build.conf", .{}) catch return null;
+    defer file.close();
+    const max_bytes: usize = 65536;
+    const raw = file.readToEndAlloc(b.allocator, max_bytes) catch return null;
+    defer b.allocator.free(raw);
+    return parseResolutionFromBuildConfText(raw);
+}
+
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
+    // AArch64 / RISC-V64：内核与 ZBM 由 zig 构建；QEMU 下完整 UEFI 链路为 Makefile（`make run-aarch64` / `make run-riscv64`，含固件与 esp-*.img）。
     const arch_opt = b.option(
         []const u8,
         "arch",
@@ -26,6 +96,15 @@ pub fn build(b: *std.Build) void {
         "Serial klog.debug before/after renderDesktopFrameEx and present (panic isolation; default off)",
     ) orelse false;
     const enable_idt_opt = b.option(bool, "enable_idt", "Enable IDT, timer and syscall (x86_64 only)") orelse true;
+    const aero_skip_ico_build = b.option(bool, "aero-skip-ico-build", "For aero-shell-icons-dll: skip SVG→ICO script (reuse existing ico/)") orelse false;
+    const aero_windres_exe = b.option([]const u8, "aero-windres", "windres executable for zircon_shell32_res.rc") orelse "x86_64-w64-mingw32-windres";
+    // Reserved for Tier 2: real `zircon_shell32_res.dll` for loongarch64-windows-gnu when Zig emits COFF for that triple.
+    const aero_la_pe_dll = b.option(
+        bool,
+        "aero-la-pe-dll",
+        "Reserved: enable LoongArch PE shell icon DLL when toolchain supports it (default false; use aero-shell-icons-la-bundle today)",
+    ) orelse false;
+    _ = aero_la_pe_dll;
     const amd_igpu_opt = b.option(
         bool,
         "amd_igpu",
@@ -129,11 +208,52 @@ pub fn build(b: *std.Build) void {
         .abi = .none,
     });
 
+    const zigimg_dep = b.dependency("zigimg", .{
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    const wallpaper_embed_mod = b.createModule(.{
+        .root_source_file = b.path("tools/wallpaper_embed.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    wallpaper_embed_mod.addImport("zigimg", zigimg_dep.module("zigimg"));
+    const wallpaper_embed_exe = b.addExecutable(.{
+        .name = "wallpaper_embed",
+        .root_module = wallpaper_embed_mod,
+    });
+    const run_wallpaper_embed = b.addRunArtifact(wallpaper_embed_exe);
+    run_wallpaper_embed.setCwd(b.path("."));
+    const wallpaper_gen_dir = run_wallpaper_embed.addOutputDirectoryArg("wallpaper_gen");
+    for (wallpaper_png_inputs) |rel| {
+        run_wallpaper_embed.addFileInput(b.path(rel));
+    }
+    const wallpaper_manifest_lp = wallpaper_gen_dir.path(b, "wallpaper_embed_manifest.zig");
+    const wallpaper_data_mod = b.createModule(.{
+        .root_source_file = wallpaper_manifest_lp,
+        .target = target,
+        .optimize = optimize,
+    });
+
     const desktop_default = b.option(
         []const u8,
         "default_desktop",
         "Default desktop when cmdline omits desktop= (same as Makefile DESKTOP)",
     ) orelse "aero";
+
+    const conf_fb = tryReadPreferredFbFromBuildConf(b);
+    const sync_fb = readPreferredFbFromSyncArtifact(b);
+    const fb_fallback: PreferredFbDims = .{ .w = 1920, .h = 1080 };
+    const zbm_fb_w = b.option(
+        u32,
+        "zbm_preferred_fb_width",
+        "Override ZBM/ramfb width; else build.conf RESOLUTION, else build/tmp/kernel_pref_fb_wh.txt (make sync), else 1920",
+    ) orelse if (conf_fb) |c| c.w else if (sync_fb) |s| s.w else fb_fallback.w;
+    const zbm_fb_h = b.option(
+        u32,
+        "zbm_preferred_fb_height",
+        "Override ZBM/ramfb height; else build.conf RESOLUTION, else sync artifact, else 1080",
+    ) orelse if (conf_fb) |c| c.h else if (sync_fb) |s| s.h else fb_fallback.h;
 
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "debug", debug_mode);
@@ -158,6 +278,9 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "usb_xhci", usb_xhci_opt);
     build_opts.addOption(bool, "usb_ehci", usb_ehci_opt);
     build_opts.addOption([]const u8, "default_desktop", desktop_default);
+    // 与 ZBM `zbm_preferred_fb_*` 同源：ramfb / 诊断与 `build.conf` RESOLUTION 对齐（LoongArch 等 GOP 回退路径）。
+    build_opts.addOption(u32, "kernel_preferred_fb_width", zbm_fb_w);
+    build_opts.addOption(u32, "kernel_preferred_fb_height", zbm_fb_h);
 
     const code_model: std.builtin.CodeModel = switch (cpu_arch) {
         .x86_64 => .kernel,
@@ -177,6 +300,7 @@ pub fn build(b: *std.Build) void {
         .strip = false,
     });
     root_mod.addOptions("build_options", build_opts);
+    root_mod.addImport("wallpaper_data", wallpaper_data_mod);
 
     const config_defaults_mod = b.createModule(.{
         .root_source_file = b.path("src/config/defaults.zig"),
@@ -185,17 +309,31 @@ pub fn build(b: *std.Build) void {
     });
     root_mod.addImport("config_defaults", config_defaults_mod);
 
-    const dwm_nt61_mod = b.createModule(.{
-        .root_source_file = b.path("src/config/dwm_nt61_defaults.zig"),
+    const zircon_aero_defaults_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/zircon_aero_defaults.zig"),
         .target = target,
         .optimize = optimize,
     });
-    root_mod.addImport("dwm_nt61_defaults", dwm_nt61_mod);
+    root_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_mod);
 
     const kernel = b.addExecutable(.{
         .name = "kernel",
         .root_module = root_mod,
     });
+    kernel.step.dependOn(&run_wallpaper_embed.step);
+
+    const run_aero_sounds = b.addSystemCommand(&.{
+        "python3",
+        "tools/soundgen/generate_aero_sounds.py",
+    });
+    run_aero_sounds.setCwd(b.path("."));
+    run_aero_sounds.has_side_effects = true;
+    const aero_sounds_step = b.step("aero-sounds", "Regenerate Aero theme WAVs under resources/sounds (requires ffmpeg + python3)");
+    aero_sounds_step.dependOn(&run_aero_sounds.step);
+
+    addAeroShellIconsDllStep(b, aero_skip_ico_build, aero_windres_exe);
+    addAeroShellIconsLaBundleStep(b, aero_skip_ico_build);
+    addAeroLoongArchWindowsPeProbeStep(b);
 
     kernel.entry = .{ .symbol_name = "_start" };
     kernel.link_gc_sections = false;
@@ -241,13 +379,13 @@ pub fn build(b: *std.Build) void {
     const step = b.step("kernel", "Build the kernel ELF");
     step.dependOn(&kernel.step);
 
-    buildUefi(b, cpu_arch, optimize, debug_mode);
+    buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
     buildZbm(b, cpu_arch, optimize, debug_mode);
     if (cpu_arch == .loongarch64) {
-        buildLoongArchZbmEfiObject(b, optimize, desktop_default, debug_mode);
+        buildLoongArchZbmEfiObject(b, optimize, desktop_default, debug_mode, zbm_fb_w, zbm_fb_h);
     }
     if (cpu_arch == .riscv64) {
-        buildRiscv64ZbmEfiObject(b, optimize, desktop_default, debug_mode);
+        buildRiscv64ZbmEfiObject(b, optimize, desktop_default, debug_mode, zbm_fb_w, zbm_fb_h);
     }
     buildDesktop(b, optimize);
 }
@@ -266,8 +404,8 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
     const target = b.standardTargetOptions(.{});
 
     // 与 `src/desktop/aero/build.zig` 一致：`theme.zig` 依赖单一玻璃默认值源
-    const dwm_nt61_desktop_mod = b.createModule(.{
-        .root_source_file = b.path("src/config/dwm_nt61_defaults.zig"),
+    const zircon_aero_defaults_desktop_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/zircon_aero_defaults.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -284,7 +422,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .root_source_file = b.path(root_path),
             .target = target,
         });
-        theme_mod.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+        theme_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
 
         // EXE
         const exe = b.addExecutable(.{
@@ -296,8 +434,8 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             }),
         });
         exe.root_module.addImport(entry.import_name, theme_mod);
-        // main.zig 使用 @import("root.zig")，与库模块分离；theme 等文件在 exe 模块内解析 nt61
-        exe.root_module.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+        // main.zig 使用 @import("root.zig")，与库模块分离；theme 等在 exe 模块内解析 zircon_aero_defaults
+        exe.root_module.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
         const install_exe = b.addInstallArtifact(exe, .{});
 
         // Static library (.lib)
@@ -306,7 +444,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .target = target,
             .optimize = optimize,
         });
-        lib_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+        lib_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
         const lib = b.addLibrary(.{
             .name = exe_name,
             .linkage = .static,
@@ -320,7 +458,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .target = target,
             .optimize = optimize,
         });
-        dll_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+        dll_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
         const dll = b.addLibrary(.{
             .name = exe_name,
             .linkage = .dynamic,
@@ -361,7 +499,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     .root_source_file = b.path(root_path),
                     .target = target,
                 });
-                theme_mod.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+                theme_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
 
                 const exe = b.addExecutable(.{
                     .name = exe_name,
@@ -372,7 +510,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     }),
                 });
                 exe.root_module.addImport(entry.import_name, theme_mod);
-                exe.root_module.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+                exe.root_module.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
                 const install_sel_exe = b.addInstallArtifact(exe, .{});
                 desktop_step.dependOn(&install_sel_exe.step);
 
@@ -381,7 +519,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     .target = target,
                     .optimize = optimize,
                 });
-                lib_sel_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+                lib_sel_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
                 const lib = b.addLibrary(.{
                     .name = exe_name,
                     .linkage = .static,
@@ -395,7 +533,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     .target = target,
                     .optimize = optimize,
                 });
-                dll_sel_rm.addImport("dwm_nt61_defaults", dwm_nt61_desktop_mod);
+                dll_sel_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
                 const dll = b.addLibrary(.{
                     .name = exe_name,
                     .linkage = .dynamic,
@@ -452,7 +590,14 @@ fn buildZbm(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin.
     zbm_step.dependOn(&install_zbm.step);
 }
 
-fn buildUefi(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin.OptimizeMode, debug_mode: bool) void {
+fn buildUefi(
+    b: *std.Build,
+    cpu_arch: std.Target.Cpu.Arch,
+    optimize: std.builtin.OptimizeMode,
+    debug_mode: bool,
+    zbm_fb_w: u32,
+    zbm_fb_h: u32,
+) void {
     // LoongArch: use boot/zbm/uefi/main_loongarch64.zig → .o + GNU-EFI link (see buildLoongArchZbmEfiObject).
     // LoongArch UEFI PE/COFF: Zig's linker does not emit it directly (UnsupportedCoffArchitecture).
     if (cpu_arch == .loongarch64) return;
@@ -475,6 +620,8 @@ fn buildUefi(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin
     const uefi_opts = b.addOptions();
     uefi_opts.addOption(bool, "debug", debug_mode);
     uefi_opts.addOption([]const u8, "desktop", desktop_opt);
+    uefi_opts.addOption(u32, "zbm_preferred_fb_width", zbm_fb_w);
+    uefi_opts.addOption(u32, "zbm_preferred_fb_height", zbm_fb_h);
 
     const uefi_mod = b.createModule(.{
         .root_source_file = b.path("boot/zbm/uefi/main.zig"),
@@ -501,7 +648,14 @@ fn buildUefi(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin
 }
 
 /// LoongArch64 ZBM: Zig → `zbm_loongarch64.o` (freestanding), then GNU-EFI crt0 + objcopy → `.efi`.
-fn buildLoongArchZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode, desktop_default: []const u8, debug_mode: bool) void {
+fn buildLoongArchZbmEfiObject(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    desktop_default: []const u8,
+    debug_mode: bool,
+    zbm_fb_w: u32,
+    zbm_fb_h: u32,
+) void {
     const la_target = b.resolveTargetQuery(.{
         .cpu_arch = .loongarch64,
         .os_tag = .freestanding,
@@ -511,6 +665,8 @@ fn buildLoongArchZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode,
     const zbm_opts = b.addOptions();
     zbm_opts.addOption(bool, "debug", debug_mode);
     zbm_opts.addOption([]const u8, "desktop", desktop_default);
+    zbm_opts.addOption(u32, "zbm_preferred_fb_width", zbm_fb_w);
+    zbm_opts.addOption(u32, "zbm_preferred_fb_height", zbm_fb_h);
     const zbm_mod = b.createModule(.{
         .root_source_file = b.path("boot/zbm/uefi/main_loongarch64.zig"),
         .target = la_target,
@@ -529,7 +685,14 @@ fn buildLoongArchZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode,
 }
 
 /// RISC-V64 ZBM：GNU-EFI 链接（与 LoongArch 相同，crt0 + objcopy → `.efi`）。
-fn buildRiscv64ZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode, desktop_default: []const u8, debug_mode: bool) void {
+fn buildRiscv64ZbmEfiObject(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    desktop_default: []const u8,
+    debug_mode: bool,
+    zbm_fb_w: u32,
+    zbm_fb_h: u32,
+) void {
     const rv_target = b.resolveTargetQuery(.{
         .cpu_arch = .riscv64,
         .os_tag = .freestanding,
@@ -538,6 +701,8 @@ fn buildRiscv64ZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode, d
     const zbm_opts = b.addOptions();
     zbm_opts.addOption(bool, "debug", debug_mode);
     zbm_opts.addOption([]const u8, "desktop", desktop_default);
+    zbm_opts.addOption(u32, "zbm_preferred_fb_width", zbm_fb_w);
+    zbm_opts.addOption(u32, "zbm_preferred_fb_height", zbm_fb_h);
     const zbm_mod = b.createModule(.{
         .root_source_file = b.path("boot/zbm/uefi/main.zig"),
         .target = rv_target,
@@ -553,4 +718,130 @@ fn buildRiscv64ZbmEfiObject(b: *std.Build, optimize: std.builtin.OptimizeMode, d
     b.getInstallStep().dependOn(&install_o.step);
     const zbm_rv_step = b.step("zbm-riscv64-uefi", "RISC-V64 ZBM: Zig object (link with scripts/build/zbm-riscv64-efi.sh → BOOTRISCV64.EFI)");
     zbm_rv_step.dependOn(&install_o.step);
+}
+
+/// Host-only: optional ICO regeneration, MinGW `windres`, then `zig cc -target x86_64-windows-gnu -shared` → PE icon DLL.
+/// `zig cc -target loongarch64-windows-gnu -shared` still often fails (UnsupportedCoffArchitecture); use `aero-shell-icons-la-bundle` until upstream fixes.
+/// ICO basenames under `src/desktop/aero/resources/win32/ico/` (IconId 1..25, PE 101..125). Must stay aligned with
+/// `resources/win32/ICON_RESOURCE_IDS.md` and `laShellIconsManifestJsonAlloc` icon rows.
+const aero_shell_icon_basenames = [_][]const u8{
+    "computer",      "documents", "recycle_bin",      "terminal",    "network",
+    "browser",       "settings",  "calculator",       "text_editor", "pictures",
+    "music",         "folder",    "control_panel",    "file",        "user",
+    "lock",          "shutdown",  "recycle_bin_full", "drive_fixed", "drive_removable",
+    "drive_optical", "printer",   "info",             "warning",     "error",
+};
+
+/// JSON manifest for the LoongArch64-style bundle (no PE DLL; PE machine 0x6264 is logical only).
+fn laShellIconsManifestJsonAlloc(b: *std.Build) []const u8 {
+    var list: std.ArrayList(u8) = .{};
+    defer list.deinit(b.allocator);
+    const w = list.writer(b.allocator);
+    w.print(
+        \\{{
+        \\  "schema_version": 1,
+        \\  "virtual_dll": "zircon_shell32_res.dll",
+        \\  "binary_form": "ico_bundle",
+        \\  "pe_machine": 25188,
+        \\  "pe_machine_hex": "0x6264",
+        \\  "pe_machine_name": "IMAGE_FILE_MACHINE_LOONGARCH64",
+        \\  "note": "ZirconOS: Zig cannot emit loongarch64-windows-gnu COFF DLL yet; this tree mirrors %SystemRoot%\\System32 for Windows-for-LoongArch64 host tests.",
+        \\  "icons": [
+    , .{}) catch @panic("OOM");
+
+    for (aero_shell_icon_basenames, 0..) |base, i| {
+        const logical: u8 = @intCast(i + 1);
+        const pe_id: u16 = @intCast(100 + logical);
+        if (i > 0) w.print(",\n", .{}) catch @panic("OOM");
+        w.print(
+            "    {{ \"logical_id\": {d}, \"pe_resource_id\": {d}, \"ico\": \"{s}.ico\", \"shell_reference\": \"zircon_shell32_res.dll,-{d}\" }}",
+            .{ logical, pe_id, base, pe_id },
+        ) catch @panic("OOM");
+    }
+    w.print(
+        \\
+        \\
+        \\  ]
+        \\}}
+        \\
+    , .{}) catch @panic("OOM");
+
+    return list.toOwnedSlice(b.allocator) catch @panic("OOM");
+}
+
+fn addAeroLoongArchWindowsPeProbeStep(b: *std.Build) void {
+    const probe = b.addSystemCommand(&.{ "bash", "scripts/build/probe-loongarch-windows-gnu-shared.sh", b.graph.zig_exe });
+    probe.setCwd(b.path("."));
+    probe.stdio = .inherit;
+    probe.has_side_effects = true;
+    const st = b.step(
+        "aero-loongarch-windows-pe-probe",
+        "Probe zig cc -target loongarch64-windows-gnu -shared (Tier 2; may fail until Zig/LLVM COFF supports LoongArch)",
+    );
+    st.dependOn(&probe.step);
+}
+
+fn addAeroShellIconsLaBundleStep(b: *std.Build, skip_ico: bool) void {
+    const wf = b.addWriteFiles();
+    wf.step.name = b.fmt("aero LoongArch shell icon bundle", .{});
+
+    if (!skip_ico) {
+        const run_ico = b.addSystemCommand(&.{ "bash", "scripts/build/build-aero-icons.sh" });
+        run_ico.setCwd(b.path("."));
+        run_ico.has_side_effects = true;
+        wf.step.dependOn(&run_ico.step);
+    }
+
+    const ico_dir = "src/desktop/aero/resources/win32/ico";
+    for (aero_shell_icon_basenames) |base| {
+        const src_ico = b.fmt("{s}/{s}.ico", .{ ico_dir, base });
+        const dst_ico = b.fmt("{s}.ico", .{base});
+        _ = wf.addCopyFile(b.path(src_ico), dst_ico);
+    }
+
+    const manifest = laShellIconsManifestJsonAlloc(b);
+    defer b.allocator.free(manifest);
+    _ = wf.add("zircon_shell32_res.manifest.json", manifest);
+
+    const install_la = b.addInstallDirectory(.{
+        .source_dir = wf.getDirectory(),
+        .install_dir = .prefix,
+        .install_subdir = "assets/loongarch64/win/System32",
+    });
+
+    const la_step = b.step(
+        "aero-shell-icons-la-bundle",
+        "ICO + zircon_shell32_res.manifest.json → zig-out/assets/loongarch64/win/System32 (no PE DLL)",
+    );
+    la_step.dependOn(&install_la.step);
+}
+
+fn addAeroShellIconsDllStep(b: *std.Build, skip_ico: bool, windres_exe: []const u8) void {
+    const windres_cmd = b.addSystemCommand(&.{ windres_exe, "-i", "zircon_shell32_res.rc", "-o" });
+    const rc_o = windres_cmd.addOutputFileArg("zircon_shell32_res.o");
+    windres_cmd.setCwd(b.path("src/desktop/aero/resources/win32"));
+    windres_cmd.stdio = .inherit;
+    windres_cmd.has_side_effects = true;
+
+    if (!skip_ico) {
+        const run_ico = b.addSystemCommand(&.{ "bash", "scripts/build/build-aero-icons.sh" });
+        run_ico.setCwd(b.path("."));
+        run_ico.has_side_effects = true;
+        windres_cmd.step.dependOn(&run_ico.step);
+    }
+
+    const zig_cc = b.addSystemCommand(&.{ b.graph.zig_exe, "cc", "-target", "x86_64-windows-gnu", "-shared" });
+    zig_cc.addFileArg(rc_o);
+    zig_cc.addFileArg(b.path("src/desktop/aero/resources/win32/zircon_shell32_res_stub.c"));
+    zig_cc.addArg("-o");
+    const dll_out = zig_cc.addOutputFileArg("zircon_shell32_res.dll");
+    zig_cc.step.dependOn(&windres_cmd.step);
+    zig_cc.stdio = .inherit;
+    zig_cc.has_side_effects = true;
+
+    const install_dll = b.addInstallFile(dll_out, "assets/zircon_shell32_res.dll");
+    install_dll.step.dependOn(&zig_cc.step);
+
+    const aero_shell_icons_dll_step = b.step("aero-shell-icons-dll", "Build zircon_shell32_res.dll (windres + zig cc -target x86_64-windows-gnu; Win32 RT_ICON)");
+    aero_shell_icons_dll_step.dependOn(&install_dll.step);
 }

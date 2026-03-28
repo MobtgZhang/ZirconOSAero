@@ -16,7 +16,7 @@
 <p align="center"><em>ZirconOS Boot Manager (ZBM) — Windows 7 风格文本菜单</em></p>
 
 <p align="center">
-  <img src="assets/screenshot-aero.png" alt="Windows 7 Aero 桌面" width="70%" />
+  <img src="assets/screenshot-aero.png" alt="ZirconOS Aero 桌面" width="70%" />
 </p>
 <p align="center"><em>唯一内置桌面：Windows 7 Aero（NT 6.1）</em></p>
 

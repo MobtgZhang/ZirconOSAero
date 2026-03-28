@@ -7,14 +7,16 @@ stack_bottom:
 .global stack_top
 stack_top:
 
-.section .uefi_vector, "a"
+/* "aw"：可写，ZBM 在 br 前写入 mb2_phys（Multiboot2 信息块物理地址），避免仅靠 x1 与固件 VA 不一致 */
+.section .uefi_vector, "aw", @progbits
 .align 8
 .global _uefi_vector
 _uefi_vector:
     .word 0x55454649
-    .word 0
+    .word 1
     .quad kernel_main
     .quad stack_top
+    .quad 0
 
 .section .text.boot, "ax", @progbits
 .global _start

@@ -123,6 +123,13 @@ pub fn readInputChar() ?u8 {
     return null;
 }
 
+/// 向 PS/2 或 VirtIO 输入环注入一字节（屏幕键盘、测试；与 `readInputChar` 同源队列）。
+pub fn injectSyntheticChar(c: u8) void {
+    if (@hasDecl(impl, "injectSyntheticChar")) {
+        impl.injectSyntheticChar(c);
+    }
+}
+
 pub fn consumeTaskMgrHotkey() bool {
     if (@hasDecl(impl, "consumeTaskMgrHotkey")) {
         return impl.consumeTaskMgrHotkey();

@@ -4,6 +4,8 @@ pub const framebuffer = @import("../../hal/riscv64/framebuffer.zig");
 const uart = @import("../../hal/riscv64/uart.zig");
 const plic = @import("../../hal/riscv64/plic.zig");
 
+extern fn riscv_early_trap_entry() align(4) void;
+
 pub const name: []const u8 = "riscv64";
 pub const PAGE_SIZE: usize = 4096;
 
@@ -19,6 +21,12 @@ pub fn consoleClear() void {}
 
 pub fn initSerial() void {
     uart.init();
+    // stvec：在完整 trap 框架前，异常时 UART 输出 `>` 并停机，避免无声崩溃
+    asm volatile ("csrw stvec, %[p]"
+        :
+        : [p] "r" (@intFromPtr(&riscv_early_trap_entry)),
+        : .{ .memory = true }
+    );
 }
 
 pub fn serialWrite(s: []const u8) void {

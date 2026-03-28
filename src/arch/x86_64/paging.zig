@@ -6,6 +6,10 @@
 const PAGE_SIZE: usize = 4096;
 const PAGE_MASK: usize = PAGE_SIZE - 1;
 
+/// 2MiB 大页（PDE.PS=1）。用于启动 identity 映射，减少 PTE 写入次数。
+pub const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
+pub const huge_page_mask: usize = HUGE_PAGE_SIZE - 1;
+
 /// 页表项标志 (Intel Vol.3 Table 4-12)
 pub const Present: u64 = 1 << 0;
 pub const Write: u64 = 1 << 1;
@@ -115,6 +119,49 @@ pub const PhysAddr = struct {
 /// 分配帧回调：传入 ctx，返回物理地址或 null
 pub const AllocFrameFn = *const fn (?*anyopaque) ?u64;
 
+/// 将 2MiB 大页拆成 512×4KiB（identity，权限继承自大页项）。供 MMIO 等对单页改属性路径使用。
+pub fn split2MiBIdentityPageIfNeeded(
+    pml4_phys: u64,
+    virt: u64,
+    alloc_frame: AllocFrameFn,
+    alloc_ctx: ?*anyopaque,
+) bool {
+    const v = VirtAddr{ .value = virt };
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    const pml4e = &pml4.entries[v.pml4Index()];
+    if (!pml4e.isPresent()) return true;
+    const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+    const pdpte = &pdpt.entries[v.pdptIndex()];
+    if (!pdpte.isPresent()) return true;
+    const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde = &pd.entries[v.pdIndex()];
+    if (!pde.isPresent()) return true;
+    const praw = @as(u64, @bitCast(pde.*));
+    if ((praw & LargePage) == 0) return true;
+
+    const huge_base = virt & ~@as(u64, huge_page_mask);
+    var pte_flags: u64 = Present | Accessed;
+    if ((praw & Write) != 0) pte_flags |= Write | Dirty;
+    if ((praw & User) != 0) pte_flags |= User;
+    if ((praw & WriteThrough) != 0) pte_flags |= WriteThrough;
+    if ((praw & CacheDisable) != 0) pte_flags |= CacheDisable;
+    if ((praw & Global) != 0) pte_flags |= Global;
+    if ((praw & NoExecute) != 0) pte_flags |= NoExecute;
+
+    const pt_frame = alloc_frame(alloc_ctx) orelse return false;
+    const pt = @as(*PageTable, @ptrFromInt(pt_frame));
+    pt.zero();
+    var i: usize = 0;
+    while (i < 512) : (i += 1) {
+        const p = huge_base + i * PAGE_SIZE;
+        pt.entries[i] = PageTableEntry.fromFrame(p, pte_flags);
+    }
+    pde.* = PageTableEntry.fromFrame(pt_frame, Present | Write);
+    pde.accessed = true;
+    invlpg(huge_base);
+    return true;
+}
+
 /// 将物理地址映射到虚拟地址
 /// pml4: 顶级页表物理地址（需已 identity map 或可访问）
 /// virt: 虚拟地址
@@ -159,6 +206,13 @@ pub fn mapPage(
     const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
     const pde_idx = v.pdIndex();
     var pde = &pd.entries[pde_idx];
+    if (pde.isPresent()) {
+        const praw = @as(u64, @bitCast(pde.*));
+        if ((praw & LargePage) != 0) {
+            if (!split2MiBIdentityPageIfNeeded(pml4_phys, virt, alloc_frame, alloc_ctx)) return false;
+            pde = &pd.entries[pde_idx];
+        }
+    }
     if (!pde.isPresent()) {
         const frame = alloc_frame(alloc_ctx) orelse return false;
         pde.* = PageTableEntry.fromFrame(frame, Present | Write);
@@ -175,8 +229,74 @@ pub fn mapPage(
     return true;
 }
 
-/// 取消映射
-pub fn unmapPage(pml4_phys: u64, virt: u64) bool {
+/// Intel Vol.3 4-14：PDE 在 PS=1 时映射 2MiB；物理地址 = entry[51:21]<<21 | VA[20:0]。
+fn encodePde2MiB(phys: u64, flags: u64) u64 {
+    const aligned = phys & ~@as(u64, huge_page_mask);
+    if (aligned != phys) return 0;
+    var e = aligned | Present | LargePage | Accessed;
+    if ((flags & Write) != 0) e |= Write | Dirty;
+    if ((flags & User) != 0) e |= User;
+    if ((flags & WriteThrough) != 0) e |= WriteThrough;
+    if ((flags & CacheDisable) != 0) e |= CacheDisable;
+    if ((flags & Global) != 0) e |= Global;
+    if ((flags & NoExecute) != 0) e |= NoExecute;
+    return e;
+}
+
+/// 建立 2MiB identity 映射（virt==phys，二者均 2MiB 对齐）。不在 PD 下分配 PT。
+pub fn map2MiBPage(
+    pml4_phys: u64,
+    virt: u64,
+    phys: u64,
+    flags: u64,
+    alloc_frame: AllocFrameFn,
+    alloc_ctx: ?*anyopaque,
+) bool {
+    if (virt != phys) return false;
+    if ((virt & huge_page_mask) != 0) return false;
+    if ((phys & huge_page_mask) != 0) return false;
+
+    const enc = encodePde2MiB(phys, flags);
+    if (enc == 0) return false;
+
+    const v = VirtAddr{ .value = virt };
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+
+    const pml4e_idx = v.pml4Index();
+    var pml4e = &pml4.entries[pml4e_idx];
+    if (!pml4e.isPresent()) {
+        const frame = alloc_frame(alloc_ctx) orelse return false;
+        pml4e.* = PageTableEntry.fromFrame(frame, Present | Write);
+        pml4e.accessed = true;
+        const pdpt = @as(*PageTable, @ptrFromInt(frame));
+        pdpt.zero();
+    }
+    const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+    const pdpte_idx = v.pdptIndex();
+    var pdpte = &pdpt.entries[pdpte_idx];
+    if (!pdpte.isPresent()) {
+        const frame = alloc_frame(alloc_ctx) orelse return false;
+        pdpte.* = PageTableEntry.fromFrame(frame, Present | Write);
+        pdpte.accessed = true;
+        const pd = @as(*PageTable, @ptrFromInt(frame));
+        pd.zero();
+    }
+    const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde_idx = v.pdIndex();
+    var pde = &pd.entries[pde_idx];
+    if (pde.isPresent()) {
+        const raw = @as(u64, @bitCast(pde.*));
+        if ((raw & LargePage) != 0 and raw == enc) return true;
+        return false;
+    }
+    pde.* = @bitCast(enc);
+    return true;
+}
+
+/// 取消映射（单 4KiB）。
+/// 若 PDE 为 2MiB 大页（PS=1），须先拆成 512×4KiB 再只清除目标 PTE。
+/// 旧实现整项清零 PDE 会拆掉整块 2MiB identity，导致相邻内核页突然未映射（VirtIO `remapIdentityVirtPageUncached` 等路径会触发异常风暴）。
+pub fn unmapPage(pml4_phys: u64, virt: u64, alloc_frame: AllocFrameFn, alloc_ctx: ?*anyopaque) bool {
     const v = VirtAddr{ .value = virt };
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
     const pml4e = &pml4.entries[v.pml4Index()];
@@ -185,12 +305,20 @@ pub fn unmapPage(pml4_phys: u64, virt: u64) bool {
     const pdpte = &pdpt.entries[v.pdptIndex()];
     if (!pdpte.isPresent()) return false;
     const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
-    const pde = &pd.entries[v.pdIndex()];
+    const pde_idx = v.pdIndex();
+    var pde = &pd.entries[pde_idx];
     if (!pde.isPresent()) return false;
+    const pde_raw = @as(u64, @bitCast(pde.*));
+    if ((pde_raw & LargePage) != 0) {
+        if (!split2MiBIdentityPageIfNeeded(pml4_phys, virt, alloc_frame, alloc_ctx)) return false;
+        pde = &pd.entries[pde_idx];
+        if (!pde.isPresent()) return false;
+    }
     const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
     const pte = &pt.entries[v.ptIndex()];
     if (!pte.isPresent()) return false;
     pte.* = .{};
+    invlpg(virt);
     return true;
 }
 
@@ -210,13 +338,10 @@ pub fn readCr3() u64 {
     );
 }
 
-/// 刷新 TLB 中单页
+/// 刷新 TLB 中单页。Zig 0.15+ LLVM 对内联 `invlpg` 内存操作数约束过严，此处退化为全 TLB 刷新（与 `mov cr3` 等价）。
 pub fn invlpg(virt: u64) void {
-    asm volatile ("invlpg [%[addr]]"
-        :
-        : [addr] "r" (virt)
-        : .{ .memory = true }
-    );
+    _ = virt;
+    flushTlb();
 }
 
 /// 刷新整个 TLB
@@ -235,6 +360,10 @@ pub fn translateVirtualToPhysical(pml4_phys: u64, virt: u64) ?u64 {
     const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
     const pde = &pd.entries[v.pdIndex()];
     if (!pde.isPresent()) return null;
+    const pde_raw = @as(u64, @bitCast(pde.*));
+    if ((pde_raw & LargePage) != 0) {
+        return (pde_raw & 0x0000_ffff_ffe0_0000) | (virt & huge_page_mask);
+    }
     const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
     const pte = &pt.entries[v.ptIndex()];
     if (!pte.isPresent()) return null;
@@ -243,3 +372,12 @@ pub fn translateVirtualToPhysical(pml4_phys: u64, virt: u64) ?u64 {
 
 pub const page_size = PAGE_SIZE;
 pub const page_mask = PAGE_MASK;
+
+const std = @import("std");
+
+test "x86_64 2MiB identity address recombine" {
+    const virt: u64 = 0x123456;
+    const entry_base: u64 = 0x400000;
+    const pa = (entry_base & 0x0000_ffff_ffe0_0000) | (virt & huge_page_mask);
+    try std.testing.expectEqual(@as(u64, 0x400000) | (virt & huge_page_mask), pa);
+}

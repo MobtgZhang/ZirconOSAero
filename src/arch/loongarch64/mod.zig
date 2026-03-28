@@ -8,7 +8,7 @@ const liointc = @import("../../hal/loongarch64/liointc.zig");
 pub const name: []const u8 = "loongarch64";
 pub const PAGE_SIZE: usize = 16384;
 
-extern fn kernel_main(magic: u32, info_addr: usize) callconv(.c) noreturn;
+extern fn kernel_main(magic_arg: usize, info_addr: usize) callconv(.c) noreturn;
 
 /// `link/loongarch64.ld` 中 `PROVIDE(_kernel_end = .)` 为 **零尺寸** 符号；在部分 Zig 版本上
 /// `@intFromPtr(&extern const _kernel_end: u8)` 会得到 0，帧分配器不保留内核映像，identity map 约在 8MiB 处失败。
@@ -132,6 +132,10 @@ pub fn readInputChar() ?u8 {
     const ev = @import("../../drivers/input/evdev_virtio_bridge.zig");
     if (ev.hasData()) return ev.readChar();
     return uart.readByte();
+}
+
+pub fn injectSyntheticChar(c: u8) void {
+    @import("../../drivers/input/evdev_virtio_bridge.zig").injectSyntheticChar(c);
 }
 
 pub fn consumeTaskMgrHotkey() bool {

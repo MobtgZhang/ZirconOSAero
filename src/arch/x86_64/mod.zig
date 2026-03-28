@@ -73,6 +73,8 @@ pub fn handleKeyboardIrq() void {
 }
 
 pub fn handleMouseIrq() void {
+    const virtio_input_pci = @import("../../drivers/input/virtio_input_pci.zig");
+    if (virtio_input_pci.isActive()) return;
     const mouse = @import("../../drivers/input/mouse.zig");
     mouse.handleIrq();
 }
@@ -85,6 +87,10 @@ pub fn readInputChar() ?u8 {
         return serial.readByte();
     }
     return null;
+}
+
+pub fn injectSyntheticChar(c: u8) void {
+    keyboard.injectSyntheticChar(c);
 }
 
 pub fn consumeTaskMgrHotkey() bool {

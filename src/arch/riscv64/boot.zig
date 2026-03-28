@@ -2,6 +2,31 @@
 
 const mb2 = @import("../../boot/multiboot2_parse.zig");
 
+const UefiVectorLayout = extern struct {
+    magic: u32,
+    version: u32,
+    kernel_entry: u64,
+    stack_addr: u64,
+    mb2_phys: u64,
+};
+extern const _uefi_vector: UefiVectorLayout align(8);
+
+fn multiboot2PhysFromUefiVector(reg_a1: usize) usize {
+    const base = @intFromPtr(&_uefi_vector);
+    if (@as(*const volatile u32, @ptrFromInt(base)).* != 0x55454649) return reg_a1;
+    if (@as(*const volatile u32, @ptrFromInt(base + 4)).* < 1) return reg_a1;
+    const p = @as(*const volatile u64, @ptrFromInt(base + 24)).*;
+    if (p == 0) return reg_a1;
+    return @as(usize, @truncate(p));
+}
+
+pub fn uefiVectorMb2PhysForDiag() u64 {
+    const base = @intFromPtr(&_uefi_vector);
+    if (@as(*const volatile u32, @ptrFromInt(base)).* != 0x55454649) return 0;
+    if (@as(*const volatile u32, @ptrFromInt(base + 4)).* < 1) return 0;
+    return @as(*const volatile u64, @ptrFromInt(base + 24)).*;
+}
+
 pub const MULTIBOOT2_BOOTLOADER_MAGIC = mb2.MULTIBOOT2_BOOTLOADER_MAGIC;
 pub const BootInfoHeader = mb2.BootInfoHeader;
 pub const TagHeader = mb2.TagHeader;
@@ -37,6 +62,7 @@ fn qemuVirtDefault() BootInfo {
 
 pub fn parse(magic: u32, phys_addr: usize) ?BootInfo {
     if (magic != mb2.MULTIBOOT2_BOOTLOADER_MAGIC) return qemuVirtDefault();
-    if (phys_addr == 0) return qemuVirtDefault();
-    return mb2.parseMultiboot2(phys_addr) orelse qemuVirtDefault();
+    const info_phys = multiboot2PhysFromUefiVector(phys_addr);
+    if (info_phys == 0) return qemuVirtDefault();
+    return mb2.parseMultiboot2(info_phys) orelse qemuVirtDefault();
 }

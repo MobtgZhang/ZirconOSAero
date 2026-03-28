@@ -5,7 +5,7 @@ const uart = @import("../../hal/mips64el/uart.zig");
 pub const name: []const u8 = "mips64el";
 pub const PAGE_SIZE: usize = 4096;
 
-extern fn kernel_main(magic: u32, info_addr: usize) callconv(.c) noreturn;
+extern fn kernel_main(magic_arg: usize, info_addr: usize) callconv(.c) noreturn;
 
 pub export fn _start() callconv(.c) noreturn {
     kernel_main(0, 0);

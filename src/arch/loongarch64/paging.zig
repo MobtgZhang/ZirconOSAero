@@ -5,6 +5,9 @@
 pub const page_size: usize = 16384;
 pub const page_mask: usize = page_size - 1;
 
+/// 单张第三级表 2048×16KiB = 32MiB VA；`mapIdentity32MiBlock` 一次填充整块。
+pub const identity_bulk_bytes: u64 = 2048 * page_size;
+
 const L0_SHIFT: u6 = 36;
 const L1_SHIFT: u6 = 25;
 const L2_SHIFT: u6 = 14;
@@ -99,6 +102,42 @@ pub fn translateVirtualToPhysical(pgd_phys: u64, virt: u64) ?u64 {
 
 pub const AllocFrameFn = *const fn (?*anyopaque) ?u64;
 
+/// `block_base` 须 32MiB 对齐；整表 identity 映射（减少启动时 `mapPage` 次）。
+pub fn mapIdentity32MiBlock(
+    pgd_phys: u64,
+    block_base: u64,
+    flags: u64,
+    alloc_frame: AllocFrameFn,
+    alloc_ctx: ?*anyopaque,
+) bool {
+    if ((block_base % identity_bulk_bytes) != 0) return false;
+    const v = VirtAddr{ .value = block_base };
+    const pgd = @as(*PageTable, @ptrFromInt(pgd_phys));
+
+    var l0e = &pgd.entries[v.pml4Index()];
+    if (!l0e.isPresent()) {
+        const frame = alloc_frame(alloc_ctx) orelse return false;
+        l0e.* = .{ .raw = (frame & ADDR_MASK) | V };
+        @as(*PageTable, @ptrFromInt(frame)).zero();
+    }
+    const l1_table = @as(*PageTable, @ptrFromInt(l0e.toFrame()));
+    var l1e = &l1_table.entries[v.pdptIndex()];
+    if (!l1e.isPresent()) {
+        const frame = alloc_frame(alloc_ctx) orelse return false;
+        l1e.* = .{ .raw = (frame & ADDR_MASK) | V };
+        @as(*PageTable, @ptrFromInt(frame)).zero();
+    }
+    const l2_table = @as(*PageTable, @ptrFromInt(l1e.toFrame()));
+    var i: usize = 0;
+    while (i < 2048) : (i += 1) {
+        if (l2_table.entries[i].isPresent()) return false;
+        const virt = block_base + i * page_size;
+        l2_table.entries[i] = PageTableEntry.fromFrame(virt, flags | D);
+    }
+    asm volatile ("invtlb 0x0, $zero, $zero");
+    return true;
+}
+
 pub fn mapPage(
     pgd_phys: u64,
     virt: u64,
@@ -137,7 +176,7 @@ pub fn mapPage(
     return true;
 }
 
-pub fn unmapPage(pgd_phys: u64, virt: u64) bool {
+pub fn unmapPage(pgd_phys: u64, virt: u64, _: AllocFrameFn, _: ?*anyopaque) bool {
     const v = VirtAddr{ .value = virt };
     const pgd = @as(*PageTable, @ptrFromInt(pgd_phys));
     const l0e = &pgd.entries[v.pml4Index()];

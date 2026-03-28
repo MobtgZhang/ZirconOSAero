@@ -8,7 +8,12 @@ const process = @import("../../ps/process.zig");
 const klog = @import("../../rtl/klog.zig");
 const ob = @import("../../ob/object.zig");
 const vm = @import("../../mm/vm.zig");
+const ntdll = @import("../../libs/ntdll.zig");
 const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
+
+fn ntResult(s: ntdll.NTSTATUS) i64 {
+    return @intCast(s);
+}
 
 pub const SYS_CREATE_PROCESS: u64 = 0;
 pub const SYS_CREATE_THREAD: u64 = 1;
@@ -26,14 +31,11 @@ pub const SYS_GET_PID: u64 = 12;
 pub const SYS_YIELD: u64 = 13;
 pub const SYS_DEBUG_PRINT: u64 = 14;
 
+/// Success and error codes use the same `NTSTATUS` values as [`ntdll`](../libs/ntdll.zig) where applicable.
 pub const STATUS_SUCCESS: i64 = 0;
-pub const STATUS_INVALID_PARAMETER: i64 = -1;
-pub const STATUS_QUEUE_FULL: i64 = -2;
+/// Legacy IPC receive: not a standard `NTSTATUS`; see [SyscallABI.md](../../docs/cn/SyscallABI.md).
 pub const STATUS_NO_MESSAGE: i64 = -3;
-pub const STATUS_ACCESS_DENIED: i64 = -4;
-pub const STATUS_NO_MEMORY: i64 = -5;
-/// Matches `STATUS_NOT_IMPLEMENTED` (0xC0000002) for user-visible consistency with ntdll.
-pub const STATUS_NOT_IMPLEMENTED: i64 = -1073741822;
+pub const STATUS_NOT_IMPLEMENTED: i64 = @intCast(ntdll.STATUS_NOT_IMPLEMENTED);
 
 pub fn dispatch(frame: *InterruptFrame) void {
     const syscall_no = frame.rax;
@@ -52,7 +54,7 @@ pub fn dispatch(frame: *InterruptFrame) void {
         SYS_MAP_MEMORY => handleMapMemory(arg1, arg2, arg3),
         SYS_UNMAP_MEMORY => handleUnmapMemory(arg1),
         SYS_EXIT_PROCESS => handleExitProcess(arg1),
-        SYS_OPEN_HANDLE => STATUS_NOT_IMPLEMENTED,
+        SYS_OPEN_HANDLE => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
         SYS_CLOSE_HANDLE => handleCloseHandle(arg1),
         SYS_WAIT_OBJECT => STATUS_SUCCESS,
         SYS_CREATE_PORT => handleCreatePort(arg1, arg2),
@@ -61,12 +63,12 @@ pub fn dispatch(frame: *InterruptFrame) void {
         SYS_YIELD => blk: {
             const scheduler = @import("../../ke/scheduler.zig");
             scheduler.yield();
-            break :blk STATUS_SUCCESS;
+            break :blk 0;
         },
         SYS_DEBUG_PRINT => handleDebugPrint(arg1, arg2),
         else => blk: {
             klog.warn("Unknown syscall %u", .{syscall_no});
-            break :blk STATUS_INVALID_PARAMETER;
+            break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
         },
     };
 
@@ -74,7 +76,10 @@ pub fn dispatch(frame: *InterruptFrame) void {
 }
 
 fn handleIpcSend(sender: u64, receiver: u64, opcode: u64) i64 {
-    return ipc.send(@intCast(sender), @intCast(receiver), @intCast(opcode), null);
+    const r = ipc.send(@intCast(sender), @intCast(receiver), @intCast(opcode), null);
+    if (r == 0) return 0;
+    if (r == -2) return ntResult(ntdll.STATUS_INSUFFICIENT_RESOURCES);
+    return ntResult(ntdll.STATUS_INVALID_PARAMETER);
 }
 
 fn handleIpcReceive(_: u64) i64 {
@@ -86,40 +91,40 @@ fn handleIpcReceive(_: u64) i64 {
 }
 
 fn handleCreateProcess(frame_alloc_ptr: u64) i64 {
-    if (frame_alloc_ptr == 0) return STATUS_INVALID_PARAMETER;
+    if (frame_alloc_ptr == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     const alloc = @as(*@import("../../mm/frame.zig").FrameAllocator, @ptrFromInt(frame_alloc_ptr));
     const p = process.createProcess(alloc);
     if (p) |proc| {
         return @intCast(proc.pid);
     }
-    return STATUS_NO_MEMORY;
+    return ntResult(ntdll.STATUS_NO_MEMORY);
 }
 
 fn handleCreateThread(_: u64, _: u64) i64 {
-    const tid = process.allocTid() orelse return STATUS_NO_MEMORY;
+    const tid = process.allocTid() orelse return ntResult(ntdll.STATUS_NO_MEMORY);
     return @intCast(tid);
 }
 
 fn handleMapMemory(virt: u64, _: u64, _: u64) i64 {
-    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_PARAMETER;
-    if (virt & 0xFFF != 0) return STATUS_INVALID_PARAMETER;
+    const proc = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    if (virt & 0xFFF != 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     if (proc.address_space) |*space| {
         const flags = vm.MapFlags{ .writable = true, .user = true };
         if (space.mapPageAlloc(virt, flags)) |_| {
-            return STATUS_SUCCESS;
+            return 0;
         }
     }
-    return STATUS_NO_MEMORY;
+    return ntResult(ntdll.STATUS_NO_MEMORY);
 }
 
 fn handleUnmapMemory(virt: u64) i64 {
-    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_PARAMETER;
-    if (virt & 0xFFF != 0) return STATUS_INVALID_PARAMETER;
+    const proc = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    if (virt & 0xFFF != 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     if (proc.address_space) |*space| {
         _ = space.unmapPage(virt);
-        return STATUS_SUCCESS;
+        return 0;
     }
-    return STATUS_INVALID_PARAMETER;
+    return ntResult(ntdll.STATUS_INVALID_PARAMETER);
 }
 
 fn copyNameArg(name_ptr: u64, name_len: u64, out: *[32]u8) ?[]const u8 {
@@ -131,40 +136,40 @@ fn copyNameArg(name_ptr: u64, name_len: u64, out: *[32]u8) ?[]const u8 {
 
 fn handleCreatePort(name_ptr: u64, name_len: u64) i64 {
     var buf: [32]u8 = undefined;
-    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return STATUS_INVALID_PARAMETER;
+    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     const pid = process.getCurrentPid();
-    const pt = lpc_port.createPort(pid, nm) orelse return STATUS_NO_MEMORY;
+    const pt = lpc_port.createPort(pid, nm) orelse return ntResult(ntdll.STATUS_NO_MEMORY);
     return @intCast(pt.id);
 }
 
 fn handleConnectPort(name_ptr: u64, name_len: u64) i64 {
     var buf: [32]u8 = undefined;
-    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return STATUS_INVALID_PARAMETER;
+    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     const pid = process.getCurrentPid();
-    const pt = lpc_port.connectPort(pid, nm) orelse return STATUS_INVALID_PARAMETER;
+    const pt = lpc_port.connectPort(pid, nm) orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     return @intCast(pt.id);
 }
 
 fn handleExitProcess(exit_code: u64) i64 {
     const pid = process.getCurrentPid();
     _ = process.terminateProcess(pid, @intCast(exit_code));
-    return STATUS_SUCCESS;
+    return 0;
 }
 
 fn handleCloseHandle(handle_val: u64) i64 {
-    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_PARAMETER;
+    const proc = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     const handle: ob.Handle = @intCast(handle_val);
     if (proc.handle_table.closeHandle(handle)) {
-        return STATUS_SUCCESS;
+        return 0;
     }
-    return STATUS_INVALID_PARAMETER;
+    return ntResult(ntdll.STATUS_INVALID_PARAMETER);
 }
 
 fn handleDebugPrint(buf_ptr: u64, len: u64) i64 {
-    if (buf_ptr == 0 or len == 0 or len > 256) return STATUS_INVALID_PARAMETER;
+    if (buf_ptr == 0 or len == 0 or len > 256) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
     const ptr = @as([*]const u8, @ptrFromInt(buf_ptr));
     const slice = ptr[0..@intCast(len)];
     const arch = @import("../../arch.zig");
     arch.consoleWrite(slice);
-    return STATUS_SUCCESS;
+    return 0;
 }

@@ -136,9 +136,10 @@ pub fn parseMultiboot2(phys_addr: usize) ?BootInfo {
         const tag_size = @max(tag.size, 8);
         if (offset + tag_size > total) break;
 
-        switch (@as(TagType, @enumFromInt(tag.type))) {
-            .end => break,
-            .cmdline => {
+        // 按原始 type 分支，避免未知 tag 经 @enumFromInt 产生未定义行为
+        switch (tag.type) {
+            0 => break, // end
+            1 => {
                 const str_start = addr + offset + 8;
                 const str_len = tag_size - 8;
                 if (str_len > 0) {
@@ -149,20 +150,22 @@ pub fn parseMultiboot2(phys_addr: usize) ?BootInfo {
                     info.desktop_theme = parseCmdlineDesktop(cmdline);
                 }
             },
-            .basic_meminfo => {
+            4 => {
                 const t = @as(*const BasicMemInfoTag, @ptrFromInt(addr + offset));
                 info.mem_lower_kb = t.mem_lower;
                 info.mem_upper_kb = t.mem_upper;
             },
-            .mmap => {
+            6 => {
                 const t = @as(*const MmapTag, @ptrFromInt(addr + offset));
-                info.mmap_entry_size = t.entry_size;
                 const entries_start = addr + offset + 16;
-                const entries_len = tag_size - 16;
-                info.mmap_entry_count = entries_len / t.entry_size;
-                info.mmap_ptr = @ptrFromInt(entries_start);
+                const entries_len = tag_size -| 16;
+                if (t.entry_size >= 24 and entries_len >= t.entry_size) {
+                    info.mmap_entry_size = t.entry_size;
+                    info.mmap_entry_count = entries_len / t.entry_size;
+                    info.mmap_ptr = @ptrFromInt(entries_start);
+                }
             },
-            .framebuffer => {
+            8 => {
                 const base = addr + offset;
                 const p8 = @as([*]const u8, @ptrFromInt(base));
                 const fb_addr_lo = @as(*const u32, @ptrCast(@alignCast(p8 + 8))).*;

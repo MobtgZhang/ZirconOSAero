@@ -125,7 +125,7 @@ pub fn mapPage(
     return true;
 }
 
-pub fn unmapPage(root_phys: u64, virt: u64) bool {
+pub fn unmapPage(root_phys: u64, virt: u64, _: AllocFrameFn, _: ?*anyopaque) bool {
     const v = VirtAddr{ .value = virt };
     const root = @as(*PageTable, @ptrFromInt(root_phys));
     const l2e = &root.entries[v.pml4Index()];

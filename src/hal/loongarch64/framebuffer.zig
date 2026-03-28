@@ -1,4 +1,5 @@
-//! LoongArch framebuffer (ramfb) — 供 arch.initFramebuffer / display 路径使用
+//! LoongArch framebuffer (ramfb) — 供 arch.initFramebuffer / display 路径使用。
+//! UEFI GOP 几何须与 `boot.zig`/`main_loongarch64.zig` 的 `EfiHandoff.fb_*` 一致；`display.initDesktopMode` 会校验 `pitch >= width*bpp/8` 并打 `DesktopGOP:`。
 
 var fb_addr: usize = 0;
 var fb_pitch: usize = 0;

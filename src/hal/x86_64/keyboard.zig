@@ -283,6 +283,11 @@ fn pushChar(ch: u8) void {
     ring_head = next;
 }
 
+/// 屏幕键盘等注入字符（与 IRQ 路径共用环形缓冲）。
+pub fn injectSyntheticChar(ch: u8) void {
+    pushChar(ch);
+}
+
 pub fn readChar() ?u8 {
     if (ring_head == ring_tail) return null;
     const ch = ring_buf[ring_tail];

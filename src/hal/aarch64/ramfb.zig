@@ -8,7 +8,7 @@
 // QEMU reference: hw/display/ramfb.c, include/hw/arm/virt.h (VIRT_FW_CFG_BASE).
 
 //! AArch64 `qemu-system-aarch64 -M virt`：fw_cfg MMIO 基址与 LoongArch 不同。
-//! 与 `hal/loongarch64/ramfb.zig` 逻辑一致，仅 `FW_CFG_BASE` 不同。
+//! **RAMFB_PHYS** 必须落在 guest DRAM 内：ARM virt RAM 自 `0x4000_0000` 起，勿用 LoongArch 的 `0x0F000000`。
 
 pub const RamfbInfo = struct {
     addr: u64,
@@ -29,12 +29,18 @@ pub const FW_CFG_DMA_CTL_SELECT: u32 = 1 << 3;
 pub const FW_CFG_DMA_CTL_WRITE: u32 = 1 << 4;
 pub const RAMFB_FOURCC_AR24: u32 = 0x34325241;
 
-const FB_WIDTH: u32 = 1024;
-const FB_HEIGHT: u32 = 768;
-const FB_STRIDE: u32 = 1024 * 4;
+const FB_WIDTH: u32 = @import("build_options").kernel_preferred_fb_width;
+const FB_HEIGHT: u32 = @import("build_options").kernel_preferred_fb_height;
+const FB_STRIDE: u32 = FB_WIDTH * 4;
 
-/// 与 LoongArch ramfb 约定一致：guest RAM 内固定物理地址，需 QEMU `-device ramfb`
-pub const RAMFB_PHYS: usize = 0x0F000000;
+/// 位于 `0x4000_0000` 之后、远离链接脚本内核映像（~`0x4008_0000`）的固定物理页；须与 `frame.markPhysRangeUsed` 一致以免被页帧分配器覆盖。
+pub const RAMFB_PHYS: usize = 0x4800_0000;
+
+/// 供帧分配器保留的字节数（与 `setup()` 写入 QEMU 的分辨率一致）
+pub fn framebufferReservedBytes() usize {
+    if (FB_WIDTH == 0 or FB_HEIGHT == 0) return 0;
+    return @as(usize, FB_STRIDE) * @as(usize, FB_HEIGHT);
+}
 
 const RAMFBCfg = extern struct {
     addr: u64,
@@ -121,10 +127,15 @@ fn writeRamfbCfgToBuf(cfg_ptr: *align(8) [32]u8, phys: u64, width: u32, height: 
 
 /// 尝试初始化 ramfb，返回 RamfbInfo 或 null
 pub fn setup() ?RamfbInfo {
+    const klog = @import("../../rtl/klog.zig");
+    if (FB_WIDTH == 0 or FB_HEIGHT == 0) return null;
     const key = findRamfbKey() orelse return null;
     const cfg_ptr = &ramfb_cfg_buf;
     writeRamfbCfgToBuf(cfg_ptr, RAMFB_PHYS, FB_WIDTH, FB_HEIGHT, FB_STRIDE);
     if (!writeRamfbConfig(key, cfg_ptr)) return null;
+    klog.info("ramfb(a64): QEMU cfg %ux%u stride=%u @0x%x", .{
+        FB_WIDTH, FB_HEIGHT, FB_STRIDE, RAMFB_PHYS,
+    });
     return RamfbInfo{
         .addr = RAMFB_PHYS,
         .pitch = FB_STRIDE,

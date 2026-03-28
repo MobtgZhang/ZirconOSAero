@@ -27,6 +27,9 @@
 #define UNICODE_UP 0x2191   /* ↑ */
 #define UNICODE_DOWN 0x2193 /* ↓ */
 
+/* 首选分辨率：make build 时由 sync_resolution_config.py 写入 build/tmp/zircon_pref_fb.h（-I 该目录） */
+#include "zircon_pref_fb.h"
+
 typedef struct {
 	UINT32 magic;
 	UINT32 version;
@@ -90,6 +93,69 @@ static void print_dec(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, UINT32 val) {
 /* UEFI: PixelRedGreenBlueReserved8BitPerColor=0, BGR=1, BitMask=2, BltOnly=3 */
 static int gop_pixel_linear(UINT32 fmt) {
 	return (int)(fmt <= 2u);
+}
+
+typedef EFI_STATUS (*GOP_QUERY_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32, UINTN *, EFI_GRAPHICS_OUTPUT_MODE_INFO **);
+typedef EFI_STATUS (*GOP_SET_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32);
+
+/* 与 boot/zbm/uefi/main_loongarch64.zig trySetPreferredGopMode 一致：精确首选 → 不小于首选的最小面积 → 最大线性 */
+static void gop_try_preferred_mode(
+	EFI_GRAPHICS_OUTPUT_PROTOCOL *gop,
+	GOP_QUERY_MODE qm,
+	GOP_SET_MODE sm,
+	UINT32 pref_w,
+	UINT32 pref_h)
+{
+	UINT32 m;
+	UINTN sz;
+	EFI_GRAPHICS_OUTPUT_MODE_INFO *mi;
+
+	for (m = 0; m < gop->Mode->MaxMode; m++) {
+		sz = 0;
+		mi = 0;
+		if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
+		if (!gop_pixel_linear(mi->PixelFormat)) continue;
+		if (mi->HorizontalResolution == pref_w && mi->VerticalResolution == pref_h) {
+			sm(gop, m);
+			return;
+		}
+	}
+
+	UINT32 best_m = 0xFFFFFFFFu;
+	UINT64 best_px = (UINT64)-1;
+	for (m = 0; m < gop->Mode->MaxMode; m++) {
+		sz = 0;
+		mi = 0;
+		if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
+		if (!gop_pixel_linear(mi->PixelFormat)) continue;
+		UINT32 w = mi->HorizontalResolution, h = mi->VerticalResolution;
+		if (w < pref_w || h < pref_h) continue;
+		UINT64 px = (UINT64)w * (UINT64)h;
+		if (px < best_px) {
+			best_px = px;
+			best_m = m;
+		}
+	}
+	if (best_m != 0xFFFFFFFFu) {
+		sm(gop, best_m);
+		return;
+	}
+
+	best_m = 0xFFFFFFFFu;
+	UINT64 max_px = 0;
+	for (m = 0; m < gop->Mode->MaxMode; m++) {
+		sz = 0;
+		mi = 0;
+		if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
+		if (!gop_pixel_linear(mi->PixelFormat)) continue;
+		UINT64 px = (UINT64)mi->HorizontalResolution * (UINT64)mi->VerticalResolution;
+		if (px > max_px) {
+			max_px = px;
+			best_m = m;
+		}
+	}
+	if (best_m != 0xFFFFFFFFu)
+		sm(gop, best_m);
 }
 
 static void init_entries(void) {
@@ -478,21 +544,21 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 	hp->fb_height = 0;
 	hp->fb_bpp = 0;
 
-	/* QEMU GTK 常把主窗口接到固件 GOP（如 800×600），而内核 ramfb 写在 0xF000000 → 看不见桌面。
-	 * 在 ExitBootServices 前 SetMode 到 ≥1024×768 的线性 GOP，并把该缓冲写入 handoff，内核与窗口同源。 */
+	/* 仅当 GOP 同时达到构建首选分辨率时才写入 handoff；否则内核弃用 GOP 并走 ramfb+fw_cfg（与 Zig ZBM / main.zig 一致）。 */
 	{
 		typedef EFI_STATUS (*LP)(EFI_GUID *Protocol, VOID *Registration, VOID **Interface);
-		typedef EFI_STATUS (*GOP_QUERY_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32, UINTN *, EFI_GRAPHICS_OUTPUT_MODE_INFO **);
-		typedef EFI_STATUS (*GOP_SET_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32);
 
 		EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
 		EFI_STATUS gst = ((LP)bs->LocateProtocol)((EFI_GUID *)&gop_guid, 0, (VOID **)&gop);
 		if (gst != EFI_SUCCESS || !gop || !gop->Mode || !gop->Mode->Info) {
-			print(con, L"  [*] GOP unavailable (kernel will use ramfb)\r\n");
+			print(con, L"  [*] No UEFI graphics -> kernel uses ramfb + fw_cfg\r\n");
+			print(con, L"      QEMU: add -device ramfb. Doc: AeroDesktopRuntime.md\r\n");
 		} else {
 			GOP_QUERY_MODE qm = (GOP_QUERY_MODE)gop->QueryMode;
 			GOP_SET_MODE sm = (GOP_SET_MODE)gop->SetMode;
-			UINT32 want_w = 1024, want_h = 768;
+			const UINT32 pref_w = ZIRCON_PREF_FB_WIDTH;
+			const UINT32 pref_h = ZIRCON_PREF_FB_HEIGHT;
+			const UINT32 min_w = 1024U, min_h = 768U;
 
 			/* Blt-only → 先切到线性模式 */
 			if (!gop_pixel_linear(gop->Mode->Info->PixelFormat)) {
@@ -506,44 +572,11 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 				}
 			}
 
-			/* 优先 1024×768 */
-			{
-				UINT32 m;
-				for (m = 0; m < gop->Mode->MaxMode; m++) {
-					UINTN sz = 0;
-					EFI_GRAPHICS_OUTPUT_MODE_INFO *mi = 0;
-					if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
-					if (!gop_pixel_linear(mi->PixelFormat)) continue;
-					if (mi->HorizontalResolution == want_w && mi->VerticalResolution == want_h) {
-						sm(gop, m);
-						break;
-					}
-				}
-			}
-			/* 否则选不小于 want 的最小面积 */
-			{
-				UINT32 m, best_m = 0xFFFFFFFFu;
-				UINT64 best_px = (UINT64)-1;
-				for (m = 0; m < gop->Mode->MaxMode; m++) {
-					UINTN sz = 0;
-					EFI_GRAPHICS_OUTPUT_MODE_INFO *mi = 0;
-					if (qm(gop, m, &sz, &mi) != EFI_SUCCESS || !mi) continue;
-					if (!gop_pixel_linear(mi->PixelFormat)) continue;
-					UINT32 w = mi->HorizontalResolution, h = mi->VerticalResolution;
-					if (w < want_w || h < want_h) continue;
-					UINT64 px = (UINT64)w * h;
-					if (px < best_px) {
-						best_px = px;
-						best_m = m;
-					}
-				}
-				if (best_m != 0xFFFFFFFFu)
-					sm(gop, best_m);
-			}
+			gop_try_preferred_mode(gop, qm, sm, pref_w, pref_h);
 
 			if (gop->Mode->Info && gop_pixel_linear(gop->Mode->Info->PixelFormat) &&
-			    gop->Mode->Info->HorizontalResolution >= want_w &&
-			    gop->Mode->Info->VerticalResolution >= want_h &&
+			    gop->Mode->Info->HorizontalResolution >= pref_w &&
+			    gop->Mode->Info->VerticalResolution >= pref_h &&
 			    gop->Mode->FrameBufferBase != 0) {
 				hp->fb_addr = gop->Mode->FrameBufferBase;
 				hp->fb_width = gop->Mode->Info->HorizontalResolution;
@@ -552,11 +585,11 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 				if (hp->fb_pitch == 0)
 					hp->fb_pitch = hp->fb_width * 4;
 				hp->fb_bpp = 32;
-				print(con, L"  [*] GOP → handoff (kernel desktop, QEMU scanout): ");
+				print(con, L"  [*] Handoff FB OK (build pref) ");
 				print_dec(con, hp->fb_width);
-				print(con, L"x");
+				print(con, L" x ");
 				print_dec(con, hp->fb_height);
-				print(con, L" @ 0x");
+				print(con, L" phys 0x");
 				{
 					CHAR16 hx[] = L"0123456789ABCDEF";
 					CHAR16 buf[20];
@@ -568,8 +601,23 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 					print(con, buf);
 				}
 				print(con, L"\r\n");
+			} else if (gop->Mode->Info && gop_pixel_linear(gop->Mode->Info->PixelFormat) &&
+				   gop->Mode->Info->HorizontalResolution >= min_w &&
+				   gop->Mode->Info->VerticalResolution >= min_h) {
+				/* Firmware GOP smaller than build preferred: handoff has no FB; kernel uses ramfb+fw_cfg. */
+				print(con, L"  [*] Firmware FB ");
+				print_dec(con, gop->Mode->Info->HorizontalResolution);
+				print(con, L" x ");
+				print_dec(con, gop->Mode->Info->VerticalResolution);
+				print(con, L" < pref ");
+				print_dec(con, pref_w);
+				print(con, L" x ");
+				print_dec(con, pref_h);
+				print(con, L"\r\n");
+				print(con, L"  [*] Kernel uses ramfb + fw_cfg at pref size (normal).\r\n");
+				print(con, L"      Serial: ramfb:  Desktop: fb  first frame. Text pane may stay small.\r\n");
 			} else {
-				print(con, L"  [*] GOP <1024x768 or non-linear after SetMode; kernel uses ramfb\r\n");
+				print(con, L"  [*] FB small or non-linear -> ramfb + fw_cfg; need -device ramfb\r\n");
 			}
 		}
 	}

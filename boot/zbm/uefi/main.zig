@@ -15,6 +15,8 @@ const arch_name = switch (builtin.target.cpu.arch) {
 
 const debug_mode = @import("build_options").debug;
 const desktop_theme_name = @import("build_options").desktop;
+const preferred_fb_width = @import("build_options").zbm_preferred_fb_width;
+const preferred_fb_height = @import("build_options").zbm_preferred_fb_height;
 
 const KERNEL_PATH = menu.KERNEL_PATH;
 const Attr = menu.Attr;
@@ -162,30 +164,87 @@ fn physPageWantsLoaderData(
     return false;
 }
 
+fn gopPixelFormatIsLinear(f: uefi.protocol.GraphicsOutput.PixelFormat) bool {
+    return f == .red_green_blue_reserved_8_bit_per_color or
+        f == .blue_green_red_reserved_8_bit_per_color or
+        f == .bit_mask;
+}
+
 /// virtio-gpu 等可能以 PixelBltOnly 启动，无线性帧缓冲；尝试 SetMode 到带 RGB/BGR/bit_mask 的模式。
 fn trySetLinearGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput) void {
     const cur = gop.mode.info.pixel_format;
-    if (cur == .red_green_blue_reserved_8_bit_per_color or
-        cur == .blue_green_red_reserved_8_bit_per_color or
-        cur == .bit_mask)
-    {
-        return;
-    }
+    if (gopPixelFormatIsLinear(cur)) return;
 
     var mid: u32 = 0;
     while (mid < gop.mode.max_mode) : (mid += 1) {
         const mi = gop.queryMode(mid) catch continue;
-        switch (mi.pixel_format) {
-            .red_green_blue_reserved_8_bit_per_color,
-            .blue_green_red_reserved_8_bit_per_color,
-            .bit_mask,
-            => {
-                gop.setMode(mid) catch continue;
-                puts(out, "    [*] GOP: selected linear framebuffer mode\r\n");
-                return;
-            },
-            else => {},
+        if (gopPixelFormatIsLinear(mi.pixel_format)) {
+            gop.setMode(mid) catch continue;
+            puts(out, "    [*] GOP: selected linear framebuffer mode\r\n");
+            return;
         }
+    }
+}
+
+/// 优先 `preferred_fb_width`×`preferred_fb_height`（build / Makefile RESOLUTION），其次不小于该分辨率的最小模式，再选最大线性模式。
+fn trySetPreferredGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput, want_w: u32, want_h: u32) void {
+    trySetLinearGopMode(out, gop);
+
+    var mid: u32 = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        if (mi.horizontal_resolution == want_w and mi.vertical_resolution == want_h) {
+            gop.setMode(mid) catch continue;
+            puts(out, "    [*] GOP: set preferred mode ");
+            printDecimal(out, want_w);
+            puts(out, "x");
+            printDecimal(out, want_h);
+            puts(out, "\r\n");
+            return;
+        }
+    }
+
+    var best_cover: ?u32 = null;
+    var best_cover_px: u64 = std.math.maxInt(u64);
+    mid = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        const w = mi.horizontal_resolution;
+        const h = mi.vertical_resolution;
+        if (w < want_w or h < want_h) continue;
+        const px = @as(u64, w) * @as(u64, h);
+        if (best_cover == null or px < best_cover_px) {
+            best_cover = mid;
+            best_cover_px = px;
+        }
+    }
+    if (best_cover) |m| {
+        gop.setMode(m) catch return;
+        puts(out, "    [*] GOP: set mode >= preferred ");
+        printDecimal(out, want_w);
+        puts(out, "x");
+        printDecimal(out, want_h);
+        puts(out, "\r\n");
+        return;
+    }
+
+    var best_any: ?u32 = null;
+    var max_px: u64 = 0;
+    mid = 0;
+    while (mid < gop.mode.max_mode) : (mid += 1) {
+        const mi = gop.queryMode(mid) catch continue;
+        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        const px = @as(u64, mi.horizontal_resolution) * @as(u64, mi.vertical_resolution);
+        if (px > max_px) {
+            best_any = mid;
+            max_px = px;
+        }
+    }
+    if (best_any) |m| {
+        gop.setMode(m) catch return;
+        puts(out, "    [*] GOP: set largest linear mode\r\n");
     }
 }
 
@@ -203,12 +262,12 @@ const GopFbInfo = struct {
 const UEFI_VECTOR_MAGIC: u32 = 0x55454649;
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 
-const UefiVectorTable = extern struct {
-    magic: u32,
-    version: u32,
-    kernel_entry: u64,
-    stack_addr: u64,
-};
+/// 与 `src/arch/aarch64|riscv64/start.S` 对齐：v0 长 24 字节；v1 多 8 字节 `mb2_phys`（ZBM 写入后内核从向量表读，避免 x1/VA 与物理不一致）。
+const uefi_vec_off_magic: usize = 0;
+const uefi_vec_off_version: usize = 4;
+const uefi_vec_off_kernel_entry: usize = 8;
+const uefi_vec_off_stack: usize = 16;
+const uefi_vec_off_mb2_phys: usize = 24;
 
 const mmap_scratch_nbytes: usize = 32768;
 const boot_info_page_size: usize = 4096;
@@ -239,7 +298,7 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
     const gop_opt = bs.locateProtocol(uefi.protocol.GraphicsOutput, null) catch return null;
     const gop = gop_opt orelse return null;
 
-    trySetLinearGopMode(out, gop);
+    trySetPreferredGopMode(out, gop, preferred_fb_width, preferred_fb_height);
 
     const mode = gop.mode;
     const info = mode.info;
@@ -480,28 +539,32 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
         break :blk 0;
     };
 
-    var vec: ?*const UefiVectorTable = null;
+    var vec_base: ?usize = null;
     if (kernel_base != 0) {
         // Scan the first 64KB from kernel base for the magic pattern
         const scan_end = kernel_base + 0x10000;
         var addr = kernel_base;
-        while (addr + @sizeOf(UefiVectorTable) <= scan_end) : (addr += 8) {
-            const candidate: *const UefiVectorTable = @ptrFromInt(addr);
-            if (candidate.magic == UEFI_VECTOR_MAGIC and candidate.version == 0 and
-                candidate.kernel_entry > kernel_base and candidate.stack_addr > kernel_base)
-            {
-                vec = candidate;
-                break;
-            }
+        while (addr + 24 <= scan_end) : (addr += 8) {
+            const magic = @as(*const u32, @ptrFromInt(addr + uefi_vec_off_magic)).*;
+            if (magic != UEFI_VECTOR_MAGIC) continue;
+            const ver = @as(*const u32, @ptrFromInt(addr + uefi_vec_off_version)).*;
+            if (ver > 1) continue;
+            const ke = @as(*const u64, @ptrFromInt(addr + uefi_vec_off_kernel_entry)).*;
+            const stk = @as(*const u64, @ptrFromInt(addr + uefi_vec_off_stack)).*;
+            if (ke <= kernel_base or stk <= kernel_base) continue;
+            if (ver == 1 and addr + 32 > scan_end) continue;
+            vec_base = addr;
+            break;
         }
     }
 
-    if (vec == null) {
+    if (vec_base == null) {
         puts(out, "    [!!] UEFI vector table not found in kernel\r\n");
         return;
     }
 
-    const kernel_entry = vec.?.kernel_entry;
+    const vb = vec_base.?;
+    const kernel_entry = @as(*const u64, @ptrFromInt(vb + uefi_vec_off_kernel_entry)).*;
     puts(out, "    [*] kernel_main at 0x");
     printHex64(out, kernel_entry);
     puts(out, "\r\n");
@@ -518,18 +581,37 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
 
     const cmdline = menu.entries[menu.selected].cmdline;
     const bi_num_pages = bootInfoPagesForScratchBuffer(mmap_buf.len, cmdline.len, gop_fb != null);
-    const boot_info_pages = bs.allocatePages(.{ .any = {} }, .loader_data, bi_num_pages) catch {
-        puts(out, "    [!!] Failed to allocate boot info memory\r\n");
-        return;
+    // Multiboot2 指针必须对内核可用：内核在 identity map 下按「物理地址」读 handoff。
+    // `allocatePages(.any)` 在部分 AArch64 固件上返回的指针数值 ≠ 物理页基址，会导致解析读到全 0 并回退 qemuVirtDefault（无 GOP tag）。
+    const bi_phys_aligned: usize = std.mem.alignForward(usize, @as(usize, @intCast(max_page_excl)), boot_info_page_size);
+    var mb_handoff_is_fixed_pa: bool = true;
+    const boot_info_pages = bs.allocatePages(
+        .{ .address = @ptrFromInt(bi_phys_aligned) },
+        .loader_data,
+        bi_num_pages,
+    ) catch blk: {
+        mb_handoff_is_fixed_pa = false;
+        break :blk bs.allocatePages(.any, .loader_data, bi_num_pages) catch {
+            puts(out, "    [!!] Failed to allocate boot info memory\r\n");
+            return;
+        };
     };
     const bi_cap = bi_num_pages * boot_info_page_size;
     const bi_base: [*]u8 = @ptrCast(boot_info_pages.ptr);
     @memset(bi_base[0..bi_cap], 0);
 
-    const boot_info_addr = buildBootInfo(bi_base, bi_cap, mmap, cmdline, gop_fb) catch {
+    buildBootInfo(bi_base, bi_cap, mmap, cmdline, gop_fb) catch {
         puts(out, "    [!!] Multiboot2 boot info larger than buffer (internal error)\r\n");
         return;
     };
+    const boot_info_addr: usize = if (mb_handoff_is_fixed_pa) bi_phys_aligned else @intFromPtr(bi_base);
+    // v1 向量表：把 Multiboot2 物理地址写回已加载映像（内核优先读此槽，不依赖 x1 数值）
+    {
+        const ver = @as(*const u32, @ptrFromInt(vb + uefi_vec_off_version)).*;
+        if (ver >= 1) {
+            @as(*volatile u64, @ptrFromInt(vb + uefi_vec_off_mb2_phys)).* = boot_info_addr;
+        }
+    }
     puts(out, "    [*] Multiboot2 boot info ready (");
 
     printDecimal(out, @intCast(bi_num_pages));
@@ -540,7 +622,7 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
 
     bs.exitBootServices(uefi.handle, mmap.info.key) catch {
         const mmap2 = bs.getMemoryMap(@as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) catch return;
-        _ = buildBootInfo(bi_base, bi_cap, mmap2, cmdline, gop_fb) catch return;
+        buildBootInfo(bi_base, bi_cap, mmap2, cmdline, gop_fb) catch return;
         bs.exitBootServices(uefi.handle, mmap2.info.key) catch return;
     };
 
@@ -562,7 +644,7 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
     // x86_64: RDI=magic, RSI=info, RSP=内核栈（勿用 UEFI 栈）
     // AArch64: x0=magic, x1=info, SP=内核栈
     // RISC-V: a0=magic, a1=info, sp=内核栈
-    const kernel_stack = vec.?.stack_addr;
+    const kernel_stack = @as(*const u64, @ptrFromInt(vb + uefi_vec_off_stack)).*;
     switch (builtin.target.cpu.arch) {
         .x86_64 => {
             asm volatile ("cli");
@@ -617,7 +699,7 @@ fn buildBootInfo(
     mmap: uefi.tables.MemoryMapSlice,
     cmdline: []const u8,
     gop_fb: ?GopFbInfo,
-) error{BootInfoTooLarge}!usize {
+) error{BootInfoTooLarge}!void {
     var off: usize = 8; // skip BootInfoHeader (filled at end)
 
     // Tag: command line (type=1)
@@ -627,7 +709,8 @@ fn buildBootInfo(
         if (off + tag_len > cap) return error.BootInfoTooLarge;
         const p: [*]u32 = @ptrCast(@alignCast(bi_base + off));
         p[0] = 1;
-        p[1] = 8 + str_sz;
+        // Multiboot2：size 为含 padding 的整段标签长度（须与 tag_len 一致）
+        p[1] = @intCast(tag_len);
         @memcpy((bi_base + off + 8)[0..cmdline.len], cmdline);
         (bi_base + off + 8)[cmdline.len] = 0;
         off += tag_len;
@@ -717,8 +800,6 @@ fn buildBootInfo(
     const hdr: [*]u32 = @ptrCast(@alignCast(bi_base));
     hdr[0] = @intCast(off); // total_size
     hdr[1] = 0; // reserved
-
-    return @intFromPtr(bi_base);
 }
 
 fn uefiToMb2MemType(t: uefi.tables.MemoryType) u32 {

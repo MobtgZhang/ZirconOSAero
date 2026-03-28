@@ -53,7 +53,7 @@ pub const MbrPartitionEntry = extern struct {
             0x14, 0x16, 0x1E => "Hidden FAT16",
             0x17 => "Hidden NTFS",
             0x1B, 0x1C => "Hidden FAT32",
-            0x27 => "Windows RE",
+            0x27 => "Recovery (RE)",
             0x42 => "Dynamic Disk",
             0x82 => "Linux Swap",
             0x83 => "Linux",
@@ -267,7 +267,7 @@ pub const GptPartitionEntry = extern struct {
         if (self.type_guid.eql(&GUID_EFI_SYSTEM)) return "EFI System";
         if (self.type_guid.eql(&GUID_MICROSOFT_BASIC_DATA)) return "Basic Data";
         if (self.type_guid.eql(&GUID_MICROSOFT_RESERVED)) return "Microsoft Reserved";
-        if (self.type_guid.eql(&GUID_WINDOWS_RECOVERY)) return "Windows Recovery";
+        if (self.type_guid.eql(&GUID_WINDOWS_RECOVERY)) return "System recovery";
         if (self.type_guid.eql(&GUID_LINUX_FILESYSTEM)) return "Linux Filesystem";
         if (self.type_guid.eql(&GUID_ZIRCONOS_SYSTEM)) return "ZirconOS System";
         if (self.type_guid.eql(&GUID_ZIRCONOS_BOOT)) return "ZirconOS Boot";

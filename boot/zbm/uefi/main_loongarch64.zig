@@ -11,6 +11,8 @@ const menu = @import("menu_common.zig");
 const arch_name = "loongarch64";
 const debug_mode = @import("build_options").debug;
 const desktop_theme_name = @import("build_options").desktop;
+const preferred_fb_width = @import("build_options").zbm_preferred_fb_width;
+const preferred_fb_height = @import("build_options").zbm_preferred_fb_height;
 const KERNEL_PATH = menu.KERNEL_PATH;
 const Attr = menu.Attr;
 
@@ -74,10 +76,6 @@ fn fillHandoffMmap(page: [*]u8, mmap_slice: uefi.tables.MemoryMapSlice) struct {
     }
     return .{ .count = n, .esz = @sizeOf(KernelMmapEntry) };
 }
-
-/// 与 `build.conf` / x86 多引导默认 `RESOLUTION` 一致
-const PREFERRED_FB_WIDTH: u32 = 1024;
-const PREFERRED_FB_HEIGHT: u32 = 768;
 
 const Elf64_Ehdr = extern struct {
     e_ident: [16]u8,
@@ -269,73 +267,173 @@ fn gopPixelFormatIsLinear(f: uefi.protocol.GraphicsOutput.PixelFormat) bool {
         f == .bit_mask;
 }
 
-/// virtio-gpu / 部分固件以 PixelBltOnly 启动；尝试切到带线性帧缓冲的模式。
+/// 内核 handoff 与 `queryGopFramebuffer` 仅支持 32bpp 线性（RGB/BGR 打包或 bit_mask）；不含 BltOnly。
+fn gopModeIs32bppLinear(mi: *const uefi.protocol.GraphicsOutput.Mode.Info) bool {
+    return gopPixelFormatIsLinear(mi.pixel_format);
+}
+
+/// 同分辨率下优先 RGB、其次 BGR、再 bit_mask（部分固件 bit_mask 与扫描线对齐异常）。
+fn gopPixelFormatRank(f: uefi.protocol.GraphicsOutput.PixelFormat) u8 {
+    return switch (f) {
+        .red_green_blue_reserved_8_bit_per_color => 0,
+        .blue_green_red_reserved_8_bit_per_color => 1,
+        .bit_mask => 2,
+        else => 255,
+    };
+}
+
+fn printGopModeDiag(out: anytype, mid: u32, mi: *const uefi.protocol.GraphicsOutput.Mode.Info) void {
+    puts(out, "        ");
+    printDecimal(out, mid);
+    puts(out, " ");
+    printDecimal(out, mi.horizontal_resolution);
+    puts(out, "x");
+    printDecimal(out, mi.vertical_resolution);
+    puts(out, " fmt=");
+    printDecimal(out, @as(u32, @intFromEnum(mi.pixel_format)));
+    puts(out, " ppsl=");
+    printDecimal(out, mi.pixels_per_scan_line);
+    puts(out, "\r\n");
+}
+
+/// virtio-gpu / 部分固件以 PixelBltOnly 启动；尝试切到带线性 32bpp 帧缓冲的模式。
+/// 在每种像素格式内按 **模式表索引递增** 取首个匹配（与固件常见枚举顺序一致），格式优先级 RGB → BGR → bit_mask。
 fn trySetLinearGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput) void {
     const cur = gop.mode.info.pixel_format;
     if (gopPixelFormatIsLinear(cur)) return;
 
-    var mid: u32 = 0;
-    while (mid < gop.mode.max_mode) : (mid += 1) {
-        const mi = gop.queryMode(mid) catch continue;
-        if (gopPixelFormatIsLinear(mi.pixel_format)) {
+    const prefer: []const uefi.protocol.GraphicsOutput.PixelFormat = &.{
+        .red_green_blue_reserved_8_bit_per_color,
+        .blue_green_red_reserved_8_bit_per_color,
+        .bit_mask,
+    };
+    for (prefer) |want_pf| {
+        var mid: u32 = 0;
+        while (mid < gop.mode.max_mode) : (mid += 1) {
+            const mi = gop.queryMode(mid) catch continue;
+            if (mi.pixel_format != want_pf) continue;
             gop.setMode(mid) catch continue;
-            puts(out, "    [*] GOP: selected linear framebuffer mode\r\n");
+            const after = gop.queryMode(mid) catch return;
+            puts(out, "    [*] GOP: selected linear 32bpp mode idx=");
+            printDecimal(out, mid);
+            puts(out, "\r\n");
+            printGopModeDiag(out, mid, after);
             return;
         }
     }
+    puts(out, "    [!] GOP: no linear 32bpp mode in firmware table\r\n");
 }
 
-/// 优先 1024×768（与 x86 默认一致），其次不小于该分辨率的最小模式，再选最大线性模式。
+/// 优先 `zbm_preferred_fb_width`×`height`（与 Makefile RESOLUTION / build -D 一致），其次不小于该分辨率的最小像素数模式，再选最大线性模式；同分辨率优先 RGB>BGR>bit_mask。
 fn trySetPreferredGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput, want_w: u32, want_h: u32) void {
     trySetLinearGopMode(out, gop);
 
+    var best_exact: ?u32 = null;
+    var best_exact_rank: u8 = 255;
     var mid: u32 = 0;
     while (mid < gop.mode.max_mode) : (mid += 1) {
         const mi = gop.queryMode(mid) catch continue;
-        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
-        if (mi.horizontal_resolution == want_w and mi.vertical_resolution == want_h) {
-            gop.setMode(mid) catch continue;
-            puts(out, "    [*] GOP: set preferred mode 1024x768\r\n");
-            return;
+        if (!gopModeIs32bppLinear(mi)) continue;
+        if (mi.horizontal_resolution != want_w or mi.vertical_resolution != want_h) continue;
+        const r = gopPixelFormatRank(mi.pixel_format);
+        if (best_exact == null or r < best_exact_rank) {
+            best_exact = mid;
+            best_exact_rank = r;
         }
     }
+    if (best_exact) |m| {
+        gop.setMode(m) catch return;
+        puts(out, "    [*] GOP: set preferred mode ");
+        printDecimal(out, want_w);
+        puts(out, "x");
+        printDecimal(out, want_h);
+        puts(out, " idx=");
+        printDecimal(out, m);
+        puts(out, "\r\n");
+        if (gop.queryMode(m)) |mi| {
+            printGopModeDiag(out, m, mi);
+        } else |_| {}
+        return;
+    }
+
+    puts(out, "    [*] GOP: no exact ");
+    printDecimal(out, want_w);
+    puts(out, "x");
+    printDecimal(out, want_h);
+    puts(out, "; trying smallest linear mode >= preferred\r\n");
 
     var best_cover: ?u32 = null;
     var best_cover_px: u64 = std.math.maxInt(u64);
+    var best_cover_rank: u8 = 255;
     mid = 0;
     while (mid < gop.mode.max_mode) : (mid += 1) {
         const mi = gop.queryMode(mid) catch continue;
-        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        if (!gopModeIs32bppLinear(mi)) continue;
         const w = mi.horizontal_resolution;
         const h = mi.vertical_resolution;
         if (w < want_w or h < want_h) continue;
         const px = @as(u64, w) * @as(u64, h);
-        if (best_cover == null or px < best_cover_px) {
+        const r = gopPixelFormatRank(mi.pixel_format);
+        const better = blk: {
+            if (best_cover == null) break :blk true;
+            if (px < best_cover_px) break :blk true;
+            if (px == best_cover_px and r < best_cover_rank) break :blk true;
+            break :blk false;
+        };
+        if (better) {
             best_cover = mid;
             best_cover_px = px;
+            best_cover_rank = r;
         }
     }
     if (best_cover) |m| {
         gop.setMode(m) catch return;
-        puts(out, "    [*] GOP: set mode >= preferred 1024x768\r\n");
+        puts(out, "    [*] GOP: set mode >= preferred ");
+        printDecimal(out, want_w);
+        puts(out, "x");
+        printDecimal(out, want_h);
+        puts(out, " idx=");
+        printDecimal(out, m);
+        puts(out, "\r\n");
+        if (gop.queryMode(m)) |mi| {
+            printGopModeDiag(out, m, mi);
+        } else |_| {}
         return;
     }
 
+    puts(out, "    [*] GOP: no mode >= preferred; falling back to largest linear 32bpp\r\n");
+
     var best_any: ?u32 = null;
     var max_px: u64 = 0;
+    var best_any_rank: u8 = 255;
     mid = 0;
     while (mid < gop.mode.max_mode) : (mid += 1) {
         const mi = gop.queryMode(mid) catch continue;
-        if (!gopPixelFormatIsLinear(mi.pixel_format)) continue;
+        if (!gopModeIs32bppLinear(mi)) continue;
         const px = @as(u64, mi.horizontal_resolution) * @as(u64, mi.vertical_resolution);
-        if (px > max_px) {
+        const r = gopPixelFormatRank(mi.pixel_format);
+        const better = blk: {
+            if (best_any == null) break :blk true;
+            if (px > max_px) break :blk true;
+            if (px == max_px and r < best_any_rank) break :blk true;
+            break :blk false;
+        };
+        if (better) {
             best_any = mid;
             max_px = px;
+            best_any_rank = r;
         }
     }
     if (best_any) |m| {
         gop.setMode(m) catch return;
-        puts(out, "    [*] GOP: set largest linear mode\r\n");
+        puts(out, "    [*] GOP: set largest linear 32bpp idx=");
+        printDecimal(out, m);
+        puts(out, "\r\n");
+        if (gop.queryMode(m)) |mi| {
+            printGopModeDiag(out, m, mi);
+        } else |_| {}
+    } else {
+        puts(out, "    [!] GOP: no usable linear mode\r\n");
     }
 }
 
@@ -343,7 +441,7 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
     const gop_opt = bs.locateProtocol(uefi.protocol.GraphicsOutput, null) catch return null;
     const gop = gop_opt orelse return null;
 
-    trySetPreferredGopMode(out, gop, PREFERRED_FB_WIDTH, PREFERRED_FB_HEIGHT);
+    trySetPreferredGopMode(out, gop, preferred_fb_width, preferred_fb_height);
 
     const mode = gop.mode;
     const info = mode.info;
@@ -384,6 +482,14 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
     puts(out, "x");
     printDecimal(out, @as(u32, bpp));
     puts(out, "\r\n");
+
+    if (fb_info.width != preferred_fb_width or fb_info.height != preferred_fb_height) {
+        puts(out, "    [!] GOP: active mode != build preferred ");
+        printDecimal(out, preferred_fb_width);
+        puts(out, "x");
+        printDecimal(out, preferred_fb_height);
+        puts(out, " (set build.conf RESOLUTION; make sync-resolution; firmware/QEMU may not expose exact mode)\r\n");
+    }
 
     return fb_info;
 }
@@ -537,14 +643,27 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
     puts(out, "\r\n");
 
     var hand = handoffForSelectedEntry(menu.selected);
+    // 仅当 GOP 同时达到构建首选宽高时写入 handoff：内核若收到更小 GOP 会弃用并走 ramfb（fw_cfg），以得到与 build.conf RESOLUTION 一致的桌面。
     if (gop_fb_opt) |gf| {
-        if (gf.width >= PREFERRED_FB_WIDTH and gf.height >= PREFERRED_FB_HEIGHT) {
+        if (gf.width >= preferred_fb_width and gf.height >= preferred_fb_height) {
             hand.version = 2;
             hand.fb_addr = gf.addr;
             hand.fb_pitch = gf.pitch;
             hand.fb_width = gf.width;
             hand.fb_height = gf.height;
             hand.fb_bpp = gf.bpp;
+        } else {
+            puts(out, "    [*] Firmware FB ");
+            printDecimal(out, gf.width);
+            puts(out, " x ");
+            printDecimal(out, gf.height);
+            puts(out, " < pref ");
+            printDecimal(out, preferred_fb_width);
+            puts(out, " x ");
+            printDecimal(out, preferred_fb_height);
+            puts(out, "\r\n");
+            puts(out, "    [*] No handoff FB; kernel uses ramfb + fw_cfg at pref (normal).\r\n");
+            puts(out, "        Serial: ramfb:  Desktop: fb  first frame. Text pane may stay small.\r\n");
         }
     }
     const ho_ptr: [*]align(4096) uefi.Page = @ptrFromInt(HANDOFF_PHYS);
@@ -566,7 +685,7 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
     hand.mmap_entry_size = mf.esz;
     hand.mmap_off_from_handoff = MMAP_STORE_OFF;
     if (mf.count > 0) {
-        hand.version = 3;
+        hand.version = @max(hand.version, 3);
     }
     hp.* = hand;
 

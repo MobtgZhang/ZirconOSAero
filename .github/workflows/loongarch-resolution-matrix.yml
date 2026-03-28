@@ -31,9 +31,9 @@ jobs:
 
       - name: Install Zig 0.15.2
         run: |
-          curl -fsSL "https://ziglang.org/download/0.15.2/zig-linux-x86_64-0.15.2.tar.xz" -o zig.tar.xz
+          curl -fsSL "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz" -o zig.tar.xz
           tar -xf zig.tar.xz
-          echo "$(pwd)/zig-linux-x86_64-0.15.2" >> "$GITHUB_PATH"
+          echo "$(pwd)/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
 
       - name: LoongArch resolution compile matrix (--quick)
         run: bash scripts/test_loongarch_resolution_matrix.sh --quick

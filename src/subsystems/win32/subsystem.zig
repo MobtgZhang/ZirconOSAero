@@ -214,7 +214,7 @@ pub fn getActiveDesktopIndex() usize {
     return active_desktop_idx;
 }
 
-/// 将活动桌面切换为指定名称（如 `Default`、`Winlogon`）；ReactOS `NtUser` 桌面切换语义子集。
+/// 将活动桌面切换为指定名称（如 `Default`、`Winlogon`）；公开 Win32 桌面切换行为的子集实现。
 pub fn switchToDesktop(name: []const u8) bool {
     const ws = getWindowStation(active_window_station_idx) orelse return false;
     for (0..ws.desktop_count) |i| {

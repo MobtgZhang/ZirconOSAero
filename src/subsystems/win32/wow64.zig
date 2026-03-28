@@ -462,7 +462,7 @@ pub fn runWow64Demo() void {
     if (legacy) |proc| {
         if (console_mod.createConsole(proc.pid, proc.getName())) |con| {
             con.writeLine("[WOW64] legacy_app.exe - Win32 Legacy Application");
-            con.writeLine("[WOW64] Compatibility flags: Win7 mode");
+            con.writeLine("[WOW64] Compatibility flags: NT 6.1 profile");
             con.writeLine("[WOW64] DEP: OptIn, ASLR: Off (legacy compat)");
             con.writeLine("");
         }

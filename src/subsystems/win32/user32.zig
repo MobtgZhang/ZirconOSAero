@@ -4,6 +4,7 @@
 
 const klog = @import("../../rtl/klog.zig");
 const kernel32 = @import("../../libs/kernel32.zig");
+const build_options = @import("build_options");
 const console_mod = @import("console.zig");
 const subsystem = @import("subsystem.zig");
 
@@ -327,9 +328,9 @@ var capture_hwnd: HWND = 0;
 var active_hwnd: HWND = 0;
 var foreground_hwnd: HWND = 0;
 
-/// 与 `build.conf` / 多引导默认 1024×768 一致；进入桌面后由 `syncScreenFromFramebuffer()` 与内核 FB 对齐。
-var screen_width: i32 = 1024;
-var screen_height: i32 = 768;
+/// 与 `build_options.kernel_preferred_fb_*`（build.conf RESOLUTION / sync）一致；桌面就绪后 `syncScreenFromFramebuffer()` 与内核 FB 再对齐。
+var screen_width: i32 = @as(i32, @intCast(build_options.kernel_preferred_fb_width));
+var screen_height: i32 = @as(i32, @intCast(build_options.kernel_preferred_fb_height));
 
 pub fn getScreenWidth() i32 {
     return screen_width;
@@ -1025,11 +1026,13 @@ pub fn init() void {
 /// 桌面 `initDesktopMode` 之后调用，使 GetSystemMetrics 与真实帧缓冲一致。
 pub fn syncScreenFromFramebuffer() void {
     const fb = @import("../../drivers/video/framebuffer.zig");
+    const drivers = @import("../../drivers/mod.zig");
     if (!fb.isInitialized()) return;
     const w = fb.getWidth();
     const h = fb.getHeight();
     if (w == 0 or h == 0) return;
     screen_width = @intCast(w);
     screen_height = @intCast(h);
+    drivers.notifyDisplayGeometryChanged(w, h);
     klog.info("user32: Screen synced to kernel framebuffer: %ux%u", .{ w, h });
 }

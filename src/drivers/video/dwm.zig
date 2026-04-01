@@ -116,6 +116,11 @@ pub fn setGlassLiteBlurEnabled(enabled: bool) void {
 
 pub fn init(cfg: DwmConfig) void {
     config = cfg;
+    const bo = @import("build_options");
+    if (bo.aero_blur_light) {
+        config.glass_blur_radius = @min(config.glass_blur_radius, 4);
+        config.glass_blur_passes = @min(config.glass_blur_passes, 2);
+    }
     initialized = true;
 }
 

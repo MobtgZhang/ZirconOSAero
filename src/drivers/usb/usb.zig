@@ -3,6 +3,7 @@
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 const pcie = @import("../bus/pcie.zig");
+const pci_bind = @import("../bus/pci_driver_bind.zig");
 const build_options = @import("build_options");
 const xhci = @import("xhci.zig");
 const ehci = @import("ehci.zig");
@@ -87,6 +88,10 @@ pub fn init() void {
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const inf = buf[i];
+            const bind_hint = pci_bind.lookupFromConfigClassWord(inf.vendor_id, inf.device_id, inf.class_code);
+            if (build_options.debug and i == 0) {
+                klog.debug("USB: pci_driver_bind first HC -> %s", .{@tagName(bind_hint)});
+            }
             switch (inf.kind) {
                 .xhci => {
                     xhci_count += 1;

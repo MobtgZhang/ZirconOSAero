@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/hal/x86_64/mitigations.zig
-// Purpose: x86_64 缓解：SMEP（CR4 位 20）；SMAP 需 stac/clac 配合，暂不默认开启。
+// Purpose: x86_64 缓解：SMEP（CR4 位 20）；SMAP（CR4 位 21）可选启用（须在内核中凡访问用户页处配合 stac/clac）。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
@@ -43,16 +43,43 @@ fn cpuid7_ebx() u32 {
     return ebx;
 }
 
-pub fn enableSmepIfAvailable() void {
-    if (maxCpuidLeaf() < 7) return;
-    if ((cpuid7_ebx() & (1 << 7)) == 0) return;
+fn cr4Read() usize {
     var cr4: usize = undefined;
     asm volatile ("mov %%cr4, %[r]"
         : [r] "=r" (cr4),
     );
-    cr4 |= @as(usize, 1) << 20;
+    return cr4;
+}
+
+fn cr4Write(v: usize) void {
     asm volatile ("mov %[r], %%cr4"
         :
-        : [r] "r" (cr4),
+        : [r] "r" (v),
     );
+}
+
+pub fn enableSmepIfAvailable() void {
+    if (maxCpuidLeaf() < 7) return;
+    if ((cpuid7_ebx() & (1 << 7)) == 0) return;
+    var cr4 = cr4Read();
+    cr4 |= @as(usize, 1) << 20;
+    cr4Write(cr4);
+}
+
+/// `CPUID.(EAX=07h,ECX=0):EBX` 位 20 — `SMAP`。启用后内核直接解引用用户 VA 可能 #PF，须在合法访问用户页前 `stac`、结束后 `clac`（Intel SDM）。
+/// 默认 **不** 在 `main` 调用；待全路径审计后再接 `main.zig`。
+pub fn enableSmapIfAvailable() void {
+    if (maxCpuidLeaf() < 7) return;
+    if ((cpuid7_ebx() & (1 << 20)) == 0) return;
+    var cr4 = cr4Read();
+    cr4 |= @as(usize, 1) << 21;
+    cr4Write(cr4);
+}
+
+pub fn smepEnabled() bool {
+    return (cr4Read() & (@as(usize, 1) << 20)) != 0;
+}
+
+pub fn smapEnabled() bool {
+    return (cr4Read() & (@as(usize, 1) << 21)) != 0;
 }

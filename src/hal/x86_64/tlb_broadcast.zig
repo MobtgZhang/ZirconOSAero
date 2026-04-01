@@ -13,7 +13,7 @@ pub fn flushLocal() void {
     paging.flushTlb();
 }
 
-/// 当前无在线 AP 时等价于 `flushLocal`；未来在修改共享页表后向其它 CPU 发 IPI。
+/// 当前无在线 AP 时等价于 `flushLocal`。SMP 就绪后：在修改**内核共享**页表项后应经 IPI 触发各核 `INVLPG`/全 TLB 刷新（见 Intel SDM TLB 一致性；本函数暂为 BSP 占位）。
 pub fn requestGlobalFlushStub() void {
     flushLocal();
 }

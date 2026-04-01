@@ -70,3 +70,37 @@ pub fn PhysBuddy(comptime max_order: u5) type {
         }
     };
 }
+
+/// 内核全局连续物理页伙伴 arena 的阶数上界：`2^8` = 256 页（典型 4KiB 页即 1MiB carve）。
+pub const kernel_contiguous_max_order: u5 = 8;
+
+var g_kernel_contiguous: PhysBuddy(kernel_contiguous_max_order) = undefined;
+var g_kernel_contiguous_ready: bool = false;
+
+/// 从 `FrameAllocator` carve 一块连续 PFN 区并初始化伙伴；无足够连续空闲页时 `g_kernel_contiguous_ready` 保持 false。
+pub fn initKernelContiguousBuddy(fa: *frame_mod.FrameAllocator) void {
+    g_kernel_contiguous = PhysBuddy(kernel_contiguous_max_order).initFromFrameAllocator(fa);
+    g_kernel_contiguous_ready = g_kernel_contiguous.inited;
+}
+
+pub fn kernelContiguousBuddyReady() bool {
+    return g_kernel_contiguous_ready;
+}
+
+pub fn kernelContiguousLeafPages() usize {
+    if (!g_kernel_contiguous_ready) return 0;
+    return g_kernel_contiguous.num_leaf_pages;
+}
+
+/// 分配 `2^order` 个连续物理页的首地址；未初始化或失败返回 null。
+pub fn kernelAllocContiguousPhys(order: u5) ?u64 {
+    if (!g_kernel_contiguous_ready) return null;
+    return g_kernel_contiguous.allocPhys(order);
+}
+
+pub fn kernelFreeContiguousPhys(phys: u64, order: u5) void {
+    if (!g_kernel_contiguous_ready) return;
+    g_kernel_contiguous.freePhys(phys, order);
+}
+
+// 与 `FrameAllocator` 的联合主机单测受 Zig 模块根路径限制（`frame.zig` 依赖 `arch`）；算法见 `buddy.zig` 单测，接线验证见内核启动 klog `PhysBuddy:`。

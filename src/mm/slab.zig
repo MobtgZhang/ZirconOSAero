@@ -70,18 +70,24 @@ pub fn SlabCache(comptime Obj: type, comptime objects_per_slab: usize) type {
     };
 }
 
-test "slab cache roundtrip uses heap" {
+/// Slab 元数据走池层 tag，便于 `pool.copyTagStats` 与泄漏审计（与 `ex_pool.zig` 一致）。
+pub const slab_pool_tag: u32 = 0x536C6142;
+
+test "slab cache roundtrip uses ex_pool" {
     const heap = @import("heap.zig");
+    const ex = @import("ex_pool.zig");
     heap.init();
     var cache = SlabCache(u32, 8){};
     const allocFn = struct {
         fn f(sz: usize, al: usize) ?[*]u8 {
-            return heap.alloc(sz, al);
+            _ = al;
+            return ex.exAllocatePoolWithTag(sz, slab_pool_tag);
         }
     }.f;
     const freeFn = struct {
         fn f(p: [*]u8, sz: usize, al: usize) void {
-            heap.free(p, sz, al);
+            _ = al;
+            ex.exFreePoolWithTag(p, sz, slab_pool_tag);
         }
     }.f;
     const p = cache.alloc(allocFn) orelse {

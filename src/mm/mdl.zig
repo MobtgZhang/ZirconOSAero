@@ -8,6 +8,8 @@
 // No Windows source code or ReactOS source code was referenced.
 // Ref: WDK — Memory Descriptor Lists (conceptual: byte offset, byte count, PFN array); Intel SDM — physical address width.
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K1.7
+//
+// 生命周期（K1.4/K1.7）：由 `ex_pool`/`pool`/`heap` 分配的 MDL 后备缓冲，须在解除仍引用该 VA 的页表映射 **之前** 释放，避免 UAF 与 DMA 窗口悬空。
 
 const std = @import("std");
 

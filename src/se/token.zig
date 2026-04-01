@@ -1,5 +1,7 @@
 //! Security Reference Monitor (NT style)
 //! Token, SID, and access check mechanism
+//!
+//! 访问检查失败时，调用方可经 `se/audit.zig` 的 `logAccessDenied` / `logObjectOpenDenied` 写入审计（与 `NTSTATUS` 返回值配合）。
 
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");

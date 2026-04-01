@@ -13,3 +13,8 @@ const klog = @import("../rtl/klog.zig");
 pub fn logAccessDenied(comptime context: []const u8) void {
     klog.notice("SE audit: access_denied ({s})", .{context});
 }
+
+/// 对象打开/句柄授予路径上的失败（与 `STATUS_ACCESS_DENIED` 等配合，便于后续接入缓冲审计）。
+pub fn logObjectOpenDenied(comptime context: []const u8) void {
+    klog.notice("SE audit: object_open_denied ({s})", .{context});
+}

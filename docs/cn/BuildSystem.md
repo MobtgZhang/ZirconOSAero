@@ -30,7 +30,6 @@
 | `LOONGARCH64_BOOT_EFI` | 文件 | （自动探测） | 若存在 `BOOTLOONGARCH64.EFI`（置于上述目录或 `firmware/`），会写入 ESP 的 `\EFI\BOOT\`；否则需在 Shell 中手动链式加载内核 |
 | `ENABLE_IDT` | true, false | true | 是否启用 IDT |
 | `DEBUG_LOG` | true, false | true | 是否启用调试日志 |
-| `GRUB_MENU` | all, minimal | minimal | GRUB 菜单模式 |
 
 ### QEMU UEFI（AArch64 / RISC-V64）
 
@@ -61,14 +60,14 @@ run.sh / make 命令
     │
     ├─ 读取 build.conf
     │
-    ├─ scripts/gen_grub_cfg.py (生成 GRUB 配置)
+    ├─ scripts/sync_resolution_config.py（RESOLUTION / make sync-resolution 时）
     │
     └─ zig build -Darch=... -Ddebug=... -Denable_idt=...
         │
         ├─ 编译内核 → build/tmp/kernel.elf
-        ├─ 编译 UEFI 应用 → zirconos.efi (若 UEFI)
-        ├─ 编译 ZBM → MBR/VBR/Stage2 (若 ZBM)
-        └─ 生成 ISO → build/release/zirconos-1.0.0-{arch}.iso
+        ├─ ZBM UEFI → 各架构 BOOT*.EFI（见 Boot.md）
+        ├─ ZBM BIOS → build/tmp/mbr.bin, vbr.bin, stage2.bin（x86_64）
+        └─ ISO → xorriso + FAT ESP（mkiso-uefi-zbm.sh；x86_64）
 ```
 
 ## 4. 使用 run.sh (推荐)
@@ -121,8 +120,8 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 | 产物 | 路径 | 说明 |
 |------|------|------|
-| 内核 ELF | `build/tmp/kernel.elf` | Multiboot2 内核映像 |
-| UEFI 应用 | `zirconos.efi` | UEFI 启动应用 |
+| 内核 ELF | `build/tmp/kernel.elf` | 内核映像（x86_64 含 Multiboot2 头） |
+| ZBM UEFI | `build/tmp/` 或 ESP 镜像 | `BOOTX64.EFI` / `BOOTAA64.EFI` 等 |
 | ZBM MBR | `build/tmp/mbr.bin` | ZBM 主引导记录 |
 | ZBM VBR | `build/tmp/vbr.bin` | ZBM 卷引导记录 |
 | ZBM Stage2 | `build/tmp/stage2.bin` | ZBM 第二阶段加载器 |
@@ -135,7 +134,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | 文件 | 说明 |
 |------|------|
 | `src/config/system.conf` | 系统核心参数：主机名、内存、调度策略、显示、文件系统 |
-| `src/config/boot.conf` | 引导配置：超时、Multiboot 参数、UEFI/ZBM 选项 |
+| `src/config/boot.conf` | 引导配置：超时、Multiboot 参数、`[display]` gfxmode（与 RESOLUTION 同步）、UEFI/ZBM |
 | `src/config/desktop.conf` | 桌面环境：主题选择、DWM 配置、任务栏、字体 |
 | `src/config/defaults.zig` | `@embedFile` 加载上述 .conf |
 
@@ -147,9 +146,11 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 ```bash
 sudo apt update
-sudo apt install -y grub-pc-bin grub-common xorriso mtools \
-    qemu-system-x86 qemu-system-arm ovmf
+sudo apt install -y xorriso mtools dosfstools \
+    qemu-system-x86 qemu-system-arm qemu-system-misc ovmf
 ```
+
+可选（x86_64 ZBM BIOS：`as`/`ld`/`objcopy`，通常来自 `binutils`）。LoongArch / RISC-V 的 ZBM UEFI 见 Makefile 中 `fetch-gnu-efi`、`fetch-gnu-efi-riscv64` 与交叉工具链说明。
 
 ### Zig 编译器
 

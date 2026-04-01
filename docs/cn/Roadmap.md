@@ -147,7 +147,7 @@
 | 真正的进程隔离 | 用户态/内核态地址空间完全分离 | 高 |
 | 服务用户态化 | Object/IO/Security Server 迁移到独立进程 | 高 |
 | 磁盘驱动 | AHCI / NVMe 存储驱动 | 中 |
-| 更多架构支持 | aarch64 / riscv64 完善 | 低 |
+| 更多架构支持 | aarch64 / riscv64 / loongarch64：CI 与文档；**mips64el** 试验、非 Tier-1 | 低 |
 
 ## 4. 设计原则
 

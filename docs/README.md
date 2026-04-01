@@ -17,6 +17,7 @@ ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** imple
 | [Roadmap.md](en/Roadmap.md) | Roadmap: Phase 0–11 milestones, goals, non-goals, risks |
 | [NT61_ShellIcons.md](en/NT61_ShellIcons.md) | Shell icons vs Win7, Zircon PE DLL, Win32 API notes |
 | [BuiltinApps_NT61_Roadmap.md](en/BuiltinApps_NT61_Roadmap.md) | Built-in apps matrix, status, clean-room reference policy |
+| [IMPLEMENTATION_STATUS_NT61.md](cn/IMPLEMENTATION_STATUS_NT61.md) | Honest MM/HAL, syscall, FS/PE status + verification commands (Chinese; technical terms in English where needed) |
 
 ### Chinese (中文)
 
@@ -39,7 +40,7 @@ The same documents are available in Chinese under [`cn/`](cn/):
 ```
 ZirconOSAero/
 ├── src/                   # Kernel and userland sources
-├── boot/                  # Bootloader (GRUB, ZBM, UEFI)
+├── boot/                  # ZBM only (BIOS stage + UEFI); no GRUB
 ├── link/                  # Per-architecture linker scripts
 ├── scripts/               # Build helpers (see scripts/README.md)
 ├── tests/                 # Test suite
@@ -56,6 +57,6 @@ ZirconOSAero/
 ## Tech stack
 
 - **Language**: Zig (no libc dependency in the kernel build)
-- **Architectures**: x86_64 (primary), aarch64, loongarch64, riscv64, mips64el
-- **Boot**: BIOS (GRUB Multiboot2), UEFI, ZBM (in-tree boot manager)
+- **Architectures**: x86_64 (primary), aarch64, loongarch64, riscv64; mips64el experimental
+- **Boot**: ZBM only (BIOS/MBR chain and UEFI ESP); Multiboot2 handoff from ZBM to kernel
 - **Runtime**: QEMU for development and testing

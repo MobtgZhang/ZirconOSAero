@@ -10,13 +10,14 @@ ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。�
 |------|------|
 | [Architecture.md](Architecture.md) | 总体架构设计：分层模型、设计原则、对象模型、安全模型 |
 | [Kernel.md](Kernel.md) | 内核内部实现：调度器、内存管理、中断、系统调用、IPC、对象管理器 |
-| [Boot.md](Boot.md) | 启动流程：GRUB / ZBM / UEFI 引导路径、内核初始化阶段 (Phase 0–12) |
+| [Boot.md](Boot.md) | 启动流程：仅 ZBM（BIOS/UEFI）、Multiboot2 handoff、各架构矩阵 (Phase 0–12 说明) |
 | [Servers.md](Servers.md) | 系统服务：Process Server、Session Manager、LPC 端口 |
 | [Subsystems.md](Subsystems.md) | 子系统：Win32 (CMD/ZirconShell/user32/gdi32)、WOW64、POSIX |
 | [BuildSystem.md](BuildSystem.md) | 构建系统：build.conf 配置、Makefile、build.zig、run.sh 用法 |
 | [Roadmap.md](Roadmap.md) | 开发路线图：里程碑 Phase 0–11、设计目标与非目标、风险分析 |
 | [PROCESS_NT61.md](PROCESS_NT61.md) | ZirconOSAero（NT 6.1 风格）阶段流程与验证门禁 |
 | [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) | NT 6.1 内核模式分阶段待办（K0–K8，clean-room） |
+| [IMPLEMENTATION_STATUS_NT61.md](IMPLEMENTATION_STATUS_NT61.md) | MM/HAL、syscall、FS/PE 状态摘要与验证命令（诚实里程碑） |
 | [DesktopManagerSpec.md](DesktopManagerSpec.md) | 桌面 / 窗口站 / DWM 职责边界与方案 B 规格 |
 | [DesktopQA.md](DesktopQA.md) | 桌面与合成验证清单；配合 `scripts/desktop-qa.sh` |
 | [AeroDesktopRuntime.md](AeroDesktopRuntime.md) | Aero 内核桌面数据流、鼠标调试判据、QEMU 输入与快捷键 |
@@ -60,7 +61,7 @@ ZirconOSAero/
 │   ├── config/            #   配置解析器 + 嵌入式默认 *.conf（system/boot/desktop）
 │   ├── desktop/           #   桌面主题 Zig 工程（各主题含 resources/）
 │   └── fonts/             #   共享开源字体（make fonts）
-├── boot/                  # 引导代码 (GRUB, ZBM, UEFI)
+├── boot/                  # 引导代码（仅 ZBM：BIOS 阶段 + UEFI；无 GRUB）
 ├── link/                  # 各架构链接脚本
 ├── gnu-efi/               # LoongArch GNU-EFI 构建输出（gitignore）
 ├── scripts/               # 构建辅助脚本（见 scripts/README.md）
@@ -73,6 +74,6 @@ ZirconOSAero/
 ## 核心技术栈
 
 - **语言**: Zig（无 libc 依赖）
-- **架构**: x86_64（主要）、aarch64、loongarch64、riscv64、mips64el
-- **引导**: BIOS (GRUB Multiboot2) + UEFI + ZBM (自研 Boot Manager)
+- **架构**: x86_64（主要）、aarch64、loongarch64、riscv64；mips64el 为试验
+- **引导**: 仅 ZBM（BIOS/MBR 链与 UEFI ESP）；ZBM 向内核递交 Multiboot2 信息块
 - **运行环境**: QEMU

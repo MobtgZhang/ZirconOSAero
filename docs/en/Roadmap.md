@@ -147,7 +147,7 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 | Real process isolation | Full user/kernel address separation | High |
 | User-mode services | Split Object/I/O/Security servers | High |
 | Disk drivers | AHCI/NVMe | Medium |
-| Other architectures | aarch64/riscv64 polish | Low |
+| Other architectures | aarch64 / riscv64 / loongarch64 CI + QEMU docs; **mips64el** experimental (not Tier-1) | Low |
 
 ## 4. Principles
 

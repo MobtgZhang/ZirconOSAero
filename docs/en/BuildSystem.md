@@ -28,7 +28,6 @@ Persistent build configuration.
 | `LOONGARCH64_BOOT_EFI` | file | (auto) | If `BOOTLOONGARCH64.EFI` exists, it is copied to ESP `\EFI\BOOT\`; else chain-load from Shell |
 | `ENABLE_IDT` | true, false | true | Enable IDT |
 | `DEBUG_LOG` | true, false | true | Debug logging |
-| `GRUB_MENU` | all, minimal | minimal | GRUB menu layout |
 
 ### QEMU UEFI (AArch64 / RISC-V64)
 
@@ -57,14 +56,14 @@ run.sh / make
     │
     ├─ read build.conf
     │
-    ├─ scripts/gen_grub_cfg.py (GRUB config)
+    ├─ scripts/sync_resolution_config.py (when RESOLUTION / make sync-resolution)
     │
     └─ zig build -Darch=... -Ddebug=... -Denable_idt=...
         │
         ├─ kernel → build/tmp/kernel.elf
-        ├─ UEFI app → zirconos.efi (if UEFI)
-        ├─ ZBM → MBR/VBR/Stage2 (if ZBM)
-        └─ ISO → build/release/zirconos-1.0.0-{arch}.iso
+        ├─ ZBM UEFI → BOOT*.EFI (per arch; see Boot.md)
+        ├─ ZBM BIOS → build/tmp/mbr.bin, vbr.bin, stage2.bin (x86_64)
+        └─ ISO → xorriso + FAT ESP (mkiso-uefi-zbm.sh; x86_64)
 ```
 
 ## 4. `run.sh` (recommended)
@@ -112,8 +111,8 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 | Artifact | Path | Notes |
 |----------|------|-------|
-| Kernel ELF | `build/tmp/kernel.elf` | Multiboot2 kernel |
-| UEFI app | `zirconos.efi` | UEFI loader |
+| Kernel ELF | `build/tmp/kernel.elf` | Kernel (Multiboot2 header on x86_64) |
+| ZBM UEFI | `build/tmp/` or ESP image | `BOOTX64.EFI` / `BOOTAA64.EFI` / etc. |
 | ZBM MBR | `build/tmp/mbr.bin` | |
 | ZBM VBR | `build/tmp/vbr.bin` | |
 | ZBM Stage2 | `build/tmp/stage2.bin` | |
@@ -126,7 +125,7 @@ Defaults live under `src/config/` and are embedded at compile time with `@embedF
 | File | Role |
 |------|------|
 | `src/config/system.conf` | Hostname, memory, scheduler, display, filesystems |
-| `src/config/boot.conf` | Timeouts, Multiboot args, UEFI/ZBM options |
+| `src/config/boot.conf` | Timeouts, Multiboot args, `[display]` gfxmode (synced), UEFI/ZBM options |
 | `src/config/desktop.conf` | Theme, DWM, taskbar, fonts |
 | `src/config/defaults.zig` | Embeds the `.conf` files |
 
@@ -138,9 +137,11 @@ Defaults live under `src/config/` and are embedded at compile time with `@embedF
 
 ```bash
 sudo apt update
-sudo apt install -y grub-pc-bin grub-common xorriso mtools \
-    qemu-system-x86 qemu-system-arm ovmf
+sudo apt install -y xorriso mtools dosfstools \
+    qemu-system-x86 qemu-system-arm qemu-system-misc ovmf
 ```
+
+Optional (ZBM BIOS MBR/stage2 on x86_64): `binutils` (`as`, `ld`, `objcopy`). LoongArch / RISC-V ZBM UEFI: see Makefile targets `fetch-gnu-efi`, `fetch-gnu-efi-riscv64` and arch-specific toolchains.
 
 ### Zig
 

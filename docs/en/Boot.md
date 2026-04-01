@@ -1,47 +1,38 @@
-# ZirconOS boot flow
+# ZirconOSAero boot flow (ZBM only)
 
-## 1. Boot paths
+This repository uses **only** the in-tree **ZirconOSAero Boot Manager (ZBM)**. **GRUB is not supported** (`Makefile` rejects `BOOTLOADER=grub`). The kernel still consumes a **Multiboot2-style information block** built by ZBM (or the UEFI ZBM application); that format is defined by the public Multiboot2 specification and is **not** tied to any particular third-party bootloader.
 
-ZirconOS supports three boot paths across BIOS and UEFI:
+## 1. Boot path matrix
 
-| Path | Firmware | Loader | Flow |
-|------|----------|--------|------|
-| GRUB BIOS | BIOS | GRUB | BIOS → GRUB → Multiboot2 → kernel.elf |
-| GRUB UEFI | UEFI | GRUB | UEFI → GRUB → Multiboot2 → kernel.elf |
-| ZBM BIOS | BIOS | ZBM | BIOS → MBR → VBR → Stage2 → kernel.elf |
-| ZBM UEFI | UEFI | ZBM | UEFI → ESP → zbmfw.efi → kernel.elf |
+| Architecture | Primary path | Firmware chain | Notes |
+|--------------|--------------|----------------|-------|
+| **x86_64** | ZBM BIOS | BIOS → MBR → VBR → Stage2 → `kernel.elf` | Multiboot2 handoff from Stage2 |
+| **x86_64** | ZBM UEFI | UEFI → ESP `\EFI\BOOT\BOOTX64.EFI` → `kernel.elf` | ISO: [scripts/build/mkiso-uefi-zbm.sh](../../scripts/build/mkiso-uefi-zbm.sh) |
+| **aarch64** | ZBM UEFI | UEFI → ESP (e.g. `BOOTAA64.EFI`) → `kernel.elf` | Built via `zig build uefi`; run via `make run-aarch64` |
+| **riscv64** | ZBM UEFI | UEFI → ESP `BOOTRISCV64.EFI` → `kernel.elf` | Zig object + GNU-EFI link: `make build-zbm-riscv64-uefi` |
+| **loongarch64** | ZBM UEFI | UEFI → ESP `BOOTLOONGARCH64.EFI` → `kernel.elf` | `main_loongarch64.zig` + GNU-EFI: `make build-zbm-loongarch-uefi` |
+| **loongarch64** | Dev shortcut | `qemu-system-loongarch64 -kernel` | **Development only**: no ZBM/ESP; see §8 |
 
-## 2. GRUB
+**mips64el** is treated as **experimental**; prefer the four architectures above for product-style validation.
 
-### BIOS
+Further detail on BCD vs Windows: [boot/zbm/README.md](../../boot/zbm/README.md).
 
-1. BIOS loads the GRUB boot sector  
-2. GRUB reads `boot/grub/grub.cfg`  
-3. Loads `kernel.elf` via Multiboot2  
-4. Jumps to `_start`  
+## 2. ESP layout (Windows 7–style naming, project-specific files)
 
-### UEFI
+Paths below are **conventions used by this project** for a Win7-like boot experience. They are **not** binary-compatible with Microsoft’s proprietary BCD store.
 
-1. Firmware loads the GRUB EFI app  
-2. GRUB reads config and loads `kernel.elf`  
-3. Multiboot2 handoff to the kernel  
+| Path | Role |
+|------|------|
+| `\Boot\BCD` | Project boot configuration data (simplified; consumed by ZBM logic in `boot/zbm/zbm.zig`) |
+| `\Boot\zbm.efi` | Optional alias / secondary reference in `src/config/boot.conf` (`loader_path`) |
+| `\EFI\BOOT\BOOT*.EFI` | Architecture-specific UEFI application built from `boot/zbm/uefi/` |
+| `\boot\kernel.elf` | Kernel image on the ESP (or data partition, depending on image script) |
 
-### Configuration
+Resolution and framebuffer defaults are synchronized from root **`build.conf`** (`RESOLUTION`) via `make sync-resolution` into `src/config/*.conf` — **not** from any GRUB-specific section.
 
-- `boot/grub/grub.cfg` — template with `@VERSION@`, `@RESOLUTION@`  
-- `boot/grub/grub-full.cfg` — full multi-theme menu  
-- `scripts/gen_grub_cfg.py` — generates final config from `build.conf` `GRUB_MENU`  
+## 3. ZBM (ZirconOSAero Boot Manager)
 
-Menu modes:
-
-- `minimal` — ZirconOS entry only  
-- `all` — full menu with all desktop themes  
-
-## 3. ZBM (ZirconOS Boot Manager)
-
-In-tree boot manager for BIOS and UEFI.
-
-### BIOS chain
+### BIOS chain (x86_64)
 
 ```
 BIOS
@@ -55,31 +46,31 @@ BIOS
     VGA text menu
     protected mode
     load kernel.elf
-    build Multiboot2 info
-    jump to kernel entry
+    build Multiboot2 info block
+    jump to kernel _start (32-bit), then long mode
 ```
 
 ### UEFI chain
 
 ```
 UEFI firmware
-  → zbmfw.efi (boot/zbm/uefi/main.zig)
-    read config and kernel
-    show boot menu
-    exit Boot Services
-    jump to kernel entry
+  → BOOT*.EFI from boot/zbm/uefi/main.zig (and arch-specific entry where applicable)
+    load kernel, show menu
+    ExitBootServices
+    build Multiboot2 handoff in memory
+    jump to kernel entry (per-arch contract)
 ```
 
-### Core (`boot/zbm/zbm.zig`)
+### Core library (`boot/zbm/zbm.zig`)
 
-- BCD (boot configuration data)  
-- Disk/partition detection  
-- Boot menu UI  
-- Kernel load and jump  
+- Simplified **BCD** semantics (menu, timeout, entries) — **clean-room**, not Windows BCD parser compatibility
+- Disk / partition detection
+- Boot menu UI
+- Kernel load and jump
 
-## 4. x86_64 early start (`start.s`)
+## 4. x86_64 early start (`src/arch/x86_64/start.s`)
 
-Common entry after any loader.
+Entry after ZBM (Multiboot2 magic and info pointer in registers per spec).
 
 ### 32-bit stage
 
@@ -104,98 +95,15 @@ _start64
   → call kernel_main(magic, info_addr)
 ```
 
+**x86_64 UEFI note**: ZBM delivers a Multiboot2 information block. The kernel may still use **8259 PIC + PIT** on some paths; full ACPI/IOAPIC bring-up is incremental work (see kernel/HAL docs).
+
 ## 5. Kernel init phases (Phase 0–12)
 
-`kernel_main` in `src/main.zig` runs phased init.
+`kernel_main` in `src/main.zig` runs phased initialization. **Documentation only** — individual phases vary in maturity; see [Roadmap.md](Roadmap.md) and README for **honest** status (not all phases are production-complete).
 
-### Phase 0 — Configuration
-
-- Load embedded configs (`src/config/system.conf`, `boot.conf`, `desktop.conf`)  
-- Parse parameters  
-
-### Phase 1 — Core hardware
-
-- Validate Multiboot2 magic  
-- GDT/TSS  
-- Physical frame allocator (from Multiboot2 mmap)  
-- Kernel heap (512KB bump allocator)  
-
-### Phase 2 — Interrupts and scheduling
-
-- IDT (256 vectors)  
-- PIC + PIT (~100 Hz)  
-- Scheduler  
-- Keyboard/mouse drivers  
-- `sti`  
-
-### Phase 3 — Virtual memory
-
-- Kernel page tables  
-- Identity mapping  
-- Map framebuffer  
-- Switch page tables  
-
-### Phase 4 — Kernel managers
-
-- Object Manager  
-- Security (system token)  
-- I/O Manager  
-
-### Phase 5 — IPC and services
-
-- LPC ports: `\LPC\PsServer`, `\LPC\ObServer`, `\LPC\IoServer`  
-- Process Server (PID 1)  
-- Session Manager / SMSS (PID 2)  
-
-### Phase 6 — Drivers and filesystems
-
-- Video/audio/input drivers  
-- VFS  
-- FAT32 (`C:\`)  
-- NTFS (`D:\`)  
-- Registry  
-
-### Phase 7 — Loaders
-
-- PE32/PE32+ loader  
-- ELF loader  
-- DLL manager  
-
-### Phase 8 — Userland base
-
-- ntdll  
-- kernel32  
-- Console runtime  
-- CMD  
-- PowerShell  
-
-### Phase 9 — Win32 subsystem
-
-- csrss  
-- Win32 execution engine  
-
-### Phase 10 — Graphics
-
-- user32  
-- gdi32  
-- GUI dispatch  
-
-### Phase 11 — Extensions
-
-- WOW64  
-- AC97 audio driver  
-
-### Phase 12 — Display mode
-
-| Mode | Description |
-|------|-------------|
-| Desktop | Graphical desktop (theme → DWM) |
-| CMD | CMD text UI |
-| Text | Raw VGA text |
+(Sections Phase 0–12 unchanged in intent: configuration, hardware, interrupts, VM, managers, IPC, drivers, loaders, userland, Win32, graphics, extensions, display mode — refer to [Kernel.md](Kernel.md) for detail.)
 
 ## 6. Linker scripts
-
-Per-architecture layout:
 
 | File | Arch | Load address |
 |------|------|----------------|
@@ -203,43 +111,41 @@ Per-architecture layout:
 | `link/aarch64.ld` | AArch64 | 0x40080000 |
 | `link/loongarch64.ld` | LoongArch64 | from `0x00200000` (QEMU virt first RAM; see §8) |
 | `link/riscv64.ld` | RISC-V 64 | arch-specific |
-| `link/mips64el.ld` | MIPS64 LE | arch-specific |
+| `link/mips64el.ld` | MIPS64 LE | experimental |
 | `link/mbr.ld` | x86 | MBR at 0x7C00 |
 | `link/vbr.ld` | x86 | VBR |
 | `link/zbm_bios.ld` | x86 | ZBM BIOS Stage2 |
 
-## 7. Multiboot2 info
+## 7. Multiboot2 handoff (ZBM → kernel)
 
-Parsed in `src/arch/x86_64/boot.zig`:
+Parsed via `src/boot/multiboot2_parse.zig` and arch `boot.zig` (e.g. x86_64). **Source**: ZBM; **format**: public Multiboot2 tag layout.
 
 | Tag | Use |
 |-----|-----|
 | Memory map | Physical layout → frame allocator |
 | Command line | Boot mode (cmd/powershell/desktop), theme |
-| Framebuffer | Address, resolution, depth |
-| Boot loader name | Loader identification |
+| Framebuffer | Address, resolution, depth (when present) |
+| Boot loader name | Identification string |
 
-Kernel command-line examples:
-
-- `mode=cmd` — CMD  
-- `mode=powershell` — PowerShell  
-- `mode=desktop` — desktop  
-- `desktop=aero` / `theme=aero` — Aero shell（非 `none` 时等价于 Aero）  
+Examples: `mode=cmd`, `mode=desktop`, `desktop=aero` / `theme=aero`.
 
 ## 8. LoongArch64 boot (QEMU)
 
-### 8.1 Recommended: QEMU `-kernel` (default)
+### 8.1 Development: `-kernel` (no ZBM)
 
-- QEMU `virt` first RAM segment is **0 .. 0x10000000 (256MB)**. The kernel is linked at **`0x00200000`** in `link/loongarch64.ld` so the image (including large `.bss`) fits in that segment. **Do not** place the kernel at **0x80000000**: there is a **hole** between low 256MB and high memory (`VIRT_HIGHMEM_BASE`); BSS spanning the hole causes unmapped writes at boot.  
-- Entry **`crt0.S`** must set the **stack pointer** before `kernel_main` (LoongArch LP64D uses `$r3` for stack).  
-- **`make run-loongarch64`** with `LOONGARCH64_QEMU_MODE=kernel` uses **`qemu-system-loongarch64 -kernel build/tmp/kernel.elf`** — no EDK2/GRUB/ESP; **serial** `-serial stdio` shows `klog`.  
-- **Display (kernel mode)**: ramfb is used for the graphical framebuffer. On some QEMU versions, LoongArch (like RISC-V) may keep showing "Guest has not initialized the display (yet)" even when the guest reports ramfb setup success — a known QEMU behavior. **Workaround**: use `LOONGARCH64_QEMU_MODE=uefi` with `make build-esp` and firmware; UEFI + virtio-gpu-pci provides a working display.
+- Link kernel at **`0x00200000`** per `link/loongarch64.ld` so the image fits low RAM; avoid placing the image across the low/high RAM **hole**.
+- **`make run-loongarch64`** with `LOONGARCH64_QEMU_MODE=kernel` uses **`qemu-system-loongarch64 -kernel build/tmp/kernel.elf`** — **no ESP/ZBM**; serial shows `klog`.
+- **Not** the product boot path; use for fast kernel iteration only.
 
-### 8.2 UEFI + ESP (ZBM only)
+### 8.2 Product-style: UEFI + ESP + ZBM
 
-This repo has **no GRUB path on LoongArch64**; UEFI boot is **ZBM + UEFI** only (`BOOTLOADER=zbm`; Makefile errors on `grub`).
+- Firmware discovers `\EFI\BOOT\BOOTLOONGARCH64.EFI` (ZBM). **No GRUB** in this tree.
+- Build: `make build-zbm-loongarch-uefi` after `make build ARCH=loongarch64`.
+- **`make run-loongarch64`** with `LOONGARCH64_QEMU_MODE=uefi` uses `build-esp` + `QEMU_EFI.fd`.
 
-- Firmware looks for `\EFI\BOOT\BOOTLOONGARCH64.EFI`; missing → Shell.  
-- EDK2 Shell (`make fetch-firmware` / `fetch-loongarch-boot-efi`) is auxiliary, not the primary path.  
-- **ZBM**: Zig cannot `zig build-exe -target loongarch64-uefi` directly (`UnsupportedCoffArchitecture`). Use **`boot/zbm/uefi/main_loongarch64.zig`** → `zbm_loongarch64.o`, then **GNU-EFI** (`make fetch-gnu-efi`) and **`objcopy --target=efi-app-loongarch64`** to produce `BOOTLOONGARCH64.EFI`. Cross GCC optional; **`zig cc`** works; **`llvm-objcopy`** or **`loongarch64-linux-gnu-objcopy`**.  
-- **`make run-loongarch64`** with `LOONGARCH64_QEMU_MODE=uefi` needs **`build-esp`** and **`QEMU_EFI.fd`**.  
+## 9. AArch64 and RISC-V64 (summary)
+
+- **AArch64**: UEFI ZBM from `boot/zbm/uefi/main.zig`; `make run-aarch64` wires firmware + ESP.
+- **RISC-V64**: `BOOTRISCV64.EFI` via `scripts/build/zbm-riscv64-efi.sh` and `make build-zbm-riscv64-uefi`.
+
+For input/menu quirks on UEFI consoles, see the Chinese Boot doc §3 notes (menu keys) or `boot/zbm/uefi/menu_common.zig`.

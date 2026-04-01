@@ -1,46 +1,38 @@
-# ZirconOS 启动流程
+# ZirconOSAero 启动流程（仅 ZBM）
 
-## 1. 引导路径总览
+本仓库**仅**使用自研 **ZirconOSAero Boot Manager (ZBM)**。**不包含 GRUB**：`Makefile` 在 `BOOTLOADER=grub` 时会报错。内核仍解析由 ZBM（UEFI 主程序等）构造的 **Multiboot2 风格信息块**；该格式见 **Multiboot2 公开规范**，与是否安装第三方 GRUB **无关**。
 
-ZirconOS 支持三种引导方式，覆盖 BIOS 和 UEFI 两种固件：
+## 1. 引导路径矩阵
 
-| 引导路径 | 固件 | 引导器 | 说明 |
-|----------|------|--------|------|
-| GRUB BIOS | BIOS | GRUB | BIOS → GRUB → Multiboot2 → kernel.elf |
-| GRUB UEFI | UEFI | GRUB | UEFI → GRUB → Multiboot2 → kernel.elf |
-| ZBM BIOS | BIOS | ZBM | BIOS → MBR → VBR → Stage2 → kernel.elf |
-| ZBM UEFI | UEFI | ZBM | UEFI → ESP → zbmfw.efi → kernel.elf |
+| 架构 | 主路径 | 固件链路 | 说明 |
+|------|--------|----------|------|
+| **x86_64** | ZBM BIOS | BIOS → MBR → VBR → Stage2 → `kernel.elf` | Stage2 构建 Multiboot2 handoff |
+| **x86_64** | ZBM UEFI | UEFI → ESP `\EFI\BOOT\BOOTX64.EFI` → `kernel.elf` | ISO：[scripts/build/mkiso-uefi-zbm.sh](../../scripts/build/mkiso-uefi-zbm.sh) |
+| **aarch64** | ZBM UEFI | UEFI → ESP（如 `BOOTAA64.EFI`）→ `kernel.elf` | `zig build uefi`；`make run-aarch64` |
+| **riscv64** | ZBM UEFI | UEFI → ESP `BOOTRISCV64.EFI` → `kernel.elf` | Zig 目标文件 + GNU-EFI：`make build-zbm-riscv64-uefi` |
+| **loongarch64** | ZBM UEFI | UEFI → ESP `BOOTLOONGARCH64.EFI` → `kernel.elf` | `main_loongarch64.zig` + GNU-EFI：`make build-zbm-loongarch-uefi` |
+| **loongarch64** | 开发旁路 | `qemu-system-loongarch64 -kernel` | **仅开发**：无 ZBM/ESP，见 §8 |
 
-## 2. GRUB 引导
+**mips64el** 视为 **experimental（试验）**；产品化验证优先上述四架构。
 
-### BIOS 模式
+BCD 与 Windows 的差异说明见 [boot/zbm/README.md](../../boot/zbm/README.md)。
 
-1. BIOS 加载 GRUB 引导扇区
-2. GRUB 读取 `boot/grub/grub.cfg`
-3. 以 Multiboot2 协议加载 `kernel.elf`
-4. 跳转到内核入口 `_start`
+## 2. ESP 布局（Win7 风格命名，项目自有文件）
 
-### UEFI 模式
+下表为**本项目**为接近 Windows 7 启动体验而采用的约定路径，**不是**与微软专有 BCD 仓库的二进制兼容实现。
 
-1. UEFI 固件加载 GRUB EFI 应用
-2. GRUB 读取配置，加载 `kernel.elf`
-3. 以 Multiboot2 协议跳转到内核
+| 路径 | 作用 |
+|------|------|
+| `\Boot\BCD` | 项目用简化启动配置（由 `boot/zbm/zbm.zig` 等逻辑使用） |
+| `\Boot\zbm.efi` | `src/config/boot.conf` 中 `loader_path` 可选引用 |
+| `\EFI\BOOT\BOOT*.EFI` | 各架构 UEFI 应用，源自 `boot/zbm/uefi/` |
+| `\boot\kernel.elf` | ESP（或数据分区，视镜像脚本而定）上的内核 |
 
-### GRUB 配置
+分辨率与帧缓冲默认值由根目录 **`build.conf`** 的 `RESOLUTION` 经 `make sync-resolution` 写入 `src/config/*.conf`，**不再**使用任何 GRUB 专用配置段。
 
-- `boot/grub/grub.cfg`：模板文件，包含 `@VERSION@`、`@RESOLUTION@` 占位符
-- `boot/grub/grub-full.cfg`：完整多主题菜单配置
-- `scripts/gen_grub_cfg.py`：根据 `build.conf` 中的 `GRUB_MENU` 选项生成最终配置
+## 3. ZBM（ZirconOSAero Boot Manager）
 
-菜单模式：
-- `minimal`：仅 ZirconOS 基本启动项
-- `all`：包含所有桌面主题的完整菜单
-
-## 3. ZBM (ZirconOS Boot Manager) 引导
-
-ZBM 是自研的引导管理器，支持 BIOS 和 UEFI。
-
-### BIOS 引导链
+### BIOS 引导链（x86_64）
 
 ```
 BIOS
@@ -49,45 +41,43 @@ BIOS
   → VBR (boot/zbm/bios/vbr.s)
     加载 Stage2
   → Stage2 (boot/zbm/bios/stage2.s)
-    启用 A20 地址线
+    启用 A20
     E820 内存探测
-    VGA 文本模式菜单
+    VGA 文本菜单
     进入保护模式
     加载 kernel.elf
-    构建 Multiboot2 信息结构
-    跳转到内核入口
+    构建 Multiboot2 信息块
+    跳转到内核 _start（32 位）再进长模式
 ```
 
 ### UEFI 引导链
 
 ```
 UEFI 固件
-  → zbmfw.efi (boot/zbm/uefi/main.zig)
-    读取配置与内核文件
-    显示启动菜单
-    退出 Boot Services
-    跳转到内核入口
+  → BOOT*.EFI（boot/zbm/uefi/main.zig，及架构相关入口）
+    加载内核、显示菜单
+    ExitBootServices
+    在内存中构建 Multiboot2 handoff
+    按架构约定跳转到内核入口
 ```
 
-**x86_64 UEFI 与中断**：ZBM 与 BIOS 路径相同，向内核递交 **Multiboot2**（含内存映射等标签）。当前内核仍用 **8259 PIC + PIT** 做 tick 与 PS/2 IRQ，**未**解析 ACPI RSDP / 未启用 **IOAPIC/Local APIC**；在仅提供 APIC 路由的固件或裸机上若出现键鼠/定时器异常，需后续在 handoff 中传递 RSDP 并迁移中断子系统（与 LoongArch 的 CSR 向量 + PCH/EXTIOI 路径独立）。
+### ZBM 核心（`boot/zbm/zbm.zig`）
 
-### ZBM 核心模块 (boot/zbm/zbm.zig)
-
-- BCD (Boot Configuration Data) 管理
+- 简化的 **BCD** 语义（菜单、超时、条目）——**clean-room**，**不**保证解析真实 Windows BCD 二进制
 - 磁盘/分区检测
 - 启动菜单 UI
 - 内核加载与跳转
 
 ### UEFI 文本菜单操作（`boot/zbm/uefi/menu_common.zig`）
 
-- **方向键**：标准 EFI 扫描码、Page Up / Page Down、Home / End；部分固件需依赖 `WaitForKey` 事件，已实现 `checkEvent` + `waitForEvent` 与轮询结合。
-- **字母键**：`j` / `k` 或 `w` / `s` 等价下/上。
+- **方向键**：标准 EFI 扫描码、Page Up/Down、Home/End；部分固件依赖事件，已实现 `checkEvent` + `waitForEvent` 与轮询结合。
+- **字母键**：`j`/`k` 或 `w`/`s` 等价下/上。
 - **数字键**：`1`–`8` 直接选中对应条目（与 `MAX_ENTRIES` 一致）。
-- **限制**：若固件未提供 `ConIn`（例如仅串口、无图形控制台输入），菜单无法读键；需使用支持键盘的 UEFI 控制台或调整固件/虚拟机参数。
+- **限制**：若固件无 `ConIn`（仅串口等），菜单无法读键；需支持键盘的 UEFI 控制台或调整虚拟机参数。
 
-## 4. x86_64 内核早期启动 (start.s)
+## 4. x86_64 内核早期启动（`src/arch/x86_64/start.s`）
 
-这是所有引导路径汇合后的内核入口点。
+ZBM 递交 Multiboot2 后进入内核（magic 与 info 指针按规范在寄存器中）。
 
 ### 32 位阶段
 
@@ -105,152 +95,62 @@ _start (32-bit protected mode)
 ### 64 位阶段
 
 ```
-_start64 (64-bit long mode)
+_start64
   → 设置段寄存器
   → 设置内核栈 (stack_top, 16KB)
-  → 启用 SSE (CR0/CR4 配置)
+  → 启用 SSE (CR0/CR4)
   → 调用 kernel_main(magic, info_addr)
 ```
 
-## 5. 内核初始化阶段 (Phase 0–12)
+**x86_64 UEFI 与中断**：ZBM 与 BIOS 路径均递交 **Multiboot2**。部分路径上内核仍用 **8259 PIC + PIT**；完整 ACPI RSDP / IOAPIC 迁移见内核与 HAL 文档。
 
-`src/main.zig` 中的 `kernel_main` 按阶段初始化系统：
+## 5. 内核初始化阶段（Phase 0–12）
 
-### Phase 0 — 配置加载
+`src/main.zig` 中 `kernel_main` 按阶段初始化。**本节为设计说明**，各阶段成熟度不一；真实状态见 [Roadmap.md](Roadmap.md) 与根 README 的诚实标注。
 
-- 加载嵌入式配置文件 (`src/config/system.conf`, `src/config/boot.conf`, `src/config/desktop.conf`)
-- 解析配置参数
-
-### Phase 1 — 核心硬件初始化
-
-- 验证 Multiboot2 magic 值
-- 初始化 GDT / TSS
-- 初始化物理帧分配器（基于 Multiboot2 内存映射）
-- 初始化内核堆 (512KB bump allocator)
-
-### Phase 2 — 中断与调度
-
-- 初始化 IDT (256 向量)
-- 初始化 PIC + PIT 定时器 (~100Hz)
-- 初始化调度器
-- 初始化键盘/鼠标驱动
-- 开启中断 (`sti`)
-
-### Phase 3 — 虚拟内存
-
-- 建立内核页表
-- Identity mapping
-- 映射 framebuffer 到内核地址空间
-- 切换到新页表
-
-### Phase 4 — 内核管理器
-
-- 初始化 Object Manager（对象类型、命名空间）
-- 初始化 Security（创建系统 Token）
-- 初始化 I/O Manager（设备/驱动框架）
-
-### Phase 5 — IPC 与系统服务
-
-- 创建 LPC 端口：`\LPC\PsServer`, `\LPC\ObServer`, `\LPC\IoServer`
-- 启动 Process Server (PID 1)
-- 启动 Session Manager / SMSS (PID 2)
-
-### Phase 6 — 驱动与文件系统
-
-- 加载设备驱动（video / audio / input）
-- 初始化 VFS
-- 挂载 FAT32 文件系统 (C:\)
-- 挂载 NTFS 文件系统 (D:\)
-- 初始化注册表
-
-### Phase 7 — 加载器
-
-- 初始化 PE32/PE32+ 加载器
-- 初始化 ELF 加载器
-- DLL 管理器
-
-### Phase 8 — 用户态基础
-
-- 初始化 ntdll (Native API)
-- 初始化 kernel32 (Win32 Base API)
-- 初始化控制台运行时
-- 初始化 CMD 命令提示符
-- 初始化 PowerShell
-
-### Phase 9 — Win32 子系统
-
-- 启动 csrss (Win32 子系统服务器)
-- 初始化 Win32 应用执行引擎
-
-### Phase 10 — 图形子系统
-
-- 初始化 user32 (窗口管理/消息队列)
-- 初始化 gdi32 (设备上下文/绘图)
-- GUI 分发
-
-### Phase 11 — 扩展功能
-
-- 初始化 WOW64 (32 位兼容)
-- 初始化 AC97 音频驱动
-
-### Phase 12 — 显示模式选择
-
-根据启动参数选择显示模式：
-
-| 模式 | 说明 |
-|------|------|
-| Desktop | 图形桌面环境（选择主题后启动 DWM） |
-| CMD | 命令提示符文本界面 |
-| Text | 纯 VGA 文本模式 |
+（Phase 0–12 意图不变：配置、硬件、中断、虚拟内存、管理器、IPC、驱动、加载器、用户态、Win32、图形、扩展、显示模式；细节见 [Kernel.md](Kernel.md)。）
 
 ## 6. 链接脚本
 
-各架构使用独立的链接脚本，定义内存布局和节安排：
-
 | 文件 | 架构 | 加载地址 |
 |------|------|----------|
-| `link/x86_64.ld` | x86_64 | 1MB (0x100000)，含 .multiboot2、.uefi_vector 节 |
+| `link/x86_64.ld` | x86_64 | 1MB (0x100000)，含 `.multiboot2`、`.uefi_vector` |
 | `link/aarch64.ld` | aarch64 | 0x40080000 |
 | `link/loongarch64.ld` | LoongArch64 | `0x00200000` 起（QEMU virt 首段 RAM；见 §8） |
 | `link/riscv64.ld` | RISC-V 64 | 架构特定 |
-| `link/mips64el.ld` | MIPS64 LE | 架构特定 |
-| `link/mbr.ld` | x86 | MBR 引导扇区 (0x7C00) |
-| `link/vbr.ld` | x86 | VBR 引导扇区 |
+| `link/mips64el.ld` | MIPS64 LE | 试验性质 |
+| `link/mbr.ld` | x86 | MBR (0x7C00) |
+| `link/vbr.ld` | x86 | VBR |
 | `link/zbm_bios.ld` | x86 | ZBM BIOS Stage2 |
 
-## 7. Multiboot2 信息解析
+## 7. Multiboot2 handoff（ZBM → 内核）
 
-内核通过 `src/arch/x86_64/boot.zig` 解析 GRUB 传递的 Multiboot2 信息：
+由 `src/boot/multiboot2_parse.zig` 与各架构 `boot.zig`（如 x86_64）解析。**来源**：ZBM；**格式**：公开 Multiboot2 标签布局。
 
 | 标签类型 | 解析内容 |
 |----------|----------|
 | Memory Map | 物理内存布局 → 帧分配器 |
-| Command Line | 启动参数（cmd / powershell / desktop 模式） |
-| Framebuffer | 图形帧缓冲地址、分辨率、色深 |
-| Boot Loader Name | 引导器名称 |
+| Command Line | 启动模式、主题等 |
+| Framebuffer | 帧缓冲地址、分辨率、色深（若存在） |
+| Boot Loader Name | 引导器标识字符串 |
 
-启动模式通过内核命令行参数传递：
-- `mode=cmd` — 启动到命令提示符
-- `mode=powershell` — 启动到 PowerShell
-- `mode=desktop` — 启动到图形桌面
-- `desktop=aero` / `theme=aero` — 选择 Aero 桌面壳（与构建选项一致）
+命令行示例：`mode=cmd`、`mode=desktop`、`desktop=aero` / `theme=aero`。
 
 ## 8. LoongArch64 启动（QEMU）
 
-### 8.1 推荐：QEMU `-kernel` 直启（默认）
+### 8.1 开发旁路：`-kernel`（无 ZBM）
 
-- QEMU `virt` 首段 RAM 为 **0 .. 0x10000000（256MB）**。内核链接在 **`link/loongarch64.ld`** 的 **`0x00200000`**，整块映像（含大 `.bss`）落在该段内，便于 `load_elf` 映射；**不要**把内核放在 **0x80000000** 起的高物理地址：低 256MB 与高内存（`VIRT_HIGHMEM_BASE`）之间存在**空洞**，BSS 跨越空洞时会出现未映射内存、启动即非法写。
-- 入口 **`crt0.S`** 在调用 `kernel_main` 前设置 **栈指针**（LoongArch LP64D 使用 `$r3` 作栈），否则首条用栈指令会访问无效地址。
-- **`make run-loongarch64`**（`LOONGARCH64_QEMU_MODE=kernel`）使用 **`qemu-system-loongarch64 -kernel build/tmp/kernel.elf`**，**无需** EDK2/GRUB/ESP，**串口** `-serial stdio` 即可看到 `klog` 输出。
-- **显示（kernel 模式）**：ramfb 用于图形 framebuffer。在部分 QEMU 版本中，LoongArch（与 RISC-V 类似）可能出现「Guest has not initialized the display (yet)」持续显示，即使 guest 已报告 ramfb 设置成功——此为已知的 QEMU 行为。**变通**：使用 `LOONGARCH64_QEMU_MODE=uefi`，搭配 `make build-esp` 与固件；UEFI + virtio-gpu-pci 可提供正常显示。
+- 内核链接在 **`0x00200000`**（`link/loongarch64.ld`），避免 BSS 跨越低/高 RAM **空洞**。
+- **`make run-loongarch64`**（`LOONGARCH64_QEMU_MODE=kernel`）使用 **`qemu-system-loongarch64 -kernel build/tmp/kernel.elf`**，**无** ESP/ZBM；串口可见 `klog`。
+- **非**产品引导路径，仅用于快速内核迭代。
 
-### 8.2 UEFI + ESP（仅 ZBM）
+### 8.2 产品式：UEFI + ESP + ZBM
 
-本仓库 **LoongArch64 不提供 GRUB 路径**；UEFI 启动仅支持 **ZBM + UEFI**（`BOOTLOADER=zbm`，Makefile 会对 `grub` 报错）。
+- 固件加载 `\EFI\BOOT\BOOTLOONGARCH64.EFI`（ZBM）。本仓库**无 GRUB**。
+- 构建：`make build ARCH=loongarch64` 后 `make build-zbm-loongarch-uefi`。
+- **`make run-loongarch64`**（`LOONGARCH64_QEMU_MODE=uefi`）需 `build-esp` 与 `QEMU_EFI.fd`。
 
-- **标准路径**：固件查找 `\EFI\BOOT\BOOTLOONGARCH64.EFI`；缺失则进入 Shell。
-- **EDK2 Shell**（`make fetch-firmware` / `fetch-loongarch-boot-efi`）可作固件内辅助或备用，**不是**主引导方案。
-- **ZBM**：Zig **无法**直接 `zig build-exe -target loongarch64-uefi` 出 PE（`UnsupportedCoffArchitecture`）。使用 **`boot/zbm/uefi/main_loongarch64.zig`** → `zbm_loongarch64.o`，再经 **GNU-EFI**（`make fetch-gnu-efi` 提供 crt0/lds）与 **`objcopy --target=efi-app-loongarch64`** 得到 `BOOTLOONGARCH64.EFI`。交叉 GCC 可选，可用 **`zig cc`**；**`llvm-objcopy`** 或 **`loongarch64-linux-gnu-objcopy`** 二选一。
-- **`make run-loongarch64`**（`LOONGARCH64_QEMU_MODE=uefi`）需 **`build-esp`** 与 **`QEMU_EFI.fd`**。
-- **Handoff v3**：ZBM 在 `ExitBootServices` 前将 **EFI 内存映射** 打包进 handoff 页（`mmap_off_from_handoff`，通常为 **0x200**），内核 `boot.parse` 用于帧分配器；v2 仍为 GOP 帧缓冲字段。
-- **中断**：内核安装 **CSR.EENTRY** 向量（`exc_vec.S`）、**CSR 定时器**（~100Hz tick）、**QEMU virt PCH PIC**（`0x10000000`）与 **ECFG.IM**，供调度 tick 与（可选）设备 HWI；键鼠在非 x86 上仍以 **VirtIO-Input 轮询**为主（Makefile 已含 `virtio-mouse-pci`）。
+## 9. AArch64 与 RISC-V64（摘要）
+
+- **AArch64**：UEFI ZBM（`boot/zbm/uefi/main.zig`），`make run-aarch64` 组合固件与 ESP。
+- **RISC-V64**：`scripts/build/zbm-riscv64-efi.sh` 生成 `BOOTRISCV64.EFI`，`make build-zbm-riscv64-uefi`。

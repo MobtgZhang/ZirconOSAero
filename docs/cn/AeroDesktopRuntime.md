@@ -88,7 +88,7 @@
 - **权威项**：仓库根目录 `**build.conf`** 中**唯一生效**的一行 `**RESOLUTION=WxHxdepth`**（例 `1920x1080x32`）。
 - `**make build**` / `**make sync-resolution**` 会运行 `**scripts/sync_resolution_config.py**`，将宽高（及 bpp）写入：
   - `**src/config/desktop.conf**` 的 `**[resolution]**`；
-  - `**src/config/boot.conf**` 的 `**[grub] gfxmode**`、`**[uefi] resolution**`；
+  - `**src/config/boot.conf**` 的 `**[display] gfxmode**`、`**[uefi] resolution**`；
   - `**src/config/system.conf**` 的 `**[display] default_width**` / `default_height` / `default_bpp**`（与串口早期 `**[display]**` 日志一致）；
   - `**build/tmp/zircon_pref_fb.h**`（LoongArch C stub）、`**build/tmp/kernel_pref_fb_wh.txt**`。
 - `**zig build**`：`build.zig` 优先读 `**build.conf**` 中的 `**RESOLUTION**`，其次读 `**kernel_pref_fb_wh.txt**`；可选 `**-Dzbm_preferred_fb_width/height**` 覆盖。不经 `make` 直接 `zig build` 时，若改动了 `build.conf` 但未跑 sync，C stub 头文件可能仍旧，LoongArch UEFI 请以 `**make build**` 或至少 `**make sync-resolution**` 为准。

@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# x86_64 `syscall` 指令入口（IA32_LSTAR）：合成与 `int 0x80` 一致的 InterruptFrame 后走 `isr_common_handler`。
-# 约定与 `syscall_entry.s` / `syscall.zig` 一致：RAX=号，RDI/RSI/RDX/R10/R8/R9=参；RCX/R11 由硬件破坏（存用户 RIP/RFLAGS）。
-# Ref: Intel SDM Vol.2 SYSCALL/SYSRET; AMD APM Vol.2.
+# x86_64 `syscall` 入口（IA32_LSTAR）：构造与 `int 0x80` 一致的 InterruptFrame 后调用 `isr_common_handler`；
+# 返回时使用 **sysretq**（需 GDT 中用户 SS 选择子比用户 CS 小 8，见 `hal/x86_64/gdt.zig`）。
+# 约定：RAX=服务号；NT 路径第 1 参在 R10（RCX/R11 由 SYSCALL 破坏）；与 `syscall.zig` 一致。
+# Ref: Intel SDM Vol.2 SYSCALL/SYSRET；Vol.4 IA32_STAR
 
 .extern zircon_x86_64_kernel_rsp0
 .global syscall_lstar_entry
@@ -10,10 +11,10 @@ syscall_lstar_entry:
     movq %rsp, %r12
     movq zircon_x86_64_kernel_rsp0(%rip), %rsp
 
-    pushq $0x23
+    pushq $0x1B
     pushq %r12
     pushq %r11
-    pushq $0x1B
+    pushq $0x23
     pushq %rcx
 
     pushq $0
@@ -55,4 +56,11 @@ syscall_lstar_entry:
     popq %rax
 
     addq $16, %rsp
-    iretq
+
+    popq %rcx
+    addq $8, %rsp
+    popq %r11
+    popq %rsi
+    addq $8, %rsp
+    movq %rsi, %rsp
+    sysretq

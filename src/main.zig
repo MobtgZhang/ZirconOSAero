@@ -45,6 +45,7 @@ comptime {
     }
     _ = @import("mm/pool.zig");
     _ = @import("mm/section.zig");
+    _ = @import("ke/apc.zig");
 }
 
 /// UEFI/汇编以 64 位寄存器传参；首参截断为 u32 供 Multiboot2 magic 比对（与 LoongArch handoff 习惯一致）。

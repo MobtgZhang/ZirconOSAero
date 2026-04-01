@@ -164,9 +164,62 @@ pub fn remapIdentityRangeUncached(virt_base: usize, size: usize) bool {
     return true;
 }
 
+pub const max_reserved_regions: usize = 32;
+
 pub const AddressSpace = struct {
     pml4_phys: u64,
     allocator: *FrameAllocator,
+    /// `MEM_RESERVE` 未提交区间（无 Present PTE）；与 `#PF` 惰性提交配合。
+    reserved_count: u8 = 0,
+    reserved_base: [max_reserved_regions]u64 = @splat(0),
+    reserved_pages: [max_reserved_regions]u32 = @splat(0),
+
+    pub fn reserveVirtualRange(self: *AddressSpace, virt_base: u64, num_pages: u32) bool {
+        if (self.reserved_count >= max_reserved_regions) return false;
+        if (num_pages == 0) return false;
+        const i = self.reserved_count;
+        self.reserved_base[i] = virt_base;
+        self.reserved_pages[i] = num_pages;
+        self.reserved_count += 1;
+        return true;
+    }
+
+    fn removeReservedCovering(self: *AddressSpace, virt_base: u64, num_pages: u64) void {
+        if (num_pages == 0) return;
+        const page_size = paging.page_size;
+        const end = virt_base + num_pages * page_size;
+        var i: u8 = 0;
+        while (i < self.reserved_count) {
+            const b = self.reserved_base[i];
+            const n = @as(u64, self.reserved_pages[i]) * page_size;
+            const e = b + n;
+            if (b == virt_base and e == end) {
+                const last = self.reserved_count - 1;
+                self.reserved_base[i] = self.reserved_base[last];
+                self.reserved_pages[i] = self.reserved_pages[last];
+                self.reserved_count -= 1;
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    /// 若 `fault_va` 落在某 `MEM_RESERVE` 区间内且尚无 PTE，则提交一页匿名映射。
+    pub fn tryLazyCommitFault(self: *AddressSpace, fault_va: u64) bool {
+        const page_size = paging.page_size;
+        const page = fault_va & ~@as(u64, page_size - 1);
+        if (self.getPhysical(page)) |_| return false;
+        var ri: u8 = 0;
+        while (ri < self.reserved_count) : (ri += 1) {
+            const b = self.reserved_base[ri];
+            const e = b + @as(u64, self.reserved_pages[ri]) * page_size;
+            if (fault_va >= b and fault_va < e) {
+                const flags = MapFlags{ .writable = true, .user = true, .executable = false };
+                return self.mapPageAlloc(page, flags) != null;
+            }
+        }
+        return false;
+    }
 
     pub fn mapPage(self: *AddressSpace, virt: u64, phys: u64, flags: MapFlags) bool {
         return paging.mapPage(
@@ -238,6 +291,23 @@ pub fn createAddressSpace(allocator: *FrameAllocator) ?AddressSpace {
     };
 }
 
+pub fn handleLazyCommitFault(space: *AddressSpace, fault_va: u64) bool {
+    return space.tryLazyCommitFault(fault_va);
+}
+
+/// 是否与任一 `MEM_RESERVE` 记录区间重叠（用于选 `base==0` 时的空洞搜索）。
+pub fn isVirtInReservedRange(space: *const AddressSpace, virt_base: u64, num_pages: usize) bool {
+    const ps: u64 = @intCast(paging.page_size);
+    const end = virt_base + @as(u64, @intCast(num_pages)) * ps;
+    var ri: u8 = 0;
+    while (ri < space.reserved_count) : (ri += 1) {
+        const b = space.reserved_base[ri];
+        const e = b + @as(u64, space.reserved_pages[ri]) * ps;
+        if (!(end <= b or virt_base >= e)) return true;
+    }
+    return false;
+}
+
 pub fn mapRange(space: *AddressSpace, virt_base: u64, num_pages: usize, flags: MapFlags) bool {
     var i: usize = 0;
     while (i < num_pages) : (i += 1) {
@@ -245,7 +315,7 @@ pub fn mapRange(space: *AddressSpace, virt_base: u64, num_pages: usize, flags: M
         if (space.mapPageAlloc(virt, flags) == null) {
             var j: usize = 0;
             while (j < i) : (j += 1) {
-                space.unmapAndFree(virt_base + j * paging.page_size);
+                _ = space.unmapAndFree(virt_base + j * paging.page_size);
             }
             return false;
         }
@@ -254,8 +324,9 @@ pub fn mapRange(space: *AddressSpace, virt_base: u64, num_pages: usize, flags: M
 }
 
 pub fn unmapRange(space: *AddressSpace, virt_base: u64, num_pages: usize) void {
+    space.removeReservedCovering(virt_base, @intCast(num_pages));
     var i: usize = 0;
     while (i < num_pages) : (i += 1) {
-        space.unmapAndFree(virt_base + i * paging.page_size);
+        _ = space.unmapAndFree(virt_base + i * paging.page_size);
     }
 }

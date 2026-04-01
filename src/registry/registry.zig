@@ -384,6 +384,15 @@ fn populateDefaults() void {
     _ = setValueSz(cpu0, "VendorIdentifier", "GenuineIntel");
 
     const sw_key = createKey(.hklm, hklm_root, "SOFTWARE") orelse return;
+    const ms_win = createKey(.hklm, sw_key, "Microsoft") orelse return;
+    const win_brand = createKey(.hklm, ms_win, "Windows") orelse return;
+    const dwm_key = createKey(.hklm, win_brand, "DWM") orelse return;
+    _ = setValueDword(dwm_key, "ColorPrevalence", 1);
+    _ = setValueDword(dwm_key, "AccentColor", 0x00D778); // BGR 风格 DWORD（与主题色一致，可经 `NtQueryValueKey` 读取）
+
+    const mm_key = createKey(.hklm, session_key, "Memory Management") orelse return;
+    _ = setValueDword(mm_key, "DisablePagingExecutive", 0);
+
     const ms_key = createKey(.hklm, sw_key, "ZirconOS") orelse return;
     const nt_key = createKey(.hklm, ms_key, "ZirconOS NT") orelse return;
     const cv_key = createKey(.hklm, nt_key, "CurrentVersion") orelse return;
@@ -401,6 +410,8 @@ fn populateDefaults() void {
     _ = setValueSz(desktop_key, "Wallpaper", "");
     _ = setValueSz(desktop_key, "WallpaperStyle", "0");
     _ = setValueDword(desktop_key, "ScreenSaveTimeOut", 600);
+    _ = setValueDword(desktop_key, "MenuShowDelay", 400);
+    _ = setValueDword(desktop_key, "DragFullWindows", 1);
 
     const colors_key = createKey(.hkcu, cp_key, "Colors") orelse return;
     _ = setValueSz(colors_key, "Background", "0 78 152");

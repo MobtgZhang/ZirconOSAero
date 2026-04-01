@@ -16,6 +16,7 @@ comptime {
         _ = @import("isr.zig");
         _ = @import("syscall.zig");
         _ = @import("syscall_msr.zig");
+        _ = @import("ssdt_nt61.zig");
     }
 }
 

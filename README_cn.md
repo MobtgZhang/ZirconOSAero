@@ -168,12 +168,12 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | Serial | 完成 | COM1 |
 | Frame Allocator | 完成 | 位图物理帧分配器 |
 | Paging | 完成 | 四级页表 |
-| Kernel Heap | 部分 | Bump + `mm/pool` NonPaged 档位 |
+| Kernel Heap | 部分 | Bump + 空闲链表 + `mm/pool` 档位 |
 | Section 对象 | 占位 | `NtCreateSection` / `NtMapViewOfSection` 未实现 |
 | IPC (LPC) | 部分 | 队列与端口；连接监听端口、`section_view_handle` 占位 |
-| Syscall | 部分 | `int 0x80` + x86_64 `syscall`；非 Windows SSDT 索引 |
+| Syscall | 部分 | `int 0x80` + `syscall`/`sysret`；NT 6.1 SSDT **子集** + 遗留基址 `0x0010_0000`（[SyscallABI.md](docs/cn/SyscallABI.md)） |
 | IDT/ISR | 完成 | 256 vectors |
-| Scheduler | 部分 | 优先级内轮转 |
+| Scheduler | 部分 | 多优先级就绪（idle/normal 档）；完整 32 级见契约矩阵 |
 | Timer | 部分 | PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
 | Sync | 完成 | Event, Mutex, Semaphore, SpinLock |
 | Object Manager | 完成 | 句柄表、命名空间 |
@@ -193,9 +193,10 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | gdi32 | 部分 | 区域/路径/字体分阶段 |
 | Console / CMD / PowerShell | 完成 | 见各模块 |
 | csrss / Exec | 部分 | 子系统服务器与执行引擎子集 |
-| WOW64 | 部分 | 见 [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md) |
-| 注册表 | 部分 | 内存树；RegF 持久化 **计划** |
+| WOW64 | 部分 | 32→64 thunk 与 `ssdt_nt61` / SysWOW64 真实表仍不对齐 — [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md) |
+| 注册表 | 部分 | 内存树 + `Mouse`/`Desktop`/`DWM`/`Memory Management` 等；RegF **计划** |
 | Aero 内核壳 | 部分 | 脏区策略、`compositor_config_epoch` trace |
+| 多架构 / Win32 验证 | 部分 | **x86_64** 为主；riscv64/LoongArch/MIPS 引导与桌面路径差异见各 arch 文档 |
 | 多架构说明 | 必读 | [PROCESS_NT61.md](docs/cn/PROCESS_NT61.md) 二进制边界 |
 | Win32k 架构 | 备忘 | [Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md) |
 

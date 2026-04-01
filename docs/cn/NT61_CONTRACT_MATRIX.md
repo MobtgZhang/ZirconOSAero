@@ -53,7 +53,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | I/O Manager、IRP | Major/Minor、完成时状态与 `IoCompleteRequest` 语义 | `src/io/io.zig`, `src/fs/vfs.zig` |
 | 设备对象与栈 | 设备扩展、附加栈（长期） | `io.zig` |
 | PnP / Power | 即插即用与电源 IRP（长期） | 驱动目录 |
-| IRQL、DPC | 同步级别约束（简化实现须在注释声明） | `src/ke/` |
+| IRQL、DPC | 同步级别约束（简化实现须在注释声明） | `src/ke/dpc.zig`, `interrupt_x86.zig` | 最小 DPC：输入轮询延后至 IRQ 出口 |
 | 内存管理器 | 池标签、`Mdl`（长期） | `src/mm/` |
 
 ## 3. 关键 Native API 与文档链接（示例）
@@ -77,10 +77,11 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | 合成启用查询（`DwmIsCompositionEnabled` 语义） | 部分 | `src/drivers/video/dwm.zig` | 内核策略位；无用户态 dwmapi DLL |
 | `DwmEnableBlurBehindWindow` / 毛玻璃区域 | 部分 | `dwm.zig`, `material.zig`, `display.zig` | `renderGlassEffect` / `renderGlassTintOnly` |
 | `DwmExtendFrameIntoClientArea` 策略 | 部分 | `display.zig`, `dwm_surface_spec.zig` | 标志与 NC/客户区绘制顺序 |
-| `WM_DWMCOMPOSITIONCHANGED` | 未 | `user32.zig`, `subsystem.zig`（规划） | NT6 可分发；当前未接消息泵 |
-| `WM_DWMCOLORIZATIONCOLORCHANGED` | 未 | 同上 | 主题色变更通知 |
-| `WM_DWMNCRENDERINGCHANGED` | 未 | 同上 | NC 渲染策略变更 |
+| `WM_DWMCOMPOSITIONCHANGED` | 部分 | `user32.zig`（`broadcastDwmCompositionChanged`） | 已向窗口队列投递；Shell 须在合成开关变化时调用 |
+| `WM_DWMCOLORIZATIONCOLORCHANGED` | 部分 | `user32.zig`（`broadcastDwmColorizationChanged`） | 同上 |
+| `WM_DWMNCRENDERINGCHANGED` | 部分 | `user32.zig`（`broadcastDwmNcRenderingChanged`） | 同上 |
 | 缩略图 / `WM_DWMSENDICONICTHUMBNAIL` | 未 | `compositor.zig` 预留 | 可选 |
+| GPU / WDDM 离屏纹理合成 | 未 | — | 长期项；当前为 CPU 帧缓冲路径（与 Win7 Aero 性能模型不同） |
 
 ## 5. user32 / gdi32 与 Learn 抽样核对（返回值约定）
 

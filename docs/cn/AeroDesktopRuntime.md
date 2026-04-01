@@ -87,9 +87,9 @@
 
 - **权威项**：仓库根目录 `**build.conf`** 中**唯一生效**的一行 `**RESOLUTION=WxHxdepth`**（例 `1920x1080x32`）。
 - `**make build**` / `**make sync-resolution**` 会运行 `**scripts/sync_resolution_config.py**`，将宽高（及 bpp）写入：
-  - `**config/desktop.conf**` / `**src/config/desktop.conf**` 的 `**[resolution]**`；
-  - `**config/boot.conf**` / `**src/config/boot.conf**` 的 `**[grub] gfxmode**`、`**[uefi] resolution**`；
-  - `**config/system.conf**` / `**src/config/system.conf**` 的 `**[display] default_width` / `default_height` / `default_bpp**`（与串口早期 `**[display]**` 日志一致）；
+  - `**src/config/desktop.conf**` 的 `**[resolution]**`；
+  - `**src/config/boot.conf**` 的 `**[grub] gfxmode**`、`**[uefi] resolution**`；
+  - `**src/config/system.conf**` 的 `**[display] default_width**` / `default_height` / `default_bpp**`（与串口早期 `**[display]**` 日志一致）；
   - `**build/tmp/zircon_pref_fb.h**`（LoongArch C stub）、`**build/tmp/kernel_pref_fb_wh.txt**`。
 - `**zig build**`：`build.zig` 优先读 `**build.conf**` 中的 `**RESOLUTION**`，其次读 `**kernel_pref_fb_wh.txt**`；可选 `**-Dzbm_preferred_fb_width/height**` 覆盖。不经 `make` 直接 `zig build` 时，若改动了 `build.conf` 但未跑 sync，C stub 头文件可能仍旧，LoongArch UEFI 请以 `**make build**` 或至少 `**make sync-resolution**` 为准。
 - **QEMU 内存**：`make run-loongarch64` 使用 `**QEMU_MEM_LOONGARCH64`**（Makefile 默认 1536M，且须 **>1G** 以满足 EDK2 virt）。根目录 `**build.conf`** 中的 `**QEMU_MEM**`（如 8G）作用于 x86_64 / AArch64 / RISC-V 等目标，**不**自动传给 LoongArch；要增大 LoongArch 客体 RAM 请设 `**QEMU_MEM_LOONGARCH64`**（命令行或 `build.conf` 若已 `-include` 进 Makefile）。
@@ -150,7 +150,7 @@
 
 - **默认 QEMU 目标（`AARCH64_QEMU_VIRTIO_GPU=0`）不依赖** 内核 **VirtIO-GPU PCI（1af4:1050）** 驱动。可见桌面路径为：**UEFI GOP 线性帧缓冲**（Multiboot2 传递）与/或 `**ramfb` + `fw_cfg`**（`[src/hal/aarch64/ramfb.zig](../../src/hal/aarch64/ramfb.zig)`），由 `[src/main.zig](../../src/main.zig)` Phase 1 组合。
 - 若 `**AARCH64_QEMU_VIRTIO_GPU=1**` 且希望 GTK **主窗口**走 virtio-gpu，需要**单独的 GPU 驱动里程碑**（见 `[docs/cn/DriverMilestones_NT61.md](DriverMilestones_NT61.md)`）；在驱动就绪前应继续以 **ramfb** 为主显示后端。
-- **分辨率**：以根目录 `**build.conf`** 的 `**RESOLUTION**` 为权威；执行 `**make sync-resolution**` 同步到 `config/desktop.conf` / `config/boot.conf`，与 ZBM GOP、`zig -Dzbm_preferred_fb_*` 对齐，避免「串口里 GOP 与嵌入配置宽高不一致」。
+- **分辨率**：以根目录 `**build.conf`** 的 `**RESOLUTION**` 为权威；执行 `**make sync-resolution**` 同步到 `src/config/desktop.conf` / `src/config/boot.conf` / `src/config/system.conf`，与 ZBM GOP、`zig -Dzbm_preferred_fb_*` 对齐，避免「串口里 GOP 与嵌入配置宽高不一致」。
 
 ### 4.2.3 RISC-V64 UEFI：串口、QEMU 与「Guest has not initialized the display」
 
@@ -234,7 +234,7 @@
 
 ## 9. 双缓冲、大块后备与软件光标层
 
-- **配置**：`config` 中 `display.double_buffer` 为 `false` 时直接绘制屏前缓冲；为 `true` 时优先使用静态后备（≤10MiB 帧），更大则尝试 `**FrameAllocator.allocContiguous`** 申请连续物理页（须已在 `main` 中 `setKernelFrameAllocator`）。**其它键**（`src/config/desktop.conf`）：`triple_buffer`（乒乓第二离屏槽，默认关）、`present_full_flip`（双缓冲时默认整幅 `memcpy`；为 `false` 时用脏矩形 `flipDirty`，须保证光标区已 `mark dirty`）、`seed_gop_to_back`（初始化时把 GOP 拷入离屏槽，默认关）、`fall_back_single_on_alloc_fail`（超大帧堆分配失败时退化为单缓冲直写 GOP，默认开）。
+- **配置**：`src/config/desktop.conf` 中 `display.double_buffer` 为 `false` 时直接绘制屏前缓冲；为 `true` 时优先使用静态后备（≤10MiB 帧），更大则尝试 `**FrameAllocator.allocContiguous`** 申请连续物理页（须已在 `main` 中 `setKernelFrameAllocator`）。**其它键**（同文件）：`triple_buffer`（乒乓第二离屏槽，默认关）、`present_full_flip`（双缓冲时默认整幅 `memcpy`；为 `false` 时用脏矩形 `flipDirty`，须保证光标区已 `mark dirty`）、`seed_gop_to_back`（初始化时把 GOP 拷入离屏槽，默认关）、`fall_back_single_on_alloc_fail`（超大帧堆分配失败时退化为单缓冲直写 GOP，默认开）。
 - **单缓冲语义**：`double_buffer=false` 时 `getDrawBuffer()` 即 GOP；`flipDirty()` **不执行 memcpy**，仅清空脏矩形计数（绘制已在屏前完成）。
 - **Present**：双缓冲且 `present_full_flip=true`（默认）时 `present()` 整幅提交；否则 `flipDirty()`。单缓冲下 `flipDirty` 仅清脏标记。
 - **软件光标层**：实现集中在 `**src/drivers/video/cursor_plane.zig`**（save-under）；`display.renderDesktopFrameEx` 在场景合成之后调用。仅指针移动且壳层无脏时走快速路径；形态变化会回退整场景路径。`display.hardware_cursor` 仅为预留钩子（`notifyHardwareCursorIfAvailable`），仅接公开硬件文档路径，非 WDDM 专有 API。

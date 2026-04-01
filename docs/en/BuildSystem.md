@@ -21,7 +21,7 @@ Persistent build configuration.
 | `BOOTLOADER` | zbm | zbm | Bootloader (ZBM only in this tree) |
 | `DESKTOP` | aero, none | aero | Desktop shell (Aero only) |
 | `OPTIMIZE` | Debug, ReleaseSafe, ReleaseFast, ReleaseSmall | Debug | Optimization |
-| `RESOLUTION` | WxHxdepth | (see `Makefile` / `build.conf`) | **`make build`** runs **`scripts/sync_resolution_config.py`**, which updates **`desktop.conf`**, **`boot.conf`**, **`system.conf`** (`[display]` defaults), **`build/tmp/zircon_pref_fb.h`**, and **`kernel_pref_fb_wh.txt`**. LoongArch GOP vs ramfb: see [AeroDesktopRuntime.md](../cn/AeroDesktopRuntime.md) §4.2.1.1. |
+| `RESOLUTION` | WxHxdepth | (see `Makefile` / `build.conf`) | **`make build`** runs **`scripts/sync_resolution_config.py`**, which updates **`src/config/desktop.conf`**, **`src/config/boot.conf`**, **`src/config/system.conf`** (`[display]` defaults), **`build/tmp/zircon_pref_fb.h`**, and **`kernel_pref_fb_wh.txt`**. LoongArch GOP vs ramfb: see [AeroDesktopRuntime.md](../cn/AeroDesktopRuntime.md) §4.2.1.1. |
 | `QEMU_MEM` | size | 512M | QEMU RAM (x86, etc.) |
 | `QEMU_MEM_LOONGARCH64` | size | 1536M | `make run-loongarch64`; `qemu-system-loongarch64 -M virt` needs **> 1G** |
 | `LOONGARCH64_FIRMWARE_DIR` | path | `~/Firmware/LoongArchVirtMachine` | `QEMU_EFI.fd` / `QEMU_VARS.fd`; falls back to `firmware/` EDK2 nightly names |

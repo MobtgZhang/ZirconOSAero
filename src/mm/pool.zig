@@ -40,9 +40,12 @@ pub fn allocateNonPaged(size: usize, _: u32) ?[*]u8 {
     return heap.alloc(slot, @alignOf(FreeNode));
 }
 
-/// 释放由 `allocateNonPaged` 返回的指针；未知档位时退化为无操作（避免双重释放 bump）。
+/// 释放由 `allocateNonPaged` 返回的指针；大于最大档位的块归还 `heap.free`。
 pub fn freeNonPaged(ptr: [*]u8, size: usize, _: u32) void {
-    const idx = sizeClassIndex(size) orelse return;
+    const idx = sizeClassIndex(size) orelse {
+        heap.free(ptr, size, @alignOf(FreeNode));
+        return;
+    };
     const slot = slot_sizes[idx];
     _ = slot;
     const node: *FreeNode = @ptrCast(@alignCast(ptr));

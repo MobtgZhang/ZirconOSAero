@@ -73,7 +73,8 @@ pub fn initSyscallInstructionPath() void {
     efer |= 1; // SCE
     wrmsr(IA32_EFER, efer);
 
-    const star: u64 = (@as(u64, gdt.USER_CS) << 48) | (@as(u64, gdt.KERNEL_CS) << 32);
+    // STAR[47:32]=syscall 时内核 CS；STAR[63:48]=SYSRET 基址，须满足 SS=基+8、CS=基+16（见 gdt.IA32_STAR_SYSRET_BASE）。
+    const star: u64 = (@as(u64, gdt.IA32_STAR_SYSRET_BASE) << 48) | (@as(u64, gdt.KERNEL_CS) << 32);
     wrmsr(IA32_STAR, star);
 
     const lstar = @intFromPtr(&syscall_lstar_entry);

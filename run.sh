@@ -46,8 +46,9 @@ case "$TARGET" in
         fi
         TARGET="build-desktop"
         ;;
-    iso)                    TARGET="iso" ;;
-    iso-release)            TARGET="iso" ; MAKE_ARGS+=("OPTIMIZE=ReleaseSafe") ;;
+    iso)                    TARGET="iso-debug" ;;
+    iso-debug)              TARGET="iso-debug" ;;
+    iso-release)            TARGET="iso-release" ;;
     run)                    TARGET="run" ;;
     run-release)            TARGET="run" ; MAKE_ARGS+=("OPTIMIZE=ReleaseSafe") ;;
     run-debug)              TARGET="run-debug" ;;

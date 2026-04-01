@@ -169,12 +169,12 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | Serial | Done | COM1 |
 | Frame allocator | Done | Bitmap allocator |
 | Paging | Done | Four-level tables, identity map |
-| Kernel heap | Partial | Bump + tagged `mm/pool` NonPaged 档位；Paged 语义与完整池化见契约矩阵 |
+| Kernel heap | Partial | Bump + 空闲链表回收 + `mm/pool` 档位；Paged 语义与完整池化见契约矩阵 |
 | Section objects | Stub | `NtCreateSection` / `NtMapViewOfSection` 占位（[MM 路线图](docs/cn/NT61_CONTRACT_MATRIX.md)） |
 | IPC (LPC) | Partial | Queues, ports；连接/通信端口分离雏形、`section_view_handle` 占位（[Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md)） |
-| Syscall | Partial | `int 0x80` + x86_64 `syscall`/LSTAR 共用分发；非 Windows SSDT 索引（[SyscallABI.md](docs/cn/SyscallABI.md), [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md)） |
+| Syscall | Partial | `int 0x80` + `syscall`/`sysret`；**NT 6.1 x64 SSDT 子集** + Zircon 遗留基址 `0x0010_0000`（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
 | IDT/ISR | Done | 256 vectors |
-| Scheduler | Partial | 优先级内轮转；饥饿/前台提升可选后续 |
+| Scheduler | Partial | 多优先级就绪队列（idle/normal 档）；完整 32 级与饥饿策略见契约矩阵 |
 | Timer | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
 | Sync | Done | Event, mutex, semaphore, spinlock |
 | Object Manager | Done | Types, handle table, namespace, waitable |
@@ -197,9 +197,10 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | PowerShell | Done | cmdlet-style commands |
 | csrss | Partial | Win32 server, stations, desktops, GUI dispatch |
 | Exec engine | Partial | PE load, DLL bind, lifecycle |
-| WOW64 | Partial | PE32, thunk；与 64 位 `SYS_*` / 微软 ntdll 路径差距见 `wow64.zig` 与 [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md) |
-| Registry runtime | Partial | 内存树 + `HKCU\Control Panel\Mouse` 等默认值；RegF/hive 持久化 Planned |
+| WOW64 | Partial | PE32, thunk；32→64 服务号须对齐 `ssdt_nt61.zig`（与旧 `SYS_*` 已分离）— 见 `wow64.zig` |
+| Registry runtime | Partial | 内存树 + `Mouse`/`Desktop`/`HKLM\...\Windows\DWM`/`Memory Management` 等键；RegF/hive 持久化 Planned |
 | Aero / DWM (kernel shell) | Partial | 脏矩形/分层路径与 `compositor_config_epoch` 握手 trace；CPU 合成与 Win7 WDDM 差异见 [DesktopManagerSpec.md](docs/cn/DesktopManagerSpec.md) |
+| 多架构 Win32 栈 | Partial | **x86_64** 为主验证路径；riscv64/LoongArch/MIPS 引导与桌面见各 `arch` 文档与 CI 说明 |
 
 ## Milestones
 

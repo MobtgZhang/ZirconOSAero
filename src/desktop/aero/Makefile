@@ -5,7 +5,7 @@
 # Requires: zig, qemu-system-x86_64, OVMF firmware, mtools
 
 .PHONY: all build build-lib build-exe test run run-uefi run-bios \
-	resources fonts iso esp clean help
+	resources fonts iso iso-debug iso-release esp clean help
 
 # ── Configuration ──
 
@@ -22,7 +22,7 @@ BUILD_DIR    := $(ROOT_DIR)/build
 TMP_DIR      := $(BUILD_DIR)/tmp
 RELEASE_DIR  := $(BUILD_DIR)/release
 KERNEL_ELF   := $(TMP_DIR)/kernel-prefix/bin/kernel
-ISO          := $(RELEASE_DIR)/zirconos-$(VERSION)-$(ARCH).iso
+ISO_DEBUG    := $(RELEASE_DIR)/zirconos-6.1.0-uefi-$(ARCH)-debug.iso
 ESP_IMG      := $(BUILD_DIR)/esp-$(ARCH).img
 
 # OVMF UEFI firmware paths
@@ -41,7 +41,8 @@ help:
 	@echo "  make build-lib     Build Aero static library only"
 	@echo "  make build-exe     Build Aero standalone executable"
 	@echo "  make test          Run unit tests"
-	@echo "  make iso           Build UEFI ISO via root Makefile (ZBM, no GRUB)"
+	@echo "  make iso / iso-debug   Root: UEFI ISO (debug, on-screen klog)"
+	@echo "  make iso-release       Root: UEFI ISO (release, quiet screen)"
 	@echo "  make esp           Build UEFI ESP image"
 	@echo ""
 	@echo "Run (QEMU):"
@@ -95,9 +96,15 @@ build-kernel:
 
 # ── ISO / ESP ──
 
-iso: build-kernel
-	@echo "[AERO] Delegating ISO build to project root (ZBM UEFI ISO)..."
-	cd $(ROOT_DIR) && $(MAKE) iso ARCH=$(ARCH) DESKTOP=aero OPTIMIZE=$(OPTIMIZE)
+iso: iso-debug
+
+iso-debug: build-kernel
+	@echo "[AERO] Delegating ISO (debug) to project root..."
+	cd $(ROOT_DIR) && $(MAKE) iso-debug ARCH=$(ARCH) DESKTOP=aero
+
+iso-release: build-kernel
+	@echo "[AERO] Delegating ISO (release) to project root..."
+	cd $(ROOT_DIR) && $(MAKE) iso-release ARCH=$(ARCH) DESKTOP=aero
 
 esp: build-kernel
 	@echo "[AERO] Delegating ESP build to project root..."

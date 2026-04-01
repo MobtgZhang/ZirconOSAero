@@ -1,24 +1,80 @@
-//! Kernel Heap Allocator (Bump allocator)
-//! Provides dynamic memory allocation for kernel-mode data structures
+//! 内核堆：bump 后备 + **空闲链表**（块首 `FreeBlock` 元数据，用户指针在元数据之后）。
 
 const HEAP_SIZE: usize = 512 * 1024;
 var heap_storage: [HEAP_SIZE]u8 align(16) = undefined;
 var heap_pos: usize = 0;
 var heap_initialized: bool = false;
 
+const FreeBlock = struct {
+    size: usize,
+    next: ?*FreeBlock,
+};
+
+var free_head: ?*FreeBlock = null;
+
 pub fn init() void {
     heap_pos = 0;
+    free_head = null;
     heap_initialized = true;
+}
+
+fn alignUp(v: usize, alignment: usize) usize {
+    const m = alignment - 1;
+    return (v + m) & ~m;
+}
+
+fn blockOverhead() usize {
+    return alignUp(@sizeOf(FreeBlock), @alignOf(FreeBlock));
+}
+
+/// 从空闲块取出 `total` 字节（含块首元数据），返回 **用户** 区起始指针。
+fn takeFromFreeBlock(block: *FreeBlock) [*]u8 {
+    const hdr = blockOverhead();
+    return @as([*]u8, @ptrCast(block)) + hdr;
 }
 
 pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
     if (!heap_initialized or size == 0 or alignment == 0) return null;
-    const align_mask = alignment - 1;
-    const aligned_pos = (heap_pos + align_mask) & ~align_mask;
-    if (aligned_pos + size > HEAP_SIZE) return null;
-    const result = @as([*]u8, @ptrCast(&heap_storage[aligned_pos]));
-    heap_pos = aligned_pos + size;
-    return result;
+    const hdr = blockOverhead();
+    const need_user = alignUp(size, alignment);
+    const total = hdr + need_user;
+
+    var prev: ?*FreeBlock = null;
+    var cur = free_head;
+    while (cur) |b| {
+        if (b.size >= total) {
+            if (prev) |p| {
+                p.next = b.next;
+            } else {
+                free_head = b.next;
+            }
+            return takeFromFreeBlock(b);
+        }
+        prev = b;
+        cur = b.next;
+    }
+
+    const aligned_pos = alignUp(heap_pos, @max(alignment, 16));
+    if (aligned_pos + total > HEAP_SIZE) return null;
+    const block: *FreeBlock = @ptrCast(@alignCast(&heap_storage[aligned_pos]));
+    block.size = total;
+    block.next = null;
+    heap_pos = aligned_pos + total;
+    return takeFromFreeBlock(block);
+}
+
+/// `ptr` / `user_size` / `alignment` 须与同次 `alloc(size, alignment)` 一致。
+pub fn free(ptr: [*]u8, user_size: usize, alignment: usize) void {
+    if (!heap_initialized or user_size == 0) return;
+    const hdr = blockOverhead();
+    const need_user = alignUp(user_size, alignment);
+    const total = hdr + need_user;
+    const block_addr = @intFromPtr(ptr) -% hdr;
+    if (block_addr < @intFromPtr(&heap_storage) or block_addr >= @intFromPtr(&heap_storage) + HEAP_SIZE) return;
+    const block: *FreeBlock = @ptrFromInt(block_addr);
+    block.size = total;
+    block.next = free_head;
+    free_head = block;
 }
 
 pub fn allocSlice(comptime T: type, count: usize) ?[]T {
@@ -53,5 +109,4 @@ pub fn totalBytes() usize {
     return HEAP_SIZE;
 }
 
-/// 非分页池子集（固定档位空闲链表）；见 `mm/pool.zig`。
 pub const pool = @import("pool.zig");

@@ -23,7 +23,7 @@
 | `BOOTLOADER` | zbm | zbm | 引导加载器（本仓库仅 ZBM） |
 | `DESKTOP` | aero, none | aero | 桌面壳（仅 Aero） |
 | `OPTIMIZE` | Debug, ReleaseSafe, ReleaseFast, ReleaseSmall | Debug | 优化级别 |
-| `RESOLUTION` | 宽x高x色深 | 见 `Makefile` / `build.conf` | **`make build`** 会运行 **`scripts/sync_resolution_config.py`**，同步 **`desktop.conf`**、**`boot.conf`**、**`system.conf`**（`[display]`）、**`build/tmp/zircon_pref_fb.h`**、**`kernel_pref_fb_wh.txt`**。LoongArch 上 GOP 与 ramfb 说明见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) 小节 4.2.1.1。 |
+| `RESOLUTION` | 宽x高x色深 | 见 `Makefile` / `build.conf` | **`make build`** 会运行 **`scripts/sync_resolution_config.py`**，同步 **`src/config/desktop.conf`**、**`src/config/boot.conf`**、**`src/config/system.conf`**（`[display]`）、**`build/tmp/zircon_pref_fb.h`**、**`kernel_pref_fb_wh.txt`**。LoongArch 上 GOP 与 ramfb 说明见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) 小节 4.2.1.1。 |
 | `QEMU_MEM` | 内存大小 | 512M | QEMU 分配内存（x86 等） |
 | `QEMU_MEM_LOONGARCH64` | 内存大小 | 1536M | `make run-loongarch64` 专用；`qemu-system-loongarch64 -M virt` 要求 **大于 1G** |
 | `LOONGARCH64_FIRMWARE_DIR` | 目录 | `~/Firmware/LoongArchVirtMachine` | 内含 `QEMU_EFI.fd` / `QEMU_VARS.fd`；若不存在则回退到 `firmware/` 下 EDK2 nightly 文件名 |

@@ -7,7 +7,7 @@
 //! `glass_tint_color` 此处为内核侧 **u32 字面值**（与 `dwm.zig` / `theme.rgb` 一致）；勿直接复制到 Aero 库主题常量而不换算。
 
 /// 合成参数表版本：内核 `display` 与用户态 `desktop/aero` 变更默认时应 bump，便于检测双轨漂移（DesktopManagerSpec）。
-pub const compositor_config_epoch: u32 = 1;
+pub const compositor_config_epoch: u32 = 2;
 
 /// 内核 `dwm.zig` / `display.initAeroDwm` / `renderer_aero.initDwm` 使用的玻璃与行为开关
 pub const KernelDwm = struct {
@@ -68,3 +68,10 @@ pub const UserShellDwm = struct {
     pub const shadow_layers = KernelCompositor.shadow_layers;
     pub const vsync = KernelDwm.vsync_compositor;
 };
+
+const std = @import("std");
+comptime {
+    std.debug.assert(UserShellDwm.blur_radius == KernelDwm.glass_blur_radius);
+    std.debug.assert(UserShellDwm.blur_passes == KernelDwm.glass_blur_passes);
+    std.debug.assert(UserShellDwm.glass_opacity == KernelDwm.glass_opacity);
+}

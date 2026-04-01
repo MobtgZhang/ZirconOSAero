@@ -18,6 +18,7 @@ pub const NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
 pub const STATUS_PENDING: NTSTATUS = 259;
 pub const STATUS_INVALID_PARAMETER: NTSTATUS = -1073741811;
+pub const STATUS_ACCESS_VIOLATION: NTSTATUS = -1073741819;
 pub const STATUS_ACCESS_DENIED: NTSTATUS = -1073741790;
 pub const STATUS_NO_MEMORY: NTSTATUS = -1073741801;
 pub const STATUS_OBJECT_NAME_NOT_FOUND: NTSTATUS = -1073741772;
@@ -520,7 +521,8 @@ pub fn NtAllocateVirtualMemory(
     _ = protect;
     const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
-    const space = proc.address_space orelse return STATUS_NO_MEMORY;
+    var space = proc.address_space orelse return STATUS_NO_MEMORY;
+    defer proc.address_space = space;
 
     const commit = (allocation_type & MEM_COMMIT) != 0;
     const reserve = (allocation_type & MEM_RESERVE) != 0;
@@ -535,14 +537,35 @@ pub fn NtAllocateVirtualMemory(
     var base = base_address.*;
     if (base == 0) {
         base = 0x0000_0000_4000_0000;
-        while (space.getPhysical(base) != null) {
+        while (space.getPhysical(base) != null or vm.isVirtInReservedRange(&space, base, num_pages)) {
             base += page_size;
         }
     }
     if (base & (page_size - 1) != 0) return STATUS_INVALID_PARAMETER;
 
     const flags = vm.MapFlags{ .writable = true, .user = true, .executable = false };
-    if (!vm.mapRange(space, base, num_pages, flags)) return STATUS_NO_MEMORY;
+
+    if (reserve and commit) {
+        if (!vm.mapRange(&space, base, num_pages, flags)) return STATUS_NO_MEMORY;
+        base_address.* = base;
+        region_size.* = size;
+        return STATUS_SUCCESS;
+    }
+
+    if (reserve and !commit) {
+        if (!space.reserveVirtualRange(base, @intCast(num_pages))) return STATUS_NO_MEMORY;
+        base_address.* = base;
+        region_size.* = size;
+        return STATUS_SUCCESS;
+    }
+
+    // MEM_COMMIT only：已映射页跳过；未映射页在 reserved 区内由 `mapPageAlloc` 提交，否则匿名提交。
+    var p: usize = 0;
+    while (p < num_pages) : (p += 1) {
+        const v = base + p * page_size;
+        if (space.getPhysical(v) != null) continue;
+        if (space.mapPageAlloc(v, flags) == null) return STATUS_NO_MEMORY;
+    }
     base_address.* = base;
     region_size.* = size;
     return STATUS_SUCCESS;
@@ -557,14 +580,15 @@ pub fn NtFreeVirtualMemory(
     if ((free_type & MEM_RELEASE) == 0) return STATUS_INVALID_PARAMETER;
     const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
-    const space = proc.address_space orelse return STATUS_NO_MEMORY;
+    var space = proc.address_space orelse return STATUS_NO_MEMORY;
 
     const page_size: u64 = 4096;
     var size = region_size.*;
     if (size == 0) return STATUS_INVALID_PARAMETER;
     size = (size + page_size - 1) & ~(page_size - 1);
     const num_pages = @as(usize, @intCast(size / page_size));
-    vm.unmapRange(space, base_address.*, num_pages);
+    vm.unmapRange(&space, base_address.*, num_pages);
+    proc.address_space = space;
     return STATUS_SUCCESS;
 }
 

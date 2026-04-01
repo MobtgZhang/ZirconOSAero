@@ -1,6 +1,6 @@
-//! Syscall dispatch for x86_64
-//! int 0x80 (vector 128): rax=syscall_no, rdi,rsi,rdx,r10,r8,r9=args
-//! Return value placed in frame.rax
+//! x86_64 系统调用分发：`syscall` / `int 0x80`（向量 128）共用本模块。
+//! - **NT 6.1 x64 SSDT 索引**（子集）：见 `ssdt_nt61.zig`；AMD64 约定第 1 参在 **R10**。
+//! - **Zircon 遗留**：`ssdt_nt61.zircon_legacy_syscall_base + 0..15`，参数为 **RDI/RSI/RDX**（兼容旧 `int 0x80` 测试）。
 
 const ipc = @import("../../lpc/ipc.zig");
 const lpc_port = @import("../../lpc/port.zig");
@@ -9,70 +9,180 @@ const klog = @import("../../rtl/klog.zig");
 const ob = @import("../../ob/object.zig");
 const vm = @import("../../mm/vm.zig");
 const ntdll = @import("../../libs/ntdll.zig");
+const ssdt = @import("ssdt_nt61.zig");
 const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
 
 fn ntResult(s: ntdll.NTSTATUS) i64 {
     return @intCast(s);
 }
 
-pub const SYS_CREATE_PROCESS: u64 = 0;
-pub const SYS_CREATE_THREAD: u64 = 1;
-pub const SYS_IPC_SEND: u64 = 2;
-pub const SYS_IPC_RECEIVE: u64 = 3;
-pub const SYS_MAP_MEMORY: u64 = 4;
-pub const SYS_UNMAP_MEMORY: u64 = 5;
-pub const SYS_EXIT_PROCESS: u64 = 6;
-pub const SYS_OPEN_HANDLE: u64 = 7;
-pub const SYS_CLOSE_HANDLE: u64 = 8;
-pub const SYS_WAIT_OBJECT: u64 = 9;
-pub const SYS_CREATE_PORT: u64 = 10;
-pub const SYS_CONNECT_PORT: u64 = 11;
-pub const SYS_GET_PID: u64 = 12;
-pub const SYS_YIELD: u64 = 13;
-pub const SYS_DEBUG_PRINT: u64 = 14;
-
-/// Success and error codes use the same `NTSTATUS` values as [`ntdll`](../libs/ntdll.zig) where applicable.
 pub const STATUS_SUCCESS: i64 = 0;
-/// Legacy IPC receive: not a standard `NTSTATUS`; see [SyscallABI.md](../../docs/cn/SyscallABI.md).
 pub const STATUS_NO_MESSAGE: i64 = -3;
 pub const STATUS_NOT_IMPLEMENTED: i64 = @intCast(ntdll.STATUS_NOT_IMPLEMENTED);
 
+/// 遗留常量（= `zircon_legacy_syscall_base + ord`）；新代码请使用 SSDT 号或本模块 `dispatch` 自动识别。
+pub const SYS_CREATE_PROCESS: u64 = ssdt.zircon_legacy_syscall_base + 0;
+pub const SYS_CREATE_THREAD: u64 = ssdt.zircon_legacy_syscall_base + 1;
+pub const SYS_IPC_SEND: u64 = ssdt.zircon_legacy_syscall_base + 2;
+pub const SYS_IPC_RECEIVE: u64 = ssdt.zircon_legacy_syscall_base + 3;
+pub const SYS_MAP_MEMORY: u64 = ssdt.zircon_legacy_syscall_base + 4;
+pub const SYS_UNMAP_MEMORY: u64 = ssdt.zircon_legacy_syscall_base + 5;
+pub const SYS_EXIT_PROCESS: u64 = ssdt.zircon_legacy_syscall_base + 6;
+pub const SYS_OPEN_HANDLE: u64 = ssdt.zircon_legacy_syscall_base + 7;
+pub const SYS_CLOSE_HANDLE: u64 = ssdt.zircon_legacy_syscall_base + 8;
+pub const SYS_WAIT_OBJECT: u64 = ssdt.zircon_legacy_syscall_base + 9;
+pub const SYS_CREATE_PORT: u64 = ssdt.zircon_legacy_syscall_base + 10;
+pub const SYS_CONNECT_PORT: u64 = ssdt.zircon_legacy_syscall_base + 11;
+pub const SYS_GET_PID: u64 = ssdt.zircon_legacy_syscall_base + 12;
+pub const SYS_YIELD: u64 = ssdt.zircon_legacy_syscall_base + 13;
+pub const SYS_DEBUG_PRINT: u64 = ssdt.zircon_legacy_syscall_base + 14;
+
+fn isLegacyZircon(syscall_no: u64) bool {
+    return syscall_no >= ssdt.zircon_legacy_syscall_base and
+        syscall_no < ssdt.zircon_legacy_syscall_base + 16;
+}
+
+fn legacyOrdinal(syscall_no: u64) u64 {
+    return syscall_no - ssdt.zircon_legacy_syscall_base;
+}
+
+/// 自用户栈读取第 N 个 syscall 扩展参数（N=0 → 第 5 个实参），偏移相对 SYSCALL 时的用户 RSP。
+fn userStackArg(frame: *InterruptFrame, nth_stack_arg: u8) ?u64 {
+    const proc = process.getCurrentProcess() orelse return null;
+    var asp = proc.address_space orelse return null;
+    const off: u64 = 0x28 + @as(u64, nth_stack_arg) * 8;
+    if (frame.rsp > 0xFFFF_FFFF_FFFF_F000) return null;
+    const va = frame.rsp +% off;
+    if (va < frame.rsp) return null;
+    const aligned = va & ~@as(u64, 7);
+    _ = asp.getPhysical(aligned) orelse return null;
+    // SAFETY: 已确认页映射存在；地址来自用户 RSP + 固定 Win64 syscall 栈偏移。
+    return @as(*const volatile u64, @ptrFromInt(va)).*;
+}
+
 pub fn dispatch(frame: *InterruptFrame) void {
     const syscall_no = frame.rax;
+
+    const result: i64 = if (isLegacyZircon(syscall_no))
+        dispatchLegacy(frame, legacyOrdinal(syscall_no))
+    else
+        dispatchNtSsdt(frame, @truncate(syscall_no));
+
+    frame.rax = @bitCast(result);
+}
+
+fn dispatchLegacy(frame: *InterruptFrame, ord: u64) i64 {
     const arg1 = frame.rdi;
     const arg2 = frame.rsi;
     const arg3 = frame.rdx;
-    _ = frame.r10;
-    _ = frame.r8;
-    _ = frame.r9;
-
-    const result: i64 = switch (syscall_no) {
-        SYS_CREATE_PROCESS => handleCreateProcess(arg1),
-        SYS_CREATE_THREAD => handleCreateThread(arg1, arg2),
-        SYS_IPC_SEND => handleIpcSend(arg1, arg2, arg3),
-        SYS_IPC_RECEIVE => handleIpcReceive(arg1),
-        SYS_MAP_MEMORY => handleMapMemory(arg1, arg2, arg3),
-        SYS_UNMAP_MEMORY => handleUnmapMemory(arg1),
-        SYS_EXIT_PROCESS => handleExitProcess(arg1),
-        SYS_OPEN_HANDLE => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
-        SYS_CLOSE_HANDLE => handleCloseHandle(arg1),
-        SYS_WAIT_OBJECT => STATUS_SUCCESS,
-        SYS_CREATE_PORT => handleCreatePort(arg1, arg2),
-        SYS_CONNECT_PORT => handleConnectPort(arg1, arg2),
-        SYS_GET_PID => @intCast(process.getCurrentPid()),
-        SYS_YIELD => blk: {
+    return switch (ord) {
+        0 => handleCreateProcess(arg1),
+        1 => handleCreateThread(arg1, arg2),
+        2 => handleIpcSend(arg1, arg2, arg3),
+        3 => handleIpcReceive(arg1),
+        4 => handleMapMemory(arg1, arg2, arg3),
+        5 => handleUnmapMemory(arg1),
+        6 => handleExitProcess(arg1),
+        7 => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
+        8 => handleCloseHandle(arg1),
+        9 => STATUS_SUCCESS,
+        10 => handleCreatePort(arg1, arg2),
+        11 => handleConnectPort(arg1, arg2),
+        12 => @intCast(process.getCurrentPid()),
+        13 => blk: {
             const scheduler = @import("../../ke/scheduler.zig");
             scheduler.yield();
             break :blk 0;
         },
-        SYS_DEBUG_PRINT => handleDebugPrint(arg1, arg2),
+        14 => handleDebugPrint(arg1, arg2),
         else => blk: {
-            klog.warn("Unknown syscall %u", .{syscall_no});
+            klog.warn("Unknown legacy syscall ord %u", .{ord});
             break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
         },
     };
+}
 
-    frame.rax = @bitCast(result);
+fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
+    const p1 = frame.r10;
+    const p2 = frame.rdx;
+    const p3 = frame.r8;
+    const p4 = frame.r9;
+
+    return switch (idx) {
+        ssdt.NtWaitForSingleObject => STATUS_SUCCESS,
+        ssdt.NtAllocateVirtualMemory => blk: {
+            const a5 = userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const a6 = userStackArg(frame, 1) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const st = ntdll.NtAllocateVirtualMemory(
+                p1,
+                @ptrFromInt(p2),
+                p3,
+                @ptrFromInt(p4),
+                @truncate(a5),
+                @truncate(a6),
+            );
+            break :blk ntResult(st);
+        },
+        ssdt.NtFreeVirtualMemory => blk: {
+            const st = ntdll.NtFreeVirtualMemory(
+                p1,
+                @ptrFromInt(p2),
+                @ptrFromInt(p3),
+                @truncate(p4),
+            );
+            break :blk ntResult(st);
+        },
+        ssdt.NtQuerySystemInformation => blk: {
+            const len: u32 = @truncate(p3);
+            const buf_ptr = p2;
+            if (buf_ptr == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            const rl: *u32 = @ptrFromInt(p4);
+            const buf: [*]u8 = @ptrFromInt(buf_ptr);
+            const st = ntdll.NtQuerySystemInformation(@truncate(p1), buf[0..len], rl);
+            break :blk ntResult(st);
+        },
+        ssdt.NtCreateFile => blk: {
+            const io = p4;
+            const alloc_sz = userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const fa = userStackArg(frame, 1) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const sh = userStackArg(frame, 2) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const disp = userStackArg(frame, 3) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const opt = userStackArg(frame, 4) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const ea = userStackArg(frame, 5) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const ealen: u32 = @truncate(userStackArg(frame, 6) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION));
+            const st = ntdll.NtCreateFile(
+                @ptrFromInt(p1),
+                @truncate(p2),
+                @ptrFromInt(p3),
+                @ptrFromInt(io),
+                alloc_sz,
+                @truncate(fa),
+                @truncate(sh),
+                @truncate(disp),
+                @truncate(opt),
+                @ptrFromInt(ea),
+                ealen,
+            );
+            break :blk ntResult(st);
+        },
+        ssdt.NtClose => handleCloseHandle(p1),
+        ssdt.NtYieldExecution => blk: {
+            const scheduler = @import("../../ke/scheduler.zig");
+            scheduler.yield();
+            break :blk 0;
+        },
+        ssdt.NtTerminateProcess => ntResult(ntdll.NtTerminateProcess(p1, @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
+        ssdt.NtCreateThread => blk: {
+            const st = ntdll.NtCreateThread(@ptrFromInt(p1), @truncate(p2));
+            break :blk ntResult(st);
+        },
+        ssdt.NtReadFile, ssdt.NtWriteFile => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
+        ssdt.NtUserGetMessage, ssdt.NtUserPeekMessage => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
+        else => blk: {
+            klog.warn("Unknown NT syscall idx 0x%x", .{idx});
+            break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+        },
+    };
 }
 
 fn handleIpcSend(sender: u64, receiver: u64, opcode: u64) i64 {

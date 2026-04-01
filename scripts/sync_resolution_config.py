@@ -7,7 +7,7 @@ Priority:
   2) build.conf 中首个未注释行 RESOLUTION=WxHxdepth
 
 Writes:
-  - config/*.conf and src/config/*.conf  ([resolution], boot grub/uefi, system [display] default_*)
+  - src/config/*.conf  ([resolution], boot grub/uefi, system [display] default_*)
   - build/tmp/zircon_pref_fb.h          (LoongArch C EFI stub #include)
   - build/tmp/kernel_pref_fb_wh.txt     (two lines: width, height)
 
@@ -25,9 +25,9 @@ BUILD_CONF = ROOT / "build.conf"
 TMP_DIR = ROOT / "build" / "tmp"
 PREF_FB_H = TMP_DIR / "zircon_pref_fb.h"
 KERNEL_PREF_FB_WH = TMP_DIR / "kernel_pref_fb_wh.txt"
-DESKTOP_PATHS = (ROOT / "config" / "desktop.conf", ROOT / "src" / "config" / "desktop.conf")
-BOOT_PATHS = (ROOT / "config" / "boot.conf", ROOT / "src" / "config" / "boot.conf")
-SYSTEM_PATHS = (ROOT / "config" / "system.conf", ROOT / "src" / "config" / "system.conf")
+DESKTOP_PATHS = (ROOT / "src" / "config" / "desktop.conf",)
+BOOT_PATHS = (ROOT / "src" / "config" / "boot.conf",)
+SYSTEM_PATHS = (ROOT / "src" / "config" / "system.conf",)
 
 
 def parse_resolution_triple(s: str) -> tuple[int, int, int]:
@@ -166,7 +166,7 @@ def main() -> int:
 
     src = "ZIRCON_RESOLUTION" if os.environ.get("ZIRCON_RESOLUTION", "").strip() else "build.conf"
     print(
-        f"Synced resolution {w}x{h}x{d} (from {src}) → desktop/boot/system.conf + "
+        f"Synced resolution {w}x{h}x{d} (from {src}) → src/config/*.conf + "
         f"{PREF_FB_H.relative_to(ROOT)} + {KERNEL_PREF_FB_WH.relative_to(ROOT)}"
     )
     return 0

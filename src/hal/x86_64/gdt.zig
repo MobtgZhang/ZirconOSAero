@@ -30,8 +30,14 @@ pub const Tss = extern struct {
 
 pub const KERNEL_CS: u16 = 0x08;
 pub const KERNEL_DS: u16 = 0x10;
-pub const USER_CS: u16 = 0x1B;
-pub const USER_DS: u16 = 0x23;
+/// Ring-3 **data / SS**（GDT 项 3）。须比 `USER_CS` 小 8，以满足 `SYSRET` 的 `SS=STAR_hi+8`、`CS=STAR_hi+16` 布局（Intel SDM）。
+pub const USER_SS: u16 = 0x1B;
+/// Ring-3 **code**（GDT 项 4）。须等于 `USER_SS + 8`。
+pub const USER_CS: u16 = 0x23;
+/// 用户数据段选择子（与 SS 相同档位的 ring-3 数据）。
+pub const USER_DS: u16 = USER_SS;
+/// 写入 `IA32_STAR` 高 16 位：`USER_SS == sysret_base + 8`、`USER_CS == sysret_base + 16`。
+pub const IA32_STAR_SYSRET_BASE: u16 = USER_SS -% 8;
 pub const TSS_SEL: u16 = 0x28;
 
 const GDT_ENTRIES = 7;
@@ -61,8 +67,9 @@ pub fn init(kernel_stack: u64) void {
     gdt[0] = .{};
     gdt[1] = makeEntry(0, 0xFFFFF, 0x9A, 0xA);
     gdt[2] = makeEntry(0, 0xFFFFF, 0x92, 0xC);
-    gdt[3] = makeEntry(0, 0xFFFFF, 0xFA, 0xA);
-    gdt[4] = makeEntry(0, 0xFFFFF, 0xF2, 0xC);
+    // 顺序：先用户 **数据**（SS），后用户 **代码**（CS），以满足 SYSRET 对选择子 +8/+16 的约定。
+    gdt[3] = makeEntry(0, 0xFFFFF, 0xF2, 0xC);
+    gdt[4] = makeEntry(0, 0xFFFFF, 0xFA, 0xA);
 
     setupTss(kernel_stack);
 

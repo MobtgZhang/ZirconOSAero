@@ -4,6 +4,8 @@ const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const klog = @import("../rtl/klog.zig");
 const scheduler = @import("scheduler.zig");
+const process = @import("../ps/process.zig");
+const dpc = @import("dpc.zig");
 
 pub const InterruptFrame = extern struct {
     r15: u64,
@@ -87,6 +89,18 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
         asm volatile ("mov %%cr2, %[cr2]"
             : [cr2] "=r" (cr2)
         );
+        const user_fault = (frame.error_code & 4) != 0;
+        if (user_fault) {
+            if (process.getCurrentProcess()) |proc| {
+                if (proc.address_space) |_| {
+                    var asp = proc.address_space.?;
+                    if (@import("../mm/vm.zig").handleLazyCommitFault(&asp, cr2)) {
+                        proc.address_space = asp;
+                        return;
+                    }
+                }
+            }
+        }
         klog.err("Page Fault at RIP=0x%x, addr=0x%x, err=0x%x", .{
             frame.rip, cr2, frame.error_code,
         });
@@ -108,22 +122,19 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         0 => {
             scheduler.tick();
             if (builtin.target.cpu.arch == .x86_64) {
-                const hub = @import("../drivers/input/input_hub.zig");
-                hub.pollAll();
+                dpc.requestInputFlushDeferred();
             }
         },
         1 => {
             if (builtin.target.cpu.arch == .x86_64) {
-                const hub = @import("../drivers/input/input_hub.zig");
-                hub.pollAll();
+                dpc.requestInputFlushDeferred();
             } else {
                 arch.handleKeyboardIrq();
             }
         },
         12 => {
             if (builtin.target.cpu.arch == .x86_64) {
-                const hub = @import("../drivers/input/input_hub.zig");
-                hub.pollAll();
+                dpc.requestInputFlushDeferred();
             } else {
                 arch.handleMouseIrq();
             }
@@ -131,6 +142,9 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         else => {},
     }
     arch.sendEoi(irq);
+    if (builtin.target.cpu.arch == .x86_64) {
+        dpc.drainPending();
+    }
 }
 
 fn handleSyscall(frame: *InterruptFrame) void {

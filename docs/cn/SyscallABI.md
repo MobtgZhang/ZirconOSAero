@@ -3,25 +3,26 @@
 ## x86_64：当前实现
 
 - **入口**：
-  - **`int 0x80`（向量 128）**：[`syscall_entry.s`](../../src/arch/x86_64/syscall_entry.s)。
-  - **`syscall` 指令**（CPU 支持 `CPUID.80000001H:EDX[11]` 且 GDT 已初始化内核栈时）：[`syscall_lstar.s`](../../src/arch/x86_64/syscall_lstar.s) + [`syscall_msr.zig`](../../src/arch/x86_64/syscall_msr.zig) 配置 `IA32_LSTAR` / `IA32_STAR` / `IA32_FMASK`；与向量 128 **共用** `syscall.dispatch`。
-- **约定**：`rax` = 调用号；`rdi, rsi, rdx, r10, r8, r9` = 参数（`syscall` 路径下 **破坏 `rcx`、`r11`**，与 AMD64 syscall 约定一致）；返回值在 `rax`（以 64 位有符号扩展承载 `NTSTATUS`）。
-- **编号表**：[`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig) 中 `SYS_*` 常量（0–14）。**不是** Windows 内核 SSDT 编号；服务号映射路线图见 [SSDT_Roadmap.md](SSDT_Roadmap.md)。
+  - **`int 0x80`（向量 128）**：[`syscall_entry.s`](../../src/arch/x86_64/syscall_entry.s)，返回 **`iretq`**。
+  - **`syscall` 指令**：[`syscall_lstar.s`](../../src/arch/x86_64/syscall_lstar.s) + [`syscall_msr.zig`](../../src/arch/x86_64/syscall_msr.zig) 配置 `IA32_LSTAR` / `IA32_STAR` / `IA32_FMASK`；处理完毕后以 **`sysretq`** 返回用户态（GDT 中用户 **SS** 须比用户 **CS** 小 8，见 [`gdt.zig`](../../src/hal/x86_64/gdt.zig)）。
+- **服务号**（`RAX`）：
+  - **NT 6.1 x64 SSDT 子集**：常量见 [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)；AMD64 约定第 **1** 参在 **`R10`**，第 2–4 参为 **`RDX`/`R8`/`R9`**，其余在用户栈（第 5 参相对 SYSCALL 时 `RSP` 常为 `+0x28`）。索引来源：公开构建版本 syscall 表（如社区维护的 `j00ru/windows-syscalls`），本仓库仅实现子集。
+  - **Zircon 遗留**：`0x0010_0000 .. 0x0010_000F`，参数为 **`RDI`/`RSI`/`RDX`**（兼容旧测试与 `int 0x80` 文档）；见 `syscall.zig` 中 `SYS_*` 别名。
+- **返回值**：`RAX` 承载 `NTSTATUS`（有符号 32 位零扩展）。
 
 ## 与 Windows NT 6.1 x64 的差异
 
-在 **真实 Windows 7 x64** 上，用户态通常通过 **`syscall` 指令** 进入内核，且服务号为 **Windows 构建版本对应的 SSDT 索引**。本仓库为独立内核，**默认不包含** 与 Windows 一致的 syscall 号表。
-
 | 兼容模式 | 说明 |
 |----------|------|
-| **A. 自带 Native API（默认）** | 用户态仅链接本仓库提供的 [`src/libs/ntdll.zig`](../../src/libs/ntdll.zig)（或等价存根），经上述 `SYS_*` 陷入内核。 |
-| **B. 二进制兼容（未实现）** | 若需加载 **微软 `ntdll.dll`**，须实现 Windows 7 x64 的 syscall 约定与完整服务表，并配套合法测试镜像；见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与项目路线图。 |
+| **A. 本仓库 ntdll + 上表 SSDT 子集** | 用户态可经 `syscall` 使用已列出的服务号；未列出服务返回 `STATUS_INVALID_PARAMETER`。 |
+| **B. 加载微软 `ntdll.dll`** | 仍须服务表与 **7600/7601** 构建完全一致及更多 Win32k 项；见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)。 |
 
 ## 其他架构
 
-`aarch64`、`riscv64`、`loongarch64`、`mips64el`：**不** 声称与 Windows syscall 兼容；各自陷阱 ABI 应在对应 `arch/*/syscall*` 或中断模块中单独文档化（当前部分架构为 stub）。
+`aarch64`、`riscv64`、`loongarch64`、`mips64el`：**不** 声称与 Windows syscall 兼容；陷阱 ABI 在对应 `arch/*/interrupt*` 中单独说明。
 
 ## 相关
 
-- 计时精度（PIT 以上）：[TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md)
-- 服务号长期策略：[SSDT_Roadmap.md](SSDT_Roadmap.md)
+- [SSDT_Roadmap.md](SSDT_Roadmap.md) — 历史与扩展策略  
+- [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)  
+- [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md)

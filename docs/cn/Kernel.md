@@ -78,21 +78,21 @@ src/
 
 | 编号 | 名称 | 功能 |
 |------|------|------|
-| 0 | SYS_CREATE_PROCESS | 创建进程（`rdi` = `FrameAllocator*`） |
-| 1 | SYS_CREATE_THREAD | 分配线程 ID |
-| 2 | SYS_IPC_SEND | 发送 IPC 消息 |
-| 3 | SYS_IPC_RECEIVE | 接收 IPC |
-| 4 | SYS_MAP_MEMORY | 映射用户页（`rdi` 须页对齐） |
-| 5 | SYS_UNMAP_MEMORY | 解除 `rdi` 虚拟页映射 |
-| 6 | SYS_EXIT_PROCESS | 以 `rdi` 为退出码终止进程 |
-| 7 | SYS_OPEN_HANDLE | 未实现（返回 `STATUS_NOT_IMPLEMENTED`） |
-| 8 | SYS_CLOSE_HANDLE | 关闭当前进程句柄 |
-| 9 | SYS_WAIT_OBJECT | 桩：立即成功 |
-| 10 | SYS_CREATE_PORT | 创建 LPC 端口，返回端口 id |
-| 11 | SYS_CONNECT_PORT | 连接命名端口，返回客户端端口 id |
-| 12 | SYS_GET_PID | 当前进程 ID |
-| 13 | SYS_YIELD | 主动让出 CPU |
-| 14 | SYS_DEBUG_PRINT | 将 `rdi` 起 `rsi` 字节输出到控制台 |
+| `0x0010_0000` | Zircon 遗留 0（原 syscall 0） | 创建进程（`rdi` = `FrameAllocator*`） |
+| `0x0010_0001` | 遗留 1 | 分配线程 ID |
+| `0x0010_0002` | 遗留 2 | 发送 IPC 消息 |
+| `0x0010_0003` | 遗留 3 | 接收 IPC |
+| `0x0010_0004` | 遗留 4 | 映射用户页（`rdi` 须页对齐） |
+| `0x0010_0005` | 遗留 5 | 解除 `rdi` 虚拟页映射 |
+| `0x0010_0006` | 遗留 6 | 以 `rdi` 为退出码终止进程 |
+| `0x0010_0007` | 遗留 7 | 未实现（`STATUS_NOT_IMPLEMENTED`） |
+| `0x0010_0008` | 遗留 8 | 关闭当前进程句柄 |
+| `0x0010_0009` | 遗留 9 | 桩：立即成功 |
+| `0x0010_000A` | 遗留 10 | 创建 LPC 端口，返回端口 id |
+| `0x0010_000B` | 遗留 11 | 连接命名端口，返回客户端端口 id |
+| `0x0010_000C` | 遗留 12 | 当前进程 ID |
+| `0x0010_000D` | 遗留 13 | 主动让出 CPU |
+| `0x0010_000E` | 遗留 14 | 将 `rdi` 起 `rsi` 字节输出到控制台 |
 
 ## 3. 内存管理 (mm/)
 

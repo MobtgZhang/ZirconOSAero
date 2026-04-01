@@ -2,6 +2,7 @@
 //! Phase 10: Window management, message queue, window classes,
 //! message loop, input processing, and basic UI primitives.
 
+const std = @import("std");
 const klog = @import("../../rtl/klog.zig");
 const kernel32 = @import("../../libs/kernel32.zig");
 const build_options = @import("build_options");
@@ -85,6 +86,26 @@ pub const WM_RBUTTONDOWN: u32 = 0x0204;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_USER: u32 = 0x0400;
 pub const WM_APP: u32 = 0x8000;
+pub const WM_SYSCOMMAND: u32 = 0x0112;
+pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
+pub const WM_EXITSIZEMOVE: u32 = 0x0232;
+
+pub const SC_MOVE: WPARAM = 0xF010;
+pub const SC_SIZE: WPARAM = 0xF000;
+pub const SC_CLOSE: WPARAM = 0xF060;
+
+pub const SWP_NOSIZE: u32 = 0x0001;
+pub const SWP_NOMOVE: u32 = 0x0002;
+pub const SWP_NOZORDER: u32 = 0x0004;
+pub const SWP_NOACTIVATE: u32 = 0x0010;
+pub const SWP_SHOWWINDOW: u32 = 0x0040;
+pub const SWP_HIDEWINDOW: u32 = 0x0080;
+
+pub const PM_NOREMOVE: u32 = 0x0000;
+pub const PM_REMOVE: u32 = 0x0001;
+pub const PM_NOYIELD: u32 = 0x0002;
+
+pub const VK_ESCAPE: WPARAM = 0x1B;
 
 // DWM 广播（与 MSDN 常量值一致；Shell 感知桌面合成）
 pub const WM_DWMCOMPOSITIONCHANGED: u32 = 0x031E;
@@ -250,6 +271,11 @@ pub const PAINTSTRUCT = struct {
     reserved: [32]u8 = [_]u8{0} ** 32,
 };
 
+fn msgMatchesFilter(message: u32, min: u32, max: u32) bool {
+    if (min == 0 and max == 0) return true;
+    return message >= min and message <= max;
+}
+
 pub const CREATESTRUCTA = struct {
     create_params: u64 = 0,
     instance: HINSTANCE = 0,
@@ -301,6 +327,8 @@ const Window = struct {
     timer_id: u32 = 0,
     timer_interval: u32 = 0,
     timer_ticks: u32 = 0,
+    /// `BeginPaint` 活跃：合成器可跳过覆盖客户区（与 `WM_PAINT` 懒惰语义配合的钩子）。
+    app_painting: bool = false,
 
     pub fn getTitle(self: *const Window) []const u8 {
         return self.title[0..self.title_len];
@@ -331,6 +359,34 @@ const Window = struct {
         self.msg_head = (self.msg_head + 1) % MAX_MSG_QUEUE;
         self.msg_count -= 1;
         return msg;
+    }
+
+    /// `WM_QUIT` 始终可取；否则在 `(min,max)` 非 `(0,0)` 时轮转队列以找到首条匹配（简化版过滤语义）。
+    pub fn getMessageFiltered(self: *Window, min: u32, max: u32) ?MSG {
+        if (self.msg_count == 0) return null;
+        const n = self.msg_count;
+        var step: usize = 0;
+        while (step < n) : (step += 1) {
+            const m = self.getMessage() orelse return null;
+            if (m.message == WM_QUIT or msgMatchesFilter(m.message, min, max)) {
+                return m;
+            }
+            _ = self.postMessage(m.message, m.wparam, m.lparam);
+        }
+        return null;
+    }
+
+    pub fn peekMessageFiltered(self: *Window, min: u32, max: u32) ?MSG {
+        if (self.msg_count == 0) return null;
+        var i: usize = 0;
+        while (i < self.msg_count) : (i += 1) {
+            const idx = (self.msg_head + i) % MAX_MSG_QUEUE;
+            const m = self.msg_queue[idx];
+            if (m.message == WM_QUIT or msgMatchesFilter(m.message, min, max)) {
+                return m;
+            }
+        }
+        return null;
     }
 };
 
@@ -636,16 +692,55 @@ pub fn GetClientRect(hwnd: HWND, rect: *RECT) BOOL {
     return TRUE;
 }
 
-pub fn SetWindowPos(hwnd: HWND, _: HWND, x: i32, y: i32, cx: i32, cy: i32, _: u32) BOOL {
+fn bringHwndToTop(hw: HWND) void {
+    var i: usize = 0;
+    while (i < window_count) : (i += 1) {
+        if (windows[i].hwnd == hw and windows[i].is_valid) {
+            var j = i;
+            while (j + 1 < window_count) : (j += 1) {
+                std.mem.swap(Window, &windows[j], &windows[j + 1]);
+            }
+            break;
+        }
+    }
+}
+
+pub fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, cx: i32, cy: i32, flags: u32) BOOL {
     const wnd = findWindow(hwnd) orelse return FALSE;
-    wnd.rect = .{
-        .left = x,
-        .top = y,
-        .right = x + cx,
-        .bottom = y + cy,
-    };
-    wnd.client_rect.right = cx;
-    wnd.client_rect.bottom = cy;
+    const w0 = wnd.rect.width();
+    const h0 = wnd.rect.height();
+
+    if ((flags & SWP_NOMOVE) == 0) {
+        wnd.rect.left = x;
+        wnd.rect.top = y;
+        if ((flags & SWP_NOSIZE) != 0) {
+            wnd.rect.right = wnd.rect.left + w0;
+            wnd.rect.bottom = wnd.rect.top + h0;
+        }
+    }
+    if ((flags & SWP_NOSIZE) == 0) {
+        wnd.rect.right = wnd.rect.left + cx;
+        wnd.rect.bottom = wnd.rect.top + cy;
+        wnd.client_rect.right = cx;
+        wnd.client_rect.bottom = cy;
+    }
+
+    if ((flags & SWP_NOZORDER) == 0) {
+        if (insert_after == HWND_TOP or insert_after == HWND_TOPMOST) {
+            bringHwndToTop(hwnd);
+        }
+    }
+
+    if ((flags & SWP_NOACTIVATE) == 0 and (flags & SWP_HIDEWINDOW) == 0) {
+        _ = SetActiveWindow(hwnd);
+    }
+    if ((flags & SWP_SHOWWINDOW) != 0) {
+        wnd.is_visible = true;
+    }
+    if ((flags & SWP_HIDEWINDOW) != 0) {
+        wnd.is_visible = false;
+    }
+
     _ = wnd.postMessage(WM_MOVE, 0, 0);
     _ = wnd.postMessage(WM_SIZE, 0, 0);
     return TRUE;
@@ -736,10 +831,10 @@ pub fn SetProcessDesktopByIndex(pid: DWORD, desktop_index: DWORD) BOOL {
 
 // ── Message Loop ──
 
-pub fn GetMessageA(msg: *MSG, hwnd: HWND, _: u32, _: u32) BOOL {
+pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
     if (hwnd != 0) {
         const wnd = findWindow(hwnd) orelse return FALSE;
-        if (wnd.getMessage()) |m| {
+        if (wnd.getMessageFiltered(min, max)) |m| {
             msg.* = m;
             total_messages_processed += 1;
             return if (m.message != WM_QUIT) TRUE else FALSE;
@@ -747,7 +842,7 @@ pub fn GetMessageA(msg: *MSG, hwnd: HWND, _: u32, _: u32) BOOL {
     } else {
         for (windows[0..window_count]) |*wnd| {
             if (!wnd.is_valid) continue;
-            if (wnd.getMessage()) |m| {
+            if (wnd.getMessageFiltered(min, max)) |m| {
                 msg.* = m;
                 total_messages_processed += 1;
                 return if (m.message != WM_QUIT) TRUE else FALSE;
@@ -758,20 +853,35 @@ pub fn GetMessageA(msg: *MSG, hwnd: HWND, _: u32, _: u32) BOOL {
     return FALSE;
 }
 
-pub fn PeekMessageA(msg: *MSG, hwnd: HWND, _: u32, _: u32, remove: u32) BOOL {
-    const PM_REMOVE: u32 = 0x0001;
+pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
     if (hwnd != 0) {
         const wnd = findWindow(hwnd) orelse return FALSE;
         if ((remove & PM_REMOVE) != 0) {
-            if (wnd.getMessage()) |m| {
+            if (wnd.getMessageFiltered(min, max)) |m| {
                 msg.* = m;
                 total_messages_processed += 1;
                 return TRUE;
             }
         } else {
-            if (wnd.peekMessage()) |m| {
+            if (wnd.peekMessageFiltered(min, max)) |m| {
                 msg.* = m;
                 return TRUE;
+            }
+        }
+    } else {
+        for (windows[0..window_count]) |*wnd| {
+            if (!wnd.is_valid) continue;
+            if ((remove & PM_REMOVE) != 0) {
+                if (wnd.getMessageFiltered(min, max)) |m| {
+                    msg.* = m;
+                    total_messages_processed += 1;
+                    return TRUE;
+                }
+            } else {
+                if (wnd.peekMessageFiltered(min, max)) |m| {
+                    msg.* = m;
+                    return TRUE;
+                }
             }
         }
     }
@@ -813,11 +923,14 @@ pub fn BeginPaint(hwnd: HWND, ps: *PAINTSTRUCT) HDC {
     ps.paint_rect = wnd.client_rect;
     ps.hdc = hwnd;
     wnd.needs_paint = false;
+    wnd.app_painting = true;
     return ps.hdc;
 }
 
 pub fn EndPaint(hwnd: HWND, _: *const PAINTSTRUCT) BOOL {
-    _ = hwnd;
+    if (findWindow(hwnd)) |w| {
+        w.app_painting = false;
+    }
     return TRUE;
 }
 
@@ -949,6 +1062,59 @@ fn pointFromLParam(lp: LPARAM) POINT {
     };
 }
 
+/// 与 MSDN `DwmDefWindowProc` 对齐的占位：扩展 NC / 玻璃命中由 DWM 处理时可在此返回 TRUE。
+pub fn DwmDefWindowProcA(_: HWND, _: u32, _: WPARAM, _: LPARAM) BOOL {
+    return FALSE;
+}
+
+fn runModalMoveLoop(hwnd: HWND) LRESULT {
+    const wnd = findWindow(hwnd) orelse return 0;
+    const saved = wnd.rect;
+    _ = PostMessageA(hwnd, WM_ENTERSIZEMOVE, 0, 0);
+    const prev_cap = SetCapture(hwnd);
+    defer {
+        _ = ReleaseCapture();
+        if (prev_cap != 0) _ = SetCapture(prev_cap);
+        _ = PostMessageA(hwnd, WM_EXITSIZEMOVE, 0, 0);
+    }
+    var have_last = false;
+    var last_pt: POINT = undefined;
+    while (true) {
+        var msg: MSG = undefined;
+        if (GetMessageA(&msg, hwnd, 0, 0) == FALSE) break;
+        switch (msg.message) {
+            WM_MOUSEMOVE => {
+                const pt = pointFromLParam(msg.lparam);
+                if (!have_last) {
+                    last_pt = pt;
+                    have_last = true;
+                    continue;
+                }
+                const dx = pt.x - last_pt.x;
+                const dy = pt.y - last_pt.y;
+                last_pt = pt;
+                wnd.rect.left += dx;
+                wnd.rect.right += dx;
+                wnd.rect.top += dy;
+                wnd.rect.bottom += dy;
+                _ = PostMessageA(hwnd, WM_MOVING, 0, 0);
+            },
+            WM_LBUTTONUP => break,
+            WM_KEYDOWN => {
+                if (msg.wparam == VK_ESCAPE) {
+                    wnd.rect = saved;
+                    break;
+                }
+            },
+            else => {
+                _ = TranslateMessage(&msg);
+                _ = DispatchMessageA(&msg);
+            },
+        }
+    }
+    return 0;
+}
+
 fn defNcHitTestForWindow(wnd: *const Window, screen_x: i32, screen_y: i32) LRESULT {
     const r = wnd.rect;
     if (screen_x < r.left or screen_y < r.top or screen_x >= r.right or screen_y >= r.bottom)
@@ -998,16 +1164,21 @@ fn defNcHitTestForWindow(wnd: *const Window, screen_x: i32, screen_y: i32) LRESU
 pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRESULT {
     switch (msg) {
         WM_NCHITTEST => {
+            _ = DwmDefWindowProcA(hwnd, msg, wparam, lparam);
             const wnd = findWindow(hwnd) orelse return HTNOWHERE;
             const pt = pointFromLParam(lparam);
             return defNcHitTestForWindow(wnd, pt.x, pt.y);
         },
         WM_NCLBUTTONDOWN => {
             if (wparam == @as(WPARAM, @intCast(HTCAPTION))) {
-                if (findWindow(hwnd)) |w| {
-                    // 真实 Windows 上 `lParam` 为 `RECT*`；此处投递占位消息供消息泵/契约测试。
-                    _ = w.postMessage(WM_MOVING, 1, 0);
-                }
+                _ = PostMessageA(hwnd, WM_SYSCOMMAND, SC_MOVE, lparam);
+            }
+            return 0;
+        },
+        WM_SYSCOMMAND => {
+            const cmd = wparam & ~@as(WPARAM, 0x0F);
+            if (cmd == SC_MOVE) {
+                return runModalMoveLoop(hwnd);
             }
             return 0;
         },

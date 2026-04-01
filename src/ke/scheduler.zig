@@ -58,7 +58,7 @@ fn createIdleThread() ?usize {
     threads[idx] = .{};
     threads[idx].id = idx;
     threads[idx].state = .running;
-    threads[idx].priority = 0;
+    threads[idx].priority = 4;
 
     const idle_name = "idle";
     @memcpy(threads[idx].name[0..idle_name.len], idle_name);
@@ -78,7 +78,7 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
     threads[idx].id = idx;
     threads[idx].process_id = process_id;
     threads[idx].state = .ready;
-    threads[idx].priority = 1;
+    threads[idx].priority = 8;
 
     const stack_base = @intFromPtr(&threads[idx].stack);
     const stack_end = stack_base + STACK_SIZE;

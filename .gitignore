@@ -1,6 +1,8 @@
 .zig-cache/
 zig-out/
 build/
+mdcs/
+run-iso.sh
 firmware/
 gnu-efi/
 *.o

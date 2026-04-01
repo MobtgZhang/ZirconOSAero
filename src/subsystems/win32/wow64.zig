@@ -6,6 +6,7 @@
 //! 本层 `translateSyscall32to64` 仍使用 **32 位 PE 常见 syscall 号** 演示 thunk；与 SysWOW64 转 64 位 `syscall` 的真实映射表不对齐，见 `docs/cn/SyscallABI.md`。
 //!
 //! 模块化：`wow64/types.zig`、`wow64/thunk.zig`、`wow64/redirect.zig`。
+//! **x86 原生服务号**（与 x64 SSDT 不同）公开子集：`wow64/ssdt_x86_win7_sp1.zig`（j00ru x86 `nt-per-system.json` Win7 SP1）。
 
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");
@@ -16,6 +17,7 @@ const console_mod = @import("console.zig");
 const types = @import("wow64/types.zig");
 const thunk = @import("wow64/thunk.zig");
 const redirect = @import("wow64/redirect.zig");
+pub const ssdt_x86_win7_sp1 = @import("wow64/ssdt_x86_win7_sp1.zig");
 
 pub const WOW64_VERSION = types.WOW64_VERSION;
 pub const WOW64_MAX_ADDR = types.WOW64_MAX_ADDR;

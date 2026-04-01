@@ -546,6 +546,7 @@ pub const CmdShell = struct {
         _ = con.writeOutput("Total Processes:           ");
         con.writeLine(formatUint(&count_buf, process.getProcessCount()));
 
+        // 仅系统信息展示用堆「已提交−live」近似值；新内核分配应走 mm/ex_pool.zig（Ex* 语义）。
         const heap = @import("../../mm/heap.zig");
         _ = con.writeOutput("Available Physical Memory: ");
         _ = con.writeOutput(formatUint(&count_buf, heap.freeBytes() / 1024));

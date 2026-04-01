@@ -175,4 +175,17 @@ pub const FrameAllocator = struct {
             addr += ps;
         }
     }
+
+    /// **单元测试专用**：将帧号 `0..num_frames` 标为可用（不经 multiboot）；勿在生产内核调用。
+    pub fn testSeedLinearFreeFrames(self: *FrameAllocator, num_frames: usize) void {
+        for (&self.bitmap) |*w| w.* = 0;
+        self.total_frames = num_frames;
+        self.used_frames = 0;
+        self.mb_handoff_start = 0;
+        self.mb_handoff_end_exclusive = 0;
+        var f: usize = 0;
+        while (f < num_frames and f < MAX_PHYS_FRAMES) : (f += 1) {
+            self.setFree(f);
+        }
+    }
 };

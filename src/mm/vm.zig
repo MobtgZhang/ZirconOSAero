@@ -113,14 +113,28 @@ fn freeFrameForRelease(ctx: ?*anyopaque, phys: u64) void {
 }
 
 /// 释放进程 **用户半区** 页表子树与叶帧，并 `free` 顶层 PML4；调用方须将 `AddressSpace` 置为不再使用且 **不得** 再以该 CR3 运行。
+/// 调用方还须保证 **无** 仍在运行的线程持有该 `pml4_phys` 作为当前 CR3（见 `ps/process.zig` `terminateProcess` 与调度器配合）。
 pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     if (@hasDecl(paging, "releaseUserHalfAddressSpace")) {
         paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, @ptrCast(space.allocator));
     }
     space.reserved_count = 0;
+    @memset(&space.reserved_base, 0);
+    @memset(&space.reserved_pages, 0);
     space.section_view_count = 0;
+    @memset(&space.section_view_base, 0);
+    @memset(&space.section_view_pages, 0);
+    @memset(&space.section_view_obj, 0);
     space.vma_len = 0;
+    @memset(&space.vma_base, 0);
+    @memset(&space.vma_pages, 0);
+    @memset(&space.vma_user, false);
+    @memset(&space.vma_writable, false);
     space.allocator.free(space.pml4_phys);
+    if (builtin.cpu.arch == .x86_64) {
+        const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
+        tlb.requestGlobalFlushStub();
+    }
 }
 
 fn vmaRangeEnd(base: u64, num_pages: u32) u64 {

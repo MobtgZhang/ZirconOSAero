@@ -41,6 +41,7 @@ pub const Irp = struct {
     ioctl_code: u32 = 0,
     device_ptr: u64 = 0,
     flags: u32 = 0,
+    completion_routine: ?IrpCompletionRoutine = null,
 
     pub fn complete(self: *Irp, status: IoStatus, transferred: usize) void {
         self.status = status;
@@ -48,9 +49,25 @@ pub const Irp = struct {
     }
 };
 
-/// 与 WDK 中 `IoCompleteRequest` 公开语义对齐的最小子集：写回状态与传输字节数（无 IoReleaseCancelSpinLock 等）。
+/// 注册完成例程；在 `IoCompleteRequest` 末尾同步调用一次后自动清除（无多层完成例程链）。
+pub fn IoSetCompletionRoutine(irp: *Irp, routine: ?IrpCompletionRoutine) void {
+    irp.completion_routine = routine;
+}
+
+/// 与 WDK 中 `IoCompleteRequest` 公开语义对齐的最小子集：写回状态与传输字节数，并可选调用 `completion_routine`。
 pub fn IoCompleteRequest(irp: *Irp, status: IoStatus, transferred: usize) void {
     irp.complete(status, transferred);
+    if (irp.completion_routine) |cb| {
+        cb(irp);
+        irp.completion_routine = null;
+    }
+}
+
+/// 将 `upper` 设备附加到 `lower` 之下（NT 设备栈方向：I/O 自顶向下）；用于总线 FDO → PDO 最小演示路径。
+pub fn attachDeviceToDeviceStack(upper_idx: u32, lower_idx: u32) bool {
+    if (upper_idx >= device_count or lower_idx >= device_count) return false;
+    devices[upper_idx].attached_device = lower_idx;
+    return true;
 }
 
 pub const MAX_DEVICES: usize = 32;
@@ -89,6 +106,9 @@ pub const DeviceObject = struct {
 };
 
 pub const DriverDispatchFn = *const fn (*Irp) IoStatus;
+
+/// 与 WDK `PIO_COMPLETION_ROUTINE` 概念对齐的最小子集：在 `IoCompleteRequest` 之后调用一次。
+pub const IrpCompletionRoutine = *const fn (*Irp) void;
 
 pub const MAX_DRIVERS: usize = 24;
 

@@ -386,3 +386,19 @@ pub fn isObjectSignaled(object_ptr: u64) bool {
     const hdr = @as(*const ObjectHeader, @ptrFromInt(object_ptr));
     return hdr.signal_state;
 }
+
+/// 剥离 NT 风格对象路径常见前缀（`\??\`、`\\?\`、`\DosDevices\`），供注册表/VFS 解析复用。
+/// Ref: https://learn.microsoft.com/windows-hardware/drivers/kernel/object-path-syntax （概念层；clean-room 实现）。
+pub fn normalizeNtObjectPath(path: []const u8) []const u8 {
+    var p = path;
+    if (std.mem.startsWith(u8, p, "\\??\\")) {
+        p = p[4..];
+    } else if (std.mem.startsWith(u8, p, "\\\\?\\")) {
+        p = p[4..];
+    }
+    const dos = "\\DosDevices\\";
+    if (std.mem.startsWith(u8, p, dos)) {
+        p = p[dos.len..];
+    }
+    return p;
+}

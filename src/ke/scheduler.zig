@@ -118,13 +118,24 @@ pub fn tick() void {
 
     if (!scheduling_enabled or thread_count <= 1) return;
 
-    var next = (current_thread + 1) % thread_count;
-    var checked: usize = 0;
-    while (checked < thread_count) : (checked += 1) {
-        if (threads[next].state == .ready or threads[next].state == .running) {
+    var max_pri: u8 = 0;
+    var i: usize = 0;
+    while (i < thread_count) : (i += 1) {
+        const t = &threads[i];
+        if (t.state == .ready or t.state == .running) {
+            if (t.priority > max_pri) max_pri = t.priority;
+        }
+    }
+
+    var next: usize = current_thread;
+    var off: usize = 1;
+    while (off <= thread_count) : (off += 1) {
+        const idx = (current_thread + off) % thread_count;
+        const t = &threads[idx];
+        if ((t.state == .ready or t.state == .running) and t.priority == max_pri) {
+            next = idx;
             break;
         }
-        next = (next + 1) % thread_count;
     }
 
     if (next != current_thread and threads[next].state != .terminated) {

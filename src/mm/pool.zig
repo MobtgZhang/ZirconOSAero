@@ -2,13 +2,21 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/mm/pool.zig
-// Purpose: 带标签的小型池分配（固定档位 + 空闲链表），作为 bump heap 的补充；语义对齐 NonPagedPool 子集。
+// Purpose: 带标签的小型池分配（固定档位 + 空闲链表），作为 bump heap 的补充；对齐 **NonPagedPool** 与 **PagedPool** 的公开语义子集。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 // Ref: WDK — Pool Types / ExAllocatePoolWithTag (公开行为描述)
 
 const heap = @import("heap.zig");
+
+/// 与 WDK 中 `POOL_TYPE` 概念对齐的粗分（本内核尚未实现工作集换出；Paged 为 **逻辑** 分页池：同物理后备但单独统计，便于后续接 MM）。
+pub const PoolType = enum(u8) {
+    non_paged = 0,
+    paged = 1,
+};
+
+var paged_bytes_outstanding: usize = 0;
 
 const SLOT_COUNT: usize = 6;
 const slot_sizes: [SLOT_COUNT]usize = .{ 16, 32, 64, 128, 256, 512 };
@@ -25,6 +33,18 @@ fn sizeClassIndex(size: usize) ?usize {
         if (size <= slot_sizes[i]) return i;
     }
     return null;
+}
+
+/// 逻辑 **PagedPool**：当前与 NonPaged 共用同一后备；`paged_bytes_outstanding` 用于调试统计。
+pub fn allocatePaged(size: usize, tag: u32) ?[*]u8 {
+    const p = allocateNonPaged(size, tag) orelse return null;
+    paged_bytes_outstanding += size;
+    return p;
+}
+
+pub fn freePaged(ptr: [*]u8, size: usize, tag: u32) void {
+    freeNonPaged(ptr, size, tag);
+    paged_bytes_outstanding = if (paged_bytes_outstanding >= size) paged_bytes_outstanding - size else 0;
 }
 
 /// 从池或 bump 堆分配 `size` 字节（向上取到档位）；失败返回 null。

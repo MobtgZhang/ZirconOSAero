@@ -370,7 +370,7 @@ pub fn getOps() vfs.FsOps {
 }
 
 pub fn init() void {
-    ntfs_volume.format("ZirconOS-NTFS");
+    ntfs_volume.format("ZirconOSAero-NTFS");
 
     _ = ntfs_volume.createDir("Windows", MFT_RECORD_ROOT);
     _ = ntfs_volume.createDir("System32", MFT_RECORD_ROOT);

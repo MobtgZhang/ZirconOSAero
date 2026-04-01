@@ -585,7 +585,7 @@ pub fn GetModuleFileNameA(module: HMODULE, buffer: []u8) DWORD {
         @memcpy(buffer[0..copy_len], name[0..copy_len]);
         return @intCast(copy_len);
     }
-    const default_name = "zirconos.exe";
+    const default_name = "zirconaero.exe";
     const copy_len = @min(default_name.len, buffer.len);
     @memcpy(buffer[0..copy_len], default_name[0..copy_len]);
     return @intCast(copy_len);
@@ -607,7 +607,7 @@ pub fn GetEnvironmentVariableA(name: []const u8, buffer: []u8) DWORD {
         .{ .key = "SystemDrive", .value = "C:" },
         .{ .key = "COMPUTERNAME", .value = "ZIRCONOS" },
         .{ .key = "USERNAME", .value = "System" },
-        .{ .key = "OS", .value = "ZirconOS_NT" },
+        .{ .key = "OS", .value = "ZirconOSAero_NT61" },
         .{ .key = "PROCESSOR_ARCHITECTURE", .value = "AMD64" },
         .{ .key = "NUMBER_OF_PROCESSORS", .value = "1" },
         .{ .key = "COMSPEC", .value = "C:\\Windows\\System32\\cmd.exe" },

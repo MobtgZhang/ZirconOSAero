@@ -756,7 +756,7 @@ pub fn runGdiDemo() void {
     _ = Ellipse(hdc, 50, 50, 150, 120);
     _ = MoveToEx(hdc, 0, 0, null);
     _ = LineTo(hdc, 100, 100);
-    _ = TextOutA(hdc, 20, 20, "ZirconOS GDI");
+    _ = TextOutA(hdc, 20, 20, "ZirconOSAero GDI");
 
     var size: user32.SIZE = .{};
     _ = GetTextExtentPoint32A(hdc, "Hello", &size);

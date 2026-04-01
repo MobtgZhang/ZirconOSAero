@@ -1,11 +1,11 @@
 # ZirconOSAero（NT 6.1 目标）
 
-**ZirconOSAero** 基于 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 路线，以 **NT 6.1（Windows 7）** 体验为默认目标：Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。
+**ZirconOSAero** 以 **NT 6.1（Windows 7）** ABI/体验为目标，独立 clean-room 实现；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。与 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 仅有历史谱系关联，**不复制 Windows/ReactOS 源码**。
 
 **独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
 
 <p align="center">
-  <img src="assets/ZirconOS_logo.svg" alt="ZirconOS logo" width="480" />
+  <img src="assets/ZirconOS_logo.svg" alt="ZirconOSAero" width="480" />
 </p>
 
 ## 截图
@@ -13,10 +13,10 @@
 <p align="center">
   <img src="assets/screenshot-zbm.png" alt="ZBM 引导管理器" width="70%" />
 </p>
-<p align="center"><em>ZirconOS Boot Manager (ZBM) — Windows 7 风格文本菜单</em></p>
+<p align="center"><em>ZirconOSAero Boot Manager (ZBM) — Windows 7 风格文本菜单</em></p>
 
 <p align="center">
-  <img src="assets/screenshot-aero.png" alt="ZirconOS Aero 桌面" width="70%" />
+  <img src="assets/screenshot-aero.png" alt="ZirconOSAero Aero 桌面" width="70%" />
 </p>
 <p align="center"><em>Shell — Windows 7 Aero（NT 6.1）唯一内置桌面</em></p>
 
@@ -182,7 +182,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | 内核堆 | Partial | Bump + 空闲链表回收 + `mm/pool` 档位；完整池化见契约矩阵 |
 | Section 对象 | Stub | `NtCreateSection` / `NtMapViewOfSection` 占位（见 NT61_CONTRACT_MATRIX） |
 | IPC (LPC) | Partial | 队列、端口；连接/通信端口分离雏形、`section_view_handle` 占位 |
-| 系统调用 | Partial | `int 0x80` + `syscall`/`sysret`；NT 6.1 x64 SSDT 子集 + 遗留基址 `0x0010_0000`（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
+| 系统调用 | Partial | `int 0x80` + `syscall`/`sysret`；NT 6.1 x64 SSDT 子集（Win7 SP1 索引参考；无 `0x0010_0000` 内部号）（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
 | IDT/ISR | Done | 256 向量 |
 | 调度器 | Partial | 多优先级就绪队列；完整 NT 32 级与饥饿策略见契约矩阵 |
 | 定时器 | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |

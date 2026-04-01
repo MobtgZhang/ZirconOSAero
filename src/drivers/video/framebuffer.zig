@@ -1,6 +1,6 @@
 //! Graphical framebuffer miniport (NT6: analog to display miniport + surface IOCTLs)
 //! Pixel primitives, bulk ops, and IRP/IOCTL dispatch for the DWM/compositor path.
-//! Original ZirconOS implementation; registers `\\Driver\\Framebuf` / `\\Device\\Framebuf0`.
+//! Framebuffer driver; registers `\\Driver\\Framebuf` / `\\Device\\Framebuf0`.
 
 const std = @import("std");
 const builtin = @import("builtin");

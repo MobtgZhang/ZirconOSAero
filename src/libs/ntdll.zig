@@ -13,6 +13,7 @@ const vm = @import("../mm/vm.zig");
 const io = @import("../io/io.zig");
 const registry = @import("../registry/registry.zig");
 const token = @import("../se/token.zig");
+const section_mm = @import("../mm/section.zig");
 
 pub const NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
@@ -451,16 +452,61 @@ pub fn NtWaitForMultipleObjects(_: u32, _: []const HANDLE, _: u32, _: bool, _: ?
 
 // ── Section (Memory-mapped) APIs ──
 
-pub fn NtCreateSection(_: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES, _: ?*u64, _: u32, _: u32, _: HANDLE) NTSTATUS {
+pub fn NtCreateSection(
+    section_handle: *HANDLE,
+    desired_access: u32,
+    object_attributes: ?*OBJECT_ATTRIBUTES,
+    maximum_size: ?*u64,
+    page_protect: u32,
+    allocation_attributes: u32,
+    file_handle: HANDLE,
+) NTSTATUS {
+    _ = desired_access;
+    _ = object_attributes;
+    _ = allocation_attributes;
+    if (file_handle != 0) return STATUS_NOT_IMPLEMENTED;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const max_sz = if (maximum_size) |p| p.* else return STATUS_INVALID_PARAMETER;
+    const sec = section_mm.createAnonymousSection(max_sz, page_protect) orelse return STATUS_NO_MEMORY;
+    const h = proc.handle_table.allocHandle(@intFromPtr(sec), ob.GENERIC_ALL, .section) orelse {
+        section_mm.releaseSectionObject(sec);
+        return STATUS_NO_MEMORY;
+    };
+    section_handle.* = h;
     return STATUS_SUCCESS;
 }
 
-pub fn NtMapViewOfSection(_: HANDLE, _: HANDLE, _: *u64, _: u64, _: u64, _: ?*u64, _: *u64, _: u32, _: u32, _: u32) NTSTATUS {
-    return STATUS_SUCCESS;
+pub fn NtMapViewOfSection(
+    section_handle: HANDLE,
+    process_handle: HANDLE,
+    base_address: *u64,
+    zero_bits: u64,
+    commit_size: u64,
+    section_offset: ?*u64,
+    view_size: *u64,
+    inherit_disposition: u32,
+    allocation_type: u32,
+    win32_protect: u32,
+) NTSTATUS {
+    _ = zero_bits;
+    _ = commit_size;
+    _ = inherit_disposition;
+    _ = allocation_type;
+    _ = win32_protect;
+    const off: u64 = if (section_offset) |p| p.* else 0;
+    const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
+    const h32: ob.Handle = @truncate(section_handle);
+    const ent = proc.handle_table.lookupHandle(h32) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .section) return STATUS_INVALID_PARAMETER;
+    const sec: *section_mm.SectionObject = @ptrFromInt(ent.object_ptr);
+    return section_mm.mapViewIntoProcess(proc, sec, base_address, off, view_size);
 }
 
-pub fn NtUnmapViewOfSection(_: HANDLE, _: u64) NTSTATUS {
-    return STATUS_SUCCESS;
+pub fn NtUnmapViewOfSection(process_handle: HANDLE, base_address: u64) NTSTATUS {
+    const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
+    return section_mm.unmapViewInProcess(proc, base_address);
 }
 
 // ── IPC APIs ──

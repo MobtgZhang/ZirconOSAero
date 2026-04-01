@@ -12,7 +12,7 @@ const klog = @import("../../rtl/klog.zig");
 
 pub const PS_VERSION = "ZirconShell (PowerShell-style)";
 pub const PS_VERSION_FULL = "ZirconShell 1.0.0 — cmdlet subset, not Windows PowerShell";
-pub const PS_COPYRIGHT = "Copyright (c) ZirconOS Project. All rights reserved.";
+pub const PS_COPYRIGHT = "Copyright (c) ZirconOSAero Project. All rights reserved.";
 
 const MAX_CMD_LEN: usize = 512;
 const MAX_HISTORY: usize = 64;
@@ -67,10 +67,10 @@ pub const PowerShell = struct {
 
         self.setVariable("PSVersionTable", PS_VERSION_FULL, true, true);
         self.setVariable("PSEdition", "Core", true, true);
-        self.setVariable("Host", "ZirconOS PowerShell Host", true, true);
+        self.setVariable("Host", "ZirconOSAero PowerShell Host", true, true);
         self.setVariable("HOME", "C:\\Users\\System", false, true);
         self.setVariable("PROFILE", "C:\\Users\\System\\profile.ps1", false, true);
-        self.setVariable("PSModulePath", "C:\\ZirconOS\\System32\\ZShell\\Modules", false, true);
+        self.setVariable("PSModulePath", "C:\\ZirconOSAero\\System32\\ZShell\\Modules", false, true);
         self.setVariable("true", "True", true, true);
         self.setVariable("false", "False", true, true);
         self.setVariable("null", "", true, true);
@@ -358,7 +358,7 @@ pub const PowerShell = struct {
         const con = console.getConsole(self.console_id) orelse return;
         con.writeLine("");
         con.writeLine("TOPIC");
-        con.writeLine("    ZirconOS PowerShell Help System");
+        con.writeLine("    ZirconOSAero PowerShell Help System");
         con.writeLine("");
         con.writeLine("AVAILABLE CMDLETS:");
         con.writeLine("  Get-ChildItem    - Lists files and directories (alias: ls, dir, gci)");
@@ -427,31 +427,31 @@ pub const PowerShell = struct {
         con.writeLine("");
         con.writeLine("CommandType     Name                          Version    Source");
         con.writeLine("-----------     ----                          -------    ------");
-        con.writeLine("Cmdlet          Clear-Host                    7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Alias                     7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-ChildItem                 7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Command                   7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Content                   7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Date                      7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Disk                      7.4.0      ZirconOS.Storage");
-        con.writeLine("Cmdlet          Get-Help                      7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-History                   7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Host                      7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Location                  7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Partition                 7.4.0      ZirconOS.Storage");
-        con.writeLine("Cmdlet          Get-Process                   7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Service                   7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Variable                  7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Get-Volume                    7.4.0      ZirconOS.Storage");
-        con.writeLine("Cmdlet          Restart-Computer              7.4.0      ZirconOS.Management");
-        con.writeLine("Cmdlet          New-Item                      7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Remove-Item                   7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Set-Location                  7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Set-Variable                  7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Stop-Computer                 7.4.0      ZirconOS.Management");
-        con.writeLine("Cmdlet          Test-Path                     7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Write-Host                    7.4.0      ZirconOS.Core");
-        con.writeLine("Cmdlet          Write-Output                  7.4.0      ZirconOS.Core");
+        con.writeLine("Cmdlet          Clear-Host                    7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Alias                     7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-ChildItem                 7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Command                   7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Content                   7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Date                      7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Disk                      7.4.0      ZirconOSAero.Storage");
+        con.writeLine("Cmdlet          Get-Help                      7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-History                   7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Host                      7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Location                  7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Partition                 7.4.0      ZirconOSAero.Storage");
+        con.writeLine("Cmdlet          Get-Process                   7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Service                   7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Variable                  7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Get-Volume                    7.4.0      ZirconOSAero.Storage");
+        con.writeLine("Cmdlet          Restart-Computer              7.4.0      ZirconOSAero.Management");
+        con.writeLine("Cmdlet          New-Item                      7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Remove-Item                   7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Set-Location                  7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Set-Variable                  7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Stop-Computer                 7.4.0      ZirconOSAero.Management");
+        con.writeLine("Cmdlet          Test-Path                     7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Write-Host                    7.4.0      ZirconOSAero.Core");
+        con.writeLine("Cmdlet          Write-Output                  7.4.0      ZirconOSAero.Core");
         con.writeLine("");
     }
 
@@ -526,10 +526,10 @@ pub const PowerShell = struct {
     fn cmdGetHost(self: *PowerShell) void {
         const con = console.getConsole(self.console_id) orelse return;
         con.writeLine("");
-        con.writeLine("Name             : ZirconOS PowerShell Host");
+        con.writeLine("Name             : ZirconOSAero PowerShell Host");
         con.writeLine("Version          : 7.4.0");
         con.writeLine("InstanceId       : 00000000-0000-0000-0000-000000000001");
-        con.writeLine("UI               : ZirconOS.Console.UI");
+        con.writeLine("UI               : ZirconOSAero.Console.UI");
         con.writeLine("CurrentCulture   : en-US");
         con.writeLine("CurrentUICulture : en-US");
         con.writeLine("");

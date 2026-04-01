@@ -1,4 +1,4 @@
-//! ZirconOS Boot Manager — Disk Partition Table Parser
+//! ZirconOSAero Boot Manager (ZBM) — disk partition table parser
 //!
 //! Supports both MBR (Master Boot Record) and GPT (GUID Partition Table).
 //! Used by the boot manager to locate the system partition and kernel image.
@@ -65,7 +65,7 @@ pub const MbrPartitionEntry = extern struct {
             0xEE => "GPT Protective",
             0xEF => "EFI System",
             0xFD => "Linux RAID",
-            0xFE => "ZirconOS System",
+            0xFE => "ZirconOSAero System",
             else => "Unknown",
         };
     }
@@ -173,7 +173,7 @@ pub const GUID_LINUX_FILESYSTEM: GptGuid = .{
     .data4 = .{ 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4 },
 };
 
-// ZirconOS-specific partition type GUID
+// ZirconOSAero-specific partition type GUID (legacy constant names retain disk compatibility)
 pub const GUID_ZIRCONOS_SYSTEM: GptGuid = .{
     .data1 = 0x5A52434E,
     .data2 = 0x4F53,
@@ -247,11 +247,11 @@ pub const GptPartitionEntry = extern struct {
         return self.type_guid.eql(&GUID_EFI_SYSTEM);
     }
 
-    pub fn isZirconOSSystem(self: *const GptPartitionEntry) bool {
+    pub fn isZirconAeroSystemPartition(self: *const GptPartitionEntry) bool {
         return self.type_guid.eql(&GUID_ZIRCONOS_SYSTEM);
     }
 
-    pub fn isZirconOSBoot(self: *const GptPartitionEntry) bool {
+    pub fn isZirconAeroBootPartition(self: *const GptPartitionEntry) bool {
         return self.type_guid.eql(&GUID_ZIRCONOS_BOOT);
     }
 
@@ -269,9 +269,9 @@ pub const GptPartitionEntry = extern struct {
         if (self.type_guid.eql(&GUID_MICROSOFT_RESERVED)) return "Microsoft Reserved";
         if (self.type_guid.eql(&GUID_WINDOWS_RECOVERY)) return "System recovery";
         if (self.type_guid.eql(&GUID_LINUX_FILESYSTEM)) return "Linux Filesystem";
-        if (self.type_guid.eql(&GUID_ZIRCONOS_SYSTEM)) return "ZirconOS System";
-        if (self.type_guid.eql(&GUID_ZIRCONOS_BOOT)) return "ZirconOS Boot";
-        if (self.type_guid.eql(&GUID_ZIRCONOS_DATA)) return "ZirconOS Data";
+        if (self.type_guid.eql(&GUID_ZIRCONOS_SYSTEM)) return "ZirconOSAero System";
+        if (self.type_guid.eql(&GUID_ZIRCONOS_BOOT)) return "ZirconOSAero Boot";
+        if (self.type_guid.eql(&GUID_ZIRCONOS_DATA)) return "ZirconOSAero Data";
         return "Unknown";
     }
 };
@@ -397,7 +397,7 @@ pub const DiskInfo = struct {
         info.index = @intCast(self.partition_count);
         info.start_lba = entry.starting_lba;
         info.size_sectors = entry.ending_lba - entry.starting_lba + 1;
-        info.is_active = entry.isBiosBootable() or entry.isZirconOSBoot();
+        info.is_active = entry.isBiosBootable() or entry.isZirconAeroBootPartition();
         info.type_name = entry.getTypeName();
         info.scheme = .gpt;
         info.mbr_type = 0;

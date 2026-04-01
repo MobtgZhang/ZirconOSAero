@@ -618,7 +618,7 @@ fn appendSignedI32(buf: []u8, pos: usize, v: i32) usize {
 fn buildSystemInfoText() []const u8 {
     var buf: [160]u8 = undefined;
     var pos: usize = 0;
-    const prefix = "ZirconOS | ";
+    const prefix = "ZirconOSAero | ";
     for (prefix) |c| {
         if (pos < buf.len) {
             buf[pos] = c;
@@ -1665,7 +1665,7 @@ pub fn initAeroDwm() void {
 }
 
 // ── Desktop Window Manager (DWM) Compositor ──
-// 默认字段来自 `zircon_aero_defaults`（经 `dwm_mod.DwmConfig`）
+// 默认字段来自 `nt61_aero_defaults`（经 `dwm_mod.DwmConfig`）
 
 pub const DwmConfig = dwm_mod.DwmConfig;
 
@@ -1699,7 +1699,7 @@ pub fn setSmoothCursorFactor(factor: i32) void {
     desktop_ctx.smooth_cursor.lerp_factor = if (factor < 64) 64 else if (factor > 255) 255 else factor;
 }
 
-/// Aero Glass（NT 6.1 DWM 概念）: 委托 `dwm.zig`（每帧模糊预算、`glass_lite`、任务栏半径上限与 `zircon_aero_defaults` 一致）。
+/// Aero Glass（NT 6.1 DWM 概念）: 委托 `dwm.zig`（每帧模糊预算、`glass_lite`、任务栏半径上限与 `nt61_aero_defaults` 一致）。
 pub fn renderGlassEffect(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: GlassChrome) void {
     if (!use_framebuffer or !fb.isInitialized()) return;
     if (!dwm_initialized or !dwm_config.glass_enabled) {
@@ -2520,7 +2520,7 @@ fn renderWindowContent(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColors) vo
 
         // Font info line (rendered with ZirconOSFonts typeface)
         if (iy + 20 <= content_y + content_h) {
-            fb.drawTextTransparent(x + 10, iy + 4, "Font: Noto Sans (ZirconOSFonts)", rgb(0x80, 0x80, 0x80));
+            fb.drawTextTransparent(x + 10, iy + 4, "Font: Noto Sans (embedded)", rgb(0x80, 0x80, 0x80));
             iy += 20;
         }
 

@@ -1,4 +1,4 @@
-//! ZirconOS Driver Module Root
+//! ZirconOSAero — driver module root (NT 6.1 target)
 //! Centralized kernel-mode driver load order (NT 6.x–style: bus → class → PnP stack).
 //! Reference: WDM driver model (Microsoft Learn / WDK), KMDF concepts mapped onto this kernel’s
 //! `io.Irp` + `registerDriver` / `createDevice`.
@@ -40,6 +40,7 @@ pub const storage = if (is_x86) struct {
 } else struct {};
 
 pub const video = struct {
+    pub const wddm_policy = @import("video/wddm_abstraction.zig");
     pub const vga = @import("video/vga.zig");
     pub const hdmi = @import("video/hdmi.zig");
     pub const framebuffer = @import("video/framebuffer.zig");

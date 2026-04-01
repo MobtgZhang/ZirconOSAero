@@ -58,7 +58,7 @@ fn cpuidExt80000001_edx() u32 {
     return edx;
 }
 
-/// 若 CPU 支持且 `zircon_x86_64_kernel_rsp0` 已初始化，则启用 `syscall` 入口；`int 0x80` 仍可用。
+/// 若 CPU 支持且 `zircon_x86_64_kernel_rsp0` 已初始化，则启用 `syscall` 入口；`int 0x80`（向量 128）与 `syscall` 共用同一 NT x64 分发（第 1 参在 R10）。
 pub fn initSyscallInstructionPath() void {
     if (gdt.zircon_x86_64_kernel_rsp0 == 0) return;
     const feat = cpuidExt80000001_edx();
@@ -86,6 +86,6 @@ pub fn initSyscallInstructionPath() void {
     percpu.syncKernelRsp0(gdt.zircon_x86_64_kernel_rsp0);
 
     if (klog.DEBUG_MODE) {
-        klog.debug("syscall: IA32_LSTAR + per-CPU KERNEL_GS_BASE (SWAPGS) enabled; int 0x80 vector 128 still active", .{});
+        klog.debug("syscall: IA32_LSTAR + per-CPU KERNEL_GS_BASE (SWAPGS) enabled; vector 128 uses same NT SSDT dispatch as syscall", .{});
     }
 }

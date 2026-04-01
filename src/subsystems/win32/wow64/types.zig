@@ -7,7 +7,7 @@
 // This is an independent clean-room implementation.
 // Reference: MSDN PE32 / WOW64 概念描述（非结构体逐字段抄录）。
 
-pub const WOW64_VERSION: []const u8 = "ZirconOS WOW64 v1.0";
+pub const WOW64_VERSION: []const u8 = "ZirconOSAero WOW64 v1.0 (NT 6.1)";
 
 pub const WOW64_MAX_ADDR: u64 = 0x7FFFFFFF;
 pub const WOW64_STACK_SIZE: u32 = 0x100000;

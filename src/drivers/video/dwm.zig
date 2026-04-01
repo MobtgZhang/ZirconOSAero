@@ -15,34 +15,34 @@
 const std = @import("std");
 const fb = @import("framebuffer.zig");
 const theme = @import("theme.zig");
-const zircon_aero = @import("zircon_aero_defaults");
+const nt61_aero = @import("nt61_aero_defaults");
 const rgb = theme.rgb;
 
-/// 与 `zircon_aero_defaults.compositor_config_epoch` 一致；`display` 等仅通过本模块读取，避免重复依赖 `zircon_aero_defaults` 模块。
-pub const compositor_config_epoch: u32 = zircon_aero.compositor_config_epoch;
+/// 与 `nt61_aero_defaults.compositor_config_epoch` 一致；`display` 等仅通过本模块读取，避免重复依赖 `nt61_aero_defaults` 模块。
+pub const compositor_config_epoch: u32 = nt61_aero.compositor_config_epoch;
 
 fn clampCoordI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
 pub const DwmConfig = struct {
-    glass_enabled: bool = zircon_aero.KernelDwm.glass_enabled,
-    glass_opacity: u8 = zircon_aero.KernelDwm.glass_opacity,
-    /// 与 docs/cn/AeroRendering.md、`zircon_aero_defaults` 一致（标题栏/面板盒式模糊）
-    glass_blur_radius: u8 = zircon_aero.KernelDwm.glass_blur_radius,
-    glass_blur_passes: u8 = zircon_aero.KernelDwm.glass_blur_passes,
-    glass_saturation: u8 = zircon_aero.KernelDwm.glass_saturation,
-    glass_tint_color: u32 = zircon_aero.KernelDwm.glass_tint_color,
-    glass_tint_opacity: u8 = zircon_aero.KernelDwm.glass_tint_opacity,
+    glass_enabled: bool = nt61_aero.KernelDwm.glass_enabled,
+    glass_opacity: u8 = nt61_aero.KernelDwm.glass_opacity,
+    /// 与 docs/cn/AeroRendering.md、`nt61_aero_defaults` 一致（标题栏/面板盒式模糊）
+    glass_blur_radius: u8 = nt61_aero.KernelDwm.glass_blur_radius,
+    glass_blur_passes: u8 = nt61_aero.KernelDwm.glass_blur_passes,
+    glass_saturation: u8 = nt61_aero.KernelDwm.glass_saturation,
+    glass_tint_color: u32 = nt61_aero.KernelDwm.glass_tint_color,
+    glass_tint_opacity: u8 = nt61_aero.KernelDwm.glass_tint_opacity,
     /// 任务栏略低于窗口标题栏的不透明度，更易透出 Harmony 壁纸（Win7 任务栏偏「实」仍保留）
-    glass_taskbar_tint_opacity: u8 = zircon_aero.KernelDwm.glass_taskbar_tint_opacity,
-    specular_intensity: u8 = zircon_aero.KernelDwm.specular_intensity,
-    animation_enabled: bool = zircon_aero.KernelDwm.animation_enabled,
-    peek_enabled: bool = zircon_aero.KernelDwm.peek_enabled,
-    shadow_enabled: bool = zircon_aero.KernelDwm.shadow_enabled,
-    vsync_compositor: bool = zircon_aero.KernelDwm.vsync_compositor,
-    smooth_cursor: bool = zircon_aero.KernelDwm.smooth_cursor,
-    cursor_lerp_factor: i32 = zircon_aero.KernelDwm.cursor_lerp_factor,
+    glass_taskbar_tint_opacity: u8 = nt61_aero.KernelDwm.glass_taskbar_tint_opacity,
+    specular_intensity: u8 = nt61_aero.KernelDwm.specular_intensity,
+    animation_enabled: bool = nt61_aero.KernelDwm.animation_enabled,
+    peek_enabled: bool = nt61_aero.KernelDwm.peek_enabled,
+    shadow_enabled: bool = nt61_aero.KernelDwm.shadow_enabled,
+    vsync_compositor: bool = nt61_aero.KernelDwm.vsync_compositor,
+    smooth_cursor: bool = nt61_aero.KernelDwm.smooth_cursor,
+    cursor_lerp_factor: i32 = nt61_aero.KernelDwm.cursor_lerp_factor,
 };
 
 pub const GlassChrome = enum { taskbar, caption, panel };
@@ -60,8 +60,8 @@ var blur_budget_pixel_passes: u32 = 0;
 var blur_rect_calls_remaining: u32 = 0;
 
 pub fn beginFrameBlurBudget() void {
-    blur_budget_pixel_passes = zircon_aero.KernelDwm.blur_budget_pixel_passes_per_frame;
-    blur_rect_calls_remaining = zircon_aero.KernelDwm.blur_max_rect_calls_per_frame;
+    blur_budget_pixel_passes = nt61_aero.KernelDwm.blur_budget_pixel_passes_per_frame;
+    blur_rect_calls_remaining = nt61_aero.KernelDwm.blur_max_rect_calls_per_frame;
 }
 
 /// 按架构与分辨率收紧 `config`（在 `init` 之后、`fb` 已就绪时调用）；与 `display.initAeroDwm` 同步写回 `dwm_config`。
@@ -69,13 +69,13 @@ pub fn applyPlatformAndResolutionTuning(width: u32, height: u32) void {
     if (!initialized) return;
     const builtin = @import("builtin");
     if (builtin.cpu.arch == .loongarch64) {
-        config.glass_blur_radius = @min(config.glass_blur_radius, zircon_aero.KernelDwm.glass_blur_radius_loongarch_cap);
-        config.glass_blur_passes = @min(config.glass_blur_passes, zircon_aero.KernelDwm.glass_blur_passes_loongarch_cap);
+        config.glass_blur_radius = @min(config.glass_blur_radius, nt61_aero.KernelDwm.glass_blur_radius_loongarch_cap);
+        config.glass_blur_passes = @min(config.glass_blur_passes, nt61_aero.KernelDwm.glass_blur_passes_loongarch_cap);
     }
     const pixels = width *| height;
-    if (pixels >= zircon_aero.KernelDwm.blur_resolution_downgrade_pixel_threshold) {
-        config.glass_blur_radius = @min(config.glass_blur_radius, zircon_aero.KernelDwm.glass_blur_radius_hd_cap);
-        config.glass_blur_passes = @min(config.glass_blur_passes, zircon_aero.KernelDwm.glass_blur_passes_hd_cap);
+    if (pixels >= nt61_aero.KernelDwm.blur_resolution_downgrade_pixel_threshold) {
+        config.glass_blur_radius = @min(config.glass_blur_radius, nt61_aero.KernelDwm.glass_blur_radius_hd_cap);
+        config.glass_blur_passes = @min(config.glass_blur_passes, nt61_aero.KernelDwm.glass_blur_passes_hd_cap);
     }
 }
 
@@ -96,7 +96,7 @@ fn boxBlurRectBudgeted(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32)
     if (w <= 0 or h <= 0 or radius == 0 or passes == 0) return;
     if (blur_rect_calls_remaining == 0) return;
     const area64 = @as(u64, @intCast(w)) *% @as(u64, @intCast(h));
-    if (area64 > zircon_aero.KernelDwm.blur_max_single_rect_pixels) return;
+    if (area64 > nt61_aero.KernelDwm.blur_max_single_rect_pixels) return;
     if (!tryConsumeBlurBudget(w, h, passes)) return;
     blur_rect_calls_remaining -= 1;
     fb.boxBlurRect(x, y, w, h, radius, passes);
@@ -176,7 +176,7 @@ fn renderGlassEffectInternal(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: 
         else => config.glass_tint_opacity,
     };
 
-    const cap_tb = zircon_aero.KernelDwm.taskbar_blur_radius_cap;
+    const cap_tb = nt61_aero.KernelDwm.taskbar_blur_radius_cap;
     if (chrome == .taskbar and cap_tb > 0) {
         blur_r = @min(blur_r, @as(u32, cap_tb));
     }

@@ -168,6 +168,7 @@ pub fn remapIdentityRangeUncached(virt_base: usize, size: usize) bool {
 }
 
 pub const max_reserved_regions: usize = 32;
+pub const max_section_views: usize = 32;
 
 pub const AddressSpace = struct {
     pml4_phys: u64,
@@ -176,6 +177,11 @@ pub const AddressSpace = struct {
     reserved_count: u8 = 0,
     reserved_base: [max_reserved_regions]u64 = @splat(0),
     reserved_pages: [max_reserved_regions]u32 = @splat(0),
+    /// `NtMapViewOfSection` 登记的区间，供 `NtUnmapViewOfSection` 成组解除映射。
+    section_view_count: u8 = 0,
+    section_view_base: [max_section_views]u64 = @splat(0),
+    section_view_pages: [max_section_views]u32 = @splat(0),
+    section_view_obj: [max_section_views]u64 = @splat(0),
 
     pub fn reserveVirtualRange(self: *AddressSpace, virt_base: u64, num_pages: u32) bool {
         if (self.reserved_count >= max_reserved_regions) return false;
@@ -278,6 +284,33 @@ pub const AddressSpace = struct {
 
     pub fn activate(self: *AddressSpace) void {
         paging.loadCr3(self.pml4_phys);
+    }
+
+    pub fn recordSectionView(self: *AddressSpace, base: u64, pages: u32, sec_ptr: u64) bool {
+        if (self.section_view_count >= max_section_views) return false;
+        const i = self.section_view_count;
+        self.section_view_base[i] = base;
+        self.section_view_pages[i] = pages;
+        self.section_view_obj[i] = sec_ptr;
+        self.section_view_count += 1;
+        return true;
+    }
+
+    /// 按视图基址查找并移除记录，返回页数。
+    pub fn takeSectionView(self: *AddressSpace, base: u64) ?u32 {
+        var i: u8 = 0;
+        while (i < self.section_view_count) : (i += 1) {
+            if (self.section_view_base[i] == base) {
+                const pages = self.section_view_pages[i];
+                const last = self.section_view_count - 1;
+                self.section_view_base[i] = self.section_view_base[last];
+                self.section_view_pages[i] = self.section_view_pages[last];
+                self.section_view_obj[i] = self.section_view_obj[last];
+                self.section_view_count -= 1;
+                return pages;
+            }
+        }
+        return null;
     }
 };
 

@@ -1,11 +1,11 @@
 # ZirconOSAero（NT 6.1 目标）
 
-**ZirconOSAero** 基于 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 路线，以 **NT 6.1（Windows 7）** 体验为默认目标：Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。
+**ZirconOSAero** 是以 **NT 6.1（Windows 7）** ABI/体验为目标的独立 clean-room 内核与用户态栈；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。早期目录谱系与 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 仓库有历史关联，**本仓库实现与文档均为独立演进，不复制 Windows/ReactOS 源码**。
 
 **独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
 
 <p align="center">
-  <img src="assets/ZirconOS_logo.svg" alt="ZirconOS logo" width="480" />
+  <img src="assets/ZirconOS_logo.svg" alt="ZirconOSAero" width="480" />
 </p>
 
 ## Screenshots
@@ -13,7 +13,7 @@
 <p align="center">
   <img src="assets/screenshot-zbm.png" alt="ZBM boot manager (Windows 7 style)" width="70%" />
 </p>
-<p align="center"><em>ZirconOS Boot Manager (ZBM) — Windows 7–style text menu</em></p>
+<p align="center"><em>ZirconOSAero Boot Manager (ZBM) — Windows 7–style text menu</em></p>
 
 <p align="center">
   <img src="assets/screenshot-aero.png" alt="ZirconOS Aero desktop" width="70%" />
@@ -50,7 +50,7 @@
 
 **实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖骨架见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
-Documentation: [`docs/README.md`](docs/README.md) · [`docs/en/Architecture.md`](docs/en/Architecture.md) · [`docs/en/Kernel.md`](docs/en/Kernel.md) · [`docs/en/Boot.md`](docs/en/Boot.md) · [`docs/en/Servers.md`](docs/en/Servers.md) · [`docs/en/Subsystems.md`](docs/en/Subsystems.md) · [`docs/en/BuildSystem.md`](docs/en/BuildSystem.md) · [`docs/en/Roadmap.md`](docs/en/Roadmap.md)
+Documentation: [`docs/README.md`](docs/README.md) · [`docs/en/Architecture.md`](docs/en/Architecture.md) · [`docs/en/Kernel.md`](docs/en/Kernel.md) · [`docs/cn/TIER2_ARCHITECTURES.md`](docs/cn/TIER2_ARCHITECTURES.md) · [`docs/en/Boot.md`](docs/en/Boot.md) · [`docs/en/Servers.md`](docs/en/Servers.md) · [`docs/en/Subsystems.md`](docs/en/Subsystems.md) · [`docs/en/BuildSystem.md`](docs/en/BuildSystem.md) · [`docs/en/Roadmap.md`](docs/en/Roadmap.md)
 
 ## Repository layout
 
@@ -178,7 +178,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | Kernel heap | Partial | Bump + 空闲链表回收 + `mm/pool` 档位；Paged 语义与完整池化见契约矩阵 |
 | Section objects | Stub | `NtCreateSection` / `NtMapViewOfSection` 占位（[MM 路线图](docs/cn/NT61_CONTRACT_MATRIX.md)） |
 | IPC (LPC) | Partial | Queues, ports；连接/通信端口分离雏形、`section_view_handle` 占位（[Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md)） |
-| Syscall | Partial | `int 0x80` + `syscall`/`sysret`；**NT 6.1 x64 SSDT 子集** + Zircon 遗留基址 `0x0010_0000`（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
+| Syscall | Partial | `int 0x80` + `syscall`/`sysret`；**NT 6.1 x64 SSDT 子集**（Win7 SP1 索引参考；无内部服务号命名空间）（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
 | IDT/ISR | Done | 256 vectors |
 | Scheduler | Partial | 多优先级就绪队列（idle/normal 档）；完整 32 级与饥饿策略见契约矩阵 |
 | Timer | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |

@@ -14,7 +14,7 @@ pub const PortState = enum {
     closed,
 };
 
-/// NT LPC：连接端口 vs 通信端口 的雏形标记（大块 Section 传输等待 ALPC 路线图）。
+/// NT LPC：连接端口（`connection_listener`：服务端监听）与通信端口（`message`：已连接会话）分离雏形。
 pub const PortKind = enum(u8) {
     message = 0,
     connection_listener = 1,
@@ -98,6 +98,12 @@ fn createPortWithKind(owner_pid: u32, name: []const u8, kind: PortKind) ?*Port {
 
 pub fn setPortSectionView(port: *Port, view_handle: u32) void {
     port.section_view_handle = view_handle;
+}
+
+/// 将节视图句柄（可为 `NtMapViewOfSection` 返回的基址低位或专用 token）绑定到端口，供大消息共享缓冲路线图使用。
+pub fn bindSectionViewToPort(port_id: u32, view_token: u32) void {
+    const p = findPortById(port_id) orelse return;
+    p.section_view_handle = view_token;
 }
 
 pub fn findPort(name: []const u8) ?*Port {

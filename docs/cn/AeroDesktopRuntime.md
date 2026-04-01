@@ -10,7 +10,7 @@
 4. `**src/drivers/video/display.zig**`：从 `mouse.getX/Y` 同步平滑坐标；场景合成走 `**renderer_aero.renderFrameEx(false)**`，指针由 **软件光标层**（save-under）叠加。
 5. `**src/drivers/video/renderer_aero.zig**`：绘制壁纸预设、桌面图标、Explorer、任务栏、开始菜单等（默认不在此绘制指针，由 `display` 光标层完成）。
 
-`src/desktop/aero/` 提供 **资源清单**（`resource_loader.zig`）、主题默认值（`zircon_aero_defaults` 交叉引用）与可复用库；与内核路径的图标 ID、壁纸文件名应对齐。
+`src/desktop/aero/` 提供 **资源清单**（`resource_loader.zig`）、主题默认值（`nt61_aero_defaults` 交叉引用）与可复用库；与内核路径的图标 ID、壁纸文件名应对齐。
 
 ## 2. 非 x86 上的主循环空闲
 
@@ -35,7 +35,7 @@
 | 可选 `MOUSE_DEBUG=true`    | 串口 `mouseDbg`：`desktop tick` 是否递增、`virtio inst` 的 `used.idx` 是否随操作变化；`syncDeliver total` 是否增长。                                                                                                                                                                          |
 | 可选 `AGENT_NDJSON=true`   | 串口 `AGENT_LOG:` 行；`hypothesisId` 含义见 `src/debug/agent_ndjson.zig` 文件头（H1/H2/H3/H4/H6/H7）。宿主机：`scripts/agent-ingest-serial.sh`。                                                                                                                                          |
 | 可选 `desktop_bisect=true` | `zig build -Ddesktop_bisect=true`：桌面循环在 `renderDesktopFrameEx` 前后打 `klog.debug`，并输出 `**scheduler` tick 差**（合成耗时量级）与 `**fb_w`**；`present` 前仍有日志，用于区分 panic 落在合成还是提交阶段。                                                                                                   |
-| 卡顿像「冻住」                  | 多为 **单帧 CPU 盒式模糊过长**（高分 GOP）。串口查 `**DesktopGOP:`** 宽高 pitch；调低 `zircon_aero_defaults` 中 blur 相关常量或见 [DesktopManagerSpec.md](DesktopManagerSpec.md) 第 8 节。                                                                                                               |
+| 卡顿像「冻住」                  | 多为 **单帧 CPU 盒式模糊过长**（高分 GOP）。串口查 `**DesktopGOP:`** 宽高 pitch；调低 `nt61_aero_defaults` 中 blur 相关常量或见 [DesktopManagerSpec.md](DesktopManagerSpec.md) 第 8 节。                                                                                                               |
 | LoongArch                | `vm.remapIdentityVirtPageUncached` 与 VirtIO 环 GPA（`virtio_input_pci` 内 H6/H7 注释）。                                                                                                                                                                                       |
 | 真机 USB                   | 当前内核 **无 USB HID 鼠标驱动**；仅 PS/2 与 VirtIO-Input PCI 可靠。仅 USB 鼠标时请换 PS/2 或在 QEMU 加 virtio-mouse。                                                                                                                                                                           |
 
@@ -182,7 +182,7 @@
 
 ## 6. 颜色与主题单一源
 
-- **DWM 数值**：`src/config/zircon_aero_defaults.zig`。
+- **DWM 数值**：`src/config/nt61_aero_defaults.zig`。
 - **内核 `theme.rgb`**：`b | (g<<8) | (r<<16)`（Win32 COLORREF 风格）。
 - **Aero 库 `desktop/aero/src/theme.zig` 的 `rgb`**：分量顺序相反，勿混用字面量。
 

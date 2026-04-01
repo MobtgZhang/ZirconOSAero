@@ -1,4 +1,4 @@
-//! ZirconOS Kernel Logger (printk-style)
+//! ZirconOSAero kernel logger (printk-style)
 //! Debug mode: full log output at all levels, dual output (VGA + serial)
 //! Release mode: only KERN_ERR and above
 

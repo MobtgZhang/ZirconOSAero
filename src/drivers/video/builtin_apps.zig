@@ -256,14 +256,14 @@ pub fn titleOf(id: BuiltinAppId) []const u8 {
         .charmap => "Character Map",
         .sync_center => "Sync Center",
         .projector => "Connect to a Projector",
-        .wmp => "Zircon Media Player",
-        .media_center => "Zircon Media Center",
-        .dvd_maker => "Zircon DVD Maker",
+        .wmp => "Media Player",
+        .media_center => "Media Center",
+        .dvd_maker => "DVD Maker",
         .sound_recorder => "Sound Recorder",
         .ie8 => "Internet Explorer",
-        .live_mail => "Zircon Mail",
-        .fax_scan => "Zircon Fax and Scan",
-        .taskmgr_focus => "Zircon Task Manager",
+        .live_mail => "Mail",
+        .fax_scan => "Fax and Scan",
+        .taskmgr_focus => "Task Manager",
         .control_panel => "Control Panel",
         .regedit => "Registry Editor",
         .disk_cleanup => "Disk Cleanup",
@@ -277,7 +277,7 @@ pub fn titleOf(id: BuiltinAppId) []const u8 {
         .perfmon => "Performance Monitor",
         .taskschd => "Task Scheduler",
         .cmd_shell => "Command Prompt",
-        .powershell_shell => "Zircon Shell",
+        .powershell_shell => "ZirconShell (cmdlet subset)",
         .minesweeper => "Minesweeper",
         .solitaire => "Solitaire",
         .spider_solitaire => "Spider Solitaire",
@@ -299,13 +299,13 @@ pub fn titleOf(id: BuiltinAppId) []const u8 {
         .shell_default_programs => "Default Programs",
         .shell_help => "Help and Support",
         .shell_run => "Run",
-        .defender => "Zircon Security",
-        .firewall => "Zircon Firewall",
-        .windows_update => "Zircon Update",
+        .defender => "Security Center",
+        .firewall => "Windows Firewall",
+        .windows_update => "Windows Update",
         .bitlocker => "BitLocker Drive Encryption",
         .uac_info => "User Account Control",
         .explorer_libraries_hint => "Libraries",
-        .generic_stub => "ZirconOS",
+        .generic_stub => "ZirconOSAero",
     };
 }
 
@@ -1119,7 +1119,7 @@ pub fn launch(id: BuiltinAppId) void {
         minesInit();
     }
     if (id == .notepad and notepad_len == 0) {
-        const greet = "ZirconOS Notepad — type text; bottom: Open/Save C:\\NOTEPAD.TXT (VFS).";
+        const greet = "ZirconOSAero Notepad — type text; bottom: Open/Save C:\\NOTEPAD.TXT (VFS).";
         @memcpy(notepad_buf[0..greet.len], greet);
         notepad_len = greet.len;
     }
@@ -1258,7 +1258,7 @@ fn renderControlPanel(x0: i32, y0: i32, t: *const theme.ThemeColors) void {
     var yy: i32 = y0 + 6;
     const lines = [_][]const u8{
         "System and Security",
-        "  Zircon Update, Security (stubs)",
+        "  Windows Update, Security (stubs)",
         "Network and Internet",
         "  (stubs)",
         "Hardware and Sound",
@@ -1461,8 +1461,8 @@ fn renderClient(w: *WinSlot, t: *const theme.ThemeColors) void {
             fb.drawTextTransparent(x0 + 4, y0 + 52, "> Device Manager", rgb(0x20, 0x50, 0x90));
         },
         .regedit => {
-            fb.drawTextTransparent(x0 + 4, y0 + 6, "HKLM\\SOFTWARE\\ZirconOS\\Status = Running", t.titlebar_text);
-            fb.drawTextTransparent(x0 + 4, y0 + 22, "HKCU\\ZirconOS\\DemoValue = 1 (read-only tree)", rgb(0x28, 0x30, 0x40));
+            fb.drawTextTransparent(x0 + 4, y0 + 6, "HKLM\\SOFTWARE\\ZirconOSAero\\Status = Running", t.titlebar_text);
+            fb.drawTextTransparent(x0 + 4, y0 + 22, "HKCU\\ZirconOSAero\\DemoValue = 1 (read-only tree)", rgb(0x28, 0x30, 0x40));
         },
         .solitaire => {
             fb.drawTextTransparent(x0 + 4, y0 + 4, "Order stack: click pile when top == next (1..13).", rgb(0x30, 0x38, 0x48));
@@ -1507,7 +1507,7 @@ fn drawStubLines(id: BuiltinAppId, x0: i32, y0: i32, body_w: i32, t: *const them
         .media_center => "Media Center: low priority shell.",
         .dvd_maker => "DVD Maker: out of scope for this tree.",
         .ie8 => "IE shell: no Trident; pluggable renderer (Gecko/WebKit-class) — policy in roadmap.",
-        .live_mail => "Zircon Mail: optional; not in default preload.",
+        .live_mail => "Mail: optional; not in default preload.",
         .fax_scan => "Fax/Scan: TWAIN/WIA concepts (Learn win32/twain, wia_*).",
         .disk_cleanup => "Disk Cleanup: stub — no destructive erase until VFS quota API; see roadmap safety.",
         .defrag => "Defrag: stub — block IOCTL not wired; safe to skip on flash.",
@@ -1527,9 +1527,9 @@ fn drawStubLines(id: BuiltinAppId, x0: i32, y0: i32, body_w: i32, t: *const them
         .shell_default_programs => "Default Programs: file assoc TBD.",
         .shell_help => "Help: documentation on host.",
         .shell_run => "Run dialog: shell_execute TBD.",
-        .defender => "Zircon Security policy UI — hardening concepts only (no third-party AV path).",
+        .defender => "Security Center policy UI — hardening concepts only (no third-party AV path).",
         .firewall => "Firewall policy UI — WDK/WFP public docs (no packet path yet).",
-        .windows_update => "Zircon Update: trusted servicing channel TBD — design follows public OS update concepts only.",
+        .windows_update => "Windows Update: trusted servicing channel TBD — design follows public OS update concepts only.",
         .bitlocker => "BitLocker: enterprise disclaimer; FVE driver TBD — cross-ref src/se (tokens).",
         .uac_info => "UAC: elevation flow TBD — cross-ref src/se/token.zig and security roadmap.",
         .explorer_libraries_hint => "Libraries: Explorer command bar.",

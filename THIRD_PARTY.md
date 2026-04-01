@@ -16,7 +16,7 @@
 
 | 来源 | 关系 |
 |------|------|
-| [ZirconOS](https://github.com/MobtgZhang/ZirconOS) | 设计谱系与目录结构对齐；本仓库独立演进。 |
+| [ZirconOS](https://github.com/MobtgZhang/ZirconOS) | 历史谱系参考 only；**ZirconOSAero 代码与行为均为独立 clean-room 实现**。 |
 
 ## 文档级参考（代码须原创）
 

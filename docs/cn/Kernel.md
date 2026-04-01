@@ -1,6 +1,6 @@
-# ZirconOS 内核实现
+# ZirconOSAero 内核实现
 
-本文档描述 ZirconOS 内核各子系统的具体实现细节。
+本文档描述 ZirconOSAero 内核各子系统的具体实现细节（NT 6.1 目标）。
 
 ## 1. 源码布局
 
@@ -70,29 +70,11 @@ src/
 
 ### 系统调用约定 (x86_64)
 
-- 入口：`int 0x80`（向量 128）
-- 调用号：`rax`
-- 参数：`rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9`
+- 入口：`syscall`/`sysret` 与 `int 0x80`（向量 128）共用分发
+- 调用号：`rax` = **Windows 7 SP1 x64** 公开 SSDT 索引（子集）
+- 参数：**NT x64** — 第 1 参 `r10`，第 2–4 参 `rdx`/`r8`/`r9`，其余在用户栈（见 [SyscallABI.md](../cn/SyscallABI.md)）
 
-已实现的系统调用（权威列表见 [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig)；其他架构当前无对等表）：
-
-| 编号 | 名称 | 功能 |
-|------|------|------|
-| `0x0010_0000` | Zircon 遗留 0（原 syscall 0） | 创建进程（`rdi` = `FrameAllocator*`） |
-| `0x0010_0001` | 遗留 1 | 分配线程 ID |
-| `0x0010_0002` | 遗留 2 | 发送 IPC 消息 |
-| `0x0010_0003` | 遗留 3 | 接收 IPC |
-| `0x0010_0004` | 遗留 4 | 映射用户页（`rdi` 须页对齐） |
-| `0x0010_0005` | 遗留 5 | 解除 `rdi` 虚拟页映射 |
-| `0x0010_0006` | 遗留 6 | 以 `rdi` 为退出码终止进程 |
-| `0x0010_0007` | 遗留 7 | 未实现（`STATUS_NOT_IMPLEMENTED`） |
-| `0x0010_0008` | 遗留 8 | 关闭当前进程句柄 |
-| `0x0010_0009` | 遗留 9 | 桩：立即成功 |
-| `0x0010_000A` | 遗留 10 | 创建 LPC 端口，返回端口 id |
-| `0x0010_000B` | 遗留 11 | 连接命名端口，返回客户端端口 id |
-| `0x0010_000C` | 遗留 12 | 当前进程 ID |
-| `0x0010_000D` | 遗留 13 | 主动让出 CPU |
-| `0x0010_000E` | 遗留 14 | 将 `rdi` 起 `rsi` 字节输出到控制台 |
+已分发服务与索引的权威来源：[`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig) + [`syscall.zig`](../../src/arch/x86_64/syscall.zig)（含 `NtClose`、`NtAllocateVirtualMemory`、`NtCreatePort`、`NtConnectPort`、`NtDisplayString` 等；未列出的索引返回 `STATUS_INVALID_PARAMETER` 或 `STATUS_NOT_IMPLEMENTED`）。
 
 ## 3. 内存管理 (mm/)
 

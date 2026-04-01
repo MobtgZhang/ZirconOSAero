@@ -10,7 +10,7 @@
 const fb = @import("framebuffer.zig");
 const wd = @import("wallpaper_data");
 
-/// Kernel framebuffer color packing: low=B, mid=G, high=R (see `theme.rgb` / `zircon_aero_defaults`).
+/// Kernel framebuffer color packing: low=B, mid=G, high=R (see `theme.rgb` / `nt61_aero_defaults`).
 fn packRgb(r: u8, g: u8, b: u8) u32 {
     return @as(u32, b) | (@as(u32, g) << 8) | (@as(u32, r) << 16);
 }

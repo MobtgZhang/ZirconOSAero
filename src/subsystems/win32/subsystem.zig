@@ -13,7 +13,7 @@ const pe_loader = @import("../../loader/pe.zig");
 const user32 = @import("user32.zig");
 const gdi32 = @import("gdi32.zig");
 
-pub const CSRSS_VERSION: []const u8 = "ZirconOS CSRSS v1.0";
+pub const CSRSS_VERSION: []const u8 = "ZirconOSAero CSRSS v1.0";
 
 pub const SubsystemType = enum(u8) {
     unknown = 0,

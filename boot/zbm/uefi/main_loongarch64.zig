@@ -1,4 +1,4 @@
-//! ZirconOS Boot Manager — LoongArch64 UEFI（与 `boot/zbm/uefi/main.zig` 共用 menu_common）
+//! ZirconOSAero Boot Manager (ZBM) — LoongArch64 UEFI（与 `boot/zbm/uefi/main.zig` 共用 menu_common）
 //!
 //! Zig build-obj + GNU-EFI/ld + objcopy 或 C stub 流程（linker_stub.lds）生成 BOOTLOONGARCH64.EFI。
 const std = @import("std");
@@ -232,7 +232,7 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
 fn displayBootProgress(out: anytype) void {
     _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
     puts(out, "\r\n");
-    puts(out, "                    ZirconOS Boot Manager                                     \r\n");
+    puts(out, "                 ZirconOSAero Boot Manager (NT 6.1)                            \r\n");
     _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
     puts(out, "\r\n");
     puts(out, "    Booting: ");

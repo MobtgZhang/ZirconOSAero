@@ -27,7 +27,7 @@ const rgb = theme.rgb;
 
 pub fn initDwm() void {
     if (dwm.isInitialized()) return;
-    // 与 display.initAeroDwm 相同参数（`zircon_aero_defaults` 单一源；正常启动路径下 display 已 init）。
+    // 与 display.initAeroDwm 相同参数（`nt61_aero_defaults` 单一源；正常启动路径下 display 已 init）。
     const cfg = dwm.DwmConfig{};
     dwm.init(cfg);
 
@@ -580,7 +580,7 @@ fn renderExplorerComputerClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.
     const entries = [_]struct { name: []const u8, date: []const u8, size: []const u8, icon: icons.IconId }{
         .{ .name = "Users", .date = "2026/01/15", .size = "", .icon = .documents },
         .{ .name = "Program Files", .date = "2026/03/20", .size = "", .icon = .documents },
-        .{ .name = "ZirconOS", .date = "2026/02/10", .size = "", .icon = .documents },
+        .{ .name = "ZirconOSAero", .date = "2026/02/10", .size = "", .icon = .documents },
         .{ .name = "PerfLogs", .date = "2026/01/01", .size = "", .icon = .documents },
         .{ .name = "boot.ini", .date = "2026/01/01", .size = "1 KB", .icon = .text_editor },
         .{ .name = "pagefile.sys", .date = "2026/03/21", .size = "2 GB", .icon = .text_editor },

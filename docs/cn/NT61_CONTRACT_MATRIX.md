@@ -82,7 +82,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 | 能力（文档概念 / API） | 状态 | 仓库位置 | 备注 |
 |------------------------|------|----------|------|
-| 离屏表面再合成 | 部分 | `renderer_aero.zig`, `dwm_compositor.zig`, `framebuffer.zig` | CPU 盒式模糊 + 预算：`zircon_aero_defaults.zig` |
+| 离屏表面再合成 | 部分 | `renderer_aero.zig`, `dwm_compositor.zig`, `framebuffer.zig` | CPU 盒式模糊 + 预算：`nt61_aero_defaults.zig` |
 | 合成启用查询（`DwmIsCompositionEnabled` 语义） | 部分 | `src/drivers/video/dwm.zig` | 内核策略位；无用户态 dwmapi DLL |
 | `DwmEnableBlurBehindWindow` / 毛玻璃区域 | 部分 | `dwm.zig`, `material.zig`, `display.zig` | `renderGlassEffect` / `renderGlassTintOnly` |
 | `DwmExtendFrameIntoClientArea` 策略 | 部分 | `display.zig`, `dwm_surface_spec.zig` | 标志与 NC/客户区绘制顺序 |

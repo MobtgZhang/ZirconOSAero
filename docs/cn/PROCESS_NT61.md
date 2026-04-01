@@ -39,7 +39,7 @@
 ### Phase 4 — Aero 桌面与合成
 
 - 以 `src/desktop/aero/` 为主线：合成器、主题加载、任务栏与 Shell；资源在 `resources/` 下维护。
-- **规格**：[DesktopManagerSpec.md](DesktopManagerSpec.md)（方案 B：内核 present + 用户态合成树 / Hit-test；`zircon_aero_defaults` 对齐玻璃参数）。
+- **规格**：[DesktopManagerSpec.md](DesktopManagerSpec.md)（方案 B：内核 present + 用户态合成树 / Hit-test；`nt61_aero_defaults` 对齐玻璃参数）。
 - **验证**：[DesktopQA.md](DesktopQA.md)、`scripts/desktop-qa.sh`。
 
 ### Phase 5 — 多架构回归

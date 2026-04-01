@@ -14,7 +14,7 @@
 - **内核**：`src/drivers/video/dwm_compositor.zig`、`display.zig`、`renderer_aero.zig` — 帧缓冲上完成 Aero 任务栏、壁纸、玻璃等 **实际像素输出**。
 - **用户态 Aero 库**：`src/desktop/aero/src/compositor.zig` — **离屏 Surface、Z-order、脏区、光标层** 的逻辑模型（宿主或测试可接 `renderer.RenderOps`）。
 
-**方案 B**（选定）：内核负责 **扫描输出与与硬件相关的 present**；用户 Aero 库持有 **合成树与 Shell 策略的规范描述**（Surface 生命周期、Layer 类型、Hit-test 顺序）。二者必须通过 **`zircon_aero_defaults.zig` 单一数值源** 对齐玻璃默认参数，避免双轨漂移。
+**方案 B**（选定）：内核负责 **扫描输出与与硬件相关的 present**；用户 Aero 库持有 **合成树与 Shell 策略的规范描述**（Surface 生命周期、Layer 类型、Hit-test 顺序）。二者必须通过 **`nt61_aero_defaults.zig` 单一数值源** 对齐玻璃默认参数，避免双轨漂移。
 
 向 **方案 A**（用户态唯一合成进程、内核仅 blit）演进时：保留本规格中的对象与 API 表，将实现从内核 `renderer_aero` 迁出即可。
 
@@ -68,7 +68,7 @@
 若使用离线 Learn 镜像（例如 `references/win32/desktop-src`），优先浏览其中 **`gdi/`**、**`dwm/`** 与 **`ProcThread/`** 等目录，核对：
 
 - `src/subsystems/win32/gdi32.zig`、`user32.zig` 的 API 形参与错误路径；
-- `src/desktop/aero/` 与 `zircon_aero_defaults.zig` 的合成/玻璃参数是否与文档描述一致。
+- `src/desktop/aero/` 与 `nt61_aero_defaults.zig` 的合成/玻璃参数是否与文档描述一致。
 
 **鼠标与指针（`inputdev/`、`LearnWin32/mouse-*.md`）**：与内核帧缓冲合成相关的命中、光标形态与重绘策略见 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) 第 2–3 节（含 **NC 热跟踪** 与 `needs_caption_chrome_only` / `render_cap` 路径，D1–D5 行为对照表）。
 
@@ -78,7 +78,7 @@
 
 公开文档中 DWM 将各窗绘制到**离屏表面**再合成；本仓库在无 GPU 合成时于帧缓冲上近似该流程，盒式模糊成本为 \(O(\text{像素} \times \text{半径} \times \text{遍数})\)。
 
-- **`zircon_aero_defaults.KernelDwm.blur_budget_pixel_passes_per_frame`**：每帧 `display.renderDesktopFrameEx` / `renderAeroDesktop` 入口重置；`dwm.zig` 内每次 `boxBlurRect` 按 `宽×高×pass` 扣减，耗尽则本帧后续 blur 跳过，仍保留 tint 与高光。
+- **`nt61_aero_defaults.KernelDwm.blur_budget_pixel_passes_per_frame`**：每帧 `display.renderDesktopFrameEx` / `renderAeroDesktop` 入口重置；`dwm.zig` 内每次 `boxBlurRect` 按 `宽×高×pass` 扣减，耗尽则本帧后续 blur 跳过，仍保留 tint 与高光。
 - **`blur_max_single_rect_pixels` / `blur_max_rect_calls_per_frame`**：单块面积与每帧调用次数硬顶，避免前几趟大矩形占满整帧（高分 GOP / LoongArch UEFI 下尤关键）。
 - **`blur_resolution_downgrade_pixel_threshold`** 与 **`glass_blur_radius_hd_cap` / `glass_blur_passes_hd_cap`**：帧像素数超阈值时自动下调半径与遍数。
 - **`glass_blur_radius_loongarch_cap` / `glass_blur_passes_loongarch_cap`**：由 **`dwm.applyPlatformAndResolutionTuning`** 在 `display.initAeroDwm`（`fb` 已就绪）时与分辨率策略一并应用到 `dwm`/`dwm_config`/`material`。
@@ -87,7 +87,7 @@
 - **壳层打开时** `setGlassLiteBlurEnabled(true)` 仍生效；**任务栏**在上下文菜单 / 开始菜单 / 托盘飞出打开时额外走 **`renderGlassTintOnly`**（`display.renderDesktopAeroTaskbar`），避免与场景模糊叠乘。
 - **取证**：`framebuffer.logDesktopGopSummary()` 在 `initDesktopMode` 打 **`DesktopGOP:`**；`-Ddesktop_bisect=true` 时在 `main.zig` 桌面循环输出 **`renderDesktopFrameEx` 前后 scheduler tick 差** 与 `fb_w`。
 
-调参时只改 `zircon_aero_defaults.zig`（单一数值源），避免与 `display.initAeroDwm` 漂移。
+调参时只改 `nt61_aero_defaults.zig`（单一数值源），避免与 `display.initAeroDwm` 漂移。
 
 ## 9. 参考链接
 

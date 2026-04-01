@@ -1,4 +1,4 @@
-//! ZirconOS Registry (NT-style)
+//! ZirconOSAero registry runtime (NT-style keys; clean-room)
 //! Provides a hierarchical key-value store for system and application settings.
 //! Modeled after the NT Registry with hives:
 //!   HKLM  - HKEY_LOCAL_MACHINE (hardware, drivers, system services)
@@ -352,7 +352,7 @@ fn populateDefaults() void {
     _ = setValueSz(env_key, "Path", "C:\\WINDOWS\\system32;C:\\WINDOWS");
     _ = setValueSz(env_key, "TEMP", "C:\\WINDOWS\\TEMP");
     _ = setValueSz(env_key, "windir", "C:\\WINDOWS");
-    _ = setValueSz(env_key, "OS", "ZirconOS_NT");
+    _ = setValueSz(env_key, "OS", "ZirconOSAero_NT61");
 
     const svc_key = createKey(.hklm, ccs_key, "Services") orelse return;
 
@@ -375,11 +375,11 @@ fn populateDefaults() void {
     const desc_key = createKey(.hklm, hw_key, "DESCRIPTION") orelse return;
     const sys_desc = createKey(.hklm, desc_key, "System") orelse return;
     _ = setValueSz(sys_desc, "Identifier", "AT/AT COMPATIBLE");
-    _ = setValueSz(sys_desc, "SystemBiosVersion", "ZirconOS BIOS v1.0");
+    _ = setValueSz(sys_desc, "SystemBiosVersion", "ZirconOSAero firmware v1.0");
 
     const cpu_key = createKey(.hklm, sys_desc, "CentralProcessor") orelse return;
     const cpu0 = createKey(.hklm, cpu_key, "0") orelse return;
-    _ = setValueSz(cpu0, "ProcessorNameString", "ZirconOS Virtual CPU");
+    _ = setValueSz(cpu0, "ProcessorNameString", "ZirconOSAero Virtual CPU");
     _ = setValueDword(cpu0, "~MHz", 3000);
     _ = setValueSz(cpu0, "VendorIdentifier", "GenuineIntel");
 
@@ -393,14 +393,14 @@ fn populateDefaults() void {
     const mm_key = createKey(.hklm, session_key, "Memory Management") orelse return;
     _ = setValueDword(mm_key, "DisablePagingExecutive", 0);
 
-    const ms_key = createKey(.hklm, sw_key, "ZirconOS") orelse return;
-    const nt_key = createKey(.hklm, ms_key, "ZirconOS NT") orelse return;
+    const ms_key = createKey(.hklm, sw_key, "ZirconOSAero") orelse return;
+    const nt_key = createKey(.hklm, ms_key, "ZirconOSAero NT") orelse return;
     const cv_key = createKey(.hklm, nt_key, "CurrentVersion") orelse return;
-    _ = setValueSz(cv_key, "ProductName", "ZirconOS v1.0");
+    _ = setValueSz(cv_key, "ProductName", "ZirconOSAero (NT 6.1)");
     _ = setValueSz(cv_key, "CurrentVersion", "5.1");
     _ = setValueDword(cv_key, "CurrentBuildNumber", 2600);
     _ = setValueSz(cv_key, "SystemRoot", "C:\\WINDOWS");
-    _ = setValueSz(cv_key, "RegisteredOwner", "ZirconOS User");
+    _ = setValueSz(cv_key, "RegisteredOwner", "ZirconOSAero User");
 
     const hkcu_root = createKey(.hkcu, NO_PARENT, "HKEY_CURRENT_USER") orelse return;
 

@@ -1306,7 +1306,7 @@ pub fn runGuiDemo() void {
     const hwnd = CreateWindowExA(
         0,
         cls_name,
-        "ZirconOS - Main Window",
+        "ZirconOSAero - Main Window",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -1339,7 +1339,7 @@ pub fn runGuiDemo() void {
     );
     klog.info("user32: Notepad window hwnd=0x%x", .{notepad_hwnd});
 
-    _ = MessageBoxA(hwnd, "ZirconOS GUI subsystem initialized!", "ZirconOS", MB_OK | MB_ICONINFORMATION);
+    _ = MessageBoxA(hwnd, "ZirconOSAero GUI subsystem initialized!", "ZirconOSAero", MB_OK | MB_ICONINFORMATION);
 
     var msg: MSG = .{};
     var processed: u32 = 0;

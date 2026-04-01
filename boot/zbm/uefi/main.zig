@@ -80,7 +80,7 @@ pub fn main() noreturn {
 fn displayBootProgress(out: anytype) void {
     _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
     puts(out, "\r\n");
-    puts(out, "                    ZirconOS Boot Manager                                     \r\n");
+    puts(out, "                 ZirconOSAero Boot Manager (NT 6.1)                            \r\n");
     _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
     puts(out, "\r\n");
     puts(out, "    Booting: ");

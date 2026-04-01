@@ -309,12 +309,12 @@ pub fn build(b: *std.Build) void {
     });
     root_mod.addImport("config_defaults", config_defaults_mod);
 
-    const zircon_aero_defaults_mod = b.createModule(.{
-        .root_source_file = b.path("src/config/zircon_aero_defaults.zig"),
+    const nt61_aero_defaults_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
         .target = target,
         .optimize = optimize,
     });
-    root_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_mod);
+    root_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
 
     const kernel = b.addExecutable(.{
         .name = "kernel",
@@ -479,8 +479,8 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
     const target = b.standardTargetOptions(.{});
 
     // 与 `src/desktop/aero/build.zig` 一致：`theme.zig` 依赖单一玻璃默认值源
-    const zircon_aero_defaults_desktop_mod = b.createModule(.{
-        .root_source_file = b.path("src/config/zircon_aero_defaults.zig"),
+    const nt61_aero_defaults_desktop_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -491,13 +491,13 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
     for (desktop_themes) |entry| {
         const src_path = b.fmt("{s}/src/main.zig", .{entry.dir});
         const root_path = b.fmt("{s}/src/root.zig", .{entry.dir});
-        const exe_name = b.fmt("ZirconOS-{s}", .{entry.name});
+        const exe_name = b.fmt("ZirconOSAero-{s}", .{entry.name});
 
         const theme_mod = b.addModule(entry.import_name, .{
             .root_source_file = b.path(root_path),
             .target = target,
         });
-        theme_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+        theme_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
 
         // EXE
         const exe = b.addExecutable(.{
@@ -509,8 +509,8 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             }),
         });
         exe.root_module.addImport(entry.import_name, theme_mod);
-        // main.zig 使用 @import("root.zig")，与库模块分离；theme 等在 exe 模块内解析 zircon_aero_defaults
-        exe.root_module.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+        // main.zig 使用 @import("root.zig")，与库模块分离；theme 等在 exe 模块内解析 nt61_aero_defaults
+        exe.root_module.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
         const install_exe = b.addInstallArtifact(exe, .{});
 
         // Static library (.lib)
@@ -519,7 +519,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .target = target,
             .optimize = optimize,
         });
-        lib_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+        lib_rm.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
         const lib = b.addLibrary(.{
             .name = exe_name,
             .linkage = .static,
@@ -533,7 +533,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .target = target,
             .optimize = optimize,
         });
-        dll_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+        dll_rm.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
         const dll = b.addLibrary(.{
             .name = exe_name,
             .linkage = .dynamic,
@@ -568,13 +568,13 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             if (mem.eql(u8, selected, entry.name)) {
                 const src_path = b.fmt("{s}/src/main.zig", .{entry.dir});
                 const root_path = b.fmt("{s}/src/root.zig", .{entry.dir});
-                const exe_name = b.fmt("ZirconOS-{s}", .{entry.name});
+                const exe_name = b.fmt("ZirconOSAero-{s}", .{entry.name});
 
                 const theme_mod = b.addModule(b.fmt("{s}-sel", .{entry.import_name}), .{
                     .root_source_file = b.path(root_path),
                     .target = target,
                 });
-                theme_mod.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+                theme_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
 
                 const exe = b.addExecutable(.{
                     .name = exe_name,
@@ -585,7 +585,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     }),
                 });
                 exe.root_module.addImport(entry.import_name, theme_mod);
-                exe.root_module.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+                exe.root_module.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
                 const install_sel_exe = b.addInstallArtifact(exe, .{});
                 desktop_step.dependOn(&install_sel_exe.step);
 
@@ -594,7 +594,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     .target = target,
                     .optimize = optimize,
                 });
-                lib_sel_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+                lib_sel_rm.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
                 const lib = b.addLibrary(.{
                     .name = exe_name,
                     .linkage = .static,
@@ -608,7 +608,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     .target = target,
                     .optimize = optimize,
                 });
-                dll_sel_rm.addImport("zircon_aero_defaults", zircon_aero_defaults_desktop_mod);
+                dll_sel_rm.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
                 const dll = b.addLibrary(.{
                     .name = exe_name,
                     .linkage = .dynamic,
@@ -661,7 +661,7 @@ fn buildZbm(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin.
     });
 
     const install_zbm = b.addInstallArtifact(zbm_lib, .{});
-    const zbm_step = b.step("zbm", "Build ZirconOS Boot Manager library");
+    const zbm_step = b.step("zbm", "Build ZirconOSAero Boot Manager (ZBM) library");
     zbm_step.dependOn(&install_zbm.step);
 }
 

@@ -29,28 +29,32 @@ pub const ThreadContext = struct {
 const MAX_THREADS: usize = 32;
 const STACK_SIZE: usize = 8192;
 
-/// 与路线图 Task 7 对齐的三档命名优先级（数值越大越优先）。
-pub const PRIORITY_IDLE: u8 = 4;
+/// NT 6.1 风格 **0–31** 数值档（越大越优先）；idle 取低端，交互/实时取高端。
+pub const PRIORITY_IDLE: u8 = 1;
 pub const PRIORITY_NORMAL: u8 = 8;
-pub const PRIORITY_REALTIME: u8 = 16;
+pub const PRIORITY_REALTIME: u8 = 24;
 
-/// 文档化八档阶梯（映射建议见 `docs/cn/SCHEDULER_API.md`）；非 NT 32 级。
+/// 仍支持 0..7 **class** 到基线优先级的映射（见 `priorityFromClass`）。
 pub const PRIORITY_CLASS_COUNT: usize = 8;
 
 /// 同等最高优先级线程间：连续占用的定时器 tick 数（`1` = 每 tick 可切换，兼容既有行为）。
 pub const TIME_SLICE_TICKS: u32 = 1;
 
-/// 从 `blocked` 唤醒时叠加到 `priority` 上的临时增量（clean-room 近似 I/O 完成提升，非 NT 精确语义）。
+/// 从 `blocked` 唤醒时叠加到 `priority` 上的临时增量（clean-room 近似 I/O 完成提升）。
 pub const IO_BOOST_PRIORITY_DELTA: u8 = 2;
 
 /// I/O 提升持续的 tick 数（PIT ~100Hz 时约 `N * 10ms` 量级）。
 pub const IO_BOOST_DURATION_TICKS: u64 = 20;
 
-/// `class` 0..7 → 单调升高的优先级值（裁剪到 u8）。
+/// 就绪过久临时抬升阈值（tick）；减轻纯优先级饿死（非 Windows 精确算法）。
+pub const STARVATION_TICK_THRESHOLD: u64 = 200;
+pub const STARVATION_BOOST: u8 = 2;
+
+/// `class` 0..7 → 0..31 内的基线优先级。
 pub fn priorityFromClass(class: u8) u8 {
     const c: u32 = @min(@as(u32, class), PRIORITY_CLASS_COUNT - 1);
-    const p: u32 = 4 + c * 2;
-    return @truncate(p);
+    const p: u32 = 2 + c * 3;
+    return @truncate(@min(p, 31));
 }
 
 pub const Thread = struct {
@@ -72,7 +76,12 @@ pub const Thread = struct {
 
 fn effectivePriority(t: *const Thread) u8 {
     const sum = @as(u16, t.priority) + @as(u16, t.io_boost);
-    return @truncate(@min(sum, @as(u16, 255)));
+    const capped: u16 = @min(sum, 31);
+    var p: u8 = @intCast(capped);
+    if (t.state == .ready and starve_ticks[t.id] > STARVATION_TICK_THRESHOLD) {
+        p = @min(31, p +| STARVATION_BOOST);
+    }
+    return p;
 }
 
 var threads: [MAX_THREADS]Thread = undefined;
@@ -81,6 +90,8 @@ var current_thread: usize = 0;
 var tick_count: u64 = 0;
 var initialized: bool = false;
 var scheduling_enabled: bool = false;
+
+var starve_ticks: [MAX_THREADS]u64 = @splat(0);
 
 pub fn init() void {
     thread_count = 0;
@@ -173,6 +184,15 @@ pub fn tick() void {
     }
 
     const cur = current_thread;
+    i = 0;
+    while (i < thread_count) : (i += 1) {
+        if (threads[i].state == .ready and i != cur) {
+            starve_ticks[i] += 1;
+        } else if (threads[i].state != .ready) {
+            starve_ticks[i] = 0;
+        }
+    }
+    if (cur < thread_count) starve_ticks[cur] = 0;
     if (threads[cur].state == .running and threads[cur].slice_remaining > 0) {
         threads[cur].slice_remaining -= 1;
     }

@@ -6,8 +6,8 @@
   - **`int 0x80`（向量 128）**：[`syscall_entry.s`](../../src/arch/x86_64/syscall_entry.s)，返回 **`iretq`**。
   - **`syscall` 指令**：[`syscall_lstar.s`](../../src/arch/x86_64/syscall_lstar.s) + [`syscall_msr.zig`](../../src/arch/x86_64/syscall_msr.zig) 配置 `IA32_LSTAR` / `IA32_STAR` / `IA32_FMASK`；处理完毕后以 **`sysretq`** 返回用户态（GDT 中用户 **SS** 须比用户 **CS** 小 8，见 [`gdt.zig`](../../src/hal/x86_64/gdt.zig)）。
 - **服务号**（`RAX`）：
-  - **NT 6.1 x64 SSDT 子集**：常量见 [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)；AMD64 约定第 **1** 参在 **`R10`**，第 2–4 参为 **`RDX`/`R8`/`R9`**，其余在用户栈（第 5 参相对 SYSCALL 时 `RSP` 常为 `+0x28`）。索引来源：公开构建版本 syscall 表（如社区维护的 `j00ru/windows-syscalls`），本仓库仅实现子集。
-  - **Zircon 遗留**：`0x0010_0000 .. 0x0010_000F`，参数为 **`RDI`/`RSI`/`RDX`**（兼容旧测试与 `int 0x80` 文档）；见 `syscall.zig` 中 `SYS_*` 别名。
+  - **NT 6.1 x64 SSDT 子集**：常量见 [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)；AMD64 约定第 **1** 参在 **`R10`**，第 2–4 参为 **`RDX`/`R8`/`R9`**，其余在用户栈（第 5 参相对 SYSCALL 时 `RSP` 常为 `+0x28`）。索引与 **Windows 7 SP1 x64** 公开表对齐（参考 `j00ru/windows-syscalls`），本仓库仅实现子集。
+  - **`int 0x80` 与 `syscall` 一致**：均使用上述 NT x64 约定（**不要**再使用已移除的 `0x0010_0000` 内部服务号）。
 - **返回值**：`RAX` 承载 `NTSTATUS`（有符号 32 位零扩展）。
 
 ## 与 Windows NT 6.1 x64 的差异

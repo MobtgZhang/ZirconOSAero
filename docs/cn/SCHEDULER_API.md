@@ -10,18 +10,18 @@
 
 | 符号 | 值 | 说明 |
 |------|-----|------|
-| `PRIORITY_IDLE` | 4 | 空闲线程默认档 |
+| `PRIORITY_IDLE` | 1 | 空闲线程默认档（NT 0–31 刻度低端） |
 | `PRIORITY_NORMAL` | 8 | `createThread` 默认档 |
-| `PRIORITY_REALTIME` | 16 | 高优先级占位（可与设备线程绑定） |
-| `PRIORITY_CLASS_COUNT` | 8 | 可映射到 NT 风格 0–7 档的 **文档阶梯**（见下） |
+| `PRIORITY_REALTIME` | 24 | 高优先级占位（可与设备线程绑定） |
+| `PRIORITY_CLASS_COUNT` | 8 | class → 基线优先级映射（见下） |
 
-### 八档映射（建议）
+### 八档映射（`priorityFromClass`）
 
-将 NT 的「优先级类」概念压缩为 8 档时，可使用：
+`effective = 2 + class * 3`（class ∈ 0..7），裁剪到 **31**。`effectivePriority` 将 `priority + io_boost` 裁剪到 **0–31**。
 
-`effective = 4 + class * 2`（class ∈ 0..7）→ 4,6,8,10,12,14,16,18；再裁剪到实现允许的最大值。
+### 防饥饿（clean-room）
 
-与真实 NT 32 级优先级 **不对齐**，仅为本内核可演进阶梯。
+就绪线程（非当前运行）每 tick 累加 `starve_ticks`；超过 `STARVATION_TICK_THRESHOLD` 后在 `effectivePriority` 上临时 `+STARVATION_BOOST`（上限 31）。**非** Windows 精确动态优先级算法。
 
 ## 时间片
 
@@ -37,7 +37,7 @@
 
 | 能力 | NT / 公开文档侧 | 本仓库 |
 |------|-----------------|--------|
-| 优先级级数 | 32 级 + 优先级类 | 8 档映射到约 4–18 的 u8 阶梯 |
+| 优先级级数 | 32 级 + 优先级类 | **0–31** 有效优先级刻度 + 防饥饿近似 |
 | 优先级提升 | I/O、前台、饥饿等多源规则 | 仅 `unblockThread` 固定增量 + 定时衰减 |
 | NUMA / 处理器亲和 | 存在 | 未实现 |
 | 实时带宽 / 公平份额 | 存在 | 未实现 |

@@ -10,9 +10,7 @@
 
 //! x64 `syscall` 调用约定（与 AMD64 长模式一致）：`RAX`=下表索引；第 1 参在 **`R10`**（因 `RCX` 存返回 RIP）；
 //! 第 2–4 参为 `RDX`、`R8`、`R9`；更多参数在**用户栈**上（相对于 SYSCALL 时 `RSP`，第 5 参常为 `+0x28`）。
-
-/// Zircon 内部遗留服务（非 Windows）：`RAX = legacy_base + 0..15`，参数走 `RDI/RSI/RDX`（`int 0x80` 路径）。
-pub const zircon_legacy_syscall_base: u32 = 0x0010_0000;
+//! `int 0x80`（向量 128）使用同一 `InterruptFrame` 与同一分发器；调用方须遵守 **NT x64 寄存器约定**（第 1 参在 **R10**），而非 Linux `int 0x80` 风格。
 
 pub const NtClose = 0x0C;
 pub const NtWaitForSingleObject = 0x04;
@@ -30,10 +28,22 @@ pub const NtReadFile = 0x07;
 pub const NtUserGetMessage = 0x58;
 pub const NtUserPeekMessage = 0x59;
 
+/// Ref: j00ru/windows-syscalls `nt-per-syscall.json` — Windows 7 SP1 x64.
+pub const NtRequestWaitReplyPort = 0x1F;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64.
+pub const NtConnectPort = 0x8F;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64.
+pub const NtCreatePort = 0x9D;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64（早期内核调试输出；本内核可作串口跟踪）。
+pub const NtDisplayString = 0xB8;
+
 const std = @import("std");
 
-test "SSDT indices stay below Zircon legacy syscall base" {
-    try std.testing.expect(NtUserGetMessage < zircon_legacy_syscall_base);
-    try std.testing.expect(NtUserPeekMessage < zircon_legacy_syscall_base);
+test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtAllocateVirtualMemory == 0x18);
+    try std.testing.expect(NtTerminateProcess == 0x29);
+    try std.testing.expect(NtCreatePort == 0x9D);
+    try std.testing.expect(NtConnectPort == 0x8F);
+    try std.testing.expect(NtDisplayString == 0xB8);
+    try std.testing.expect(NtRequestWaitReplyPort == 0x1F);
 }

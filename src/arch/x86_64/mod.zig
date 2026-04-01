@@ -160,6 +160,8 @@ pub fn sendEoi(irq: u8) void {
 
 pub fn initTimer() void {
     pit.init();
+    const hpet = @import("../../hal/x86_64/hpet.zig");
+    _ = hpet.initOptional();
 }
 
 pub fn initPic() void {

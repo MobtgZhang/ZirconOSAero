@@ -1,7 +1,6 @@
-# ZirconOS Syscall Entry (int 0x80, vector 128)
-# Uses same register save/restore layout as ISR for unified InterruptFrame.
-# Syscall convention: rax=number, rdi,rsi,rdx,r10,r8,r9=args
-# Return value placed in saved rax on stack.
+# ZirconOSAero — int 0x80 syscall entry (vector 128)
+# Same InterruptFrame as syscall_lstar.s / ISR; dispatcher: src/arch/x86_64/syscall.zig
+# NT x64 service convention: rax=SSDT index; 1st arg=R10; 2nd=rdx; 3rd=r8; 4th=r9; rest on user stack (+0x28…).
 
 .global syscall_entry
 syscall_entry:

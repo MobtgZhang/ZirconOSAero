@@ -14,7 +14,7 @@
 
 ## 建议结论（2026 里程碑）
 
-1. **短期**：完善 **LPC 连接端口 / 通信端口** 分离（[`src/lpc/port.zig`](../../src/lpc/port.zig)）、**Section -backed 缓冲**，支撑 csrss 与内核 **DesktopManagerSpec** 单源配置（见 `zircon_aero_defaults.compositor_config_epoch` 与显示层 trace）。
+1. **短期**：完善 **LPC 连接端口 / 通信端口** 分离（[`src/lpc/port.zig`](../../src/lpc/port.zig)）、**Section -backed 缓冲**，支撑 csrss 与内核 **DesktopManagerSpec** 单源配置（见 `nt61_aero_defaults.compositor_config_epoch` 与显示层 trace）。
 2. **中期**：在 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 中逐项标注 **user32/gdi32** 为 **Partial**，不默认声称 **二进制级 win32k 等价**。
 3. **长期**：若需运行 **未修改微软用户态二进制**，再评估 **受限 win32k** 或 **混合模型**（仅同步原语与句柄在内核，绘制仍在服务进程）。
 

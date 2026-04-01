@@ -1,4 +1,4 @@
-# ZirconOS kernel implementation
+# ZirconOSAero kernel implementation (NT 6.1 target)
 
 This document describes the main kernel subsystems.
 
@@ -76,29 +76,11 @@ Selected via `src/arch.zig` for the build target.
 
 ### Syscall ABI (x86_64)
 
-- Entry: `int 0x80` (vector 128)  
-- Number: `rax`  
-- Args: `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9`  
+- Entry: `syscall`/`sysret` and `int 0x80` (vector 128) share one dispatcher  
+- Number: `rax` = public **Windows 7 SP1 x64** SSDT index (subset)  
+- Args: **NT x64** — 1st in `r10`, then `rdx`/`r8`/`r9`, rest on user stack ([SyscallABI.md](../cn/SyscallABI.md))  
 
-Implemented calls (see [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig); other architectures use traps/MMIO only—no second table yet):
-
-| # | Name | Role |
-|---|------|------|
-| `0x0010_0000` | Zircon legacy 0 — was syscall 0 | Create process (`rdi` = `FrameAllocator*`) |
-| `0x0010_0001` | legacy 1 | Allocate thread ID |
-| `0x0010_0002` | legacy 2 | Send IPC message |
-| `0x0010_0003` | legacy 3 | Receive IPC |
-| `0x0010_0004` | legacy 4 | Map user page at `rdi` (page-aligned) |
-| `0x0010_0005` | legacy 5 | Unmap page at `rdi` |
-| `0x0010_0006` | legacy 6 | Exit with code `rdi` |
-| `0x0010_0007` | legacy 7 | Not implemented (`STATUS_NOT_IMPLEMENTED`) |
-| `0x0010_0008` | legacy 8 | Close handle in current process |
-| `0x0010_0009` | legacy 9 | Stub wake (`STATUS_SUCCESS`) |
-| `0x0010_000A` | legacy 10 | Create LPC port; returns port id |
-| `0x0010_000B` | legacy 11 | Connect to named port; returns client port id |
-| `0x0010_000C` | legacy 12 | Current PID |
-| `0x0010_000D` | legacy 13 | Yield CPU |
-| `0x0010_000E` | legacy 14 | Write `rsi` bytes from `rdi` to console |
+Authoritative indices and handlers: [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig), [`syscall.zig`](../../src/arch/x86_64/syscall.zig). There is no `0x0010_0000` internal service namespace.
 
 ## 3. Memory management (`mm/`)
 

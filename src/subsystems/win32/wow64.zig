@@ -2,7 +2,7 @@
 //! Phase 11: PE32 loading, 32-bit syscall thunking, address space
 //! management, 32-bit ntdll/kernel32 shim, and compatibility testing.
 //!
-//! **与真实 SysWOW64 的差距**：64 位内核侧已提供 **NT 6.1 SSDT 子集**（`src/arch/x86_64/ssdt_nt61.zig`）与 **Zircon 遗留基址** `0x0010_0000`（旧 `SYS_*`）。
+//! **与真实 SysWOW64 的差距**：64 位内核侧为 **NT 6.1 SSDT 子集**（`src/arch/x86_64/ssdt_nt61.zig`）；无非 Windows 服务号命名空间。
 //! 本层 `translateSyscall32to64` 仍使用 **32 位 PE 常见 syscall 号** 演示 thunk；与 SysWOW64 转 64 位 `syscall` 的真实映射表不对齐，见 `docs/cn/SyscallABI.md`。
 //!
 //! 模块化：`wow64/types.zig`、`wow64/thunk.zig`、`wow64/redirect.zig`。

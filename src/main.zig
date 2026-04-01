@@ -419,7 +419,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
     // ═══ Text Mode Fallback ═══
     klog.info("", .{});
-    klog.info("=== ZirconOS v1.0 Kernel Ready ===", .{});
+    klog.info("=== ZirconOSAero kernel ready (NT 6.1) ===", .{});
     klog.info("Architecture : %s", .{arch.impl.name});
     klog.info("Processes    : %u", .{@import("ps/process.zig").getProcessCount()});
     klog.info("Sessions     : %u", .{smss.getSessionCount()});
@@ -744,7 +744,7 @@ fn showZbmStyleBootMenu() void {
         "ZirconOSAero [CMD Shell]",
     };
     const descriptions = [_][]const u8{
-        "Start ZirconOS normally.",
+        "Start ZirconOSAero normally.",
         "Start with debug logging and serial output enabled.",
         "Start with minimal drivers and services.",
         "Start in safe mode with network support.",
@@ -757,7 +757,7 @@ fn showZbmStyleBootMenu() void {
     while (true) {
         if (need_full_redraw) {
             klog.info("", .{});
-            klog.info("                    ZirconOS Boot Manager                                     ", .{});
+            klog.info("                 ZirconOSAero Boot Manager (NT 6.1)                            ", .{});
             klog.info("                         Version %s                                             ", .{sys_config.getVersion()});
             klog.info("", .{});
             klog.info("    Choose an operating system to start:", .{});
@@ -867,7 +867,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     }
 
     klog.info("========================================", .{});
-    klog.info("  ZirconOS v1.0 (NT-style Hybrid Microkernel)", .{});
+    klog.info("  ZirconOSAero (NT 6.1 hybrid kernel)", .{});
     klog.info("  Architecture: %s", .{arch.impl.name});
     klog.info("========================================", .{});
 

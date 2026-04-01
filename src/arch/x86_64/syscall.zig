@@ -1,13 +1,10 @@
-//! x86_64 系统调用分发：`syscall` / `int 0x80`（向量 128）共用本模块。
-//! - **NT 6.1 x64 SSDT 索引**（子集）：见 `ssdt_nt61.zig`；AMD64 约定第 1 参在 **R10**。
-//! - **Zircon 遗留**：`ssdt_nt61.zircon_legacy_syscall_base + 0..15`，参数为 **RDI/RSI/RDX**（兼容旧 `int 0x80` 测试）。
+//! x86_64 系统调用分发：`syscall` 与 `int 0x80`（向量 128）共用本模块与同一 **NT 6.1 x64** 寄存器约定。
+//! - **服务号**：`ssdt_nt61.zig` 中公开 SSDT 索引（Windows 7 SP1 x64 参考：j00ru/windows-syscalls）。
+//! - **约定**：第 1 参在 **R10**（`syscall` 时 RCX 存用户 RIP，故不用 RCX 传参）；第 2–4 参为 **RDX/R8/R9**；其余在用户栈。
 
-const ipc = @import("../../lpc/ipc.zig");
-const lpc_port = @import("../../lpc/port.zig");
 const process = @import("../../ps/process.zig");
 const klog = @import("../../rtl/klog.zig");
 const ob = @import("../../ob/object.zig");
-const vm = @import("../../mm/vm.zig");
 const ntdll = @import("../../libs/ntdll.zig");
 const ssdt = @import("ssdt_nt61.zig");
 const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
@@ -20,32 +17,6 @@ fn ntResult(s: ntdll.NTSTATUS) i64 {
 pub const STATUS_SUCCESS: i64 = 0;
 pub const STATUS_NO_MESSAGE: i64 = -3;
 pub const STATUS_NOT_IMPLEMENTED: i64 = @intCast(ntdll.STATUS_NOT_IMPLEMENTED);
-
-/// 遗留常量（= `zircon_legacy_syscall_base + ord`）；新代码请使用 SSDT 号或本模块 `dispatch` 自动识别。
-pub const SYS_CREATE_PROCESS: u64 = ssdt.zircon_legacy_syscall_base + 0;
-pub const SYS_CREATE_THREAD: u64 = ssdt.zircon_legacy_syscall_base + 1;
-pub const SYS_IPC_SEND: u64 = ssdt.zircon_legacy_syscall_base + 2;
-pub const SYS_IPC_RECEIVE: u64 = ssdt.zircon_legacy_syscall_base + 3;
-pub const SYS_MAP_MEMORY: u64 = ssdt.zircon_legacy_syscall_base + 4;
-pub const SYS_UNMAP_MEMORY: u64 = ssdt.zircon_legacy_syscall_base + 5;
-pub const SYS_EXIT_PROCESS: u64 = ssdt.zircon_legacy_syscall_base + 6;
-pub const SYS_OPEN_HANDLE: u64 = ssdt.zircon_legacy_syscall_base + 7;
-pub const SYS_CLOSE_HANDLE: u64 = ssdt.zircon_legacy_syscall_base + 8;
-pub const SYS_WAIT_OBJECT: u64 = ssdt.zircon_legacy_syscall_base + 9;
-pub const SYS_CREATE_PORT: u64 = ssdt.zircon_legacy_syscall_base + 10;
-pub const SYS_CONNECT_PORT: u64 = ssdt.zircon_legacy_syscall_base + 11;
-pub const SYS_GET_PID: u64 = ssdt.zircon_legacy_syscall_base + 12;
-pub const SYS_YIELD: u64 = ssdt.zircon_legacy_syscall_base + 13;
-pub const SYS_DEBUG_PRINT: u64 = ssdt.zircon_legacy_syscall_base + 14;
-
-fn isLegacyZircon(syscall_no: u64) bool {
-    return syscall_no >= ssdt.zircon_legacy_syscall_base and
-        syscall_no < ssdt.zircon_legacy_syscall_base + 16;
-}
-
-fn legacyOrdinal(syscall_no: u64) u64 {
-    return syscall_no - ssdt.zircon_legacy_syscall_base;
-}
 
 /// 自用户栈读取第 N 个 syscall 扩展参数（N=0 → 第 5 个实参），偏移相对 SYSCALL 时的用户 RSP。
 fn userStackArg(frame: *InterruptFrame, nth_stack_arg: u8) ?u64 {
@@ -61,46 +32,80 @@ fn userStackArg(frame: *InterruptFrame, nth_stack_arg: u8) ?u64 {
     return @as(*const volatile u64, @ptrFromInt(va)).*;
 }
 
-pub fn dispatch(frame: *InterruptFrame) void {
-    const syscall_no = frame.rax;
-
-    const result: i64 = if (isLegacyZircon(syscall_no))
-        dispatchLegacy(frame, legacyOrdinal(syscall_no))
-    else
-        dispatchNtSsdt(frame, @truncate(syscall_no));
-
-    frame.rax = @bitCast(result);
+/// 自用户态 `UNICODE_STRING`（Length 为字节数）读取窄字符名到 `out`（UTF-16LE 低字节，非 ASCII 置 `?`）。
+fn readUserUnicodePathName(unicode_str_va: u64, out: *[32]u8) ?[]const u8 {
+    if (unicode_str_va == 0) return null;
+    // SAFETY: 用户指针；仅用于 syscall 路径，与现有内核用户指针策略一致。
+    const us = @as(*const volatile extern struct {
+        Length: u16,
+        MaximumLength: u16,
+        Buffer: u64,
+    }, @ptrFromInt(unicode_str_va));
+    const byte_len = us.Length;
+    if (byte_len < 2 or byte_len > 64) return null;
+    const wchar_count = @as(usize, @intCast(byte_len)) / 2;
+    if (wchar_count == 0) return null;
+    if (us.Buffer == 0) return null;
+    var j: usize = 0;
+    var i: usize = 0;
+    while (i < wchar_count and j < out.len) : (i += 1) {
+        const ch = @as(*const volatile u16, @ptrFromInt(us.Buffer + i * 2)).*;
+        out[j] = if (ch < 128) @truncate(ch) else '?';
+        j += 1;
+    }
+    return out[0..j];
 }
 
-fn dispatchLegacy(frame: *InterruptFrame, ord: u64) i64 {
-    const arg1 = frame.rdi;
-    const arg2 = frame.rsi;
-    const arg3 = frame.rdx;
-    return switch (ord) {
-        0 => handleCreateProcess(arg1),
-        1 => handleCreateThread(arg1, arg2),
-        2 => handleIpcSend(arg1, arg2, arg3),
-        3 => handleIpcReceive(arg1),
-        4 => handleMapMemory(arg1, arg2, arg3),
-        5 => handleUnmapMemory(arg1),
-        6 => handleExitProcess(arg1),
-        7 => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
-        8 => handleCloseHandle(arg1),
-        9 => STATUS_SUCCESS,
-        10 => handleCreatePort(arg1, arg2),
-        11 => handleConnectPort(arg1, arg2),
-        12 => @intCast(process.getCurrentPid()),
-        13 => blk: {
-            const scheduler = @import("../../ke/scheduler.zig");
-            scheduler.yield();
-            break :blk 0;
-        },
-        14 => handleDebugPrint(arg1, arg2),
-        else => blk: {
-            klog.warn("Unknown legacy syscall ord %u", .{ord});
-            break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
-        },
-    };
+fn readPortNameFromObjectAttributes(obj_attr_va: u64, out: *[32]u8) ?[]const u8 {
+    if (obj_attr_va == 0) return null;
+    const oa = @as(*const volatile extern struct {
+        Length: u32,
+        _pad0: u32,
+        RootDirectory: u64,
+        ObjectName: u64,
+        Attributes: u32,
+        _pad1: u32,
+        SecurityDescriptor: u64,
+        SecurityQualityOfService: u64,
+    }, @ptrFromInt(obj_attr_va));
+    if (oa.ObjectName == 0) return null;
+    return readUserUnicodePathName(oa.ObjectName, out);
+}
+
+/// `NtDisplayString`：将用户 `UNICODE_STRING` 以可打印 ASCII 子集写到控制台。
+fn readUserUnicodeForDisplay(unicode_str_va: u64, out: *[256]u8) ?[]const u8 {
+    if (unicode_str_va == 0) return null;
+    const us = @as(*const volatile extern struct {
+        Length: u16,
+        MaximumLength: u16,
+        Buffer: u64,
+    }, @ptrFromInt(unicode_str_va));
+    const byte_len = us.Length;
+    if (byte_len == 0 or byte_len > 510) return null;
+    if (us.Buffer == 0) return null;
+    const wchar_count = @as(usize, @intCast(byte_len)) / 2;
+    var j: usize = 0;
+    var i: usize = 0;
+    while (i < wchar_count and j < out.len - 2) : (i += 1) {
+        const ch = @as(*const volatile u16, @ptrFromInt(us.Buffer + i * 2)).*;
+        if (ch == '\r' or ch == '\n') {
+            out[j] = ';';
+            j += 1;
+        } else if (ch < 128) {
+            out[j] = @truncate(ch);
+            j += 1;
+        } else {
+            out[j] = '?';
+            j += 1;
+        }
+    }
+    return out[0..j];
+}
+
+pub fn dispatch(frame: *InterruptFrame) void {
+    const syscall_no = frame.rax;
+    const result: i64 = dispatchNtSsdt(frame, @truncate(syscall_no));
+    frame.rax = @bitCast(result);
 }
 
 fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
@@ -189,6 +194,10 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             const st = user32.ntUserPeekMessageSyscall(p1, p2, @truncate(p3), @truncate(p4), @truncate(a5));
             break :blk ntResult(st);
         },
+        ssdt.NtCreatePort => dispatchNtCreatePort(frame),
+        ssdt.NtConnectPort => dispatchNtConnectPort(frame),
+        ssdt.NtRequestWaitReplyPort => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
+        ssdt.NtDisplayString => dispatchNtDisplayString(frame),
         else => blk: {
             klog.warn("Unknown NT syscall idx 0x%x", .{idx});
             break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
@@ -196,84 +205,42 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
     };
 }
 
-fn handleIpcSend(sender: u64, receiver: u64, opcode: u64) i64 {
-    const r = ipc.send(@intCast(sender), @intCast(receiver), @intCast(opcode), null);
-    if (r == 0) return 0;
-    if (r == -2) return ntResult(ntdll.STATUS_INSUFFICIENT_RESOURCES);
-    return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+fn dispatchNtCreatePort(frame: *InterruptFrame) i64 {
+    const port_handle_user = frame.r10;
+    const oa_user = frame.rdx;
+    if (port_handle_user == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    var name_buf: [32]u8 = undefined;
+    const nm = readPortNameFromObjectAttributes(oa_user, &name_buf) orelse
+        return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    var local: ntdll.HANDLE = 0;
+    const st = ntdll.NtCreatePort(&local, nm);
+    if (st != ntdll.STATUS_SUCCESS) return ntResult(st);
+    @as(*volatile u64, @ptrFromInt(port_handle_user)).* = local;
+    return 0;
 }
 
-fn handleIpcReceive(_: u64) i64 {
-    const msg = ipc.receive(process.getCurrentPid());
-    if (msg) |m| {
-        return @intCast(m.sender);
-    }
-    return STATUS_NO_MESSAGE;
+fn dispatchNtConnectPort(frame: *InterruptFrame) i64 {
+    const port_handle_user = frame.r10;
+    const server_name_us = frame.rdx;
+    if (port_handle_user == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    var name_buf: [32]u8 = undefined;
+    const nm = readUserUnicodePathName(server_name_us, &name_buf) orelse
+        return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    var local: ntdll.HANDLE = 0;
+    const st = ntdll.NtConnectPort(&local, nm);
+    if (st != ntdll.STATUS_SUCCESS) return ntResult(st);
+    @as(*volatile u64, @ptrFromInt(port_handle_user)).* = local;
+    return 0;
 }
 
-fn handleCreateProcess(frame_alloc_ptr: u64) i64 {
-    if (frame_alloc_ptr == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    const alloc = @as(*@import("../../mm/frame.zig").FrameAllocator, @ptrFromInt(frame_alloc_ptr));
-    const p = process.createProcess(alloc);
-    if (p) |proc| {
-        return @intCast(proc.pid);
-    }
-    return ntResult(ntdll.STATUS_NO_MEMORY);
-}
-
-fn handleCreateThread(_: u64, _: u64) i64 {
-    const tid = process.allocTid() orelse return ntResult(ntdll.STATUS_NO_MEMORY);
-    return @intCast(tid);
-}
-
-fn handleMapMemory(virt: u64, _: u64, _: u64) i64 {
-    const proc = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    if (virt & 0xFFF != 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    if (proc.address_space) |*space| {
-        const flags = vm.MapFlags{ .writable = true, .user = true };
-        if (space.mapPageAlloc(virt, flags)) |_| {
-            return 0;
-        }
-    }
-    return ntResult(ntdll.STATUS_NO_MEMORY);
-}
-
-fn handleUnmapMemory(virt: u64) i64 {
-    const proc = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    if (virt & 0xFFF != 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    if (proc.address_space) |*space| {
-        _ = space.unmapPage(virt);
-        return 0;
-    }
-    return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-}
-
-fn copyNameArg(name_ptr: u64, name_len: u64, out: *[32]u8) ?[]const u8 {
-    if (name_ptr == 0 or name_len == 0 or name_len > out.len) return null;
-    const p = @as([*]const u8, @ptrFromInt(name_ptr));
-    @memcpy(out[0..name_len], p[0..name_len]);
-    return out[0..name_len];
-}
-
-fn handleCreatePort(name_ptr: u64, name_len: u64) i64 {
-    var buf: [32]u8 = undefined;
-    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    const pid = process.getCurrentPid();
-    const pt = lpc_port.createPort(pid, nm) orelse return ntResult(ntdll.STATUS_NO_MEMORY);
-    return @intCast(pt.id);
-}
-
-fn handleConnectPort(name_ptr: u64, name_len: u64) i64 {
-    var buf: [32]u8 = undefined;
-    const nm = copyNameArg(name_ptr, name_len, &buf) orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    const pid = process.getCurrentPid();
-    const pt = lpc_port.connectPort(pid, nm) orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    return @intCast(pt.id);
-}
-
-fn handleExitProcess(exit_code: u64) i64 {
-    const pid = process.getCurrentPid();
-    _ = process.terminateProcess(pid, @intCast(exit_code));
+fn dispatchNtDisplayString(frame: *InterruptFrame) i64 {
+    const us_ptr = frame.r10;
+    var buf: [256]u8 = undefined;
+    const slice = readUserUnicodeForDisplay(us_ptr, &buf) orelse
+        return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    const arch_mod = @import("../../arch.zig");
+    arch_mod.consoleWrite(slice);
+    arch_mod.consoleWrite("\r\n");
     return 0;
 }
 
@@ -284,13 +251,4 @@ fn handleCloseHandle(handle_val: u64) i64 {
         return 0;
     }
     return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-}
-
-fn handleDebugPrint(buf_ptr: u64, len: u64) i64 {
-    if (buf_ptr == 0 or len == 0 or len > 256) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
-    const ptr = @as([*]const u8, @ptrFromInt(buf_ptr));
-    const slice = ptr[0..@intCast(len)];
-    const arch = @import("../../arch.zig");
-    arch.consoleWrite(slice);
-    return 0;
 }

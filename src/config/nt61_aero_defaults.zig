@@ -1,4 +1,4 @@
-//! ZirconOS Aero 桌面合成默认参数 — **唯一数值源**（与 `docs/cn/AeroRendering.md`、`docs/cn/DesktopManagerSpec.md` 一致）。
+//! ZirconOSAero — NT 6.1 风格 Aero 桌面合成默认参数 — **唯一数值源**（与 `docs/cn/AeroRendering.md`、`docs/cn/DesktopManagerSpec.md` 一致）。
 //! 内核帧缓冲路径（`src/drivers/video/`）与用户态 Aero 库（`src/desktop/aero/`）均应通过本模块引用，
 //! 避免 `initAeroDwm` 与 `theme.DwmDefaults` 漂移。（对外 ABI 对齐目标为 NT 6.1 档公开行为描述。）
 //!

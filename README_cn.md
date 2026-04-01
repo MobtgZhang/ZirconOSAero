@@ -171,6 +171,8 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 矩阵中 **Done** 仅表示 QEMU/CI 烟测主路径可演示且与契约矩阵一致，**不表示**与商业 Windows 7 内核等价。须以契约矩阵、[MVT_NT61.md](docs/cn/MVT_NT61.md) 与 `zig build test` 为准。
 
+**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 交叉编译内核与 ZBM 相关目标，x86_64 另构建 **无 GRUB** 的 UEFI ISO 烟测；引导说明见 [Boot.md](docs/cn/Boot.md)。
+
 ## Phase 0–11 功能矩阵（继承上游能力）
 
 状态以代码与契约为准；**Partial / Stub** 非「全部完成」。
@@ -196,12 +198,12 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | Session Manager | Done | SMSS、会话、子系统注册 |
 | Security | Done | Token、SID、访问检查 |
 | I/O Manager | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP；PCI 早期见 `acpi_pci_early.zig` |
-| VFS | Done | 挂载点 |
-| FAT32 | Done | `C:\` 上文件与目录 |
-| NTFS | Done | MFT，`D:\` 上文件与目录 |
-| PE32+ 加载器 | Done | 头、DLL、导入、重定位、PEB/TEB |
+| VFS | Partial | 挂载点；完整语义见契约矩阵 |
+| FAT32 | Partial | `C:\` 主路径；与 NT 格式化完全互操作非目标 |
+| NTFS | Partial | MFT 子集与基本路径；**非**完整 NTFS（日志/压缩等见路线图） |
+| PE32+ 加载器 | Partial | 头、导入、重定位、PEB/TEB 子集；与 SSDT 持续对齐 |
 | PE32 加载器 | Partial | 32 位 PE + WOW64；与官方 SysWOW64/SSDT 不对齐 |
-| ELF 加载器 | Done | ELF64 头、段、共享对象 |
+| ELF 加载器 | Partial | ELF64 头与加载子集；glibc 动态全兼容非目标 |
 | ntdll | Partial | Native API 子集；服务号见 SSDT 路线图 |
 | kernel32 | Partial | Win32 基础 API 子集 |
 | user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集 |

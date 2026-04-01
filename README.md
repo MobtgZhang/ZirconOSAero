@@ -171,6 +171,8 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 特性矩阵中的 **Done** 仅表示：在 **QEMU/CI 烟测** 路径上该模块有 **可运行的主路径演示**，并与 [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md) 中的契约描述一致。**Done 不表示**与商业版 Windows 7 内核在完整性、边界行为、性能或安全属性上已等价。许多组件仍为 **Partial / Stub**（子集实现或占位）；历史上若出现「全盘 Done」类表述，应视为过时——**以契约矩阵 + 自动化测试 + 源码注释为准**。完整 NT 6.1 级内核是多年工程；本项目的现实定位是 **可验证的研究与渐进兼容**，而非「已复刻完成」的产品声明。
 
+**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 做内核与 ZBM 相关交叉编译，x86_64 另生成 **无 GRUB** 的 UEFI ISO 烟测产物；详见 [docs/en/Boot.md](docs/en/Boot.md)。
+
 ## Phase 0–11 feature matrix（继承上游能力）
 
 | Area | Status | Notes |
@@ -194,12 +196,12 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | Session Manager | Done | SMSS, sessions, subsystem registration |
 | Security | Done | Token, SID, access checks |
 | I/O Manager | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP 桥接；PnP/PCI 见 `acpi_pci_early.zig` |
-| VFS | Done | Mount points |
-| FAT32 | Done | Files/dirs on `C:\` |
-| NTFS | Done | MFT, files/dirs on `D:\` |
-| PE32+ loader | Done | Headers, DLLs, imports, relocs, PEB/TEB |
+| VFS | Partial | Mount points；完整 IRP/锁语义见契约矩阵 |
+| FAT32 | Partial | `C:\` 主路径可用；与 NT 格式化工具完全互操作非目标 |
+| NTFS | Partial | MFT 子集与基本路径；**非**完整 NTFS（日志/压缩/稀疏/安全描述符全谱系见路线图） |
+| PE32+ loader | Partial | Headers, imports, relocs, PEB/TEB 子集；绑定与边界情况持续对齐 SSDT |
 | PE32 loader | Partial | 32-bit PE + WOW64；与官方 SysWOW64/SSDT 不对齐 |
-| ELF loader | Done | ELF64 headers, segments, shared objects |
+| ELF loader | Partial | ELF64 头与加载子集；与 glibc 动态链接全兼容非目标 |
 | ntdll | Partial | Native API 子集；服务号见 SSDT 路线图 |
 | kernel32 | Partial | Win32 base API 子集 |
 | user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集；完整 NC 序列见契约矩阵 |

@@ -168,3 +168,13 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 | GUI/compatibility too early | Stuck in user32/gdi32/WOW64 | Strict phasing |
 | Unstable Native API | Weak foundation for Win32 | Solid ntdll first |
 | Scope creep | No shippable v1.0 | Clear boundaries and non-goals |
+
+## 6. Deferred surfaces (kernel-first milestone)
+
+The following tracks are **explicitly not** part of the **kernel-usable** milestone; they remain in-tree but must not block MM/SMP/isolation work:
+
+| Track | Notes |
+|-------|--------|
+| Full GPU DWM / hardware composition | Software compositor + Aero shell only; no claim of Win7 GPU parity |
+| Complete Win32 / WOW64 | Expand only after `VMM` + process teardown + CR3 switching are stable |
+| NT 32-level priority / boost | See [SCHEDULER_API.md](../cn/SCHEDULER_API.md); current scheduler is an approximation |

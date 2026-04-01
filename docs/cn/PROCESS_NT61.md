@@ -5,7 +5,7 @@
 ## 目标与约束
 
 - **内核与体系结构**：混合微内核思路与 NT 风格子系统分层；用户态服务与 Win32 兼容层按里程碑扩展。
-- **引导**：仅 **ZirconOS Boot Manager (ZBM)** — BIOS/MBR 链与 UEFI/GPT 链；**不使用 GRUB**。
+- **引导**：仅 **ZirconOSAero Boot Manager (ZBM)** — BIOS/MBR 链与 UEFI/GPT 链；**不使用 GRUB**。
 - **视觉**：默认 **Aero** 桌面（`src/desktop/aero/`），与 Vista/7 玻璃、任务栏、DWM 组合方向一致。
 - **架构**：`x86_64`、`aarch64`、`loongarch64`、`riscv64`（及上游已有的 `mips64el`）；UEFI 由 Zig 直接产出（x86_64/aarch64），LoongArch 为 GNU-EFI 链接路径；**RISC-V UEFI** 在 Zig 工具链支持 PE/COFF 前见 `build.zig` 注释与下方阶段说明。
 
@@ -33,7 +33,7 @@
 
 ### Phase 3 — 子系统与用户态
 
-- 对象管理器、进程/LPC、I/O、安全描述符等按依赖顺序实现；与 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 上游目录结构对齐并做 NT6.1 行为差分。
+- 对象管理器、进程/LPC、I/O、安全描述符等按依赖顺序实现；代码布局以本仓库 `src/` 为准，行为与 NT 6.1 公开文档对齐。
 - 子里程碑拆分见 [ExecutivePhase3_Milestones.md](ExecutivePhase3_Milestones.md)。
 
 ### Phase 4 — Aero 桌面与合成
@@ -56,5 +56,5 @@
 
 ## 参考
 
-- 上游设计与完整功能矩阵：[MobtgZhang/ZirconOS](https://github.com/MobtgZhang/ZirconOS)
-- 英文引导说明：`docs/en/Boot.md`（需随本仓库「仅 ZBM」策略同步修订）。
+- 完成度与契约：[NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)
+- 英文引导说明：`docs/en/Boot.md`（仅 ZBM 策略）。

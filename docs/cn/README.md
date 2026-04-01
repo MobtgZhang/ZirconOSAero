@@ -1,6 +1,6 @@
-# ZirconOS 文档（中文）
+# ZirconOSAero 文档（中文）
 
-ZirconOS 是一个基于 Zig 语言实现的 **NT 风格混合微内核操作系统**。内核提供最小机制（调度、虚拟内存、IPC、中断、系统调用），复杂系统语义通过用户态服务和子系统实现，兼容 Win32 API 子集。
+ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。内核提供最小机制（调度、虚拟内存、IPC、中断、系统调用），复杂系统语义通过用户态服务和子系统实现，兼容 Win32 API 子集。
 
 **英文文档**：[../README.md](../README.md) · **English pages**: [`../en/`](../en/)
 
@@ -36,7 +36,7 @@ ZirconOS 是一个基于 Zig 语言实现的 **NT 风格混合微内核操作系
 ## 项目概览
 
 ```
-ZirconOS/
+ZirconOSAero/
 ├── src/                   # 内核源码
 │   ├── main.zig           #   内核入口 (Phase 0-12)
 │   ├── arch/              #   架构相关 (x86_64, aarch64, loongarch64, riscv64, mips64el)

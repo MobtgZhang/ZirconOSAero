@@ -1,8 +1,8 @@
-# ZirconOS architecture
+# ZirconOSAero architecture
 
 ## 1. Design position
 
-**ZirconOS = NT-style hybrid microkernel + user-mode subsystems + Zig**
+**ZirconOSAero = NT 6.1–target hybrid microkernel + user-mode subsystems + Zig**
 
 Core ideas:
 
@@ -95,7 +95,7 @@ Application compatibility surfaces:
 
 | Subsystem | Notes |
 |-----------|-------|
-| Native | ZirconOS native API |
+| Native | ZirconOSAero native API subset |
 | Win32 | kernel32 / user32 / gdi32 / ntdll subset |
 | POSIX | libc/POSIX mapping (planned) |
 | WOW64 | 32-bit PE thunking + ABI glue |

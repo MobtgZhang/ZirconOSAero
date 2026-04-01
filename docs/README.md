@@ -1,6 +1,6 @@
-# ZirconOS documentation
+# ZirconOSAero documentation
 
-ZirconOS is an **NT-style hybrid microkernel operating system** implemented in Zig. The kernel provides minimal mechanisms (scheduling, virtual memory, IPC, interrupts, system calls); higher-level semantics live in user-mode services and subsystems, with a subset of Win32-compatible APIs.
+ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** implemented in Zig. The kernel provides minimal mechanisms (scheduling, virtual memory, IPC, interrupts, system calls); higher-level semantics live in user-mode services and subsystems, with a subset of Win32-compatible APIs.
 
 **简体中文**：[cn/README.md](cn/README.md)
 
@@ -10,7 +10,7 @@ ZirconOS is an **NT-style hybrid microkernel operating system** implemented in Z
 |----------|-------------|
 | [Architecture.md](en/Architecture.md) | Overall architecture: layering, design principles, object model, security |
 | [Kernel.md](en/Kernel.md) | Kernel internals: scheduler, memory, interrupts, syscalls, IPC, Object Manager |
-| [Boot.md](en/Boot.md) | Boot path: GRUB / ZBM / UEFI, kernel init phases (Phase 0–12) |
+| [Boot.md](en/Boot.md) | Boot path: ZBM / UEFI (no GRUB), kernel init phases (Phase 0–12) |
 | [Servers.md](en/Servers.md) | System services: Process Server, Session Manager, LPC ports |
 | [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/ZirconShell/user32/gdi32), WOW64, POSIX |
 | [BuildSystem.md](en/BuildSystem.md) | Build system: `build.conf`, Makefile, `build.zig`, `run.sh` |
@@ -37,7 +37,7 @@ The same documents are available in Chinese under [`cn/`](cn/):
 ## Repository layout (overview)
 
 ```
-ZirconOS/
+ZirconOSAero/
 ├── src/                   # Kernel and userland sources
 ├── boot/                  # Bootloader (GRUB, ZBM, UEFI)
 ├── link/                  # Per-architecture linker scripts

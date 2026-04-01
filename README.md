@@ -1,6 +1,6 @@
 # ZirconOSAero（NT 6.1 目标）
 
-**ZirconOSAero** 是以 **NT 6.1（Windows 7）** ABI/体验为目标的独立 clean-room 内核与用户态栈；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。早期目录谱系与 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 仓库有历史关联，**本仓库实现与文档均为独立演进，不复制 Windows/ReactOS 源码**。
+**ZirconOSAero** 是以 **NT 6.1（Windows 7）** ABI/体验为目标的独立 clean-room 内核与用户态栈；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。**本仓库实现与文档均为独立演进，不复制 Windows/ReactOS 源码**。
 
 **独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
 
@@ -16,7 +16,7 @@
 <p align="center"><em>ZirconOSAero Boot Manager (ZBM) — Windows 7–style text menu</em></p>
 
 <p align="center">
-  <img src="assets/screenshot-aero.png" alt="ZirconOS Aero desktop" width="70%" />
+  <img src="assets/screenshot-aero.png" alt="ZirconOSAero Aero desktop" width="70%" />
 </p>
 <p align="center"><em>Shell — Windows 7 Aero（NT 6.1）唯一内置桌面</em></p>
 

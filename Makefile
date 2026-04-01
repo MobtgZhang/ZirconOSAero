@@ -476,7 +476,7 @@ help:
 
 build: sync-resolution
 	@mkdir -p $(TMP_DIR)
-	@echo "[ZirconOS] Building kernel (arch=$(ARCH), optimize=$(OPTIMIZE), desktop=$(DESKTOP))..."
+	@echo "[ZirconOSAero] Building kernel (arch=$(ARCH), optimize=$(OPTIMIZE), desktop=$(DESKTOP))..."
 	@mkdir -p $(TMP_DIR)/kernel-prefix $(TMP_DIR)/zig-cache
 	cd $(ROOT_DIR) && zig build \
 		-Doptimize=$(OPTIMIZE) \
@@ -503,15 +503,15 @@ build: sync-resolution
 		-Ddefault_desktop=$(DESKTOP) \
 		--cache-dir $(TMP_DIR)/zig-cache \
 		--prefix $(TMP_DIR)/kernel-prefix
-	@echo "[ZirconOS] Stripping debug sections..."
+	@echo "[ZirconOSAero] Stripping debug sections..."
 ifeq ($(ARCH),loongarch64)
 	@cp -f $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
-	@echo "[ZirconOS] (loongarch64: copied ELF; --strip-debug skipped: host objcopy/zig objcopy lack full support)"
+	@echo "[ZirconOSAero] (loongarch64: copied ELF; --strip-debug skipped: host objcopy/zig objcopy lack full support)"
 else
 	@objcopy --strip-debug $(KERNEL_ELF_DEBUG) $(KERNEL_ELF) 2>/dev/null || \
 		cp -f $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
 endif
-	@echo "[ZirconOS] Kernel: $(KERNEL_ELF)"
+	@echo "[ZirconOSAero] Kernel: $(KERNEL_ELF)"
 
 build-release:
 	@$(MAKE) build OPTIMIZE=ReleaseSafe
@@ -521,37 +521,37 @@ build-release:
 # ══════════════════════════════════════════════════════
 
 build-desktop:
-	@echo "[ZirconOS] Building desktop theme: $(DESKTOP) (EXE + LIB + DLL)..."
+	@echo "[ZirconOSAero] Building desktop theme: $(DESKTOP) (EXE + LIB + DLL)..."
 	@if [ "$(DESKTOP)" = "none" ]; then \
-		echo "[ZirconOS] DESKTOP=none, skipping desktop build"; \
+		echo "[ZirconOSAero] DESKTOP=none, skipping desktop build"; \
 	elif [ -d "$(THEME_DIR)" ]; then \
 		cd $(THEME_DIR) && zig build -Doptimize=$(OPTIMIZE) && \
 		cd $(THEME_DIR) && zig build dll -Doptimize=$(OPTIMIZE); \
 	else \
-		echo "[ZirconOS] Theme directory not found: $(THEME_DIR)"; \
+		echo "[ZirconOSAero] Theme directory not found: $(THEME_DIR)"; \
 	fi
 
 build-desktop-all:
-	@echo "[ZirconOS] Building all desktop themes (EXE + LIB + DLL)..."
+	@echo "[ZirconOSAero] Building all desktop themes (EXE + LIB + DLL)..."
 	@for theme in classic luna aero modern fluent sunvalley; do \
 		dir="$(ROOT_DIR)/src/desktop/$$theme"; \
 		if [ -d "$$dir" ]; then \
-			echo "[ZirconOS]   Building $$theme..."; \
+			echo "[ZirconOSAero]   Building $$theme..."; \
 			cd "$$dir" && zig build -Doptimize=$(OPTIMIZE) && \
 			cd "$$dir" && zig build dll -Doptimize=$(OPTIMIZE); \
 		else \
-			echo "[ZirconOS]   Skipping $$theme (not found: $$dir)"; \
+			echo "[ZirconOSAero]   Skipping $$theme (not found: $$dir)"; \
 		fi; \
 	done
 
 build-desktop-dll:
-	@echo "[ZirconOS] Building desktop theme DLL: $(DESKTOP)..."
+	@echo "[ZirconOSAero] Building desktop theme DLL: $(DESKTOP)..."
 	@if [ "$(DESKTOP)" = "none" ]; then \
-		echo "[ZirconOS] DESKTOP=none, skipping DLL build"; \
+		echo "[ZirconOSAero] DESKTOP=none, skipping DLL build"; \
 	elif [ -d "$(THEME_DIR)" ]; then \
 		cd $(THEME_DIR) && zig build dll -Doptimize=$(OPTIMIZE); \
 	else \
-		echo "[ZirconOS] Theme directory not found: $(THEME_DIR)"; \
+		echo "[ZirconOSAero] Theme directory not found: $(THEME_DIR)"; \
 	fi
 
 # ══════════════════════════════════════════════════════
@@ -564,7 +564,7 @@ ifeq ($(ARCH),loongarch64)
 else ifeq ($(ARCH),riscv64)
 	@$(MAKE) build-zbm-riscv64-uefi
 else
-	@echo "[ZirconOS] Building ZBM UEFI boot application..."
+	@echo "[ZirconOSAero] Building ZBM UEFI boot application..."
 	@mkdir -p $(UEFI_PREFIX) $(UEFI_CACHE) $(TMP_DIR)
 	cd $(ROOT_DIR) && zig build uefi \
 		-Doptimize=$(OPTIMIZE) \
@@ -573,7 +573,7 @@ else
 		-Ddebug=$(DEBUG_LOG) \
 		--cache-dir $(UEFI_CACHE) \
 		--prefix $(UEFI_PREFIX)
-	@echo "[ZirconOS] UEFI app: $(UEFI_EFI)"
+	@echo "[ZirconOSAero] UEFI app: $(UEFI_EFI)"
 endif
 
 # LoongArch UEFI：默认 C stub（稳定）；Zig stub 有 INE 异常，LOONGARCH64_USE_C_STUB=0 时用 Zig
@@ -581,36 +581,36 @@ LOONGARCH64_USE_C_STUB ?= 1
 
 # Zig stub：main_loongarch64.zig + linker_stub.lds（与 C stub 同流程），固件可加载
 build-zbm-loongarch64-stub:
-	@echo "[ZirconOS] LoongArch UEFI: Building Zig ZBM stub (AevOS-style)..."
+	@echo "[ZirconOSAero] LoongArch UEFI: Building Zig ZBM stub (AevOS-style)..."
 	@mkdir -p $(TMP_DIR)
 	@$(MAKE) build ARCH=loongarch64
 	@bash $(ROOT_DIR)/scripts/build/build-zbm-loongarch64-stub.sh "$(ZBM_LOONGARCH64_EFI)"
 
 # C stub：无 gnu-efi，与 AevOS 相同构建流程，QEMU_EFI.fd 可加载
 build-stub-loongarch64:
-	@echo "[ZirconOS] LoongArch UEFI: Building C stub (AevOS-style)..."
+	@echo "[ZirconOSAero] LoongArch UEFI: Building C stub (AevOS-style)..."
 	@mkdir -p $(TMP_DIR)
 	@test -f "$(TMP_DIR)/zircon_pref_fb.h" || $(MAKE) sync-resolution
-	@test -f "$(TMP_DIR)/zircon_pref_fb.h" || { echo "[ZirconOS] ERROR: missing $(TMP_DIR)/zircon_pref_fb.h — run: make sync-resolution 或 make build" >&2; exit 1; }
+	@test -f "$(TMP_DIR)/zircon_pref_fb.h" || { echo "[ZirconOSAero] ERROR: missing $(TMP_DIR)/zircon_pref_fb.h — run: make sync-resolution 或 make build" >&2; exit 1; }
 	@bash $(ROOT_DIR)/scripts/build/build-stub-loongarch64.sh "$(ZBM_LOONGARCH64_EFI)"
 
 # Zig ZBM：GNU-EFI 链接，部分 QEMU_EFI.fd 报 Unsupported
 # 依赖 sync-resolution：保证 zircon_pref_fb.h / 嵌入分辨率与 build.conf 一致（直接 make 本目标时也会先 sync）
 build-zbm-loongarch-uefi: sync-resolution
-	@echo "[ZirconOS] LoongArch ZBM UEFI: GNU-EFI link $(ZBM_LOONGARCH64_O) → $(ZBM_LOONGARCH64_EFI)"
-	@test -f "$(ZBM_LOONGARCH64_O)" || { echo "[ZirconOS] ERROR: missing $(ZBM_LOONGARCH64_O). Run: make build ARCH=loongarch64" >&2; exit 1; }
+	@echo "[ZirconOSAero] LoongArch ZBM UEFI: GNU-EFI link $(ZBM_LOONGARCH64_O) → $(ZBM_LOONGARCH64_EFI)"
+	@test -f "$(ZBM_LOONGARCH64_O)" || { echo "[ZirconOSAero] ERROR: missing $(ZBM_LOONGARCH64_O). Run: make build ARCH=loongarch64" >&2; exit 1; }
 	@if [ ! -f "$(ROOT_DIR)/gnu-efi/loongarch64-built/crt0-efi-loongarch64.o" ]; then \
-		echo "[ZirconOS] 首次需要 GNU-EFI（LoongArch），正在执行 fetch-gnu-efi …"; \
+		echo "[ZirconOSAero] 首次需要 GNU-EFI（LoongArch），正在执行 fetch-gnu-efi …"; \
 		$(MAKE) fetch-gnu-efi; \
 	fi
 	@bash $(ROOT_DIR)/scripts/build/zbm-loongarch64-efi.sh "$(ZBM_LOONGARCH64_O)" "$(ZBM_LOONGARCH64_EFI)"
 
 # RISC-V64：Zig 仅生成 .o，GNU-EFI（ncroxon）链接为 BOOTRISCV64.EFI
 build-zbm-riscv64-uefi:
-	@echo "[ZirconOS] RISC-V64 ZBM: GNU-EFI link $(ZBM_RISCV64_O) → $(ZBM_RISCV64_EFI)"
-	@test -f "$(ZBM_RISCV64_O)" || { echo "[ZirconOS] ERROR: missing $(ZBM_RISCV64_O). Run: make build ARCH=riscv64" >&2; exit 1; }
+	@echo "[ZirconOSAero] RISC-V64 ZBM: GNU-EFI link $(ZBM_RISCV64_O) → $(ZBM_RISCV64_EFI)"
+	@test -f "$(ZBM_RISCV64_O)" || { echo "[ZirconOSAero] ERROR: missing $(ZBM_RISCV64_O). Run: make build ARCH=riscv64" >&2; exit 1; }
 	@if [ ! -f "$(ROOT_DIR)/gnu-efi/riscv64-built/crt0-efi-riscv64.o" ]; then \
-		echo "[ZirconOS] 首次需要 GNU-EFI（RISC-V），执行 fetch-gnu-efi-riscv64 …"; \
+		echo "[ZirconOSAero] 首次需要 GNU-EFI（RISC-V），执行 fetch-gnu-efi-riscv64 …"; \
 		bash $(ROOT_DIR)/scripts/build/fetch-gnu-efi-riscv64.sh || exit 1; \
 	fi
 	@bash $(ROOT_DIR)/scripts/build/zbm-riscv64-efi.sh "$(ZBM_RISCV64_O)" "$(ZBM_RISCV64_EFI)"
@@ -620,35 +620,35 @@ build-zbm-riscv64-uefi:
 # ══════════════════════════════════════════════════════
 
 build-zbm-bios:
-	@echo "[ZirconOS] Building ZBM BIOS components..."
+	@echo "[ZirconOSAero] Building ZBM BIOS components..."
 	@mkdir -p $(ZBM_DIR)
 	as --32 -o $(ZBM_DIR)/mbr.o $(ZBM_SRC_DIR)/mbr.s
 	ld -m elf_i386 -T $(ROOT_DIR)/link/mbr.ld -o $(ZBM_DIR)/mbr.elf $(ZBM_DIR)/mbr.o 2>/dev/null || true
 	objcopy -O binary $(ZBM_DIR)/mbr.o $(ZBM_DIR)/mbr.bin
 	truncate -s 512 $(ZBM_DIR)/mbr.bin
-	@echo "[ZirconOS] MBR: $(ZBM_DIR)/mbr.bin"
+	@echo "[ZirconOSAero] MBR: $(ZBM_DIR)/mbr.bin"
 	as --32 -o $(ZBM_DIR)/vbr.o $(ZBM_SRC_DIR)/vbr.s
 	ld -m elf_i386 -T $(ROOT_DIR)/link/vbr.ld -o $(ZBM_DIR)/vbr.elf $(ZBM_DIR)/vbr.o 2>/dev/null || true
 	objcopy -O binary $(ZBM_DIR)/vbr.o $(ZBM_DIR)/vbr.bin
 	truncate -s 512 $(ZBM_DIR)/vbr.bin
-	@echo "[ZirconOS] VBR: $(ZBM_DIR)/vbr.bin"
+	@echo "[ZirconOSAero] VBR: $(ZBM_DIR)/vbr.bin"
 	as --32 -o $(ZBM_DIR)/stage2.o $(ZBM_SRC_DIR)/stage2.s
 	ld -m elf_i386 -T $(ROOT_DIR)/link/zbm_bios.ld -o $(ZBM_DIR)/stage2.elf $(ZBM_DIR)/stage2.o 2>/dev/null || true
 	objcopy -O binary $(ZBM_DIR)/stage2.o $(ZBM_DIR)/stage2.bin
-	@echo "[ZirconOS] Stage2: $(ZBM_DIR)/stage2.bin"
+	@echo "[ZirconOSAero] Stage2: $(ZBM_DIR)/stage2.bin"
 	cd $(ROOT_DIR) && zig build zbm \
 		-Doptimize=ReleaseSmall \
 		-Darch=x86_64 \
 		--cache-dir $(TMP_DIR)/zig-cache \
 		--prefix $(TMP_DIR)/kernel-prefix 2>/dev/null || true
-	@echo "[ZirconOS] ZBM BIOS components built"
+	@echo "[ZirconOSAero] ZBM BIOS components built"
 
 # ══════════════════════════════════════════════════════
 #  ZBM Disk Images (MBR + GPT)
 # ══════════════════════════════════════════════════════
 
 build-zbm-disk: build-zbm-bios build
-	@echo "[ZirconOS] Building ZBM disk images (128 MB)..."
+	@echo "[ZirconOSAero] Building ZBM disk images (128 MB)..."
 	@mkdir -p $(BUILD_DIR)
 	dd if=/dev/zero of=$(ZBM_DISK_MBR) bs=1M count=128 status=none
 	dd if=$(ZBM_DIR)/mbr.bin of=$(ZBM_DISK_MBR) bs=512 count=1 conv=notrunc status=none
@@ -663,16 +663,16 @@ build-zbm-disk: build-zbm-bios build
 	dd if=$(ZBM_DIR)/vbr.bin of=$(ZBM_DISK_MBR) bs=512 seek=2048 count=1 conv=notrunc status=none
 	dd if=$(ZBM_DIR)/stage2.bin of=$(ZBM_DISK_MBR) bs=512 seek=2049 conv=notrunc status=none
 	dd if=$(KERNEL_ELF) of=$(ZBM_DISK_MBR) bs=512 seek=2113 conv=notrunc status=none
-	@echo "[ZirconOS] MBR disk: $(ZBM_DISK_MBR)"
+	@echo "[ZirconOSAero] MBR disk: $(ZBM_DISK_MBR)"
 	@if command -v sgdisk >/dev/null 2>&1; then \
 		dd if=/dev/zero of=$(ZBM_DISK_GPT) bs=1M count=128 status=none; \
 		sgdisk --clear $(ZBM_DISK_GPT) >/dev/null 2>&1; \
 		sgdisk -n 1:2048:67583 -t 1:EF00 -c 1:"EFI System" $(ZBM_DISK_GPT) >/dev/null 2>&1; \
-		sgdisk -n 2:67584:0 -t 2:8300 -c 2:"ZirconOS System" $(ZBM_DISK_GPT) >/dev/null 2>&1; \
+		sgdisk -n 2:67584:0 -t 2:8300 -c 2:"ZirconOSAero System" $(ZBM_DISK_GPT) >/dev/null 2>&1; \
 		dd if=$(ZBM_DIR)/stage2.bin of=$(ZBM_DISK_GPT) bs=512 seek=34 conv=notrunc status=none; \
-		echo "[ZirconOS] GPT disk: $(ZBM_DISK_GPT)"; \
+		echo "[ZirconOSAero] GPT disk: $(ZBM_DISK_GPT)"; \
 	else \
-		echo "[ZirconOS] sgdisk not found, skipping GPT (apt install gdisk)"; \
+		echo "[ZirconOSAero] sgdisk not found, skipping GPT (apt install gdisk)"; \
 	fi
 
 # ══════════════════════════════════════════════════════
@@ -689,7 +689,7 @@ else
 		$(MAKE) build-zbm-loongarch64-stub; \
 	fi
 endif
-	@echo "[ZirconOS] Building ESP image (arch=$(ARCH))..."
+	@echo "[ZirconOSAero] Building ESP image (arch=$(ARCH))..."
 ifeq ($(ARCH),loongarch64)
 	@ZIRCON_BUILD_TMP="$(TMP_DIR)" BOOTLOADER=$(BOOTLOADER) \
 		ZBM_LOONGARCH64_EFI="$(ZBM_LOONGARCH64_EFI)" \
@@ -711,7 +711,7 @@ endif
 		mcopy -i $(ESP_IMG) $(KERNEL_ELF) ::/boot/kernel.elf 2>/dev/null || true; \
 	fi
 endif
-	@echo "[ZirconOS] ESP image: $(ESP_IMG)"
+	@echo "[ZirconOSAero] ESP image: $(ESP_IMG)"
 
 # ══════════════════════════════════════════════════════
 #  ISO (UEFI only — embedded FAT ESP + xorriso; no GRUB)
@@ -771,14 +771,14 @@ endif
 
 # ── ZBM + BIOS ──
 _run-zbm-bios: build-zbm-disk
-	@echo "[ZirconOS] BIOS + ZBM → $(DESKTOP) Desktop ($(QEMU_MEM))..."
+	@echo "[ZirconOSAero] BIOS + ZBM → $(DESKTOP) Desktop ($(QEMU_MEM))..."
 	qemu-system-x86_64 \
 		-drive format=raw,file=$(ZBM_DISK_MBR) \
 		$(QEMU_COMMON)
 
 # ── ZBM + UEFI ──
 _run-zbm-uefi: build-esp
-	@echo "[ZirconOS] UEFI + ZBM ($(QEMU_X86_UEFI_MACHINE)+OVMF, virtio ESP) → $(DESKTOP) ($(QEMU_MEM))..."
+	@echo "[ZirconOSAero] UEFI + ZBM ($(QEMU_X86_UEFI_MACHINE)+OVMF, virtio ESP) → $(DESKTOP) ($(QEMU_MEM))..."
 	@mkdir -p $(TMP_DIR)
 	@cp -f $(OVMF_VARS) $(TMP_DIR)/OVMF_VARS.fd
 	qemu-system-x86_64 \
@@ -802,13 +802,13 @@ run-debug: build-zbm-disk
 
 run-aarch64:
 	@$(MAKE) build-esp ARCH=aarch64
-	@echo "[ZirconOS] AArch64 UEFI boot (EDK2 nightly firmware)..."
+	@echo "[ZirconOSAero] AArch64 UEFI boot (EDK2 nightly firmware)..."
 	@if [ ! -f "$(AARCH64_EFI_CODE)" ]; then \
-		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
 	@mkdir -p $(TMP_DIR)
-	@echo "[ZirconOS] Padding AArch64 pflash to $(AARCH64_PFLASH_MB)MiB (QEMU virt requirement)..."
+	@echo "[ZirconOSAero] Padding AArch64 pflash to $(AARCH64_PFLASH_MB)MiB (QEMU virt requirement)..."
 	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH0.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
 	@dd if=$(AARCH64_EFI_CODE) of=$(TMP_DIR)/AARCH64_PFLASH0.fd conv=notrunc status=none
 	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH1.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
@@ -821,13 +821,13 @@ run-aarch64:
 
 run-aarch64-debug:
 	@$(MAKE) build-esp ARCH=aarch64
-	@echo "[ZirconOS] AArch64 debug mode (GDB on :1234)..."
+	@echo "[ZirconOSAero] AArch64 debug mode (GDB on :1234)..."
 	@if [ ! -f "$(AARCH64_EFI_CODE)" ]; then \
-		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
 	@mkdir -p $(TMP_DIR)
-	@echo "[ZirconOS] Padding AArch64 pflash to $(AARCH64_PFLASH_MB)MiB (QEMU virt requirement)..."
+	@echo "[ZirconOSAero] Padding AArch64 pflash to $(AARCH64_PFLASH_MB)MiB (QEMU virt requirement)..."
 	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH0.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
 	@dd if=$(AARCH64_EFI_CODE) of=$(TMP_DIR)/AARCH64_PFLASH0.fd conv=notrunc status=none
 	@dd if=/dev/zero of=$(TMP_DIR)/AARCH64_PFLASH1.fd bs=1M count=$(AARCH64_PFLASH_MB) status=none
@@ -845,9 +845,9 @@ run-aarch64-debug:
 
 run-riscv64:
 	@$(MAKE) build-esp ARCH=riscv64
-	@echo "[ZirconOS] RISC-V64 UEFI boot ($(RISCV64_EFI_CODE))..."
+	@echo "[ZirconOSAero] RISC-V64 UEFI boot ($(RISCV64_EFI_CODE))..."
 	@if [ ! -f "$(RISCV64_EFI_CODE)" ]; then \
-		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
 	qemu-system-riscv64 \
@@ -859,9 +859,9 @@ run-riscv64:
 
 run-riscv64-debug:
 	@$(MAKE) build-esp ARCH=riscv64
-	@echo "[ZirconOS] RISC-V64 UEFI debug (GDB on :1234)..."
+	@echo "[ZirconOSAero] RISC-V64 UEFI debug (GDB on :1234)..."
 	@if [ ! -f "$(RISCV64_EFI_CODE)" ]; then \
-		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
 	qemu-system-riscv64 \
@@ -880,20 +880,20 @@ run-riscv64-debug:
 run-loongarch64:
 ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
 	@$(MAKE) build ARCH=loongarch64
-	@echo "[ZirconOS] LoongArch64 QEMU: -kernel $(KERNEL_ELF) + ramfb（Aero 桌面）"
-	@echo "[ZirconOS] 若 QEMU 持续显示 'Guest has not initialized the display'，可尝试: make run-loongarch64 LOONGARCH64_QEMU_MODE=uefi（需固件）"
+	@echo "[ZirconOSAero] LoongArch64 QEMU: -kernel $(KERNEL_ELF) + ramfb（Aero 桌面）"
+	@echo "[ZirconOSAero] 若 QEMU 持续显示 'Guest has not initialized the display'，可尝试: make run-loongarch64 LOONGARCH64_QEMU_MODE=uefi（需固件）"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-kernel $(KERNEL_ELF) \
 		-device ramfb,id=zircon_ramfb
 else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
 	@$(MAKE) build-esp ARCH=loongarch64 DESKTOP=$(DESKTOP)
-	@echo "[ZirconOS] LoongArch64 UEFI + ZBM — $(LOONGARCH64_EFI_CODE)"
+	@echo "[ZirconOSAero] LoongArch64 UEFI + ZBM — $(LOONGARCH64_EFI_CODE)"
 	@if [ ! -f "$(LOONGARCH64_EFI_CODE)" ]; then \
-		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
-	@echo "[ZirconOS] 等待内置 Shell 的 startup.nsh 倒计时结束（勿按 ESC）后将进入 ZBM 菜单；串口与 QEMU 窗口均可查看 ConOut。"
-	@echo "[ZirconOS] 键盘操作：请先点击 QEMU 窗口使其获得焦点，再用方向键/数字键选择启动项。"
+	@echo "[ZirconOSAero] 等待内置 Shell 的 startup.nsh 倒计时结束（勿按 ESC）后将进入 ZBM 菜单；串口与 QEMU 窗口均可查看 ConOut。"
+	@echo "[ZirconOSAero] 键盘操作：请先点击 QEMU 窗口使其获得焦点，再用方向键/数字键选择启动项。"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-bios $(LOONGARCH64_EFI_CODE) \
 		$(QEMU_LOONGARCH64_DEVICES) \
@@ -913,17 +913,17 @@ run-loongarch64-serial-debug:
 run-loongarch64-debug:
 ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
 	@$(MAKE) build ARCH=loongarch64
-	@echo "[ZirconOS] LoongArch64 debug: -kernel + ramfb + GDB :1234"
+	@echo "[ZirconOSAero] LoongArch64 debug: -kernel + ramfb + GDB :1234"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-kernel $(KERNEL_ELF) -device ramfb,id=zircon_ramfb -s -S
 else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
 	@$(MAKE) build-esp ARCH=loongarch64 DESKTOP=$(DESKTOP)
-	@echo "[ZirconOS] LoongArch64 UEFI debug (GDB on :1234)..."
+	@echo "[ZirconOSAero] LoongArch64 UEFI debug (GDB on :1234)..."
 	@if [ ! -f "$(LOONGARCH64_EFI_CODE)" ]; then \
-		echo "[ZirconOS] Firmware not found. Run: make fetch-firmware"; \
+		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
 		exit 1; \
 	fi
-	@echo "[ZirconOS] 若需手动：fs0: → cd \\EFI\\BOOT → BOOTLOONGARCH64.EFI"
+	@echo "[ZirconOSAero] 若需手动：fs0: → cd \\EFI\\BOOT → BOOTLOONGARCH64.EFI"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-bios $(LOONGARCH64_EFI_CODE) \
 		$(QEMU_LOONGARCH64_DEVICES) \
@@ -941,11 +941,11 @@ fonts:
 	@if [ -x $(ROOT_DIR)/scripts/fonts/fetch-fonts.sh ]; then \
 		$(ROOT_DIR)/scripts/fonts/fetch-fonts.sh; \
 	else \
-		echo "[ZirconOS] $(ROOT_DIR)/scripts/fonts/fetch-fonts.sh not found"; \
+		echo "[ZirconOSAero] $(ROOT_DIR)/scripts/fonts/fetch-fonts.sh not found"; \
 	fi
 
 resources:
-	@echo "[ZirconOS] Resources for $(DESKTOP) theme:"
+	@echo "[ZirconOSAero] Resources for $(DESKTOP) theme:"
 	@if [ -n "$(THEME_DIR)" ] && [ -d "$(THEME_DIR)/resources" ]; then \
 		echo "  Wallpapers:"; \
 		find $(THEME_DIR)/resources/wallpapers -name '*.png' 2>/dev/null | sed 's/.*\//    /' | sort || echo "    (none)"; \
@@ -960,39 +960,39 @@ resources:
 	fi
 
 fetch-themes:
-	@echo "[ZirconOS] 桌面主题与资源: src/desktop/<主题>/resources/，共享字体: src/fonts/"
+	@echo "[ZirconOSAero] 桌面主题与资源: src/desktop/<主题>/resources/，共享字体: src/fonts/"
 
 # GNU-EFI（LoongArch ZBM 链接所需 crt0/lds → gnu-efi/loongarch64-built/）
 fetch-gnu-efi:
-	@echo "[ZirconOS] Fetching GNU-EFI (for LoongArch BOOTLOONGARCH64.EFI link)..."
+	@echo "[ZirconOSAero] Fetching GNU-EFI (for LoongArch BOOTLOONGARCH64.EFI link)..."
 	@bash $(ROOT_DIR)/scripts/build/fetch-gnu-efi.sh "$(ROOT_DIR)/gnu-efi/loongarch64-built"
 
 fetch-gnu-efi-riscv64:
-	@echo "[ZirconOS] Fetching GNU-EFI (ncroxon, RISC-V64 BOOTRISCV64.EFI link)..."
+	@echo "[ZirconOSAero] Fetching GNU-EFI (ncroxon, RISC-V64 BOOTRISCV64.EFI link)..."
 	@bash $(ROOT_DIR)/scripts/build/fetch-gnu-efi-riscv64.sh "$(ROOT_DIR)/gnu-efi/riscv64-built"
 
 # ── Firmware (EDK2 nightly from https://retrage.github.io/edk2-nightly/) ──
 fetch-firmware:
-	@echo "[ZirconOS] Downloading EDK2 nightly firmware..."
+	@echo "[ZirconOSAero] Downloading EDK2 nightly firmware..."
 	@bash $(ROOT_DIR)/scripts/build/fetch-firmware.sh $(FIRMWARE_DIR)
 
 # LoongArch 默认可移动介质引导名 \EFI\BOOT\BOOTLOONGARCH64.EFI（无则固件直接进 Shell）
 fetch-loongarch-boot-efi:
-	@echo "[ZirconOS] Downloading BOOTLOONGARCH64.EFI (EDK2 RELEASE Shell → standard boot path)..."
+	@echo "[ZirconOSAero] Downloading BOOTLOONGARCH64.EFI (EDK2 RELEASE Shell → standard boot path)..."
 	@mkdir -p $(FIRMWARE_DIR)
 	curl -fSL -o $(FIRMWARE_DIR)/BOOTLOONGARCH64.EFI \
 		https://retrage.github.io/edk2-nightly/bin/RELEASELOONGARCH64_Shell.efi
-	@echo "[ZirconOS] Installed: $(FIRMWARE_DIR)/BOOTLOONGARCH64.EFI"
+	@echo "[ZirconOSAero] Installed: $(FIRMWARE_DIR)/BOOTLOONGARCH64.EFI"
 
 # ══════════════════════════════════════════════════════
 #  Tests
 # ══════════════════════════════════════════════════════
 
 test: test-kernel test-config test-boot
-	@echo "[ZirconOS] All tests complete."
+	@echo "[ZirconOSAero] All tests complete."
 
 test-kernel: build
-	@echo "[ZirconOS] Running kernel verification tests..."
+	@echo "[ZirconOSAero] Running kernel verification tests..."
 	@mkdir -p $(TEST_RESULTS_DIR)
 	python3 $(ROOT_DIR)/tests/run_all.py \
 		--kernel $(KERNEL_ELF) \
@@ -1003,14 +1003,14 @@ smoke-qemu-mbr:
 	@bash $(ROOT_DIR)/scripts/smoke-qemu-mbr.sh
 
 test-config:
-	@echo "[ZirconOS] Running build configuration tests..."
+	@echo "[ZirconOSAero] Running build configuration tests..."
 	@mkdir -p $(TEST_RESULTS_DIR)
 	python3 $(ROOT_DIR)/tests/test_build_config.py \
 		--project-root $(ROOT_DIR) \
 		--output-dir $(TEST_RESULTS_DIR)
 
 test-boot:
-	@echo "[ZirconOS] Running boot combination tests..."
+	@echo "[ZirconOSAero] Running boot combination tests..."
 	@mkdir -p $(TEST_RESULTS_DIR)
 	python3 $(ROOT_DIR)/tests/test_boot_combinations.py \
 		--project-root $(ROOT_DIR) \
@@ -1021,11 +1021,11 @@ test-boot:
 # ══════════════════════════════════════════════════════
 
 clean:
-	@echo "[ZirconOS] Cleaning..."
+	@echo "[ZirconOSAero] Cleaning..."
 	rm -rf $(BUILD_DIR)
 	rm -rf $(ROOT_DIR)/.zig-cache $(ROOT_DIR)/zig-out
 	@for theme in classic luna aero modern fluent sunvalley; do \
 		dir="$(ROOT_DIR)/src/desktop/$$theme"; \
 		[ -d "$$dir" ] && rm -rf "$$dir/.zig-cache" "$$dir/zig-out" 2>/dev/null; \
 	done || true
-	@echo "[ZirconOS] Clean done"
+	@echo "[ZirconOSAero] Clean done"

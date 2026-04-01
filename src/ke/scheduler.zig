@@ -7,7 +7,34 @@
 // This is an independent clean-room implementation.
 // Reference: OS textbook priority scheduling; MS Learn — threading (behavioral only).
 
+const builtin = @import("builtin");
 const klog = @import("../rtl/klog.zig");
+const vm_mod = @import("../mm/vm.zig");
+const process_mod = @import("../ps/process.zig");
+const spinlock_mod = @import("spinlock.zig");
+const percpu_sched = @import("percpu_sched.zig");
+
+var sched_irq_lock: spinlock_mod.IrqSpinLock = .{};
+
+fn activateCr3ForProcessId(pid: u32) void {
+    if (builtin.cpu.arch != .x86_64) return;
+    if (pid == 0) {
+        if (vm_mod.kernelAddressSpace()) |ks| {
+            ks.activate();
+        }
+        return;
+    }
+    if (process_mod.findProcess(pid)) |pp| {
+        if (pp.address_space) |asp| {
+            var a = asp;
+            a.activate();
+            return;
+        }
+    }
+    if (vm_mod.kernelAddressSpace()) |ks| {
+        ks.activate();
+    }
+}
 
 pub const ThreadState = enum {
     ready,
@@ -60,6 +87,8 @@ pub fn priorityFromClass(class: u8) u8 {
 pub const Thread = struct {
     id: usize = 0,
     process_id: u32 = 0,
+    /// 目标运行 CPU（SMP 演进：`assignCpuForNewThread`）。
+    home_cpu: u32 = 0,
     state: ThreadState = .ready,
     context: ThreadContext = .{},
     stack: [STACK_SIZE]u8 align(16) = undefined,
@@ -109,6 +138,7 @@ fn createIdleThread() ?usize {
     const idx = thread_count;
     threads[idx] = .{};
     threads[idx].id = idx;
+    threads[idx].home_cpu = percpu_sched.assignCpuForNewThread();
     threads[idx].state = .running;
     threads[idx].priority = PRIORITY_IDLE;
     threads[idx].io_boost = 0;
@@ -132,6 +162,7 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
     threads[idx] = .{};
     threads[idx].id = idx;
     threads[idx].process_id = process_id;
+    threads[idx].home_cpu = percpu_sched.assignCpuForNewThread();
     threads[idx].state = .ready;
     threads[idx].priority = PRIORITY_NORMAL;
     threads[idx].io_boost = 0;
@@ -172,7 +203,11 @@ pub fn enableScheduling() void {
 }
 
 pub fn tick() void {
+    sched_irq_lock.lock();
+    defer sched_irq_lock.unlock();
+
     tick_count += 1;
+    percpu_sched.workStealBalanceIfIdle();
 
     if (!scheduling_enabled or thread_count <= 1) return;
 
@@ -244,6 +279,7 @@ pub fn tick() void {
         threads[next].state = .running;
         threads[next].slice_remaining = TIME_SLICE_TICKS;
         current_thread = next;
+        activateCr3ForProcessId(threads[next].process_id);
     }
 }
 

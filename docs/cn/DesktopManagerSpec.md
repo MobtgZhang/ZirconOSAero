@@ -20,7 +20,7 @@
 
 ## 2. 对象与进程映射
 
-| NT / Win32 概念 | ZirconOS 实现位置 | 说明 |
+| NT / Win32 概念 | ZirconOSAero 实现位置 | 说明 |
 |-----------------|-------------------|------|
 | Session | SMSS `src/servers/smss.zig`、会话状态 | 会话 0 交互桌面 |
 | Window station | `subsystem.WindowStation` | `WinSta0` 在 csrss `init()` 创建 |

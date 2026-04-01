@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ZirconOS x86-64 Boot Combination Tests
+ZirconOSAero x86-64 Boot Combination Tests
 
 Tests boot methods with ZBM only (no GRUB): MBR+ZBM, UEFI+ZBM.
 Verifies Makefile acceptance and expected artifact paths.
@@ -336,7 +336,7 @@ def write_results(results, output_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='ZirconOS Boot Combination Tests')
+    parser = argparse.ArgumentParser(description='ZirconOSAero Boot Combination Tests')
     parser.add_argument('--project-root', default=None)
     parser.add_argument('--output-dir', default=RESULTS_DIR)
     args = parser.parse_args()
@@ -346,7 +346,7 @@ def main():
     else:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    print("ZirconOS x86-64 Boot Combination Test Suite")
+    print("ZirconOSAero x86-64 Boot Combination Test Suite")
     print(f"Project: {project_root}")
     print("=" * 60)
 

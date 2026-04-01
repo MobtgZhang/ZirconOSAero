@@ -4,9 +4,9 @@
 const std = @import("std");
 const vm = @import("../mm/vm.zig");
 const FrameAllocator = @import("../mm/frame.zig").FrameAllocator;
+const klog = @import("../rtl/klog.zig");
 const ob = @import("../ob/object.zig");
 const token = @import("../se/token.zig");
-const klog = @import("../rtl/klog.zig");
 
 pub const MAX_PROCESSES: usize = 32;
 pub const MAX_THREADS_PER_PROCESS: usize = 8;
@@ -153,6 +153,12 @@ pub fn createSystemProcess(frame_alloc: *FrameAllocator, name: []const u8) ?*Pro
 
 pub fn terminateProcess(pid: u32, exit_code: u32) bool {
     const p = findProcess(pid) orelse return false;
+    if (p.address_space) |as| {
+        var space = as;
+        vm.releaseProcessAddressSpace(&space);
+        p.address_space = null;
+    }
+    p.handle_table.closeAllOpenHandles();
     p.state = .terminated;
     p.exit_code = exit_code;
     klog.debug("Process: PID=%u terminated (exit_code=%u)", .{ pid, exit_code });

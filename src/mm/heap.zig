@@ -7,9 +7,19 @@
 // This is an independent clean-room implementation.
 // Reference: OS textbook free-list heap; MS Learn — kernel pool concepts (behavioral only).
 
+const builtin = @import("builtin");
 const std = @import("std");
 
 const HEAP_SIZE: usize = 512 * 1024;
+
+/// Debug / 统计：分配与释放次数（串口可打印）。
+var alloc_count: usize = 0;
+var free_count: usize = 0;
+
+pub fn stats() struct { allocs: usize, frees: usize } {
+    return .{ .allocs = alloc_count, .frees = free_count };
+}
+
 var heap_storage: [HEAP_SIZE]u8 align(16) = undefined;
 var heap_pos: usize = 0;
 var heap_initialized: bool = false;
@@ -34,6 +44,22 @@ fn alignUp(v: usize, alignment: usize) usize {
 
 fn blockOverhead() usize {
     return alignUp(@sizeOf(FreeBlock), @alignOf(FreeBlock));
+}
+
+/// 校验空闲链表指针落在堆缓冲区内（Debug 构建下用于压力测试收尾）。
+pub fn heap_check() bool {
+    if (builtin.mode != .Debug) return true;
+    const hdr = blockOverhead();
+    var cur = free_head;
+    const h0 = @intFromPtr(&heap_storage);
+    const h1 = h0 + HEAP_SIZE;
+    while (cur) |b| {
+        const p = @intFromPtr(b);
+        if (p < h0 or p >= h1) return false;
+        if (b.size < hdr) return false;
+        cur = b.next;
+    }
+    return true;
 }
 
 /// 从空闲块取出 `total` 字节（含块首元数据），返回 **用户** 区起始指针。
@@ -67,6 +93,7 @@ pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
             }
             b.size = total;
             b.next = null;
+            alloc_count += 1;
             return takeFromFreeBlock(b);
         }
         prev = b;
@@ -79,6 +106,7 @@ pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
     block.size = total;
     block.next = null;
     heap_pos = aligned_pos + total;
+    alloc_count += 1;
     return takeFromFreeBlock(block);
 }
 
@@ -97,6 +125,7 @@ pub fn free(ptr: [*]u8, user_size: usize, alignment: usize) void {
     block.size = total;
     block.next = free_head;
     free_head = block;
+    free_count += 1;
 }
 
 pub fn allocSlice(comptime T: type, count: usize) ?[]T {
@@ -215,6 +244,7 @@ test "heap random alloc free stress" {
         n -= 1;
         kfree(live_p[n], live_sz[n], live_al[n]);
     }
+    try std.testing.expect(heap_check());
 
     // Drained free list + bump high-water should still allow repeated medium blocks.
     for (0..40) |_| {

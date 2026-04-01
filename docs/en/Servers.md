@@ -1,4 +1,4 @@
-# ZirconOS system services
+# ZirconOSAero system services
 
 System services run in user mode and talk to the microkernel over LPC/IPC. They implement policy and higher-level management.
 

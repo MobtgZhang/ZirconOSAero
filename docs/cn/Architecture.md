@@ -1,8 +1,8 @@
-# ZirconOS 总体架构设计
+# ZirconOSAero 总体架构设计
 
 ## 1. 设计定位
 
-**ZirconOS = NT 风格混合微内核 + 用户态子系统 + Zig 实现**
+**ZirconOSAero = NT 6.1 目标混合微内核 + 用户态子系统 + Zig 实现**
 
 核心设计思想：
 
@@ -95,7 +95,7 @@
 
 | 子系统 | 说明 |
 |--------|------|
-| Native | ZirconOS 原生 API |
+| Native | ZirconOSAero 原生 API 子集 |
 | Win32 | kernel32 / user32 / gdi32 / ntdll 兼容 |
 | POSIX | libc / POSIX API 映射 |
 | WOW64 | 32 位 PE thunk + ABI 转换 |

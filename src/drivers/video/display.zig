@@ -2518,7 +2518,7 @@ fn renderWindowContent(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColors) vo
             iy += 22;
         }
 
-        // Font info line (rendered with ZirconOSFonts typeface)
+        // Font info line (bundled UI font / theme typeface)
         if (iy + 20 <= content_y + content_h) {
             fb.drawTextTransparent(x + 10, iy + 4, "Font: Noto Sans (embedded)", rgb(0x80, 0x80, 0x80));
             iy += 20;
@@ -3125,7 +3125,7 @@ fn handleContextMenuLeftClick(px: i32, py: i32) bool {
     return true;
 }
 
-// ── Cursor Rendering (ZirconOS Aero Crystal Style) ──
+// ── Cursor Rendering (Aero crystal style) ──
 // The cursor uses a crystal/glass design with:
 //   - Dark teal outline for sharp definition
 //   - White fill for high visibility

@@ -10,7 +10,8 @@
 ## 与路线图差距（Next steps）
 
 - **内核半区**：须保证用户页表不映射内核私有映射（或采用 separate kernel page table + trampoline）；当前以混合内核为过渡时，须在契约矩阵中标注实测范围。
-- **CR3 切换**：用户线程运行路径上须在 syscall/调度点激活进程页表（`AddressSpace.activate`）；与 `syscall.zig` / 调度器联调为持续工作项。
+- **CR3 切换**：用户线程运行路径上须在 syscall/调度点激活进程页表（`AddressSpace.activate`）；调度器 `tick` 已在切换线程时按 `process_id` 调用 `activate`（与 `syscall.zig` 返回用户态路径持续联调）。
+- **TSS.RSP0 / 每线程内核栈**：须在上下文切换与 `syscall` 入口与当前线程内核栈顶对齐（见 `src/ps/process.zig` `Thread` 字段与 `hal/x86_64/gdt.zig`）。
 - **自动化测试**：QEMU 下运行故意访问未映射内核 VA 的用例，期望进程终止而非 `KeBugCheck` 式整内核停机（可在 `tests/` 增加脚本化场景）。
 
 ## 参考

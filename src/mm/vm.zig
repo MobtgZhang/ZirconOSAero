@@ -102,6 +102,116 @@ pub fn bindKernelAddressSpace(space: *AddressSpace) void {
     g_kernel_space = space;
 }
 
+pub fn kernelAddressSpace() ?*AddressSpace {
+    return g_kernel_space;
+}
+
+fn freeFrameForRelease(ctx: ?*anyopaque, phys: u64) void {
+    const a = ctx orelse return;
+    const fa: *FrameAllocator = @ptrCast(@alignCast(a));
+    fa.free(phys);
+}
+
+/// 释放进程 **用户半区** 页表子树与叶帧，并 `free` 顶层 PML4；调用方须将 `AddressSpace` 置为不再使用且 **不得** 再以该 CR3 运行。
+pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
+    if (@hasDecl(paging, "releaseUserHalfAddressSpace")) {
+        paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, @ptrCast(space.allocator));
+    }
+    space.reserved_count = 0;
+    space.section_view_count = 0;
+    space.vma_len = 0;
+    space.allocator.free(space.pml4_phys);
+}
+
+fn vmaRangeEnd(base: u64, num_pages: u32) u64 {
+    return base + @as(u64, num_pages) * @as(u64, @intCast(paging.page_size));
+}
+
+fn vmaOverlaps(a0: u64, a1: u64, b0: u64, b1: u64) bool {
+    return !(a1 <= b0 or b1 <= a0);
+}
+
+/// 通用 VMA 槽位（与 `MEM_RESERVE` 记录互补；供 `NtAllocateVirtualMemory` 等逐步接线）。
+pub const max_vma: usize = 48;
+
+pub const VmAreaDesc = struct {
+    user: bool,
+    writable: bool,
+    from_reserved_record: bool,
+};
+
+pub fn vmaInsert(space: *AddressSpace, base: u64, num_pages: u32, user: bool, writable: bool) bool {
+    if (num_pages == 0 or space.vma_len >= max_vma) return false;
+    const end = vmaRangeEnd(base, num_pages);
+    var i: u8 = 0;
+    while (i < space.vma_len) : (i += 1) {
+        const b = space.vma_base[i];
+        const e = vmaRangeEnd(b, space.vma_pages[i]);
+        if (vmaOverlaps(base, end, b, e)) return false;
+    }
+    var ri: u8 = 0;
+    while (ri < space.reserved_count) : (ri += 1) {
+        const b = space.reserved_base[ri];
+        const e = vmaRangeEnd(b, space.reserved_pages[ri]);
+        if (vmaOverlaps(base, end, b, e)) return false;
+    }
+    const slot = space.vma_len;
+    space.vma_base[slot] = base;
+    space.vma_pages[slot] = num_pages;
+    space.vma_user[slot] = user;
+    space.vma_writable[slot] = writable;
+    space.vma_len += 1;
+    return true;
+}
+
+pub fn vmaRemove(space: *AddressSpace, base: u64, num_pages: u32) bool {
+    if (num_pages == 0) return false;
+    const end = vmaRangeEnd(base, num_pages);
+    var i: u8 = 0;
+    while (i < space.vma_len) : (i += 1) {
+        const b = space.vma_base[i];
+        const e = vmaRangeEnd(b, space.vma_pages[i]);
+        if (b == base and e == end) {
+            const last = space.vma_len - 1;
+            space.vma_base[i] = space.vma_base[last];
+            space.vma_pages[i] = space.vma_pages[last];
+            space.vma_user[i] = space.vma_user[last];
+            space.vma_writable[i] = space.vma_writable[last];
+            space.vma_len -= 1;
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn vmaFind(space: *const AddressSpace, va: u64) ?VmAreaDesc {
+    var i: u8 = 0;
+    while (i < space.vma_len) : (i += 1) {
+        const b = space.vma_base[i];
+        const e = vmaRangeEnd(b, space.vma_pages[i]);
+        if (va >= b and va < e) {
+            return .{
+                .user = space.vma_user[i],
+                .writable = space.vma_writable[i],
+                .from_reserved_record = false,
+            };
+        }
+    }
+    var ri: u8 = 0;
+    while (ri < space.reserved_count) : (ri += 1) {
+        const b = space.reserved_base[ri];
+        const e = vmaRangeEnd(b, space.reserved_pages[ri]);
+        if (va >= b and va < e) {
+            return .{
+                .user = true,
+                .writable = true,
+                .from_reserved_record = true,
+            };
+        }
+    }
+    return null;
+}
+
 /// 将 `[phys_base, phys_base+size)` 按页做 identity 映射（MMIO：可写、不可执行、uncached）
 /// Intel 核显 BAR、VirtIO PCI 等均须经此路径或 `remapIdentityVirtPageUncached`，避免 WB 缓存导致 MMIO 读写异常。
 pub fn mapDeviceMmioIdentity(phys_base: u64, size: u64) bool {
@@ -182,6 +292,12 @@ pub const AddressSpace = struct {
     section_view_base: [max_section_views]u64 = @splat(0),
     section_view_pages: [max_section_views]u32 = @splat(0),
     section_view_obj: [max_section_views]u64 = @splat(0),
+    /// 显式 VMA 记录（与 `reserved_*` 不重复登记：reserve 仅走 `reserved_*`；`vmaInsert` 用于已映射或其它视图）。
+    vma_len: u8 = 0,
+    vma_base: [max_vma]u64 = @splat(0),
+    vma_pages: [max_vma]u32 = @splat(0),
+    vma_user: [max_vma]bool = @splat(false),
+    vma_writable: [max_vma]bool = @splat(false),
 
     pub fn reserveVirtualRange(self: *AddressSpace, virt_base: u64, num_pages: u32) bool {
         if (self.reserved_count >= max_reserved_regions) return false;
@@ -365,4 +481,10 @@ pub fn unmapRange(space: *AddressSpace, virt_base: u64, num_pages: usize) void {
     while (i < num_pages) : (i += 1) {
         _ = space.unmapAndFree(virt_base + i * paging.page_size);
     }
+}
+
+/// `MmFreeVirtualMemory` 语义子集：解除映射并尝试自 `vma` 表移除精确匹配项。
+pub fn mmFreeVirtualRange(space: *AddressSpace, virt_base: u64, num_pages: u32) void {
+    unmapRange(space, virt_base, num_pages);
+    _ = vmaRemove(space, virt_base, num_pages);
 }

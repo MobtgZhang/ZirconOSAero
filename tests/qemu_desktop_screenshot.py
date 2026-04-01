@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Headless QEMU + framebuffer screendump for ZirconOS desktop smoke test.
+Headless QEMU + framebuffer screendump for ZirconOSAero desktop smoke test.
 
 Requires: qemu-system-x86_64, a built ISO (make iso-debug), optional netcat (nc) for monitor.
 

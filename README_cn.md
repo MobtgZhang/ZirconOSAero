@@ -1,6 +1,6 @@
 # ZirconOSAero（NT 6.1 目标）
 
-**ZirconOSAero** 以 **NT 6.1（Windows 7）** ABI/体验为目标，独立 clean-room 实现；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。与 [ZirconOS](https://github.com/MobtgZhang/ZirconOS) 仅有历史谱系关联，**不复制 Windows/ReactOS 源码**。
+**ZirconOSAero** 以 **NT 6.1（Windows 7）** ABI/体验为目标，独立 clean-room 实现；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。**不复制 Windows/ReactOS 源码**。
 
 **独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
 

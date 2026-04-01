@@ -1,5 +1,5 @@
 /*
- * ZirconOS Boot Manager — Windows 7 风格启动菜单 (LoongArch64 UEFI)
+ * ZirconOSAero Boot Manager (ZBM) — Windows 7 风格启动菜单 (LoongArch64 UEFI)
  * AevOS-style build (no gnu-efi)，固件可加载；显示 ZBM 菜单后引导内核。
  */
 #include "efi_stub_types.h"
@@ -187,7 +187,7 @@ static void display_menu(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
 	con->SetAttribute(con, ATTR_NORMAL);
 
 	print(con, L"\r\n");
-	print(con, L"                    ZirconOS Boot Manager                                     \r\n");
+	print(con, L"                    ZirconOSAero Boot Manager (ZBM)                         \r\n");
 	print(con, L"                         Version ");
 	print(con, ZBM_VERSION);
 	print(con, L"                                             \r\n");
@@ -223,7 +223,7 @@ static void display_menu(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
 
 	con->SetAttribute(con, ATTR_DIM);
 	print(con, L"\r\n");
-	if (selected == 0) print(con, L"    Start ZirconOS normally.");
+	if (selected == 0) print(con, L"    Start ZirconOSAero normally.");
 	else if (selected == 1) print(con, L"    Start with debug logging and serial output enabled.");
 	else if (selected == 2) print(con, L"    Start with minimal drivers and services.");
 	else if (selected == 3) print(con, L"    Start in safe mode with network support.");
@@ -302,7 +302,7 @@ static void update_selection_only(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, UINTN ol
 	row = BOOT_DESC_ROW;
 	con->SetCursorPosition(con, 0, row);
 	con->SetAttribute(con, ATTR_DIM);
-	if (new_sel == 0) print(con, L"    Start ZirconOS normally.");
+	if (new_sel == 0) print(con, L"    Start ZirconOSAero normally.");
 	else if (new_sel == 1) print(con, L"    Start with debug logging and serial output enabled.");
 	else if (new_sel == 2) print(con, L"    Start with minimal drivers and services.");
 	else if (new_sel == 3) print(con, L"    Start in safe mode with network support.");
@@ -503,7 +503,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 	con->Reset(con, 0);
 	con->SetAttribute(con, ATTR_NORMAL);
 	print(con, L"\r\n");
-	print(con, L"                    ZirconOS Boot Manager                                     \r\n");
+	print(con, L"                    ZirconOSAero Boot Manager (ZBM)                         \r\n");
 	con->SetAttribute(con, ATTR_DIM);
 	print(con, L"\r\n");
 	print(con, L"    Booting: ");

@@ -1,4 +1,4 @@
-# ZirconOS Aero Desktop — Makefile
+# ZirconOSAero Aero Desktop — Makefile
 # DWM-composited Glass Desktop Theme (NT 6.1 style)
 #
 # Default: UEFI boot with Aero desktop
@@ -34,7 +34,7 @@ OVMF_VARS    ?= /usr/share/OVMF/OVMF_VARS_4M.fd
 all: run-uefi
 
 help:
-	@echo "ZirconOS Aero v$(VERSION) — DWM Glass Desktop"
+	@echo "ZirconOSAero Aero v$(VERSION) — DWM Glass Desktop"
 	@echo ""
 	@echo "Build:"
 	@echo "  make build         Build Aero theme library + kernel"
@@ -52,7 +52,7 @@ help:
 	@echo ""
 	@echo "Resources:"
 	@echo "  make resources     Validate and list Aero resources"
-	@echo "  make fonts         Fetch fonts (ZirconOSFonts)"
+	@echo "  make fonts         Fetch bundled desktop fonts"
 	@echo ""
 	@echo "  make clean         Remove build artifacts"
 	@echo ""
@@ -147,7 +147,7 @@ resources:
 	@echo "  Sounds:     $(shell ls -d $(AERO_DIR)/resources/sounds/*/ 2>/dev/null | wc -l) sound schemes"
 
 fonts:
-	@echo "[AERO] Fetching fonts from ZirconOSFonts..."
+	@echo "[AERO] Fetching fonts..."
 	@if [ -x $(FONTS_DIR)/fetch-fonts.sh ]; then \
 		cd $(FONTS_DIR) && ./fetch-fonts.sh; \
 	else \

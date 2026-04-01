@@ -348,6 +348,84 @@ pub fn flushTlb() void {
     loadCr3(readCr3());
 }
 
+/// 释放回调：`phys` 为 4KiB 对齐物理地址（含页表页与匿名数据页）。
+pub const FreeFrameFn = *const fn (ctx: ?*anyopaque, phys: u64) void;
+
+fn releasePtTable(pt_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) void {
+    const pt = @as(*PageTable, @ptrFromInt(pt_phys));
+    for (&pt.entries) |*pte| {
+        if (!pte.isPresent()) continue;
+        free_frame(ctx, pte.toFrame());
+        pte.* = .{};
+    }
+    free_frame(ctx, pt_phys);
+}
+
+fn releasePdAll(pd_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) void {
+    const pd = @as(*PageTable, @ptrFromInt(pd_phys));
+    for (&pd.entries) |*pde| {
+        if (!pde.isPresent()) continue;
+        const pde_raw = @as(u64, @bitCast(pde.*));
+        if ((pde_raw & LargePage) != 0) {
+            const base = pde.toFrame();
+            var a = base;
+            while (a < base + HUGE_PAGE_SIZE) : (a += PAGE_SIZE) {
+                free_frame(ctx, a);
+            }
+        } else {
+            releasePtTable(pde.toFrame(), free_frame, ctx);
+        }
+        pde.* = .{};
+    }
+    free_frame(ctx, pd_phys);
+}
+
+fn releasePdptAll(pdpt_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) void {
+    const pdpt = @as(*PageTable, @ptrFromInt(pdpt_phys));
+    for (&pdpt.entries) |*pdpte| {
+        if (!pdpte.isPresent()) continue;
+        releasePdAll(pdpte.toFrame(), free_frame, ctx);
+        pdpte.* = .{};
+    }
+    free_frame(ctx, pdpt_phys);
+}
+
+/// 释放 PML4 **低半区**（索引 0..256）下整棵用户页表子树及所有叶帧；**不**触碰 256..512（内核典型映射）。
+/// 调用后须由调用方释放 `pml4_phys` 自身（若该页专属于进程）。
+pub fn releaseUserHalfAddressSpace(pml4_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) void {
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    var i: usize = 0;
+    while (i < 256) : (i += 1) {
+        var pml4e = &pml4.entries[i];
+        if (!pml4e.isPresent()) continue;
+        const pdpt_phys = pml4e.toFrame();
+        releasePdptAll(pdpt_phys, free_frame, ctx);
+        pml4e.* = .{};
+    }
+}
+
+/// 叶级可写位（大页则看 PDE；否则看 PTE）。无映射返回 false。
+pub fn isPageWritable(pml4_phys: u64, virt: u64) bool {
+    const v = VirtAddr{ .value = virt };
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    const pml4e = &pml4.entries[v.pml4Index()];
+    if (!pml4e.isPresent()) return false;
+    const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+    const pdpte = &pdpt.entries[v.pdptIndex()];
+    if (!pdpte.isPresent()) return false;
+    const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde = &pd.entries[v.pdIndex()];
+    if (!pde.isPresent()) return false;
+    const pde_raw = @as(u64, @bitCast(pde.*));
+    if ((pde_raw & LargePage) != 0) {
+        return pde.writable;
+    }
+    const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
+    const pte = &pt.entries[v.ptIndex()];
+    if (!pte.isPresent()) return false;
+    return pte.writable;
+}
+
 pub fn translateVirtualToPhysical(pml4_phys: u64, virt: u64) ?u64 {
     const v = VirtAddr{ .value = virt };
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));

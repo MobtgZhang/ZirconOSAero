@@ -146,6 +146,16 @@ pub const HandleTable = struct {
         return true;
     }
 
+    /// 进程终止时关闭表中仍有效的句柄（与 `closeHandle` 语义一致）。
+    pub fn closeAllOpenHandles(self: *HandleTable) void {
+        var i: Handle = 0;
+        while (i < MAX_HANDLES) : (i += 1) {
+            if (self.entries[i].object_ptr != 0) {
+                _ = self.closeHandle(i);
+            }
+        }
+    }
+
     pub fn lookupHandle(self: *const HandleTable, handle: Handle) ?*const HandleEntry {
         if (handle >= MAX_HANDLES) return null;
         const entry = &self.entries[handle];

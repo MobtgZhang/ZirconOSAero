@@ -413,6 +413,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_buddy_tests = b.addRunArtifact(buddy_tests);
 
+    const slab_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/mm/slab.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const slab_tests = b.addTest(.{
+        .root_module = slab_test_mod,
+        .name = "slab",
+    });
+    const run_slab_tests = b.addRunArtifact(slab_tests);
+
     const ssdt_test_mod = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/ssdt_nt61.zig"),
         .target = b.graph.host,
@@ -435,6 +446,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_se_token_tests = b.addRunArtifact(se_token_tests);
 
+    const smp_atomic_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/smp_atomic_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const smp_atomic_tests = b.addTest(.{
+        .root_module = smp_atomic_host_mod,
+        .name = "smp_atomic_host",
+    });
+    const run_smp_atomic_tests = b.addRunArtifact(smp_atomic_tests);
+
     const wow64_types_test_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/types.zig"),
         .target = b.graph.host,
@@ -446,12 +468,14 @@ pub fn build(b: *std.Build) void {
     });
     const run_wow64_types_tests = b.addRunArtifact(wow64_types_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap + pool + buddy + SSDT + se/token + wow64_types host)");
+    const test_step = b.step("test", "Run host unit tests (heap + pool + buddy + slab + SSDT + se/token + smp_atomic_host + wow64_types host)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
+    test_step.dependOn(&run_slab_tests.step);
     test_step.dependOn(&run_ssdt_tests.step);
     test_step.dependOn(&run_se_token_tests.step);
+    test_step.dependOn(&run_smp_atomic_tests.step);
     test_step.dependOn(&run_wow64_types_tests.step);
 
     buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
@@ -820,7 +844,7 @@ fn laShellIconsManifestJsonAlloc(b: *std.Build) []const u8 {
         \\  "pe_machine": 25188,
         \\  "pe_machine_hex": "0x6264",
         \\  "pe_machine_name": "IMAGE_FILE_MACHINE_LOONGARCH64",
-        \\  "note": "ZirconOS: Zig cannot emit loongarch64-windows-gnu COFF DLL yet; this tree mirrors %SystemRoot%\\System32 for Windows-for-LoongArch64 host tests.",
+        \\  "note": "ZirconOSAero: Zig cannot emit loongarch64-windows-gnu COFF DLL yet; this tree mirrors %SystemRoot%\\System32 for Windows-for-LoongArch64 host tests.",
         \\  "icons": [
     , .{}) catch @panic("OOM");
 

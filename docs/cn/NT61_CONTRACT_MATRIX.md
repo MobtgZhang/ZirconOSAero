@@ -4,6 +4,29 @@
 
 **图例**：已实现 / 部分 / 未实现 — 以 `src/` 代码为准。
 
+**验证**：阶段完成度须与 `zig build test`、`.github/workflows/ci.yml` 及 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 中可复现步骤一致；禁止仅凭文档勾选「完成」。
+
+## 0. 内核内存、虚拟内存与 SMP（基线）
+
+| 能力 | 模块 | 状态说明 |
+|------|------|----------|
+| 物理帧位图 + mmap 过滤 | `src/mm/frame.zig` | 部分 — 见 [PHYS_ALLOC_AUDIT.md](PHYS_ALLOC_AUDIT.md) |
+| 伙伴 + 连续物理页封装 | `buddy.zig` / `phys_buddy.zig` | 部分 — arena 接线随启动路径演进 |
+| 通用堆 + 统计 / `heap_check` | `src/mm/heap.zig` | 部分 |
+| Slab cache | `src/mm/slab.zig` | 部分 |
+| VMA 槽位 + `mmFreeVirtualRange` | `src/mm/vm.zig` | 部分 |
+| 用户指针探测 | `src/mm/probe.zig` | 部分 — syscall 路径逐步覆盖 |
+| 进程页表释放（用户半区） | `arch/x86_64/paging.zig` `releaseUserHalfAddressSpace` | 部分 |
+| 调度切换 CR3 | `src/ke/scheduler.zig` | 部分 |
+| ACPI MADT / LAPIC 枚举 | `src/hal/x86_64/madt.zig` | 部分 |
+| AP 入口 / TLB 广播占位 | `ap_entry.zig` / `tlb_broadcast.zig` | Stub |
+| 每 CPU 调度与窃取 | `percpu_sched.zig` / `scheduler.zig` | 部分 — `home_cpu` 占位 |
+
+### 0.1 x86_64 用户 / 内核布局（文档常量）
+
+- 用户 canonical 上界：`vm.USER_VA_MAX_HINT_X86_64`（与 Intel SDM 一致）。
+- 进程 PML4 **低 256 项**为用户子树；**高半区**内核映射与内核 `CR3` 指向的顶层表可共享同一套中间页表物理页 — 销毁进程时仅释放进程 **自有** PML4 页，且 `releaseUserHalfAddressSpace` **仅**递归释放索引 0..255 子树。
+
 ## 1. desktop-src 镜像（用户态与 Win32）
 
 本地路径：`ZirconOSFluentRust/references/win32/desktop-src`（仅作离线目录索引，非许可声明）。

@@ -21,6 +21,8 @@ zig build install -Darch=x86_64 -Doptimize=ReleaseSafe
 bash scripts/ci-qemu-smoke.sh
 ```
 
+`zig build test` 当前包含：`heap`、`pool`、`buddy`、`slab`、`ssdt`、`se_token`、`smp_atomic_host`、`wow64_types` 等主机单测；与 [NT61_CONTRACT_MATRIX.md](cn/NT61_CONTRACT_MATRIX.md) 中「验证」行一致。
+
 交叉编译烟测（可选）：
 
 ```bash

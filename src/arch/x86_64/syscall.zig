@@ -3,6 +3,7 @@
 //! - **约定**：第 1 参在 **R10**（`syscall` 时 RCX 存用户 RIP，故不用 RCX 传参）；第 2–4 参为 **RDX/R8/R9**；其余在用户栈。
 
 const process = @import("../../ps/process.zig");
+const probe = @import("../../mm/probe.zig");
 const klog = @import("../../rtl/klog.zig");
 const ob = @import("../../ob/object.zig");
 const ntdll = @import("../../libs/ntdll.zig");
@@ -27,15 +28,18 @@ fn userStackArg(frame: *InterruptFrame, nth_stack_arg: u8) ?u64 {
     const va = frame.rsp +% off;
     if (va < frame.rsp) return null;
     const aligned = va & ~@as(u64, 7);
-    _ = asp.getPhysical(aligned) orelse return null;
-    // SAFETY: 已确认页映射存在；地址来自用户 RSP + 固定 Win64 syscall 栈偏移。
+    if (!probe.probeUserMemory(&asp, aligned, 8, false)) return null;
+    // SAFETY: `probeUserMemory` 已确认用户栈页可读；地址来自用户 RSP + 固定 Win64 syscall 栈偏移。
     return @as(*const volatile u64, @ptrFromInt(va)).*;
 }
 
 /// 自用户态 `UNICODE_STRING`（Length 为字节数）读取窄字符名到 `out`（UTF-16LE 低字节，非 ASCII 置 `?`）。
 fn readUserUnicodePathName(unicode_str_va: u64, out: *[32]u8) ?[]const u8 {
     if (unicode_str_va == 0) return null;
-    // SAFETY: 用户指针；仅用于 syscall 路径，与现有内核用户指针策略一致。
+    const proc = process.getCurrentProcess() orelse return null;
+    var asp = proc.address_space orelse return null;
+    if (!probe.probeUserUnicodeString(&asp, unicode_str_va, false)) return null;
+    // SAFETY: `probeUserUnicodeString` 已校验 UNICODE_STRING 头与 Buffer 范围。
     const us = @as(*const volatile extern struct {
         Length: u16,
         MaximumLength: u16,
@@ -75,6 +79,9 @@ fn readPortNameFromObjectAttributes(obj_attr_va: u64, out: *[32]u8) ?[]const u8 
 /// `NtDisplayString`：将用户 `UNICODE_STRING` 以可打印 ASCII 子集写到控制台。
 fn readUserUnicodeForDisplay(unicode_str_va: u64, out: *[256]u8) ?[]const u8 {
     if (unicode_str_va == 0) return null;
+    const proc = process.getCurrentProcess() orelse return null;
+    var asp = proc.address_space orelse return null;
+    if (!probe.probeUserUnicodeString(&asp, unicode_str_va, false)) return null;
     const us = @as(*const volatile extern struct {
         Length: u16,
         MaximumLength: u16,

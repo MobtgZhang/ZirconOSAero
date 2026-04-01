@@ -1,8 +1,8 @@
-# ZirconOS Aero 桌面管理器 — 架构设计
+# ZirconOSAero Aero 桌面管理器 — 架构设计
 
 ## 一、整体分层架构
 
-ZirconOS Aero 桌面管理器采用分层架构设计，参考 Windows 7 DWM 的核心理念：**每个窗口独立渲染到显存表面，合成器统一合成输出**。
+ZirconOSAero Aero 桌面管理器采用分层架构设计，参考 Windows 7 DWM 的核心理念：**每个窗口独立渲染到显存表面，合成器统一合成输出**。
 
 ### 1.1 与内核的职责划分（方案 B）
 
@@ -17,7 +17,7 @@ ZirconOS Aero 桌面管理器采用分层架构设计，参考 Windows 7 DWM 的
 │                 用户态应用程序                        │
 │           (Shell 命令 / 窗口应用)                     │
 ├─────────────────────────────────────────────────────┤
-│           ZirconOS Aero Shell (shell.zig)            │
+│           ZirconOSAero Aero Shell (shell.zig)        │
 │  ┌───────────┐  ┌──────────┐  ┌──────────────────┐  │
 │  │ 开始菜单    │  │ 任务栏    │  │ 桌面 & 图标管理   │  │
 │  │ startmenu  │  │ taskbar  │  │ desktop          │  │

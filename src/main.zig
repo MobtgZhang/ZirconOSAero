@@ -47,6 +47,15 @@ comptime {
     _ = @import("mm/section.zig");
     _ = @import("ke/apc.zig");
     _ = @import("ke/roadmap_hooks.zig");
+    _ = @import("mm/slab.zig");
+    _ = @import("mm/phys_buddy.zig");
+    _ = @import("mm/probe.zig");
+    _ = @import("ke/spinlock.zig");
+    _ = @import("ke/percpu_sched.zig");
+    if (builtin.cpu.arch == .x86_64) {
+        _ = @import("hal/x86_64/ap_entry.zig");
+        _ = @import("hal/x86_64/tlb_broadcast.zig");
+    }
 }
 
 /// UEFI/汇编以 64 位寄存器传参；首参截断为 u32 供 Multiboot2 magic 比对（与 LoongArch handoff 习惯一致）。
@@ -261,7 +270,9 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         if (boot_info) |bi| {
             if (bi.acpi_rsdp_phys != 0) {
                 const acpi_pci = @import("hal/x86_64/acpi_pci_early.zig");
+                const madt = @import("hal/x86_64/madt.zig");
                 acpi_pci.initFromRsdp(bi.acpi_rsdp_phys);
+                madt.initFromRsdp(bi.acpi_rsdp_phys);
             }
         }
     }

@@ -1,4 +1,4 @@
-# ZirconOS build system
+# ZirconOSAero build system
 
 ## 1. Toolchain
 
@@ -6,7 +6,7 @@
 |------|------|
 | Zig | Compiler and build system (no libc for kernel) |
 | Make | Convenience entry; reads `build.conf` and runs `zig build` |
-| GRUB | Build bootable ISOs |
+| ZBM | Boot manager (BIOS/MBR + UEFI); **no GRUB** in this repo |
 | QEMU | Virtual machine |
 | xorriso / mtools | ISO creation |
 

@@ -49,7 +49,7 @@ if [[ -f "$LOG" ]]; then
       exit 1
     fi
     if [[ "$SZ" -ge 128 ]]; then
-      if ! grep -aqs "ZirconOSAero" "$LOG" && ! grep -aqs "ZirconOS" "$LOG"; then
+      if ! grep -aqs "ZirconOSAero" "$LOG"; then
         echo "[smoke] FAIL: serial had data but no kernel banner" >&2
         exit 1
       fi

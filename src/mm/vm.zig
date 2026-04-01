@@ -73,6 +73,9 @@ pub const MapFlags = struct {
     }
 };
 
+/// x86_64 用户态 canonical 低半区上界（文档常量；页表须与 `arch` 一致）。Ref: Intel SDM — canonical addresses.
+pub const USER_VA_MAX_HINT_X86_64: u64 = 0x0000_7FFF_FFFF_FFFF;
+
 /// NT 6.1 虚拟分配阶段（公开文档：`ZwAllocateVirtualMemory` / `VirtualAlloc` 的 MEM_RESERVE vs MEM_COMMIT）。
 /// - **Reserved**：VA 区间计入地址空间，无页表 Present / 无物理页。
 /// - **Committed**：页表项有效并具备后备（匿名页或段视图）。

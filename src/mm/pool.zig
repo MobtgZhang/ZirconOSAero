@@ -52,3 +52,14 @@ pub fn freeNonPaged(ptr: [*]u8, size: usize, _: u32) void {
     node.next = free_heads[idx];
     free_heads[idx] = node;
 }
+
+test "pool slot roundtrip uses heap then freelist" {
+    const std = @import("std");
+    heap.init();
+    const p = allocateNonPaged(64, 0x1234) orelse std.debug.panic("p", .{});
+    @memset(p[0..64], 0);
+    freeNonPaged(p, 64, 0x1234);
+    const q = allocateNonPaged(64, 0x5678) orelse std.debug.panic("q", .{});
+    try std.testing.expect(@intFromPtr(q) == @intFromPtr(p));
+    freeNonPaged(q, 64, 0x5678);
+}

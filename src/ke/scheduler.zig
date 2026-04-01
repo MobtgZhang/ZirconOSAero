@@ -1,5 +1,11 @@
-//! Round-Robin Scheduler
-//! Manages kernel threads with cooperative/timer-driven context switching
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// ZirconOSAero - NT 6.1 Compatible Kernel
+// Module: src/ke/scheduler.zig
+// Purpose: 定时器驱动的多级优先级就绪调度（抢占式）；API 说明见 docs/cn/SCHEDULER_API.md
+//
+// This is an independent clean-room implementation.
+// Reference: OS textbook priority scheduling; MS Learn — threading (behavioral only).
 
 const klog = @import("../rtl/klog.zig");
 
@@ -23,10 +29,23 @@ pub const ThreadContext = struct {
 const MAX_THREADS: usize = 32;
 const STACK_SIZE: usize = 8192;
 
-/// 与路线图 Task 7 对齐的三档优先级（数值越大越优先）。
+/// 与路线图 Task 7 对齐的三档命名优先级（数值越大越优先）。
 pub const PRIORITY_IDLE: u8 = 4;
 pub const PRIORITY_NORMAL: u8 = 8;
 pub const PRIORITY_REALTIME: u8 = 16;
+
+/// 文档化八档阶梯（映射建议见 `docs/cn/SCHEDULER_API.md`）；非 NT 32 级。
+pub const PRIORITY_CLASS_COUNT: usize = 8;
+
+/// 同等最高优先级线程间：连续占用的定时器 tick 数（`1` = 每 tick 可切换，兼容既有行为）。
+pub const TIME_SLICE_TICKS: u32 = 1;
+
+/// `class` 0..7 → 单调升高的优先级值（裁剪到 u8）。
+pub fn priorityFromClass(class: u8) u8 {
+    const c: u32 = @min(@as(u32, class), PRIORITY_CLASS_COUNT - 1);
+    const p: u32 = 4 + c * 2;
+    return @truncate(p);
+}
 
 pub const Thread = struct {
     id: usize = 0,

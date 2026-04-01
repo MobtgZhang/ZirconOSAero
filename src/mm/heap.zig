@@ -1,4 +1,11 @@
-//! 内核堆：bump 后备 + **空闲链表**（块首 `FreeBlock` 元数据，用户指针在元数据之后）。
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// ZirconOSAero - NT 6.1 Compatible Kernel
+// Module: src/mm/heap.zig
+// Purpose: 内核通用堆 — bump 增长区 + 按块 `FreeBlock` 元数据的空闲链表（支持 kfree）；大块不走伙伴合并（相邻块不合并），复杂碎片控制见 `pool.zig` 档位与路线图 slab/伙伴评估。
+//
+// This is an independent clean-room implementation.
+// Reference: OS textbook free-list heap; MS Learn — kernel pool concepts (behavioral only).
 
 const std = @import("std");
 
@@ -148,4 +155,18 @@ test "heap split large free block" {
     kfree(big, 256, 8);
     _ = alloc(32, 8) orelse std.debug.panic("a", .{});
     _ = alloc(32, 8) orelse std.debug.panic("b", .{});
+}
+
+test "heap interleaved alloc free reuses bump region" {
+    init();
+    var ptrs: [24]?[*]u8 = .{null} ** 24;
+    for (0..24) |i| {
+        ptrs[i] = alloc(48, 16);
+        try std.testing.expect(ptrs[i] != null);
+    }
+    for (0..24) |i| {
+        if (ptrs[i]) |p| kfree(p, 48, 16);
+    }
+    const again = alloc(48, 16) orelse std.debug.panic("again", .{});
+    kfree(again, 48, 16);
 }

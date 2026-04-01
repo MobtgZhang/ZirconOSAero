@@ -2,9 +2,11 @@
 
 ## x86_64：当前实现
 
-- **入口**：`int 0x80`（向量 128），见 [`src/arch/x86_64/syscall_entry.s`](../../src/arch/x86_64/syscall_entry.s)。
-- **约定**：`rax` = 调用号；`rdi, rsi, rdx, r10, r8, r9` = 参数；返回值在 `rax`（以 64 位有符号扩展承载 `NTSTATUS`）。
-- **编号表**：[`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig) 中 `SYS_*` 常量（0–14）。**不是** Windows 内核 SSDT 编号。
+- **入口**：
+  - **`int 0x80`（向量 128）**：[`syscall_entry.s`](../../src/arch/x86_64/syscall_entry.s)。
+  - **`syscall` 指令**（CPU 支持 `CPUID.80000001H:EDX[11]` 且 GDT 已初始化内核栈时）：[`syscall_lstar.s`](../../src/arch/x86_64/syscall_lstar.s) + [`syscall_msr.zig`](../../src/arch/x86_64/syscall_msr.zig) 配置 `IA32_LSTAR` / `IA32_STAR` / `IA32_FMASK`；与向量 128 **共用** `syscall.dispatch`。
+- **约定**：`rax` = 调用号；`rdi, rsi, rdx, r10, r8, r9` = 参数（`syscall` 路径下 **破坏 `rcx`、`r11`**，与 AMD64 syscall 约定一致）；返回值在 `rax`（以 64 位有符号扩展承载 `NTSTATUS`）。
+- **编号表**：[`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig) 中 `SYS_*` 常量（0–14）。**不是** Windows 内核 SSDT 编号；服务号映射路线图见 [SSDT_Roadmap.md](SSDT_Roadmap.md)。
 
 ## 与 Windows NT 6.1 x64 的差异
 
@@ -18,3 +20,8 @@
 ## 其他架构
 
 `aarch64`、`riscv64`、`loongarch64`、`mips64el`：**不** 声称与 Windows syscall 兼容；各自陷阱 ABI 应在对应 `arch/*/syscall*` 或中断模块中单独文档化（当前部分架构为 stub）。
+
+## 相关
+
+- 计时精度（PIT 以上）：[TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md)
+- 服务号长期策略：[SSDT_Roadmap.md](SSDT_Roadmap.md)

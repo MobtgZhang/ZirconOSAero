@@ -9,6 +9,11 @@
 - **视觉**：默认 **Aero** 桌面（`src/desktop/aero/`），与 Vista/7 玻璃、任务栏、DWM 组合方向一致。
 - **架构**：`x86_64`、`aarch64`、`loongarch64`、`riscv64`（及上游已有的 `mips64el`）；UEFI 由 Zig 直接产出（x86_64/aarch64），LoongArch 为 GNU-EFI 链接路径；**RISC-V UEFI** 在 Zig 工具链支持 PE/COFF 前见 `build.zig` 注释与下方阶段说明。
 
+### 二进制兼容边界（必读）
+
+- **微软官方 Windows 7 用户态二进制**仅面向 **x86 / x86_64**。其他架构在本仓库中为 **同名 NT API 子集 + 实验性 Shell**，不声称可加载 Windows 7 官方 PE 生态。
+- 契约粒度与「完成度」以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 为准；README 功能矩阵中的 **Partial / Stub** 表示非 Done。
+
 ## 阶段划分（必须按序）
 
 ### Phase 0 — 工具链与基线构建

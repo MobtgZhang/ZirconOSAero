@@ -64,16 +64,17 @@ fn formatToBuf(buf: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
             i += 1;
             if (arg_idx >= fields.len) {
                 if (pos < buf.len) buf[pos] = fmt[i];
-                pos += 1;
+                pos +|= 1;
                 i += 1;
                 continue;
             }
-            pos += formatArg(buf[pos..], fmt[i], args, fields, arg_idx);
+            // 饱和加：超长 %s 或畸形格式时 `pos + wrote` 在 usize 上溢出会触发 Debug panic。
+            pos +|= formatArg(buf[pos..], fmt[i], args, fields, arg_idx);
             arg_idx += 1;
             i += 1;
         } else {
             if (pos < buf.len) buf[pos] = fmt[i];
-            pos += 1;
+            pos +|= 1;
             i += 1;
         }
     }

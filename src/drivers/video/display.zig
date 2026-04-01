@@ -32,7 +32,7 @@ fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme_mod.rgb(r, g, b);
 }
 
-fn clampI32FromI64(v: i64) i32 {
+pub fn clampI32FromI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
@@ -44,7 +44,7 @@ fn clampRectDimI64(d: i64) i32 {
 }
 
 /// 轴对齐矩形命中：`x ∈ [rx, rx+rw)`、`y ∈ [ry, ry+rh)`，加法在 i64 上避免 i32 溢出。
-fn pointInRectI32(px: i32, py: i32, rx: i32, ry: i32, rw: i32, rh: i32) bool {
+pub fn pointInRectI32(px: i32, py: i32, rx: i32, ry: i32, rw: i32, rh: i32) bool {
     const pxi = @as(i64, px);
     const pyi = @as(i64, py);
     const x0 = @as(i64, rx);
@@ -171,6 +171,33 @@ pub const AERO_CLIENT_INSET: i32 = 2;
 
 /// NT 6.1 Aero 标题栏三键悬停（DWM 风格绘制 + 命中测试）。
 pub const AeroCaptionBtnHover = enum { none, minimize, maximize, close };
+
+/// Explorer / 任务管理器壳窗口的显示状态（与 Win32 SW_* 概念对齐，实现为内核壳层）。
+pub const ShellWindowState = enum(u8) {
+    normal,
+    minimized,
+    maximized,
+};
+
+/// 边框拖拽缩放时激活的边或角（`none` 表示未在缩放）。
+pub const FrameResizeEdge = enum(u8) {
+    none,
+    n,
+    s,
+    e,
+    w,
+    ne,
+    nw,
+    se,
+    sw,
+};
+
+/// 与 `hitTestFrameResizeEdge` 一致：边框命中带宽度（像素）。
+const frame_resize_hit_px: i32 = 6;
+const explorer_min_frame_w: i32 = 320;
+const explorer_min_frame_h: i32 = 200;
+const taskmgr_min_frame_w: i32 = 260;
+const taskmgr_min_frame_h: i32 = 160;
 
 var explorer_caption_btn_hover: AeroCaptionBtnHover = .none;
 var taskmgr_caption_btn_hover: AeroCaptionBtnHover = .none;
@@ -367,6 +394,9 @@ pub const ShellRect = struct {
     h: i32,
 };
 
+/// Explorer / 任务管理器客户区外框宽高（与 `computeSampleWindowDims` / `explorerFrameDims` 共用类型，避免 Zig 匿名结构体不兼容）。
+pub const ShellFrameDims = struct { w: i32, h: i32 };
+
 pub fn rectUnion(a: ShellRect, b: ShellRect) ShellRect {
     const ax1 = @as(i64, a.x);
     const ay1 = @as(i64, a.y);
@@ -459,14 +489,15 @@ pub fn rectsOverlap(a: ShellRect, b: ShellRect) bool {
 pub fn desktopIconStripBounds(scr_w: i32, scr_h: i32) ShellRect {
     const tb = getTaskbarHeight();
     const strip_w: i32 = @min(200, scr_w);
-    const sh = scr_h - tb - 8;
-    const h = if (sh > 0) sh else 0;
+    const sh = @as(i64, scr_h) - @as(i64, tb) - 8;
+    const h: i32 = if (sh > 0) clampI32FromI64(sh) else 0;
     return .{ .x = 0, .y = 0, .w = strip_w, .h = h };
 }
 
 pub fn taskbarBoundsRect(scr_w: i32, scr_h: i32) ShellRect {
     const tb = getTaskbarHeight();
-    return .{ .x = 0, .y = scr_h - tb, .w = scr_w, .h = tb };
+    const y = clampI32FromI64(@as(i64, scr_h) - @as(i64, tb));
+    return .{ .x = 0, .y = y, .w = scr_w, .h = tb };
 }
 
 pub fn patchVerticalGradientRegion(scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw: i32, rh: i32, topc: u32, botc: u32) void {
@@ -503,7 +534,7 @@ fn patchAeroDragBackground(scr_w: i32, scr_h: i32) void {
         explorer_drag_prev_rect = cur;
     }
     if (taskmgr_drag_active) {
-        const cur = ShellRect{ .x = taskmgr_x, .y = taskmgr_y, .w = 320, .h = 260 };
+        const cur = ShellRect{ .x = taskmgr_x, .y = taskmgr_y, .w = taskmgr_w, .h = taskmgr_h };
         var u = rectUnion(taskmgr_drag_prev_rect, cur);
         u = rectInflate(u, pad);
         u = rectClampToScreen(u, scr_w, scr_h);
@@ -518,7 +549,11 @@ var explorer_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 var taskmgr_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
 fn renderSceneWithoutSoftwareCursor() void {
+    const panic_ctx = @import("../../rtl/panic_context.zig");
+    panic_ctx.setPhase(0x0002_0070);
+    cursor_plane.invalidate();
     syncAeroGlassFastPath();
+    panic_ctx.setPhase(0x0002_0071);
     renderer_aero.renderFrameEx(false);
 }
 
@@ -644,27 +679,32 @@ pub fn drawSystemInfoStrip(scr_w: i32, scr_h: i32, tb_h: i32) void {
     const tw = fb.textWidthScaled(text, scale);
     const pad: i32 = 12;
     const strip_h: i32 = @as(i32, @intCast(16 * scale)) + 8;
-    const bar_y = scr_h - tb_h - strip_h;
+    const bar_y = clampI32FromI64(@as(i64, scr_h) - @as(i64, tb_h) - @as(i64, strip_h));
     if (bar_y < 4) return;
-    const bar_w = @min(scr_w - 16, tw + pad * 2);
-    const bar_x = scr_w - bar_w - 8;
+    const tw_pad: i64 = @as(i64, tw) + @as(i64, pad) * 2;
+    const bar_w = @min(scr_w - 16, clampI32FromI64(tw_pad));
+    const bar_x = clampI32FromI64(@as(i64, scr_w) - @as(i64, bar_w) - 8);
 
     fb.fillRect(bar_x, bar_y, bar_w, strip_h, rgb(0x18, 0x1A, 0x22));
     fb.drawRect(bar_x, bar_y, bar_w, strip_h, rgb(0x50, 0x5C, 0x70));
     fb.drawHLine(bar_x + 1, bar_y + 1, bar_w - 2, rgb(0x35, 0x3D, 0x4A));
 
-    const tx = bar_x + bar_w - tw - pad;
+    const tx = clampI32FromI64(@as(i64, bar_x) + @as(i64, bar_w) - @as(i64, tw) - @as(i64, pad));
     const ty = bar_y + @divTrunc(strip_h - @as(i32, @intCast(16 * scale)), 2);
     fb.drawTextTransparentScaled(tx, ty, text, rgb(0xE4, 0xE8, 0xF2), scale);
 }
 
 pub fn renderDesktopFrame() void {
-    renderDesktopFrameEx(true, false, false, false);
+    renderDesktopFrameEx(true, false, false, false, false);
 }
 
 /// `scene_dirty`：整壁纸+壳层；`startmenu_repaint`：开始菜单悬停行变化时的局部重绘（Harmony 壁纸预设下避免整帧）；`caption_chrome_only`：仅标题栏带；`drag_repaint`：仅拖窗合成（`renderDragFrame`），不计入整场景以免与光标快速路径冲突。
+/// `shell_geometry_repaint`：边框缩放等非拖动态几何变化（`renderFrameEx` 全壳层，非整场景 `scene_dirty`）。
 /// `scene_dirty` 为真时优先于其余路径。
-pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_repaint: bool, startmenu_repaint: bool) void {
+pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_repaint: bool, startmenu_repaint: bool, shell_geometry_repaint: bool) void {
+    const panic_ctx = @import("../../rtl/panic_context.zig");
+    panic_ctx.setPhase(0x0002_0001);
+    defer panic_ctx.setPhase(0);
     if (!use_framebuffer or !fb.isInitialized()) return;
 
     dwm_mod.beginFrameBlurBudget();
@@ -677,6 +717,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     // 合成前再排空一轮输入，避免 IRQ/轮询与取样之间存在竞态导致本帧光标滞后一整帧。
     const input_hub = @import("../../drivers/input/input_hub.zig");
     input_hub.pollAll();
+    panic_ctx.setPhase(0x0002_0010);
 
     // VirtIO-Input / PS/2 均在 mouse 状态中更新坐标；非 x86 也必须每帧同步到 desktop_ctx，
     // 否则光标停留在 syncCursorFromMouse 的初值（VirtIO 事件无法驱动绘制）。
@@ -693,6 +734,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     updateSmoothCursor(raw_x, raw_y);
     desktop_ctx.cursor_x = desktop_ctx.smooth_cursor.display_x;
     desktop_ctx.cursor_y = desktop_ctx.smooth_cursor.display_y;
+    panic_ctx.setPhase(0x0002_0020);
 
     const mouse_debug = @import("../../drivers/input/mouse_debug.zig");
     const md_enabled = @import("build_options").mouse_debug;
@@ -701,12 +743,21 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
 
     if (scene_dirty) {
         path_kind = .full;
+        panic_ctx.setPhase(0x0002_0030);
         renderSceneWithoutSoftwareCursor();
+        panic_ctx.setPhase(0x0002_0040);
         cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     } else if (drag_repaint) {
         path_kind = .drag_layer;
         syncAeroGlassFastPath();
         renderer_aero.renderFrameEx(false);
+        panic_ctx.setPhase(0x0002_0041);
+        cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
+    } else if (shell_geometry_repaint) {
+        path_kind = .drag_layer;
+        syncAeroGlassFastPath();
+        renderer_aero.renderFrameEx(false);
+        panic_ctx.setPhase(0x0002_0042);
         cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     } else if (startmenu_repaint and startmenu.isVisible()) {
         if (renderer_aero.startMenuRepaintCanPatchWallpaper()) {
@@ -719,6 +770,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
             const t = theme_mod.getActiveTheme();
             const tb_h = theme_mod.getTaskbarHeight();
             renderer_aero.redrawStartMenuRegionOnly(scr_w, scr_h, t, tb_h);
+            panic_ctx.setPhase(0x0002_0043);
             cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
             cursor_plane.markMotionDirty(
                 desktop_ctx.smooth_cursor.prev_x,
@@ -728,7 +780,9 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
             );
         } else {
             path_kind = .full;
+            panic_ctx.setPhase(0x0002_0031);
             renderSceneWithoutSoftwareCursor();
+            panic_ctx.setPhase(0x0002_0044);
             cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
         }
     } else if (caption_chrome_only) {
@@ -736,6 +790,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
         cursor_plane.restoreSaveUnderIfPlaced();
         syncAeroGlassFastPath();
         renderer_aero.redrawCaptionBandsOnly();
+        panic_ctx.setPhase(0x0002_0045);
         cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
         cursor_plane.markMotionDirty(
             desktop_ctx.smooth_cursor.prev_x,
@@ -746,23 +801,37 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     } else {
         // 壳层打开时：场景已在上一整帧写入缓冲（含菜单/托盘），仅指针移动可走 moveOnly，避免每帧全屏 DWM。
         if (ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) {
+            panic_ctx.setPhase(0x0002_0050);
             if (cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
                 path_kind = .cursor_fast;
             } else {
                 path_kind = .full;
+                panic_ctx.setPhase(0x0002_0032);
                 renderSceneWithoutSoftwareCursor();
+                panic_ctx.setPhase(0x0002_0046);
                 cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
             }
-        } else if (!cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
-            path_kind = .full;
-            renderSceneWithoutSoftwareCursor();
-            cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
+        } else {
+            panic_ctx.setPhase(0x0002_0051);
+            if (!cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
+                path_kind = .full;
+                panic_ctx.setPhase(0x0002_0033);
+                renderSceneWithoutSoftwareCursor();
+                panic_ctx.setPhase(0x0002_0047);
+                cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
+            }
         }
     }
+    panic_ctx.setPhase(0x0002_0060);
+    syncDwmCompositorShellMetadata(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
     if (md_enabled) {
         mouse_debug.noteDesktopRenderPath(path_kind);
     }
     mouse.clearCursorMoved();
+
+    if (shell_blur_cooldown_frames > 0) {
+        shell_blur_cooldown_frames -= 1;
+    }
 }
 
 fn updateSmoothCursor(raw_x: i32, raw_y: i32) void {
@@ -795,8 +864,8 @@ fn updateSmoothCursor(raw_x: i32, raw_y: i32) void {
     sc.display_y = dy;
 
     const P: i32 = 256;
-    sc.sub_x = dx * P;
-    sc.sub_y = dy * P;
+    sc.sub_x = @truncate(@as(i64, dx) * @as(i64, P));
+    sc.sub_y = @truncate(@as(i64, dy) * @as(i64, P));
 
     sc.is_moving = (sc.display_x != sc.prev_x or sc.display_y != sc.prev_y);
 }
@@ -832,10 +901,11 @@ pub fn handleDesktopHotkeys() bool {
 
 pub fn bringTaskManagerToFront() void {
     if (!use_framebuffer or !fb.isInitialized()) return;
+    taskmgr_shell_state = .normal;
     const scr_w: i32 = @intCast(fb.getWidth());
     const scr_h: i32 = @intCast(fb.getHeight());
-    const tm_w: i32 = 320;
-    const tm_h: i32 = 260;
+    const tm_w = taskmgr_w;
+    const tm_h = taskmgr_h;
     const tb = getTaskbarHeight();
     const pad: i32 = 12;
     taskmgr_x = @divTrunc(scr_w - tm_w, 2);
@@ -848,30 +918,29 @@ pub fn bringTaskManagerToFront() void {
 fn isStartButtonClick(click_x: i32, click_y: i32, scr_w: i32, scr_h: i32) bool {
     _ = scr_w;
     const tb_h = getTaskbarHeight();
-    const tb_y = scr_h - tb_h;
+    const tb_y = clampI32FromI64(@as(i64, scr_h) - @as(i64, tb_h));
     if (click_y >= scr_h or click_y < tb_y) return false;
 
     const o = aeroTaskbarStartOrb(tb_y, tb_h);
     const dx = click_x - o.cx;
     const dy = click_y - o.cy;
     const hit_r = o.r + 2;
-    return dx * dx + dy * dy <= hit_r * hit_r;
+    const dx64 = @as(i64, dx);
+    const dy64 = @as(i64, dy);
+    const hr = @as(i64, hit_r);
+    return dx64 * dx64 + dy64 * dy64 <= hr * hr;
 }
 
 fn taskMgrWindowContains(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
+    if (taskmgr_shell_state == .minimized) return false;
     initTaskMgrPosition(scr_w, scr_h);
-    const tm_w: i32 = 320;
-    const tm_h: i32 = 260;
-    return px >= taskmgr_x and px < taskmgr_x + tm_w and
-        py >= taskmgr_y and py < taskmgr_y + tm_h;
+    return pointInRectI32(px, py, taskmgr_x, taskmgr_y, taskmgr_w, taskmgr_h);
 }
 
 fn taskMgrTitlebarHit(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
     initTaskMgrPosition(scr_w, scr_h);
-    const tm_w: i32 = 320;
     const cap = shellTitlebarH();
-    return px >= taskmgr_x and px < taskmgr_x + tm_w and
-        py >= taskmgr_y and py < taskmgr_y + cap;
+    return pointInRectI32(px, py, taskmgr_x, taskmgr_y, taskmgr_w, cap);
 }
 
 fn explorerClientRect(scr_w: i32, scr_h: i32) struct { x: i32, y: i32, w: i32, h: i32 } {
@@ -887,7 +956,7 @@ fn explorerClientRect(scr_w: i32, scr_h: i32) struct { x: i32, y: i32, w: i32, h
 /// Aero 壳窗口客户端布局与 renderer_aero.renderExplorerContent 一致。
 fn aeroExplorerClientClick(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
     const cr = explorerClientRect(scr_w, scr_h);
-    if (px < cr.x or px >= cr.x + cr.w or py < cr.y or py >= cr.y + cr.h) return false;
+    if (!pointInRectI32(px, py, cr.x, cr.y, cr.w, cr.h)) return false;
     const lx = px - cr.x;
     const ly = py - cr.y;
     const cmd_h: i32 = AERO_EXPLORER_CMD_H;
@@ -903,6 +972,9 @@ fn aeroExplorerClientClick(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
 }
 
 pub fn handleClick(x: i32, y: i32) bool {
+    const panic_ctx = @import("../../rtl/panic_context.zig");
+    panic_ctx.setPhase(0x0003_0001);
+    defer panic_ctx.setPhase(0);
     const h: i32 = @intCast(fb.getHeight());
     const w: i32 = @intCast(fb.getWidth());
 
@@ -965,7 +1037,7 @@ pub fn handleClick(x: i32, y: i32) bool {
     }
 
     const tb_h = getTaskbarHeight();
-    const tb_y = h - tb_h;
+    const tb_y = clampI32FromI64(@as(i64, h) - @as(i64, tb_h));
     if (aero_tray_flyout_visible and y >= tb_y) {
         const hit = aero_tray.hitTest(x, y, w, h, tb_h);
         if (hit == .chevron) {
@@ -985,7 +1057,7 @@ pub fn handleClick(x: i32, y: i32) bool {
     }
     if (aero_tray_flyout_visible) {
         const fr = aeroTrayFlyoutRect(w, h);
-        if (x >= fr.x and x < fr.x + fr.w and y >= fr.y and y < fr.y + fr.h) {
+        if (pointInRectI32(x, y, fr.x, fr.y, fr.w, fr.h)) {
             if (aeroTrayFlyoutPick(x, y, w, h)) |idx| {
                 const item = aero_tray_flyout_items[idx];
                 if (!(item.len == 3 and item[0] == '-')) {
@@ -999,6 +1071,9 @@ pub fn handleClick(x: i32, y: i32) bool {
         return true;
     }
     if (y >= tb_y and y < h) {
+        if (tryTaskbarRestoreMinimizedWindows(x, y, w, h)) {
+            return true;
+        }
         const hit = aero_tray.hitTest(x, y, w, h, tb_h);
         if (hit == .chevron) {
             aero_tray_flyout_visible = !aero_tray_flyout_visible;
@@ -1021,23 +1096,49 @@ pub fn handleClick(x: i32, y: i32) bool {
 
     initTaskMgrPosition(w, h);
     if (taskMgrWindowContains(x, y, w, h)) {
+        if (taskmgr_shell_state == .normal) {
+            const tedge = hitTestFrameResizeEdge(x, y, taskmgr_x, taskmgr_y, taskmgr_w, taskmgr_h);
+            if (tedge != .none) {
+                taskmgr_edge_resize = tedge;
+                return true;
+            }
+        }
         if (taskMgrTitlebarHit(x, y, w, h)) {
-            const tm_w: i32 = 320;
             const cap = shellTitlebarH();
-            switch (hitTestAeroCaptionButtons(x, y, taskmgr_x, taskmgr_y, tm_w, cap)) {
+            switch (hitTestAeroCaptionButtons(x, y, taskmgr_x, taskmgr_y, taskmgr_w, cap)) {
                 .close => {
                     klog.info("Task Manager: close (stub)", .{});
                     return true;
                 },
-                .minimize, .maximize => {
-                    klog.info("Task Manager: min/max (stub)", .{});
+                .minimize => {
+                    taskmgr_shell_state = .minimized;
+                    taskmgr_edge_resize = .none;
+                    return true;
+                },
+                .maximize => {
+                    if (taskmgr_shell_state == .maximized) {
+                        taskmgr_shell_state = .normal;
+                        taskmgr_x = taskmgr_restore.x;
+                        taskmgr_y = taskmgr_restore.y;
+                        taskmgr_w = taskmgr_restore.w;
+                        taskmgr_h = taskmgr_restore.h;
+                    } else {
+                        taskmgr_restore = .{ .x = taskmgr_x, .y = taskmgr_y, .w = taskmgr_w, .h = taskmgr_h };
+                        const wa = desktopWorkArea(w, h);
+                        taskmgr_x = wa.x;
+                        taskmgr_y = wa.y;
+                        taskmgr_w = wa.w;
+                        taskmgr_h = wa.h;
+                        taskmgr_shell_state = .maximized;
+                    }
                     return true;
                 },
                 .none => {
+                    if (taskmgr_shell_state == .maximized) return true;
                     taskmgr_drag_active = true;
                     taskmgr_drag_off_x = x - taskmgr_x;
                     taskmgr_drag_off_y = y - taskmgr_y;
-                    taskmgr_drag_prev_rect = .{ .x = taskmgr_x, .y = taskmgr_y, .w = 320, .h = 260 };
+                    taskmgr_drag_prev_rect = .{ .x = taskmgr_x, .y = taskmgr_y, .w = taskmgr_w, .h = taskmgr_h };
                     return true;
                 },
             }
@@ -1046,17 +1147,49 @@ pub fn handleClick(x: i32, y: i32) bool {
     }
     const wr = getWindowRect(w, h);
     const cap_h = shellTitlebarH();
+    if (wr.w > 0 and wr.h > 0 and explorer_shell_state == .normal) {
+        const ex_edge = hitTestFrameResizeEdge(x, y, wr.x, wr.y, wr.w, wr.h);
+        if (ex_edge != .none) {
+            explorer_edge_resize = ex_edge;
+            return true;
+        }
+    }
     if (pointInRectI32(x, y, wr.x, wr.y, wr.w, cap_h)) {
         switch (hitTestAeroCaptionButtons(x, y, wr.x, wr.y, wr.w, cap_h)) {
             .close => {
                 klog.info("Explorer: close (stub)", .{});
                 return true;
             },
-            .minimize, .maximize => {
-                klog.info("Explorer: min/max (stub)", .{});
+            .minimize => {
+                explorer_shell_state = .minimized;
+                explorer_edge_resize = .none;
+                return true;
+            },
+            .maximize => {
+                if (explorer_shell_state == .maximized) {
+                    explorer_shell_state = .normal;
+                    window_x = explorer_restore_snap.x;
+                    window_y = explorer_restore_snap.y;
+                    explorer_custom_frame = explorer_restore_snap.custom;
+                    if (explorer_restore_snap.custom) {
+                        explorer_frame_w = explorer_restore_snap.w;
+                        explorer_frame_h = explorer_restore_snap.h;
+                    }
+                } else {
+                    const dim = explorerFrameDims(w, h);
+                    explorer_restore_snap = .{
+                        .x = window_x,
+                        .y = window_y,
+                        .w = dim.w,
+                        .h = dim.h,
+                        .custom = explorer_custom_frame,
+                    };
+                    explorer_shell_state = .maximized;
+                }
                 return true;
             },
             .none => {
+                if (explorer_shell_state == .maximized) return true;
                 drag_active = true;
                 drag_offset_x = x - window_x;
                 drag_offset_y = y - window_y;
@@ -1073,7 +1206,8 @@ pub fn handleClick(x: i32, y: i32) bool {
 
 pub fn handleRightClick(x: i32, y: i32) bool {
     const h: i32 = @intCast(fb.getHeight());
-    const tb_y = h - getTaskbarHeight();
+    const tb_h = getTaskbarHeight();
+    const tb_y = clampI32FromI64(@as(i64, h) - @as(i64, tb_h));
 
     if (startmenu.isVisible()) {
         startmenu.hide();
@@ -1094,7 +1228,9 @@ pub fn handleRightClick(x: i32, y: i32) bool {
 
 /// 资源管理器窗口拖动：先算理想位置，钳位后若被挡在边缘则重算抓取偏移，避免标题栏与指针「滑脱」。
 fn applyExplorerDrag(x: i32, y: i32, scr_w: i32, scr_h: i32) void {
-    const dim = computeSampleWindowDims(scr_w, scr_h);
+    if (explorer_shell_state != .normal) return;
+    if (explorer_edge_resize != .none) return;
+    const dim = explorerFrameDims(scr_w, scr_h);
     const pad: i32 = 2;
     const cap = shellTitlebarH();
     const tb = getTaskbarHeight();
@@ -1113,8 +1249,10 @@ fn applyExplorerDrag(x: i32, y: i32, scr_w: i32, scr_h: i32) void {
 
 /// 任务管理器拖动：同上，贴边时保持抓取点与指针一致。
 fn applyTaskMgrDrag(x: i32, y: i32, scr_w: i32, scr_h: i32) void {
-    const tm_w: i32 = 320;
-    const tm_h: i32 = 260;
+    if (taskmgr_shell_state != .normal) return;
+    if (taskmgr_edge_resize != .none) return;
+    const tm_w = taskmgr_w;
+    const tm_h = taskmgr_h;
     const pad: i32 = 2;
     const tb = getTaskbarHeight();
 
@@ -1136,6 +1274,8 @@ pub const MouseMovePaintHint = struct {
     /// 开始菜单悬停行变化：仅重绘菜单脏区（避免整屏壁纸+毛玻璃）。
     needs_startmenu_repaint: bool = false,
     needs_drag_repaint: bool = false,
+    /// 边框拖拽改变 Explorer / 任务管理器几何：走 `renderer_aero.renderFrameEx` 非拖动态全壳层（非 `scene_dirty`）。
+    needs_shell_frame_repaint: bool = false,
     needs_caption_chrome_only: bool = false,
     cursor_shape_changed: bool = false,
 
@@ -1144,6 +1284,7 @@ pub const MouseMovePaintHint = struct {
             .needs_full_scene = a.needs_full_scene or b.needs_full_scene,
             .needs_startmenu_repaint = a.needs_startmenu_repaint or b.needs_startmenu_repaint,
             .needs_drag_repaint = a.needs_drag_repaint or b.needs_drag_repaint,
+            .needs_shell_frame_repaint = a.needs_shell_frame_repaint or b.needs_shell_frame_repaint,
             .needs_caption_chrome_only = a.needs_caption_chrome_only or b.needs_caption_chrome_only,
             .cursor_shape_changed = a.cursor_shape_changed or b.cursor_shape_changed,
         };
@@ -1163,6 +1304,15 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
 
     const scr_w: i32 = @intCast(fb.getWidth());
     const scr_h: i32 = @intCast(fb.getHeight());
+    const mouse = @import("../input/mouse.zig");
+    var shell_geometry_changed = false;
+    if (explorer_edge_resize != .none and mouse.isLeftPressed()) {
+        shell_geometry_changed = applyExplorerFrameResize(x, y, scr_w, scr_h) or shell_geometry_changed;
+    }
+    if (taskmgr_edge_resize != .none and mouse.isLeftPressed()) {
+        shell_geometry_changed = applyTaskMgrFrameResize(x, y, scr_w, scr_h) or shell_geometry_changed;
+    }
+
     const wx0 = window_x;
     const wy0 = window_y;
     const tmx0 = taskmgr_x;
@@ -1187,8 +1337,20 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
     const wr = getWindowRect(scr_w, scr_h);
     const cap_h = shellTitlebarH();
     initTaskMgrPosition(scr_w, scr_h);
-    const tm_w: i32 = 320;
-    if (builtin_apps.captionHoverForTopmost(x, y) != .none) {
+    const tm_w = taskmgr_w;
+
+    // 指针在开始菜单或桌面右键菜单上时，不做顶层窗标题栏三键命中：否则与壳层叠加时热态会抖动，
+    // 且旧逻辑曾把「壳层打开 + caption 热态」强升为整场景（每帧全屏毛玻璃），在 UEFI GOP 高分辨率下等同卡死。
+    var skip_top_window_caption_hit = false;
+    if (startmenu.isVisible()) {
+        const sm_r = startmenu.getInteractiveBounds(scr_w, scr_h);
+        if (sm_r.contains(x, y)) skip_top_window_caption_hit = true;
+    }
+    if (ctx_menu_visible and isInsideContextMenu(x, y)) skip_top_window_caption_hit = true;
+
+    if (skip_top_window_caption_hit) {
+        // 保持 .none，依赖 startmenu / context 局部重绘路径。
+    } else if (builtin_apps.captionHoverForTopmost(x, y) != .none) {
         explorer_caption_btn_hover = .none;
         taskmgr_caption_btn_hover = .none;
     } else if (taskMgrWindowContains(x, y, scr_w, scr_h) and taskMgrTitlebarHit(x, y, scr_w, scr_h)) {
@@ -1202,21 +1364,19 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
     const startmenu_hover_changed = startmenu_hover;
     const needs_startmenu_repaint = startmenu.isVisible() and startmenu_hover_changed;
     const needs_drag_repaint = explorer_moved or taskmgr_moved or builtin_moved;
-    // 仅开始菜单/托盘挡住 Explorer 标题栏热态；右键菜单不挡（`redrawCaptionBandsOnly` 已重画上下文菜单）。
-    const overlay_blocks_caption_fast = startmenu.isVisible() or aero_tray_flyout_visible;
-    const needs_caption_chrome_only = caption_hover_changed and !explorer_moved and !taskmgr_moved and !startmenu_hover_changed and !overlay_blocks_caption_fast;
+    // 开始菜单/托盘飞出打开时仍允许 `caption_chrome_only`：`redrawCaptionBandsOnly` 会重画上下文菜单；
+    // 勿再因「壳层 + caption 热态」强升整场景（NT 6.1 风格 DWM 在 CPU 上的致命路径）。
+    const needs_caption_chrome_only = caption_hover_changed and !explorer_moved and !taskmgr_moved and !startmenu_hover_changed and !shell_geometry_changed;
 
     const prev_kind = desktop_cursor_kind;
     updateDesktopCursorKind(x, y, prev_kind);
     const cursor_shape_changed = prev_kind != desktop_cursor_kind;
 
-    // 壳层遮挡时：caption 热态仍须整帧（下层可能被盖住）。光标形态由 `cursor_plane.moveOnly` 单独处理，勿再强制全场景。
-    const needs_full_scene_overlay = overlay_blocks_caption_fast and caption_hover_changed;
-
     return .{
-        .needs_full_scene = needs_full_scene_overlay,
+        .needs_full_scene = false,
         .needs_startmenu_repaint = needs_startmenu_repaint,
         .needs_drag_repaint = needs_drag_repaint,
+        .needs_shell_frame_repaint = shell_geometry_changed,
         .needs_caption_chrome_only = needs_caption_chrome_only,
         .cursor_shape_changed = cursor_shape_changed,
     };
@@ -1311,10 +1471,17 @@ pub fn isWindowDragging() bool {
     return drag_active or taskmgr_drag_active or builtin_apps.isDragging();
 }
 
-pub fn handleMouseRelease() void {
+/// 左键释放：若曾拖动 Explorer / 任务管理器 / 内置窗，返回 true，主循环据此触发重绘（恢复完整标题栏玻璃，避免 noop mouseup 整屏 scene_dirty）。
+pub fn handleMouseRelease() bool {
+    const was_explorer = drag_active;
+    const was_taskmgr = taskmgr_drag_active;
+    const was_resize = (explorer_edge_resize != .none) or (taskmgr_edge_resize != .none);
     drag_active = false;
     taskmgr_drag_active = false;
-    builtin_apps.onMouseRelease();
+    explorer_edge_resize = .none;
+    taskmgr_edge_resize = .none;
+    const was_builtin_drag = builtin_apps.onMouseRelease();
+    return was_explorer or was_taskmgr or was_builtin_drag or was_resize;
 }
 
 pub fn renderAeroDesktop() void {
@@ -1336,9 +1503,9 @@ fn renderHarmonyStyleWallpaper(w: i32, h: i32) void {
     // 四边暗角，增强景深与任务栏玻璃对比
     const vstrip: i32 = 28;
     fb.blendTintRect(0, 0, w, vstrip, rgb(0x00, 0x04, 0x12), 38, 255);
-    fb.blendTintRect(0, h - vstrip, w, vstrip, rgb(0x00, 0x02, 0x0A), 48, 255);
+    fb.blendTintRect(0, clampI32FromI64(@as(i64, h) - @as(i64, vstrip)), w, vstrip, rgb(0x00, 0x02, 0x0A), 48, 255);
     fb.blendTintRect(0, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
-    fb.blendTintRect(w - vstrip, 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
+    fb.blendTintRect(clampI32FromI64(@as(i64, w) - @as(i64, vstrip)), 0, vstrip, h, rgb(0x00, 0x04, 0x10), 32, 255);
 }
 
 fn renderAeroBackground(w: i32, h: i32, t: *const ThemeColors) void {
@@ -1348,7 +1515,8 @@ fn renderAeroBackground(w: i32, h: i32, t: *const ThemeColors) void {
 
 /// Aero 任务栏唯一绘制入口（`renderer_aero` 全帧与壳层共用，避免两套像素分叉）。
 pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, tb_h: i32) void {
-    const tb_y = scr_h - tb_h;
+    const tb_y = clampI32FromI64(@as(i64, scr_h) - @as(i64, tb_h));
+    taskmgr_tray_chip_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
     const drag_fast = isDragging();
     const shell_open = ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible;
 
@@ -1427,6 +1595,19 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
         ax += tile + 5;
     }
 
+    if (taskmgr_shell_state == .minimized) {
+        const chip_x = ax + 6;
+        const chip_w: i32 = 78;
+        const chip_y = ay;
+        const chip_h = pill_h;
+        if (chip_x + chip_w < scr_w - peek_w - 80) {
+            fb.fillRoundedRect(chip_x, chip_y, chip_w, chip_h, pill_r, rgb(0x30, 0x50, 0x78));
+            fb.drawRect(chip_x, chip_y, chip_w, chip_h, rgb(0xA0, 0xCC, 0xF0));
+            fb.drawTextTransparentUi(chip_x + 6, chip_y + @divTrunc(pill_h - 14, 2), "TaskMgr", rgb(0xE8, 0xF0, 0xFF));
+            taskmgr_tray_chip_rect = .{ .x = chip_x, .y = chip_y, .w = chip_w, .h = chip_h };
+        }
+    }
+
     const tray = aero_tray.layout(scr_w, scr_h, tb_h);
     if (tray.shelf_w > 4 and tray.shelf_h > 4) {
         fb.fillRoundedRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, 6, rgb(0x18, 0x28, 0x3C));
@@ -1460,6 +1641,7 @@ pub fn initAeroDwm() void {
         // 默认用较轻模糊（仍可见毛玻璃），需要画质再调大 glass_blur_*。
         const cfg = DwmConfig{};
         initDwm(cfg);
+        klog.debug("AeroDWM: compositor_config_epoch=%u (config handshake trace)", .{dwm_mod.compositor_config_epoch});
 
         dwm_mod.init(cfg);
         if (fb.isInitialized()) {
@@ -1575,7 +1757,15 @@ pub fn renderShadow(x: i32, y: i32, w: i32, h: i32, size: i32) void {
         if (offset <= 0) break;
         // Darken the existing background by a small alpha (outer = darker, inner = lighter)
         const shadow_alpha: u8 = @intCast(@as(u32, @intCast(25 - layer * 5)));
-        fb.blendTintRect(x + offset, y + offset, w, h, rgb(0x00, 0x00, 0x00), shadow_alpha, 255);
+        fb.blendTintRect(
+            clampI32FromI64(@as(i64, x) + @as(i64, offset)),
+            clampI32FromI64(@as(i64, y) + @as(i64, offset)),
+            w,
+            h,
+            rgb(0x00, 0x00, 0x00),
+            shadow_alpha,
+            255,
+        );
     }
 }
 
@@ -1611,7 +1801,7 @@ pub fn renderDesktopIcons(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
     _ = scr_w;
     const base_x: i32 = 20;
     var base_y: i32 = 16;
-    const avail_h = scr_h - getTaskbarHeight() - 16;
+    const avail_h: i32 = clampI32FromI64(@as(i64, scr_h) - @as(i64, getTaskbarHeight()) - 16);
     const icon_scale: u32 = 2;
 
     const icon_style: icons.ThemeStyle = .aero;
@@ -1715,6 +1905,12 @@ var taskmgr_placed: bool = false;
 var taskmgr_drag_active: bool = false;
 var taskmgr_drag_off_x: i32 = 0;
 var taskmgr_drag_off_y: i32 = 0;
+var taskmgr_shell_state: ShellWindowState = .normal;
+var taskmgr_w: i32 = 320;
+var taskmgr_h: i32 = 260;
+var taskmgr_restore: struct { x: i32, y: i32, w: i32, h: i32 } = .{ .x = 0, .y = 0, .w = 320, .h = 260 };
+/// 任务管理器最小化时任务栏上的可点击恢复条带（每帧由 `renderDesktopAeroTaskbar` 更新）。
+var taskmgr_tray_chip_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
 /// 资源管理器导航：C: 根（大图标）、WINNT\\System32 详细列表、单文件浏览页。
 const W2kExLoc = enum { c_drive, c_winnt_system32, file_page };
@@ -1753,12 +1949,10 @@ fn explorerW2kWindowTitle() []const u8 {
 
 pub fn initTaskMgrPosition(scr_w: i32, scr_h: i32) void {
     if (taskmgr_placed) return;
-    const tm_w: i32 = 320;
-    const tm_h: i32 = 260;
     const tb = getTaskbarHeight();
     const pad: i32 = 12;
-    taskmgr_x = scr_w - tm_w - pad;
-    taskmgr_y = scr_h - tb - tm_h - pad;
+    taskmgr_x = scr_w - taskmgr_w - pad;
+    taskmgr_y = scr_h - tb - taskmgr_h - pad;
     taskmgr_placed = true;
 }
 
@@ -1772,6 +1966,7 @@ pub fn renderTaskManagerWin(scr_w: i32, scr_h: i32, t: *const ThemeColors) void 
 }
 
 fn renderExplorerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
+    if (explorer_shell_state == .minimized) return;
     const wr = getWindowRect(scr_w, scr_h);
     const win_w = wr.w;
     const win_h = wr.h;
@@ -1801,9 +1996,10 @@ fn renderExplorerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
 }
 
 fn renderTaskManagerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
+    if (taskmgr_shell_state == .minimized) return;
     initTaskMgrPosition(scr_w, scr_h);
-    const tm_w: i32 = 320;
-    const tm_h: i32 = 260;
+    const tm_w = taskmgr_w;
+    const tm_h = taskmgr_h;
     const win_x = taskmgr_x;
     const win_y = taskmgr_y;
     const th = shellTitlebarH();
@@ -1828,8 +2024,8 @@ fn renderTaskManagerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) voi
 /// 拖动态：标题栏无盒式模糊，客户区单色，与 `renderer_aero.renderExplorerWindowDragLight` 对齐。
 pub fn renderTaskManagerWinDragLight(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
     initTaskMgrPosition(scr_w, scr_h);
-    const tm_w: i32 = 320;
-    const tm_h: i32 = 260;
+    const tm_w = taskmgr_w;
+    const tm_h = taskmgr_h;
     const win_x = taskmgr_x;
     const win_y = taskmgr_y;
     const th = shellTitlebarH();
@@ -2342,7 +2538,7 @@ fn renderWindowContent(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColors) vo
     fb.drawTextTransparent(x + 8, y + h - 18, status_text, rgb(0x00, 0x00, 0x00));
 }
 
-// ── Window Drag State ──
+// ── Window Drag / Shell 几何（Explorer + 任务管理器）──
 
 var drag_active: bool = false;
 var drag_offset_x: i32 = 0;
@@ -2351,19 +2547,38 @@ var window_x: i32 = 0;
 var window_y: i32 = 0;
 var window_placed: bool = false;
 
+var explorer_shell_state: ShellWindowState = .normal;
+var explorer_restore_snap: struct { x: i32, y: i32, w: i32, h: i32, custom: bool } = .{
+    .x = 0,
+    .y = 0,
+    .w = 0,
+    .h = 0,
+    .custom = false,
+};
+var explorer_custom_frame: bool = false;
+var explorer_frame_w: i32 = 0;
+var explorer_frame_h: i32 = 0;
+var explorer_edge_resize: FrameResizeEdge = .none;
+var taskmgr_edge_resize: FrameResizeEdge = .none;
+
+var explorer_dwm_surface_id: ?u16 = null;
+var taskmgr_dwm_surface_id: ?u16 = null;
+
 /// Explorer client size scales with resolution (fraction of work area). Font/glyph scale is unchanged.
-fn computeSampleWindowDims(scr_w: i32, scr_h: i32) struct { w: i32, h: i32 } {
+fn computeSampleWindowDims(scr_w: i32, scr_h: i32) ShellFrameDims {
     const tb = getTaskbarHeight();
     const margin: i32 = 16;
-    const max_h = scr_h - tb - margin * 2;
-    const max_w = scr_w - margin * 2;
+    const max_h_i = @as(i64, scr_h) - @as(i64, tb) - @as(i64, margin) * 2;
+    const max_w_i = @as(i64, scr_w) - @as(i64, margin) * 2;
+    const max_h = clampI32FromI64(max_h_i);
+    const max_w = clampI32FromI64(max_w_i);
     if (max_w < 160 or max_h < 120) {
         return .{ .w = @max(120, max_w), .h = @max(96, max_h) };
     }
 
     // ~72% of work area (NT 6.1 Aero-style large Explorer); floors keep modest minimums on huge panels.
-    var win_w: i32 = @divTrunc(max_w * 18, 25);
-    var win_h: i32 = @divTrunc(max_h * 18, 25);
+    var win_w: i32 = clampI32FromI64(@divTrunc(max_w_i * 18, 25));
+    var win_h: i32 = clampI32FromI64(@divTrunc(max_h_i * 18, 25));
     win_w = @max(480, @min(max_w, win_w));
     win_h = @max(400, @min(max_h, win_h));
 
@@ -2377,20 +2592,298 @@ fn initWindowPosition(scr_w: i32, scr_h: i32) void {
         const pad: i32 = 12;
         window_x = @divTrunc(scr_w - dim.w, 2);
         if (window_x < pad) window_x = pad;
-        window_y = @divTrunc(scr_h - tb - dim.h, 2);
+        const wy64 = @divTrunc(@as(i64, scr_h) - @as(i64, tb) - @as(i64, dim.h), 2);
+        window_y = clampI32FromI64(wy64);
         if (window_y < pad) window_y = pad;
-        if (window_y + dim.h > scr_h - tb - 2) {
-            window_y = scr_h - tb - dim.h - 2;
+        const bottom = @as(i64, window_y) + @as(i64, dim.h);
+        const limit = @as(i64, scr_h) - @as(i64, tb) - 2;
+        if (bottom > limit) {
+            window_y = clampI32FromI64(limit - @as(i64, dim.h));
         }
         if (window_y < pad) window_y = pad;
         window_placed = true;
     }
 }
 
+fn desktopWorkArea(scr_w: i32, scr_h: i32) ShellRect {
+    const tb = getTaskbarHeight();
+    const m: i32 = 2;
+    const mi = @as(i64, m);
+    return .{
+        .x = m,
+        .y = m,
+        .w = clampRectDimI64(@as(i64, scr_w) - 2 * mi),
+        .h = clampRectDimI64(@as(i64, scr_h) - @as(i64, tb) - 2 * mi),
+    };
+}
+
+fn explorerFrameDims(scr_w: i32, scr_h: i32) ShellFrameDims {
+    if (explorer_custom_frame and explorer_frame_w >= explorer_min_frame_w and explorer_frame_h >= explorer_min_frame_h) {
+        return .{ .w = explorer_frame_w, .h = explorer_frame_h };
+    }
+    return computeSampleWindowDims(scr_w, scr_h);
+}
+
+pub fn isExplorerWindowMinimized() bool {
+    return explorer_shell_state == .minimized;
+}
+
+pub fn isTaskMgrWindowMinimized() bool {
+    return taskmgr_shell_state == .minimized;
+}
+
+pub fn getTaskMgrSize() struct { w: i32, h: i32 } {
+    return .{ .w = taskmgr_w, .h = taskmgr_h };
+}
+
 pub fn getWindowRect(scr_w: i32, scr_h: i32) struct { x: i32, y: i32, w: i32, h: i32 } {
+    if (explorer_shell_state == .minimized) {
+        return .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+    }
     initWindowPosition(scr_w, scr_h);
-    const dim = computeSampleWindowDims(scr_w, scr_h);
+    if (explorer_shell_state == .maximized) {
+        const wa = desktopWorkArea(scr_w, scr_h);
+        return .{ .x = wa.x, .y = wa.y, .w = wa.w, .h = wa.h };
+    }
+    const dim = explorerFrameDims(scr_w, scr_h);
     return .{ .x = window_x, .y = window_y, .w = dim.w, .h = dim.h };
+}
+
+fn hitTestFrameResizeEdge(px: i32, py: i32, rx: i32, ry: i32, rw: i32, rh: i32) FrameResizeEdge {
+    if (rw < frame_resize_hit_px * 3 or rh < frame_resize_hit_px * 3) return .none;
+    if (!pointInRectI32(px, py, rx, ry, rw, rh)) return .none;
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    const rx64 = @as(i64, rx);
+    const ry64 = @as(i64, ry);
+    const rw64 = @as(i64, rw);
+    const rh64 = @as(i64, rh);
+    const hit = @as(i64, frame_resize_hit_px);
+    const in_left = pxi < rx64 + hit;
+    const in_right = pxi >= rx64 + rw64 - hit;
+    const in_top = pyi < ry64 + hit;
+    const in_bottom = pyi >= ry64 + rh64 - hit;
+    if (!(in_left or in_right or in_top or in_bottom)) return .none;
+    if (in_top and in_left) return .nw;
+    if (in_top and in_right) return .ne;
+    if (in_bottom and in_left) return .sw;
+    if (in_bottom and in_right) return .se;
+    if (in_top) return .n;
+    if (in_bottom) return .s;
+    if (in_left) return .w;
+    if (in_right) return .e;
+    return .none;
+}
+
+fn clampShellFrameToWorkArea(nx: *i32, ny: *i32, nw: *i32, nh: *i32, wa: ShellRect, min_w: i32, min_h: i32) void {
+    if (nw.* < min_w) nw.* = min_w;
+    if (nh.* < min_h) nh.* = min_h;
+    if (nx.* < wa.x) {
+        const d = wa.x - nx.*;
+        nx.* = wa.x;
+        nw.* -= d;
+    }
+    if (ny.* < wa.y) {
+        const d = wa.y - ny.*;
+        ny.* = wa.y;
+        nh.* -= d;
+    }
+    if (nx.* + nw.* > wa.x + wa.w) {
+        nw.* = wa.x + wa.w - nx.*;
+    }
+    if (ny.* + nh.* > wa.y + wa.h) {
+        nh.* = wa.y + wa.h - ny.*;
+    }
+    nw.* = @max(min_w, nw.*);
+    nh.* = @max(min_h, nh.*);
+}
+
+fn applyExplorerFrameResize(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
+    if (explorer_edge_resize == .none) return false;
+    const wa = desktopWorkArea(scr_w, scr_h);
+    var nx = window_x;
+    var ny = window_y;
+    const dim0 = explorerFrameDims(scr_w, scr_h);
+    var nw = dim0.w;
+    var nh = dim0.h;
+
+    switch (explorer_edge_resize) {
+        .none => return false,
+        .e => nw = px - nx,
+        .s => nh = py - ny,
+        .se => {
+            nw = px - nx;
+            nh = py - ny;
+        },
+        .w => {
+            const right = nx + nw;
+            nw = right - px;
+            nx = px;
+        },
+        .n => {
+            const bottom = ny + nh;
+            nh = bottom - py;
+            ny = py;
+        },
+        .ne => {
+            const bottom = ny + nh;
+            nh = bottom - py;
+            ny = py;
+            nw = px - nx;
+        },
+        .nw => {
+            const right = nx + nw;
+            const bottom = ny + nh;
+            nw = right - px;
+            nx = px;
+            nh = bottom - py;
+            ny = py;
+        },
+        .sw => {
+            const right = nx + nw;
+            nw = right - px;
+            nx = px;
+            nh = py - ny;
+        },
+    }
+    clampShellFrameToWorkArea(&nx, &ny, &nw, &nh, wa, explorer_min_frame_w, explorer_min_frame_h);
+    const changed = nx != window_x or ny != window_y or nw != dim0.w or nh != dim0.h;
+    window_x = nx;
+    window_y = ny;
+    explorer_frame_w = nw;
+    explorer_frame_h = nh;
+    explorer_custom_frame = true;
+    return changed;
+}
+
+fn applyTaskMgrFrameResize(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
+    if (taskmgr_edge_resize == .none) return false;
+    const wa = desktopWorkArea(scr_w, scr_h);
+    var nx = taskmgr_x;
+    var ny = taskmgr_y;
+    var nw = taskmgr_w;
+    var nh = taskmgr_h;
+
+    switch (taskmgr_edge_resize) {
+        .none => return false,
+        .e => nw = px - nx,
+        .s => nh = py - ny,
+        .se => {
+            nw = px - nx;
+            nh = py - ny;
+        },
+        .w => {
+            const right = nx + nw;
+            nw = right - px;
+            nx = px;
+        },
+        .n => {
+            const bottom = ny + nh;
+            nh = bottom - py;
+            ny = py;
+        },
+        .ne => {
+            const bottom = ny + nh;
+            nh = bottom - py;
+            ny = py;
+            nw = px - nx;
+        },
+        .nw => {
+            const right = nx + nw;
+            const bottom = ny + nh;
+            nw = right - px;
+            nx = px;
+            nh = bottom - py;
+            ny = py;
+        },
+        .sw => {
+            const right = nx + nw;
+            nw = right - px;
+            nx = px;
+            nh = py - ny;
+        },
+    }
+    clampShellFrameToWorkArea(&nx, &ny, &nw, &nh, wa, taskmgr_min_frame_w, taskmgr_min_frame_h);
+    const changed = nx != taskmgr_x or ny != taskmgr_y or nw != taskmgr_w or nh != taskmgr_h;
+    taskmgr_x = nx;
+    taskmgr_y = ny;
+    taskmgr_w = nw;
+    taskmgr_h = nh;
+    return changed;
+}
+
+/// 与 `renderDesktopAeroTaskbar` 中第一个应用磁贴（Computer）几何一致，用于最小化恢复命中。
+fn taskbarComputerPillRect(scr_w: i32, scr_h: i32) ?ShellRect {
+    const tb_h = getTaskbarHeight();
+    const tb_y = clampI32FromI64(@as(i64, scr_h) - @as(i64, tb_h));
+    const orb = aeroTaskbarStartOrb(tb_y, tb_h);
+    const icon_s: u32 = 2;
+    const icon_px = icons.getIconTotalSize(icon_s);
+    const ql_pad: i32 = 3;
+    var qx: i32 = orb.slot_w + 6;
+    for (0..3) |_| {
+        qx += icon_px + 2 * ql_pad + 6;
+    }
+    const tile: i32 = 34;
+    const pill_h: i32 = tile;
+    const ax = qx + 8;
+    const ay = tb_y + @divTrunc(tb_h - pill_h, 2);
+    if (ax + tile > scr_w - 8) return null;
+    return ShellRect{ .x = ax, .y = ay, .w = tile, .h = pill_h };
+}
+
+fn hitTestTaskbarComputerPill(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
+    const r = taskbarComputerPillRect(scr_w, scr_h) orelse return false;
+    return pointInRectI32(px, py, r.x, r.y, r.w, r.h);
+}
+
+fn hitTestTaskMgrTrayChip(px: i32, py: i32) bool {
+    const r = taskmgr_tray_chip_rect;
+    if (r.w <= 0 or r.h <= 0) return false;
+    return pointInRectI32(px, py, r.x, r.y, r.w, r.h);
+}
+
+fn tryTaskbarRestoreMinimizedWindows(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
+    if (explorer_shell_state == .minimized and hitTestTaskbarComputerPill(px, py, scr_w, scr_h)) {
+        explorer_shell_state = .normal;
+        return true;
+    }
+    if (taskmgr_shell_state == .minimized and hitTestTaskMgrTrayChip(px, py)) {
+        taskmgr_shell_state = .normal;
+        return true;
+    }
+    return false;
+}
+
+fn syncDwmCompositorShellMetadata(scr_w: i32, scr_h: i32) void {
+    if (!dwm_comp.isInitialized()) return;
+    if (explorer_dwm_surface_id == null) {
+        explorer_dwm_surface_id = dwm_comp.createSurface(0, 0, 400, 300, 1);
+    }
+    if (taskmgr_dwm_surface_id == null) {
+        taskmgr_dwm_surface_id = dwm_comp.createSurface(0, 0, 320, 260, 2);
+    }
+    if (explorer_dwm_surface_id) |sid| {
+        if (explorer_shell_state == .minimized) {
+            dwm_comp.moveSurface(sid, -4096, -4096);
+            dwm_comp.resizeSurface(sid, 4, 4);
+        } else {
+            const wr = getWindowRect(scr_w, scr_h);
+            dwm_comp.moveSurface(sid, wr.x, wr.y);
+            dwm_comp.resizeSurface(sid, @intCast(@max(1, wr.w)), @intCast(@max(1, wr.h)));
+        }
+        dwm_comp.markSurfaceDirty(sid);
+    }
+    if (taskmgr_dwm_surface_id) |sid| {
+        if (taskmgr_shell_state == .minimized) {
+            dwm_comp.moveSurface(sid, -4096, -4096);
+            dwm_comp.resizeSurface(sid, 4, 4);
+        } else {
+            dwm_comp.moveSurface(sid, taskmgr_x, taskmgr_y);
+            dwm_comp.resizeSurface(sid, @intCast(@max(1, taskmgr_w)), @intCast(@max(1, taskmgr_h)));
+        }
+        dwm_comp.markSurfaceDirty(sid);
+    }
 }
 
 // ── Aero 托盘「显示隐藏的图标」弹出菜单（纵向列表，避免与网络/设置图标同一行重叠）──
@@ -2424,11 +2917,14 @@ fn aeroTrayFlyoutRect(scr_w: i32, scr_h: i32) struct { x: i32, y: i32, w: i32, h
     const tb_h = getTaskbarHeight();
     const tray = aero_tray.layout(scr_w, scr_h, tb_h);
     const menu_h = aeroTrayFlyoutMenuHeight();
-    var fx = tray.chevron_x - AERO_TRAY_FLYOUT_W + 24;
-    if (fx < 4) fx = 4;
-    if (fx + AERO_TRAY_FLYOUT_W > scr_w - 4) fx = scr_w - 4 - AERO_TRAY_FLYOUT_W;
-    const fy = @max(4, tray.tb_y - menu_h - 4);
-    return .{ .x = fx, .y = fy, .w = AERO_TRAY_FLYOUT_W, .h = menu_h };
+    const fw = @as(i64, AERO_TRAY_FLYOUT_W);
+    var fx64 = @as(i64, tray.chevron_x) - fw + 24;
+    if (fx64 < 4) fx64 = 4;
+    const sw = @as(i64, scr_w);
+    if (fx64 + fw > sw - 4) fx64 = sw - 4 - fw;
+    const fy64 = @as(i64, tray.tb_y) - @as(i64, menu_h) - 4;
+    const fy = @max(4, clampI32FromI64(fy64));
+    return .{ .x = clampI32FromI64(fx64), .y = fy, .w = AERO_TRAY_FLYOUT_W, .h = menu_h };
 }
 
 /// 由 `renderer_aero` 在任务栏之后绘制（与托盘命中几何一致）。
@@ -2445,7 +2941,8 @@ pub fn renderAeroTrayFlyout(scr_w: i32, scr_h: i32) void {
     }
     fb.fillRect(r.x, r.y, r.w, r.h, t.window_bg);
     if (dwm_initialized and dwm_config.glass_enabled) {
-        renderGlassEffect(r.x, r.y, r.w, r.h, t.titlebar_active_left, .caption);
+        // 小面板与右键菜单一致：tint-only，避免托盘飞出打开时盒式模糊拖慢壳层。
+        renderGlassTintOnly(r.x, r.y, r.w, r.h, t.titlebar_active_left, .caption);
     }
     fb.drawRect(r.x, r.y, r.w, r.h, t.window_border);
 
@@ -2465,15 +2962,17 @@ pub fn renderAeroTrayFlyout(scr_w: i32, scr_h: i32) void {
 
 fn aeroTrayFlyoutPick(px: i32, py: i32, scr_w: i32, scr_h: i32) ?usize {
     const r = aeroTrayFlyoutRect(scr_w, scr_h);
-    if (px < r.x or px >= r.x + r.w or py < r.y or py >= r.y + r.h) return null;
-    var iy: i32 = r.y + AERO_TRAY_FLYOUT_PAD;
+    if (!pointInRectI32(px, py, r.x, r.y, r.w, r.h)) return null;
+    const pyi = @as(i64, py);
+    var iy: i64 = @as(i64, r.y) + AERO_TRAY_FLYOUT_PAD;
+    const row = @as(i64, AERO_TRAY_FLYOUT_ROW);
     for (aero_tray_flyout_items, 0..) |item, i| {
         if (item.len == 3 and item[0] == '-') {
             iy += 10;
             continue;
         }
-        if (py >= iy and py < iy + AERO_TRAY_FLYOUT_ROW) return i;
-        iy += AERO_TRAY_FLYOUT_ROW;
+        if (pyi >= iy and pyi < iy + row) return i;
+        iy += row;
     }
     return null;
 }
@@ -2483,6 +2982,8 @@ fn aeroTrayFlyoutPick(px: i32, py: i32, scr_w: i32, scr_h: i32) ?usize {
 var ctx_menu_visible: bool = false;
 var ctx_menu_x: i32 = 0;
 var ctx_menu_y: i32 = 0;
+/// 关闭壳层弹出后若干帧内跳过盒式模糊（减轻首帧后第一次整场景重绘在 Debug 下的整数/负载尖峰；与 AeroDesktopRuntime 右键菜单路径相关）。
+var shell_blur_cooldown_frames: u8 = 0;
 
 const ctx_menu_items = [_][]const u8{
     "View",
@@ -2514,16 +3015,31 @@ fn ctxMenuHeight() i32 {
 pub fn showContextMenu(x: i32, y: i32) void {
     const h: i32 = @intCast(fb.getHeight());
     const w: i32 = @intCast(fb.getWidth());
-    ctx_menu_x = if (x + CTX_MENU_W > w) w - CTX_MENU_W - 2 else x;
-    const menu_h = ctxMenuHeight();
-    const tb_h = getTaskbarHeight();
-    ctx_menu_y = if (y + menu_h > h - tb_h) h - tb_h - menu_h - 2 else y;
+    const menu_h: i32 = ctxMenuHeight();
+    const tb_h: i32 = getTaskbarHeight();
+    // 菜单锚点用 i64 计算，避免 `x+CTX_MENU_W` / `y+menu_h` 在 i32 上 Debug 溢出 panic（异常指针坐标或极端分辨率）。
+    const wx = @as(i64, w);
+    const hx = @as(i64, h);
+    const xi = @as(i64, x);
+    const yi = @as(i64, y);
+    const mw = @as(i64, CTX_MENU_W);
+    const mh = @as(i64, menu_h);
+    const tb = @as(i64, tb_h);
+    var mx = xi;
+    if (mx + mw > wx) mx = wx - mw - 2;
+    const work_bottom = hx - tb;
+    var my = yi;
+    if (my + mh > work_bottom) my = work_bottom - mh - 2;
+    ctx_menu_x = clampI32FromI64(mx);
+    ctx_menu_y = clampI32FromI64(my);
     ctx_menu_visible = true;
     cursor_plane.invalidate();
 }
 
 pub fn hideContextMenu() void {
     ctx_menu_visible = false;
+    shell_blur_cooldown_frames = 3;
+    cursor_plane.invalidate();
 }
 
 pub fn isContextMenuVisible() bool {
@@ -2544,7 +3060,13 @@ pub fn renderContextMenu() void {
     if (dwm_initialized and dwm_config.shadow_enabled) {
         renderShadow(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, 4);
     } else {
-        fb.fillRect(ctx_menu_x + 2, ctx_menu_y + 2, CTX_MENU_W, menu_h, rgb(0x20, 0x20, 0x20));
+        fb.fillRect(
+            clampI32FromI64(@as(i64, ctx_menu_x) + 2),
+            clampI32FromI64(@as(i64, ctx_menu_y) + 2),
+            CTX_MENU_W,
+            menu_h,
+            rgb(0x20, 0x20, 0x20),
+        );
     }
 
     fb.fillRect(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, t.window_bg);
@@ -2558,13 +3080,13 @@ pub fn renderContextMenu() void {
     const text_color: u32 = t.titlebar_text;
     const sep_color: u32 = rgb(0xB8, 0xB8, 0xC0);
 
-    var iy: i32 = ctx_menu_y + 4;
+    var iy: i32 = clampI32FromI64(@as(i64, ctx_menu_y) + 4);
     for (ctx_menu_items) |item| {
         if (item.len == 3 and item[0] == '-') {
-            fb.drawHLine(ctx_menu_x + 4, iy + 3, CTX_MENU_W - 8, sep_color);
+            fb.drawHLine(clampI32FromI64(@as(i64, ctx_menu_x) + 4), iy + 3, CTX_MENU_W - 8, sep_color);
             iy += CTX_SEP_H;
         } else {
-            fb.drawTextTransparent(ctx_menu_x + 28, iy + 4, item, text_color);
+            fb.drawTextTransparent(clampI32FromI64(@as(i64, ctx_menu_x) + 28), iy + 4, item, text_color);
             iy += CTX_ITEM_H;
         }
     }
@@ -2573,8 +3095,7 @@ pub fn renderContextMenu() void {
 fn isInsideContextMenu(x: i32, y: i32) bool {
     if (!ctx_menu_visible) return false;
     const menu_h = ctxMenuHeight();
-    return x >= ctx_menu_x and x < ctx_menu_x + CTX_MENU_W and
-        y >= ctx_menu_y and y < ctx_menu_y + menu_h;
+    return pointInRectI32(x, y, ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h);
 }
 
 /// 左键在桌面上下文菜单内：可点项执行占位并关闭；分隔条不关闭；边距内点击关闭（与常见 Shell 一致）。
@@ -2582,14 +3103,18 @@ fn handleContextMenuLeftClick(px: i32, py: i32) bool {
     if (!ctx_menu_visible) return false;
     if (!isInsideContextMenu(px, py)) return false;
 
-    var iy: i32 = ctx_menu_y + 4;
+    const py_i = @as(i64, py);
+    var iy: i64 = @as(i64, ctx_menu_y) + 4;
     for (ctx_menu_items) |item| {
         if (item.len == 3 and item[0] == '-') {
-            if (py >= iy and py < iy + CTX_SEP_H) return true;
+            if (py_i >= iy and py_i < iy + CTX_SEP_H) return true;
             iy += CTX_SEP_H;
             continue;
         }
-        if (py >= iy and py < iy + CTX_ITEM_H) {
+        if (py_i >= iy and py_i < iy + CTX_ITEM_H) {
+            if (std.mem.eql(u8, item, "Refresh")) {
+                renderer_aero.cycleWallpaperPreset();
+            }
             hideContextMenu();
             klog.info("Desktop context menu: %s", .{item});
             return true;
@@ -2614,6 +3139,8 @@ pub fn renderCursor(x: i32, y: i32) void {
 
     const w_i32: i32 = @intCast(fb.getWidth());
     const h_i32: i32 = @intCast(fb.getHeight());
+    const fw: i64 = @intCast(w_i32);
+    const fh: i64 = @intCast(h_i32);
 
     // 0=transparent, 1=fill, 2=outline, 3=glass_highlight, 4=inner_glow（与 Aero `aero_cursor_shape.zig` 同源）
     const cursor_shape = aero_cursor_shape.pixels(desktop_cursor_kind).*;
@@ -2628,16 +3155,16 @@ pub fn renderCursor(x: i32, y: i32) void {
         for (cursor_shape, 0..) |row, dy| {
             for (row, 0..) |pixel, dx| {
                 if (pixel == 2) {
-                    const base_sx = x + @as(i32, @intCast(dx)) * scale + scale;
-                    const base_sy = y + @as(i32, @intCast(dy)) * scale + scale;
+                    const base_sx = @as(i64, x) + @as(i64, @intCast(dx)) * scale + scale;
+                    const base_sy = @as(i64, y) + @as(i64, @intCast(dy)) * scale + scale;
                     var sy: i32 = 0;
                     while (sy < scale) : (sy += 1) {
                         var sx: i32 = 0;
                         while (sx < scale) : (sx += 1) {
-                            const px = base_sx + sx;
-                            const py = base_sy + sy;
-                            if (px >= 0 and px < w_i32 and py >= 0 and py < h_i32) {
-                                fb.blendPixel(@intCast(px), @intCast(py), 0x00000000, 80);
+                            const px64 = base_sx + sx;
+                            const py64 = base_sy + sy;
+                            if (px64 >= 0 and px64 < fw and py64 >= 0 and py64 < fh) {
+                                fb.blendPixel(@intCast(px64), @intCast(py64), 0x00000000, 80);
                             }
                         }
                     }
@@ -2649,8 +3176,8 @@ pub fn renderCursor(x: i32, y: i32) void {
     for (cursor_shape, 0..) |row, dy| {
         for (row, 0..) |pixel, dx| {
             if (pixel != 0) {
-                const base_px = x + @as(i32, @intCast(dx)) * scale;
-                const base_py = y + @as(i32, @intCast(dy)) * scale;
+                const base_px = @as(i64, x) + @as(i64, @intCast(dx)) * scale;
+                const base_py = @as(i64, y) + @as(i64, @intCast(dy)) * scale;
                 const color: u32 = switch (pixel) {
                     1 => fill,
                     2 => outline,
@@ -2662,10 +3189,10 @@ pub fn renderCursor(x: i32, y: i32) void {
                 while (sy < scale) : (sy += 1) {
                     var sx: i32 = 0;
                     while (sx < scale) : (sx += 1) {
-                        const px = base_px + sx;
-                        const py = base_py + sy;
-                        if (px >= 0 and px < w_i32 and py >= 0 and py < h_i32) {
-                            fb.putPixel32(@intCast(px), @intCast(py), color);
+                        const px64 = base_px + sx;
+                        const py64 = base_py + sy;
+                        if (px64 >= 0 and px64 < fw and py64 >= 0 and py64 < fh) {
+                            fb.putPixel32(@intCast(px64), @intCast(py64), color);
                         }
                     }
                 }
@@ -2916,7 +3443,8 @@ pub fn getPresentCount() u64 {
 /// 拖窗时用轻量单遍模糊替代「完全跳过」，兼顾帧率与玻璃观感。
 fn syncAeroGlassFastPath() void {
     const during_drag = drag_active or taskmgr_drag_active or builtin_apps.isDragging();
-    const first = desktop_ctx.present_count == 0;
+    var first = desktop_ctx.present_count == 0;
+    if (shell_blur_cooldown_frames > 0) first = true;
     dwm_mod.setSkipGlassBoxBlur(first);
     dwm_mod.setGlassLiteBlurEnabled(during_drag and !first);
 }

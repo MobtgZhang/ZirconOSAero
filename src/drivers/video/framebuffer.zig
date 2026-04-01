@@ -346,6 +346,11 @@ fn clampDrawCoordI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
+fn clampRectSizeI64(v: i64) i32 {
+    if (v <= 0) return 0;
+    return @intCast(@min(v, @as(i64, std.math.maxInt(i32))));
+}
+
 pub fn drawRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
     if (w <= 0 or h <= 0) return;
     drawHLine(x, y, w, color);
@@ -506,18 +511,20 @@ pub fn drawChar(x: i32, y: i32, ch: u8, fg: u32, bg: u32) void {
 
 pub fn drawCharTransparent(x: i32, y: i32, ch: u8, fg: u32) void {
     const glyph = getGlyph(ch);
+    const fw: i64 = @intCast(fb_config.width);
+    const fh: i64 = @intCast(fb_config.height);
 
     var dy: u32 = 0;
     while (dy < CHAR_H) : (dy += 1) {
-        const py_i = y + @as(i32, @intCast(dy));
-        if (py_i < 0 or py_i >= @as(i32, @intCast(fb_config.height))) continue;
+        const py_i = @as(i64, y) + @as(i64, dy);
+        if (py_i < 0 or py_i >= fh) continue;
         const bits = glyph[dy];
 
         var dx: u32 = 0;
         while (dx < CHAR_W) : (dx += 1) {
             if ((bits >> @intCast(7 - dx)) & 1 != 0) {
-                const px_i = x + @as(i32, @intCast(dx));
-                if (px_i >= 0 and px_i < @as(i32, @intCast(fb_config.width))) {
+                const px_i = @as(i64, x) + @as(i64, dx);
+                if (px_i >= 0 and px_i < fw) {
                     putPixel32(@intCast(px_i), @intCast(py_i), fg);
                 }
             }
@@ -526,16 +533,18 @@ pub fn drawCharTransparent(x: i32, y: i32, ch: u8, fg: u32) void {
 }
 
 fn drawCjk16Transparent(x: i32, y: i32, rows: [16]u16, fg: u32) void {
+    const fw: i64 = @intCast(fb_config.width);
+    const fh: i64 = @intCast(fb_config.height);
     var dy: u32 = 0;
     while (dy < cjk_font.CJK_H) : (dy += 1) {
-        const py_i = y + @as(i32, @intCast(dy));
-        if (py_i < 0 or py_i >= @as(i32, @intCast(fb_config.height))) continue;
+        const py_i = @as(i64, y) + @as(i64, dy);
+        if (py_i < 0 or py_i >= fh) continue;
         const bits = rows[dy];
         var dx: u32 = 0;
         while (dx < cjk_font.CJK_W) : (dx += 1) {
             if ((bits >> @intCast(15 - dx)) & 1 != 0) {
-                const px_i = x + @as(i32, @intCast(dx));
-                if (px_i >= 0 and px_i < @as(i32, @intCast(fb_config.width))) {
+                const px_i = @as(i64, x) + @as(i64, dx);
+                if (px_i >= 0 and px_i < fw) {
                     putPixel32(@intCast(px_i), @intCast(py_i), fg);
                 }
             }
@@ -585,11 +594,14 @@ pub fn drawTextTransparentClipped(x: i32, y: i32, x_max_excl: i32, text: []const
 }
 
 pub fn drawText(x: i32, y: i32, text: []const u8, fg: u32, bg: u32) void {
-    var cx = x;
+    const fw: i64 = @intCast(fb_config.width);
+    var cx64 = @as(i64, x);
+    const adv = @as(i64, CHAR_W);
     for (text) |ch| {
-        if (cx + @as(i32, CHAR_W) > @as(i32, @intCast(fb_config.width))) break;
-        drawChar(cx, y, ch, fg, bg);
-        cx += @as(i32, CHAR_W);
+        if (cx64 + adv > fw) break;
+        const cxi = clampDrawCoordI64(cx64);
+        drawChar(cxi, y, ch, fg, bg);
+        cx64 += adv;
     }
 }
 
@@ -603,7 +615,7 @@ pub fn drawTextTransparentUi(x: i32, y: i32, text: []const u8, fg: u32) void {
     const g = @as(u32, getGreen(fg)) * 12 / 40;
     const b = @as(u32, getBlue(fg)) * 12 / 40;
     const shadow = (r << 16) | (g << 8) | b;
-    drawTextTransparent(x + 1, y + 1, text, shadow);
+    drawTextTransparent(clampDrawCoordI64(@as(i64, x) + 1), clampDrawCoordI64(@as(i64, y) + 1), text, shadow);
     drawTextTransparent(x, y, text, fg);
 }
 
@@ -620,16 +632,18 @@ pub fn drawTextTransparentUiCenteredInRect(rx: i32, ry: i32, rw: i32, rh: i32, t
 /// 2× / 3× scaled glyphs for taskbar and status lines (clearer than 8×16 on large panels).
 pub fn drawCharTransparentScaled(x: i32, y: i32, ch: u8, fg: u32, scale: u32) void {
     if (scale < 1) return;
+    const sw: i32 = std.math.cast(i32, scale) orelse return;
     const glyph = getGlyph(ch);
+    const sc_i = @as(i64, scale);
     var dy: u32 = 0;
     while (dy < CHAR_H) : (dy += 1) {
         const bits = glyph[dy];
         var dx: u32 = 0;
         while (dx < CHAR_W) : (dx += 1) {
             if ((bits >> @intCast(7 - dx)) & 1 != 0) {
-                const px = x + @as(i32, @intCast(@as(u64, dx) *% @as(u64, scale)));
-                const py = y + @as(i32, @intCast(@as(u64, dy) *% @as(u64, scale)));
-                fillRect(px, py, @as(i32, @intCast(scale)), @as(i32, @intCast(scale)), fg);
+                const px0 = @as(i64, x) + @as(i64, dx) * sc_i;
+                const py0 = @as(i64, y) + @as(i64, dy) * sc_i;
+                fillRect(clampDrawCoordI64(px0), clampDrawCoordI64(py0), sw, sw, fg);
             }
         }
     }
@@ -637,13 +651,13 @@ pub fn drawCharTransparentScaled(x: i32, y: i32, ch: u8, fg: u32, scale: u32) vo
 
 pub fn drawTextTransparentScaled(x: i32, y: i32, text: []const u8, fg: u32, scale: u32) void {
     if (scale < 1) return;
-    var cx = x;
-    const adv: i32 = @as(i32, @intCast(@as(u64, CHAR_W) *% @as(u64, scale)));
+    var cx64 = @as(i64, x);
+    const adv: i64 = @as(i64, CHAR_W) * @as(i64, scale);
     const fb_w_i64: i64 = @intCast(fb_config.width);
     for (text) |ch| {
-        if (@as(i64, cx) + @as(i64, adv) > fb_w_i64) break;
-        drawCharTransparentScaled(cx, y, ch, fg, scale);
-        cx += adv;
+        if (cx64 + adv > fb_w_i64) break;
+        drawCharTransparentScaled(clampDrawCoordI64(cx64), y, ch, fg, scale);
+        cx64 += adv;
     }
 }
 
@@ -682,21 +696,30 @@ pub fn textWidth(text: []const u8) i32 {
 pub fn fillRoundedRect(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32) void {
     if (w <= 0 or h <= 0) return;
     const r = @min(radius, @min(@divTrunc(w, 2), @divTrunc(h, 2)));
+    const x64 = @as(i64, x);
+    const y64 = @as(i64, y);
+    const w64 = @as(i64, w);
+    const h64 = @as(i64, h);
+    const rr = @as(i64, r);
 
-    fillRect(x + r, y, w - 2 * r, r, color);
-    fillRect(x, y + r, w, h - 2 * r, color);
-    fillRect(x + r, y + h - r, w - 2 * r, r, color);
+    fillRect(clampDrawCoordI64(x64 + rr), y, clampRectSizeI64(w64 - 2 * rr), r, color);
+    fillRect(x, clampDrawCoordI64(y64 + rr), w, clampRectSizeI64(h64 - 2 * rr), color);
+    fillRect(clampDrawCoordI64(x64 + rr), clampDrawCoordI64(y64 + h64 - rr), clampRectSizeI64(w64 - 2 * rr), r, color);
 
-    fillCircleQuarter(x + r, y + r, r, 0, color);
-    fillCircleQuarter(x + w - r - 1, y + r, r, 1, color);
-    fillCircleQuarter(x + r, y + h - r - 1, r, 2, color);
-    fillCircleQuarter(x + w - r - 1, y + h - r - 1, r, 3, color);
+    fillCircleQuarter(clampDrawCoordI64(x64 + rr), clampDrawCoordI64(y64 + rr), r, 0, color);
+    fillCircleQuarter(clampDrawCoordI64(x64 + w64 - rr - 1), clampDrawCoordI64(y64 + rr), r, 1, color);
+    fillCircleQuarter(clampDrawCoordI64(x64 + rr), clampDrawCoordI64(y64 + h64 - rr - 1), r, 2, color);
+    fillCircleQuarter(clampDrawCoordI64(x64 + w64 - rr - 1), clampDrawCoordI64(y64 + h64 - rr - 1), r, 3, color);
 }
 
 fn fillCircleQuarter(cx: i32, cy: i32, radius: i32, quarter: u2, color: u32) void {
     if (radius <= 0) return;
+    const cx64 = @as(i64, cx);
+    const cy64 = @as(i64, cy);
     const r64 = @as(i64, radius);
     const r2 = r64 * r64;
+    const fw = @as(i64, fb_config.width);
+    const fh = @as(i64, fb_config.height);
     var dy: i32 = 0;
     while (dy <= radius) : (dy += 1) {
         var dx: i32 = 0;
@@ -704,22 +727,20 @@ fn fillCircleQuarter(cx: i32, cy: i32, radius: i32, quarter: u2, color: u32) voi
             const dx64 = @as(i64, dx);
             const dy64 = @as(i64, dy);
             if (dx64 * dx64 + dy64 * dy64 <= r2) {
-                const px: i32 = switch (quarter) {
-                    0 => cx - dx,
-                    1 => cx + dx,
-                    2 => cx - dx,
-                    3 => cx + dx,
+                const px64: i64 = switch (quarter) {
+                    0 => cx64 - dx64,
+                    1 => cx64 + dx64,
+                    2 => cx64 - dx64,
+                    3 => cx64 + dx64,
                 };
-                const py: i32 = switch (quarter) {
-                    0 => cy - dy,
-                    1 => cy - dy,
-                    2 => cy + dy,
-                    3 => cy + dy,
+                const py64: i64 = switch (quarter) {
+                    0 => cy64 - dy64,
+                    1 => cy64 - dy64,
+                    2 => cy64 + dy64,
+                    3 => cy64 + dy64,
                 };
-                if (px >= 0 and px < @as(i32, @intCast(fb_config.width)) and
-                    py >= 0 and py < @as(i32, @intCast(fb_config.height)))
-                {
-                    putPixel32(@intCast(px), @intCast(py), color);
+                if (px64 >= 0 and py64 >= 0 and px64 < fw and py64 < fh) {
+                    putPixel32(@intCast(px64), @intCast(py64), color);
                 }
             }
         }
@@ -729,44 +750,62 @@ fn fillCircleQuarter(cx: i32, cy: i32, radius: i32, quarter: u2, color: u32) voi
 /// Filled circle centered at `(cx, cy)` with integer radius (bounding box `2r×2r`).
 pub fn fillCircle(cx: i32, cy: i32, radius: i32, color: u32) void {
     if (radius <= 0) return;
-    const d = 2 * radius;
-    fillRoundedRect(cx - radius, cy - radius, d, d, radius, color);
+    const d = clampRectSizeI64(@as(i64, radius) * 2);
+    fillRoundedRect(
+        clampDrawCoordI64(@as(i64, cx) - @as(i64, radius)),
+        clampDrawCoordI64(@as(i64, cy) - @as(i64, radius)),
+        d,
+        d,
+        radius,
+        color,
+    );
 }
 
 /// Aero-style orb sheen: blend `sheen_rgb` toward the top and upper-left inside the disk.
 /// Ref: public Win7 Aero orb appearance (gloss + sphere read); clean-room pixel recipe.
 pub fn aeroSheenDisk(cx: i32, cy: i32, radius: i32, sheen_rgb: u32) void {
     if (radius <= 0) return;
+    const cx64 = @as(i64, cx);
+    const cy64 = @as(i64, cy);
     const r64 = @as(i64, radius);
     const r2 = r64 * r64;
-    const top = cy - radius;
-    const span: i32 = @max(1, 2 * radius);
+    const top = cy64 - r64;
+    const span: i32 = @max(1, clampRectSizeI64(r64 * 2));
 
-    var py = cy - radius;
-    while (py <= cy + radius) : (py += 1) {
-        const dy64 = @as(i64, py - cy);
-        const from_top: i32 = py - top;
+    var py64 = cy64 - r64;
+    while (py64 <= cy64 + r64) : (py64 += 1) {
+        const dy64 = py64 - cy64;
+        const from_top: i32 = clampDrawCoordI64(py64 - top);
         const base_a: u32 = @intCast(@min(95, @max(0, @divTrunc(from_top * 95, span))));
         if (base_a == 0) continue;
 
-        var px = cx - radius;
-        while (px <= cx + radius) : (px += 1) {
-            const dx64 = @as(i64, px - cx);
+        var px64 = cx64 - r64;
+        while (px64 <= cx64 + r64) : (px64 += 1) {
+            const dx64 = px64 - cx64;
             if (dx64 * dx64 + dy64 * dy64 > r2) continue;
-            if (px < 0 or py < 0) continue;
-            const ux: u32 = @intCast(px);
-            const uy: u32 = @intCast(py);
+            if (px64 < 0 or py64 < 0) continue;
+            const ux: u32 = @intCast(px64);
+            const uy: u32 = @intCast(py64);
             if (ux >= fb_config.width or uy >= fb_config.height) continue;
 
             var a: u32 = base_a;
-            if (px <= cx and py <= cy + @divTrunc(radius, 4)) {
+            const px_i = clampDrawCoordI64(px64);
+            const py_i = clampDrawCoordI64(py64);
+            const cx_i = clampDrawCoordI64(cx64);
+            const cy_i = clampDrawCoordI64(cy64);
+            if (px_i <= cx_i and py_i <= cy_i + @divTrunc(radius, 4)) {
                 a +|= 42;
             }
             if (a > 155) a = 155;
             blendPixel(ux, uy, sheen_rgb, @intCast(a));
         }
     }
-    markDirtyRegion(cx - radius, cy - radius, 2 * radius + 1, 2 * radius + 1);
+    markDirtyRegion(
+        clampDrawCoordI64(cx64 - r64),
+        clampDrawCoordI64(cy64 - r64),
+        clampRectSizeI64(r64 * 2 + 1),
+        clampRectSizeI64(r64 * 2 + 1),
+    );
 }
 
 // ── 3D-style border effects ──
@@ -969,7 +1008,10 @@ pub fn addSpecularBand(x: i32, y: i32, w: i32, band_h: i32, intensity: u32) void
     var py: u32 = y0;
     while (py < y1) : (py += 1) {
         const t = py - y0;
-        const boost = intensity - (intensity * t / bh);
+        // u32 减法在 dist 估计偏大时会下溢触发 Debug panic；用 u64 归一化到 [0, intensity]
+        const num = @as(u64, intensity) * @as(u64, t);
+        const inc = num / @as(u64, @max(bh, 1));
+        const boost: u32 = if (inc >= intensity) 0 else @intCast(@as(u64, intensity) - inc);
 
         var px: u32 = x0;
         while (px < x1) : (px += 1) {

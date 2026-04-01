@@ -10,6 +10,7 @@
 
 //! Windows 7 风格开始菜单（NT 6.1 Shell 布局）
 
+const std = @import("std");
 const fb = @import("framebuffer.zig");
 const icons = @import("icons.zig");
 const klog = @import("../../rtl/klog.zig");
@@ -24,6 +25,10 @@ fn drawMenuIcon(id: icons.IconId, x: i32, y: i32, scale: u32) void {
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return b | (g << 8) | (r << 16);
+}
+
+fn clampMenuI32(v: i64) i32 {
+    return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
 pub const MenuStyle = enum(u8) {
@@ -72,6 +77,8 @@ const AERO7_ROW_H: i32 = 24;
 const AERO7_BOTTOM_BAND_H: i32 = @max(46, 44);
 const AERO7_SEARCH_INNER_H: i32 = 26;
 const AERO7_RAIL_W: i32 = 52;
+/// 大屏下 Win7 风格主面板目标高度；实际 `aeroRect` 会按 `scr_h` 钳位，避免小屏下 `mid_h` 等链式下溢。
+const AERO7_DESIRED_MENU_H: i32 = AERO7_HEADER_H + 310 + AERO7_BOTTOM_BAND_H + AERO7_RAIL_W + 12;
 const AERO7_IDX_ALL: i32 = 48;
 
 /// 底部：仅 Win7 式「关机」主按钮 + 右侧箭头（注销/睡眠/重启等均在飞出菜单内）。
@@ -184,9 +191,13 @@ pub fn pointerHoverIndex() i32 {
 }
 
 fn aeroRect(scr_h: i32) MenuRect {
-    const h: i32 = AERO7_HEADER_H + 310 + AERO7_BOTTOM_BAND_H + AERO7_RAIL_W + 12;
+    const sh64 = @as(i64, scr_h);
+    const max_h64 = @min(@as(i64, AERO7_DESIRED_MENU_H), @max(40, sh64 - 8));
+    const h: i32 = @intCast(std.math.clamp(max_h64, 40, @as(i64, std.math.maxInt(i32))));
     const w: i32 = 428;
-    return .{ .x = 0, .y = scr_h - 40 - h, .w = w, .h = h };
+    const y64 = sh64 - 40 - @as(i64, h);
+    const yy: i32 = @intCast(std.math.clamp(y64, std.math.minInt(i32), std.math.maxInt(i32)));
+    return .{ .x = 0, .y = yy, .w = w, .h = h };
 }
 
 fn rectUnion(a: MenuRect, b: MenuRect) MenuRect {
@@ -221,9 +232,14 @@ fn allProgramsPanelRect(scr_w: i32, scr_h: i32) MenuRect {
     const r = aeroRect(scr_h);
     const L = innerLayout(scr_h);
     const panel_w: i32 = 196;
-    var px = r.x + r.w;
-    if (px + panel_w > scr_w - 2) px = @max(2, scr_w - 2 - panel_w);
-    const panel_h = L.bottom_y + AERO7_BOTTOM_BAND_H - L.content_y;
+    const px0 = @as(i64, r.x) + @as(i64, r.w);
+    var px = clampMenuI32(px0);
+    const sw = @as(i64, scr_w);
+    if (@as(i64, px) + @as(i64, panel_w) > sw - 2) {
+        px = @max(2, clampMenuI32(sw - 2 - @as(i64, panel_w)));
+    }
+    const panel_h_i64 = @as(i64, L.bottom_y) + @as(i64, AERO7_BOTTOM_BAND_H) - @as(i64, L.content_y);
+    const panel_h = @max(1, clampMenuI32(panel_h_i64));
     return .{ .x = px, .y = L.content_y, .w = panel_w, .h = panel_h };
 }
 
@@ -260,6 +276,7 @@ pub const MenuRect = struct {
 fn innerLayout(scr_h: i32) struct {
     inner_x: i32,
     inner_y: i32,
+    inner_w: i32,
     inner_h: i32,
     main_x: i32,
     main_w: i32,
@@ -272,23 +289,29 @@ fn innerLayout(scr_h: i32) struct {
     all_prog_y: i32,
 } {
     const r = aeroRect(scr_h);
-    const inner_x = r.x + 4;
-    const inner_y = r.y + 4;
-    const inner_w = r.w - 8;
-    const inner_h = r.h - 8;
-    const rail = AERO7_RAIL_W;
-    const main_x = inner_x + rail;
-    const main_w = inner_w - rail;
-    const content_y = inner_y + AERO7_HEADER_H + 2;
-    const mid_h = inner_h - AERO7_HEADER_H - AERO7_BOTTOM_BAND_H - 6;
-    const bottom_y = inner_y + inner_h - AERO7_BOTTOM_BAND_H;
+    const rx = @as(i64, r.x);
+    const ry = @as(i64, r.y);
+    const rw = @as(i64, r.w);
+    const rh = @as(i64, r.h);
+    const inner_x = clampMenuI32(rx + 4);
+    const inner_y = clampMenuI32(ry + 4);
+    const inner_w = @max(0, clampMenuI32(rw - 8));
+    const inner_h = @max(0, clampMenuI32(rh - 8));
+    const rail = @as(i64, AERO7_RAIL_W);
+    const main_x = clampMenuI32(@as(i64, inner_x) + rail);
+    const main_w = @max(0, clampMenuI32(@as(i64, inner_w) - rail));
+    const content_y = clampMenuI32(@as(i64, inner_y) + @as(i64, AERO7_HEADER_H) + 2);
+    const mid_raw = @as(i64, inner_h) - @as(i64, AERO7_HEADER_H) - @as(i64, AERO7_BOTTOM_BAND_H) - 6;
+    const mid_h = @max(0, clampMenuI32(mid_raw));
+    const bottom_y = clampMenuI32(@as(i64, inner_y) + @as(i64, inner_h) - @as(i64, AERO7_BOTTOM_BAND_H));
     const foot_y = bottom_y;
     const search_y = bottom_y;
-    const split_x = main_x + AERO7_LEFT_W;
-    const all_prog_y = content_y + mid_h - AERO7_ROW_H - 6;
+    const split_x = clampMenuI32(@as(i64, main_x) + @as(i64, AERO7_LEFT_W));
+    const all_prog_y = clampMenuI32(@as(i64, content_y) + @as(i64, mid_h) - @as(i64, AERO7_ROW_H) - 6);
     return .{
         .inner_x = inner_x,
         .inner_y = inner_y,
+        .inner_w = inner_w,
         .inner_h = inner_h,
         .main_x = main_x,
         .main_w = main_w,
@@ -303,12 +326,16 @@ fn innerLayout(scr_h: i32) struct {
 }
 
 fn leftColumnHoverIndex(px: i32, py: i32, content_y: i32, all_prog_y: i32, main_x: i32, split_x: i32) i32 {
-    if (px < main_x + 8 or px >= split_x or py < content_y + 6 or py >= all_prog_y) return -1;
-    var iy: i32 = content_y + 6;
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    if (pxi < @as(i64, main_x) + 8 or pxi >= @as(i64, split_x) or
+        pyi < @as(i64, content_y) + 6 or pyi >= @as(i64, all_prog_y)) return -1;
+    var iy = @as(i64, content_y) + 6;
+    const row = @as(i64, AERO7_ROW_H);
     for (aero7_left, 0..) |item, li| {
         if (!menuItemMatchesSearch(item.label)) continue;
-        if (py >= iy and py < iy + AERO7_ROW_H) return @intCast(li);
-        iy += AERO7_ROW_H;
+        if (pyi >= iy and pyi < iy + row) return @intCast(li);
+        iy += row;
         if (search_len == 0 and item.separator_after) {
             iy += 4;
             if (li + 1 == pinned_left_count) iy += 5;
@@ -318,12 +345,16 @@ fn leftColumnHoverIndex(px: i32, py: i32, content_y: i32, all_prog_y: i32, main_
 }
 
 fn rightColumnHoverIndex(px: i32, py: i32, content_y: i32, bottom_y: i32, split_x: i32, main_x: i32, main_w: i32) i32 {
-    if (px < split_x + 6 or px >= main_x + main_w - 8 or py < content_y + 6 or py >= bottom_y - 4) return -1;
-    var iy: i32 = content_y + 6;
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    if (pxi < @as(i64, split_x) + 6 or pxi >= @as(i64, main_x) + @as(i64, main_w) - 8 or
+        pyi < @as(i64, content_y) + 6 or pyi >= @as(i64, bottom_y) - 4) return -1;
+    var iy = @as(i64, content_y) + 6;
+    const row = @as(i64, AERO7_ROW_H);
     for (aero7_right, 0..) |item, ri| {
         if (!menuItemMatchesSearch(item.label)) continue;
-        if (py >= iy and py < iy + AERO7_ROW_H) return 100 + @as(i32, @intCast(ri));
-        iy += AERO7_ROW_H;
+        if (pyi >= iy and pyi < iy + row) return 100 + @as(i32, @intCast(ri));
+        iy += row;
         if (search_len == 0 and item.separator_after) iy += 4;
     }
     return -1;
@@ -346,16 +377,19 @@ fn allProgramsHoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
 
 fn powerFlyoutRect(scr_w: i32, scr_h: i32) MenuRect {
     const L = innerLayout(scr_h);
-    const sd_x = L.main_x + L.main_w - 116;
     const flyout_w: i32 = 176;
     const row_h: i32 = 22;
     const rows: i32 = 7;
     const flyout_h = 6 + rows * row_h;
-    var fx = sd_x + 108;
-    if (fx + flyout_w > scr_w - 2) fx = @max(2, scr_w - 2 - flyout_w);
+    const sd_x = clampMenuI32(@as(i64, L.main_x) + @as(i64, L.main_w) - 116);
+    var fx = clampMenuI32(@as(i64, sd_x) + 108);
+    const sw = @as(i64, scr_w);
+    if (@as(i64, fx) + @as(i64, flyout_w) > sw - 2) {
+        fx = @max(2, clampMenuI32(sw - 2 - @as(i64, flyout_w)));
+    }
     const r = aeroRect(scr_h);
     if (fx < r.x) fx = r.x;
-    const fy = L.bottom_y - flyout_h + 2;
+    const fy = clampMenuI32(@as(i64, L.bottom_y) - @as(i64, flyout_h) + 2);
     return .{ .x = fx, .y = fy, .w = flyout_w, .h = flyout_h };
 }
 
@@ -363,10 +397,10 @@ fn powerFlyoutHoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
     const fr = powerFlyoutRect(scr_w, scr_h);
     if (!fr.contains(px, py)) return -1;
     const row_h: i32 = 22;
-    const body_y = fr.y + 3;
-    const row = @divTrunc(py - body_y, row_h);
+    const body_y = @as(i64, fr.y) + 3;
+    const row = @divTrunc(@as(i64, py) - body_y, row_h);
     if (row < 0 or row > 6) return -1;
-    return IDX_FLYOUT_BASE + 1 + row;
+    return IDX_FLYOUT_BASE + 1 + @as(i32, @intCast(row));
 }
 
 pub fn updatePointerHover(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
@@ -404,17 +438,20 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
     const inner_y = L.inner_y;
     const inner_h = L.inner_h;
 
-    if (py >= bottom_y and py < inner_y + inner_h) {
-        const sd_y = bottom_y + @divTrunc(AERO7_BOTTOM_BAND_H - 28, 2);
-        if (py >= sd_y and py < sd_y + 28) {
-            const sd_x = main_x + main_w - 116;
-            if (px >= sd_x and px < sd_x + 80) return IDX_FOOT_SHUTDOWN_BTN;
-            if (px >= sd_x + 80 and px < sd_x + 106) return IDX_FOOT_SHUTDOWN_CHEVRON;
+    const pyi = @as(i64, py);
+    const pxi = @as(i64, px);
+    if (pyi >= @as(i64, bottom_y) and pyi < @as(i64, inner_y) + @as(i64, inner_h)) {
+        const sd_y = @as(i64, bottom_y) + @divTrunc(AERO7_BOTTOM_BAND_H - 28, 2);
+        if (pyi >= sd_y and pyi < sd_y + 28) {
+            const sd_x = @as(i64, main_x) + @as(i64, main_w) - 116;
+            if (pxi >= sd_x and pxi < sd_x + 80) return IDX_FOOT_SHUTDOWN_BTN;
+            if (pxi >= sd_x + 80 and pxi < sd_x + 106) return IDX_FOOT_SHUTDOWN_CHEVRON;
         }
         return -1;
     }
 
-    if (py >= all_prog_y and py < all_prog_y + AERO7_ROW_H and px >= main_x + 8 and px < split_x)
+    if (pyi >= @as(i64, all_prog_y) and pyi < @as(i64, all_prog_y) + @as(i64, AERO7_ROW_H) and
+        pxi >= @as(i64, main_x) + 8 and pxi < @as(i64, split_x))
         return AERO7_IDX_ALL;
 
     const lh = leftColumnHoverIndex(px, py, content_y, all_prog_y, main_x, split_x);
@@ -612,20 +649,22 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     }
 
     const r = aeroRect(scr_h);
+    const L = innerLayout(scr_h);
     const text_dark = rgb(0x18, 0x1C, 0x22);
     const text_dim = rgb(0x50, 0x58, 0x62);
     const text_white = rgb(0xFF, 0xFF, 0xFF);
     const sep = rgb(0xB8, 0xC4, 0xD4);
     const rail_bg = rgb(0x10, 0x1C, 0x30);
     const cr = menuCornerRadius();
-    const panel_open_lite = menu_frames_since_open == 0;
+    // 前两帧 tint-only，减轻壳层刚打开时盒式模糊与首帧卡顿。
+    const panel_open_lite = menu_frames_since_open <= 1;
 
     fb.blendTintRect(r.x + 5, r.y + 5, r.w, r.h, rgb(0x00, 0x00, 0x00), 35, 255);
 
-    const inner_x = r.x + 4;
-    const inner_y = r.y + 4;
-    const inner_w = r.w - 8;
-    const inner_h = r.h - 8;
+    const inner_x = L.inner_x;
+    const inner_y = L.inner_y;
+    const inner_w = L.inner_w;
+    const inner_h = L.inner_h;
 
     if (dwm.isGlassEnabled()) {
         if (panel_open_lite) {
@@ -641,13 +680,13 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.draw3DRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, rgb(0xC8, 0xD8, 0xE8), rgb(0x30, 0x40, 0x55));
 
     const rail = AERO7_RAIL_W;
-    const main_x = inner_x + rail;
-    const main_w = inner_w - rail;
+    const main_x = L.main_x;
+    const main_w = L.main_w;
 
     fb.fillRect(inner_x, inner_y, rail, inner_h, rail_bg);
     fb.drawGradientV(inner_x, inner_y, rail, @divTrunc(inner_h, 2), rgb(0x18, 0x28, 0x40), rail_bg);
     fb.drawVLine(main_x - 1, inner_y, inner_h, rgb(0x30, 0x44, 0x5C));
-    const orb_y = inner_y + inner_h - rail - 6;
+    const orb_y = clampMenuI32(@as(i64, inner_y) + @as(i64, inner_h) - @as(i64, rail) - 6);
     drawOrbGraphic(inner_x + 8, orb_y);
 
     const hdr_h = AERO7_HEADER_H;
@@ -657,7 +696,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.drawHLine(main_x + 2, inner_y + 2, main_w - 4, rgb(0xF8, 0xFC, 0xFF));
 
     const av_sz: i32 = 40;
-    const av_x = main_x + main_w - av_sz - 10;
+    const av_x = clampMenuI32(@as(i64, main_x) + @as(i64, main_w) - @as(i64, av_sz) - 10);
     fb.fillRoundedRect(av_x, inner_y + 8, av_sz, av_sz, 5, rgb(0xA8, 0xB8, 0xC8));
     fb.blendTintRect(av_x, inner_y + 8, av_sz, av_sz, rgb(0xFF, 0xFF, 0xFF), 35, 255);
     fb.drawRect(av_x, inner_y + 8, av_sz, av_sz, rgb(0xD8, 0xE4, 0xF0));
@@ -677,12 +716,11 @@ pub fn render(scr_w: i32, scr_h: i32) void {
         fb.drawTextTransparentUi(sx, inner_y + 29, sub, rgb(0xC8, 0xD4, 0xE4));
     }
 
-    const content_y = inner_y + hdr_h + 2;
-    const mid_h = inner_h - AERO7_HEADER_H - AERO7_BOTTOM_BAND_H - 6;
-    const bottom_y = inner_y + inner_h - AERO7_BOTTOM_BAND_H;
-    const split_x = main_x + AERO7_LEFT_W;
-    const all_prog_y = content_y + mid_h - AERO7_ROW_H - 6;
-    const col_h = bottom_y + AERO7_BOTTOM_BAND_H - content_y;
+    const content_y = L.content_y;
+    const bottom_y = L.bottom_y;
+    const split_x = L.split_x;
+    const all_prog_y = L.all_prog_y;
+    const col_h = @max(0, clampMenuI32(@as(i64, bottom_y) + @as(i64, AERO7_BOTTOM_BAND_H) - @as(i64, content_y)));
 
     // 单列模糊已在整板完成；左右仅叠色保持对比，避免二次 boxBlur 造成左淡右透不对称。
     const left_base = rgb(0xD0, 0xE0, 0xF0);

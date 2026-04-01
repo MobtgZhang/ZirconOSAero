@@ -106,7 +106,8 @@ pub fn redrawStartMenuRegionOnly(w: i32, h: i32, t: *const theme.ThemeColors, tb
 
     display.initTaskMgrPosition(w, h);
     const tm = display.getTaskMgrPos();
-    const tm_r = display.ShellRect{ .x = tm.x, .y = tm.y, .w = 320, .h = 260 };
+    const tm_sz = display.getTaskMgrSize();
+    const tm_r = display.ShellRect{ .x = tm.x, .y = tm.y, .w = tm_sz.w, .h = tm_sz.h };
     if (display.rectsOverlap(dirty, tm_r)) {
         display.renderTaskManagerWin(w, h, t);
         dirty = display.rectUnion(dirty, tm_r);
@@ -148,16 +149,23 @@ pub fn redrawCaptionBandsOnly() void {
     const aero_tb_h: i32 = display.AERO_TITLEBAR_H;
 
     const wr = display.getWindowRect(scr_w, scr_h);
-    redrawExplorerCaptionBand(wr.x, wr.y, wr.w, aero_tb_h, t);
+    if (wr.w > 0) {
+        redrawExplorerCaptionBand(wr.x, wr.y, wr.w, aero_tb_h, t);
+    }
 
     display.initTaskMgrPosition(scr_w, scr_h);
-    const tm_w: i32 = 320;
+    const tm_sz = display.getTaskMgrSize();
+    const tm_w = tm_sz.w;
     const tm_pos = display.getTaskMgrPos();
-    redrawTaskMgrCaptionBand(tm_pos.x, tm_pos.y, tm_w, aero_tb_h, t);
+    if (!display.isTaskMgrWindowMinimized()) {
+        redrawTaskMgrCaptionBand(tm_pos.x, tm_pos.y, tm_w, aero_tb_h, t);
+    }
 
-    var dirty = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = aero_tb_h };
-    const tm_dirty = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_w, .h = aero_tb_h };
-    dirty = display.rectUnion(dirty, tm_dirty);
+    var dirty = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = if (wr.w > 0) aero_tb_h else 0 };
+    if (!display.isTaskMgrWindowMinimized()) {
+        const tm_dirty = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_w, .h = aero_tb_h };
+        dirty = display.rectUnion(dirty, tm_dirty);
+    }
 
     if (display.isContextMenuVisible()) {
         display.renderContextMenu();
@@ -192,16 +200,29 @@ fn redrawTaskMgrCaptionBand(win_x: i32, win_y: i32, tm_w: i32, th: i32, t: *cons
 }
 
 fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_cursor: bool) void {
+    const panic_ctx = @import("../../rtl/panic_context.zig");
+    panic_ctx.setPhase(0x0002_0080);
     renderBackground(w, h);
+    panic_ctx.setPhase(0x0002_0081);
     display.renderDesktopIcons(w, h, t);
-    renderExplorerWindow(w, h, t);
-    display.renderTaskManagerWin(w, h, t);
+    panic_ctx.setPhase(0x0002_0082);
+    if (!display.isExplorerWindowMinimized()) {
+        renderExplorerWindow(w, h, t);
+    }
+    panic_ctx.setPhase(0x0002_0083);
+    if (!display.isTaskMgrWindowMinimized()) {
+        display.renderTaskManagerWin(w, h, t);
+    }
+    panic_ctx.setPhase(0x0002_0084);
     builtin_apps.renderShellHostedApps(w, h, t, .normal);
+    panic_ctx.setPhase(0x0002_0085);
     renderTaskbar(w, h, t, tb_h);
 
     if (startmenu.isVisible()) {
+        panic_ctx.setPhase(0x0002_0086);
         startmenu.render(w, h);
     }
+    panic_ctx.setPhase(0x0002_0087);
     display.renderContextMenu();
     if (draw_cursor) {
         display.renderCursorAt();
@@ -222,7 +243,8 @@ fn dragFrameDirtyUnion(scr_w: i32, scr_h: i32, ds: display.DragState, pad: i32) 
     }
     if (ds.taskmgr_active) {
         const tm_pos = display.getTaskMgrPos();
-        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = 320, .h = 260 };
+        const tm_sz = display.getTaskMgrSize();
+        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_sz.w, .h = tm_sz.h };
         var u = display.rectUnion(ds.taskmgr_prev, cur);
         u = display.rectInflate(u, pad);
         u = display.rectClampToScreen(u, scr_w, scr_h);
@@ -274,7 +296,8 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
 
     if (paint_taskbar) {
         renderTaskbar(w, h, t, tb_h);
-        fb.markDirtyRegion(0, h - tb_h, w, tb_h);
+        const tb_y = display.clampI32FromI64(@as(i64, h) - @as(i64, tb_h));
+        fb.markDirtyRegion(0, tb_y, w, tb_h);
     }
 
     if (startmenu.isVisible()) {
@@ -297,7 +320,8 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     }
     if (ds.taskmgr_active) {
         const tm_pos = display.getTaskMgrPos();
-        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = 320, .h = 260 };
+        const tm_sz = display.getTaskMgrSize();
+        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_sz.w, .h = tm_sz.h };
         var u = display.rectUnion(ds.taskmgr_prev, cur);
         u = display.rectInflate(u, 14);
         u = display.rectClampToScreen(u, w, h);
@@ -463,13 +487,13 @@ fn renderExplorerComputerClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.
     fb.drawHLine(x, y + cmd_h, w, rgb(0xB8, 0xC4, 0xD4));
     const cmds = [_][]const u8{ "Organize", "Open", "▼" };
     const cmd_ty = y + @divTrunc(cmd_h - 14, 2);
-    var bx: i32 = x + 8;
+    var bx64 = @as(i64, x) + 8;
     for (cmds, 0..cmds.len) |cmd, ci| {
         const tc: u32 = if (ci == 2) rgb(0x40, 0x40, 0x40) else rgb(0x00, 0x51, 0x9E);
-        fb.drawTextTransparent(bx, cmd_ty, cmd, tc);
-        bx += fb.textWidth(cmd) + @as(i32, if (ci == 1) 16 else 12);
+        fb.drawTextTransparent(display.clampI32FromI64(bx64), cmd_ty, cmd, tc);
+        bx64 += @as(i64, fb.textWidth(cmd)) + @as(i64, if (ci == 1) 16 else 12);
     }
-    const div_x = bx + 4;
+    const div_x = display.clampI32FromI64(bx64 + 4);
     fb.drawVLine(div_x, y + 6, cmd_h - 12, rgb(0xC8, 0xD0, 0xDC));
     const inc = "Include in library";
     const share = "Share with";
@@ -477,18 +501,20 @@ fn renderExplorerComputerClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.
     const share_w = fb.textWidth(share);
     const link_gap: i32 = 18;
     const lx: i32 = div_x + 8;
-    const cmd_right = x + w - 6;
-    if (lx + inc_w + link_gap + share_w <= cmd_right) {
+    const cmd_right = display.clampI32FromI64(@as(i64, x) + @as(i64, w) - 6);
+    const fits_all = @as(i64, lx) + @as(i64, inc_w) + @as(i64, link_gap) + @as(i64, share_w) <= @as(i64, cmd_right);
+    const fits_inc = @as(i64, lx) + @as(i64, inc_w) <= @as(i64, cmd_right);
+    if (fits_all) {
         fb.drawTextTransparent(lx, cmd_ty, inc, rgb(0x00, 0x51, 0x9E));
-        fb.drawTextTransparent(lx + inc_w + link_gap, cmd_ty, share, rgb(0x00, 0x51, 0x9E));
-    } else if (lx + inc_w <= cmd_right) {
+        fb.drawTextTransparent(display.clampI32FromI64(@as(i64, lx) + @as(i64, inc_w) + @as(i64, link_gap)), cmd_ty, share, rgb(0x00, 0x51, 0x9E));
+    } else if (fits_inc) {
         fb.drawTextTransparent(lx, cmd_ty, inc, rgb(0x00, 0x51, 0x9E));
     }
 
     const addr_y = y + cmd_h + 1;
     const go_btn_w: i32 = display.AERO_EXPLORER_GO_BTN_W;
     const addr_field_x: i32 = x + 52;
-    const go_x = x + w - go_btn_w - display.AERO_EXPLORER_GO_MARGIN_END;
+    const go_x = display.clampI32FromI64(@as(i64, x) + @as(i64, w) - @as(i64, go_btn_w) - @as(i64, display.AERO_EXPLORER_GO_MARGIN_END));
     const addr_field_w = @max(64, go_x - 4 - addr_field_x);
     fb.fillRect(x, addr_y, w, addr_h, rgb(0xF8, 0xF9, 0xFC));
     fb.drawHLine(x, addr_y + addr_h, w, rgb(0xC0, 0xC8, 0xD4));
@@ -544,7 +570,7 @@ fn renderExplorerComputerClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.
     const hdr_y = body_y + 3;
     const col_date_x = list_x + @max(160, list_w - 200);
     const col_size_x = list_x + list_w - 56;
-    const hdr_extra = col_date_x + fb.textWidth("Date modified") + 8 < col_size_x;
+    const hdr_extra = @as(i64, col_date_x) + @as(i64, fb.textWidth("Date modified")) + 8 < @as(i64, col_size_x);
     fb.drawTextTransparent(list_x + 28, hdr_y, "Name", rgb(0x40, 0x40, 0x40));
     if (hdr_extra) {
         fb.drawTextTransparent(col_date_x, hdr_y, "Date modified", rgb(0x40, 0x40, 0x40));
@@ -598,7 +624,8 @@ fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme
     const org = shell_strings.explorerLine("ex_lib_organize");
     const nl = shell_strings.explorerLine("ex_lib_new_lib");
     fb.drawTextTransparent(x + 8, cmd_ty, org, rgb(0x00, 0x51, 0x9E));
-    fb.drawTextTransparent(x + 8 + fb.textWidth(org) + 18, cmd_ty, nl, rgb(0x00, 0x51, 0x9E));
+    const nl_x = display.clampI32FromI64(@as(i64, x) + 8 + @as(i64, fb.textWidth(org)) + 18);
+    fb.drawTextTransparent(nl_x, cmd_ty, nl, rgb(0x00, 0x51, 0x9E));
 
     const addr_y = y + cmd_h + 1;
     fb.fillRect(x, addr_y, w, addr_h, rgb(0xF8, 0xF9, 0xFC));
@@ -612,7 +639,7 @@ fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme
 
     const field_x = x + display.AERO_EXPLORER_LIB_ADDR_FIELD_X;
     const search_w = display.AERO_EXPLORER_LIB_SEARCH_W;
-    const search_x = x + w - 6 - search_w;
+    const search_x = display.clampI32FromI64(@as(i64, x) + @as(i64, w) - 6 - @as(i64, search_w));
     const field_w = @max(48, search_x - 4 - field_x);
     fb.fillRect(field_x, addr_y + 3, field_w, 20, rgb(0xFF, 0xFF, 0xFF));
     fb.drawRect(field_x, addr_y + 3, field_w, 20, rgb(0x9C, 0xA8, 0xB8));
@@ -689,7 +716,7 @@ fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme
         fb.drawTextTransparent(ix + @divTrunc(tile - tw, 2), iy + tile - 14, lib.label, rgb(0x10, 0x14, 0x1A));
     }
 
-    const status_y = y + h - status_h;
+    const status_y = display.clampI32FromI64(@as(i64, y) + @as(i64, h) - @as(i64, status_h));
     fb.fillRect(x, status_y, w, status_h, rgb(0xE8, 0xEE, 0xF6));
     fb.drawHLine(x, status_y, w, rgb(0xC0, 0xC8, 0xD4));
     fb.drawTextTransparent(x + 8, status_y + 4, shell_strings.explorerLine("ex_lib_status"), rgb(0x30, 0x38, 0x42));
@@ -711,7 +738,8 @@ fn patchDragBackground(scr_w: i32, scr_h: i32) void {
     }
     if (drag_state.taskmgr_active) {
         const tm_pos = display.getTaskMgrPos();
-        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = 320, .h = 260 };
+        const tm_sz = display.getTaskMgrSize();
+        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_sz.w, .h = tm_sz.h };
         var u = display.rectUnion(drag_state.taskmgr_prev, cur);
         u = display.rectInflate(u, pad);
         u = display.rectClampToScreen(u, scr_w, scr_h);

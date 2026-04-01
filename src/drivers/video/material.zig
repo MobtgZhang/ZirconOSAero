@@ -15,7 +15,12 @@
 //! All pipelines operate on the raw framebuffer; in a GPU-accelerated build these
 //! would map to HLSL/SPIR-V compute shaders running in the DWM composition pass.
 
+const std = @import("std");
 const fb = @import("framebuffer.zig");
+
+fn clampCoordI64(v: i64) i32 {
+    return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
+}
 
 pub const MaterialType = enum(u8) {
     opaque_solid = 0,
@@ -203,21 +208,27 @@ pub fn renderRevealHighlight(cx: i32, cy: i32, radius: u16, opacity: u8) void {
     const r: i32 = @intCast(radius);
     const w_i32: i32 = @intCast(fb.getWidth());
     const h_i32: i32 = @intCast(fb.getHeight());
-    const r_sq = r * r;
+    const r_sq = @as(i64, r) * @as(i64, r);
 
     var dy: i32 = -r;
     while (dy <= r) : (dy += 1) {
         var dx: i32 = -r;
         while (dx <= r) : (dx += 1) {
-            const dist_sq = dx * dx + dy * dy;
+            const dx64 = @as(i64, dx);
+            const dy64 = @as(i64, dy);
+            const dist_sq = dx64 * dx64 + dy64 * dy64;
             if (dist_sq > r_sq) continue;
 
-            const px = cx + dx;
-            const py = cy + dy;
+            const px = clampCoordI64(@as(i64, cx) + dx64);
+            const py = clampCoordI64(@as(i64, cy) + dy64);
             if (px < 0 or px >= w_i32 or py < 0 or py >= h_i32) continue;
 
-            const dist = isqrt(@intCast(dist_sq));
-            const falloff: u32 = @as(u32, opacity) * (@as(u32, @intCast(r)) - dist) / @as(u32, @intCast(r));
+            const dist_sq_cap: u32 = if (dist_sq > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(dist_sq);
+            const dist = isqrt(dist_sq_cap);
+            const ru: u32 = @intCast(r);
+            const du: u32 = dist;
+            const dr: u32 = if (du >= ru) 0 else ru - du;
+            const falloff: u32 = @as(u32, opacity) * dr / @max(ru, 1);
             const alpha: u8 = @intCast(if (falloff > 255) 255 else falloff);
 
             if (alpha > 2) {
@@ -242,7 +253,15 @@ pub fn renderShadow(x: i32, y: i32, w: i32, h: i32, size: u8, layers: u8) void {
         if (offset <= 0) break;
         const alpha_val: u32 = @intCast(25 - @min(layer * 5, 24));
         const shadow_alpha: u8 = @intCast(alpha_val);
-        fb.blendTintRect(x + offset, y + offset, w, h, 0x00000000, shadow_alpha, 255);
+        fb.blendTintRect(
+            clampCoordI64(@as(i64, x) + @as(i64, offset)),
+            clampCoordI64(@as(i64, y) + @as(i64, offset)),
+            w,
+            h,
+            0x00000000,
+            shadow_alpha,
+            255,
+        );
     }
 }
 

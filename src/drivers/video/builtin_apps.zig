@@ -364,6 +364,40 @@ fn aeroCaptionButtonLayout(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32) 
     };
 }
 
+/// 标题栏命中：右/下边界在 i64 上计算，避免 wx+DEF_W 等链式 i32 加法在 Debug 下溢出。
+fn pointInSlotCaption(px: i32, py: i32, wx: i32, wy: i32) bool {
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    const x0 = @as(i64, wx);
+    const y0 = @as(i64, wy);
+    const x1 = x0 + @as(i64, DEF_W);
+    const y1 = y0 + @as(i64, CAPTION_H);
+    return pxi >= x0 and pxi < x1 and pyi >= y0 and pyi < y1;
+}
+
+fn pointInSlotClient(px: i32, py: i32, wx: i32, wy: i32) bool {
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    const x0 = @as(i64, wx);
+    const y0 = @as(i64, wy);
+    const x1 = x0 + @as(i64, DEF_W);
+    const y1 = y0 + @as(i64, DEF_H);
+    return pxi >= x0 and pxi < x1 and pyi >= y0 and pyi < y1;
+}
+
+fn refocusAfterClosedSlot(closed: usize) void {
+    if (focused_slot != closed) return;
+    var s: usize = MAX_SLOTS;
+    while (s > 0) {
+        s -= 1;
+        if (slots[s].open) {
+            focused_slot = s;
+            return;
+        }
+    }
+    focused_slot = 0;
+}
+
 fn hitTestCaption(px: i32, py: i32, win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32) AeroCaptionBtnHover {
     if (titlebar_h < 4 or win_w < 96) return .none;
     const pxi = @as(i64, px);
@@ -636,9 +670,12 @@ pub fn isDragging() bool {
     return drag_slot != null;
 }
 
-pub fn onMouseRelease() void {
+/// 左键释放：若刚结束内置窗标题栏拖拽，返回 true，供桌面主循环触发一帧整场景以退出 `drag_light`。
+pub fn onMouseRelease() bool {
     paint_down = false;
+    const ended_builtin_drag = drag_slot != null;
     drag_slot = null;
+    return ended_builtin_drag;
 }
 
 /// 返回 true 表示内置窗位置或客户区（画图笔划）有变化，需重绘。
@@ -691,7 +728,7 @@ pub fn updateCaptionHover(px: i32, py: i32) void {
         s -= 1;
         if (!slots[s].open) continue;
         const w = slots[s];
-        if (px >= w.x and px < w.x + DEF_W and py >= w.y and py < w.y + CAPTION_H) {
+        if (pointInSlotCaption(px, py, w.x, w.y)) {
             slots[s].cap_hover = hitTestCaption(px, py, w.x, w.y, DEF_W, CAPTION_H);
             return;
         }
@@ -704,7 +741,7 @@ pub fn captionHoverForTopmost(px: i32, py: i32) AeroCaptionBtnHover {
         s -= 1;
         if (!slots[s].open) continue;
         const w = slots[s];
-        if (px >= w.x and px < w.x + DEF_W and py >= w.y and py < w.y + CAPTION_H) {
+        if (pointInSlotCaption(px, py, w.x, w.y)) {
             return hitTestCaption(px, py, w.x, w.y, DEF_W, CAPTION_H);
         }
     }
@@ -721,15 +758,16 @@ pub fn handleClick(px: i32, py: i32, scr_w: i32, scr_h: i32, tb_h: i32) bool {
         const si: usize = @intCast(s);
         if (!slots[si].open) continue;
         const w = slots[si];
-        if (px < w.x or px >= w.x + DEF_W or py < w.y or py >= w.y + DEF_H) continue;
+        if (!pointInSlotClient(px, py, w.x, w.y)) continue;
 
         focused_slot = si;
         narrOnFocus(slots[si].app);
-        if (py < w.y + CAPTION_H) {
+        if (@as(i64, py) < @as(i64, w.y) + @as(i64, CAPTION_H)) {
             const h = hitTestCaption(px, py, w.x, w.y, DEF_W, CAPTION_H);
             switch (h) {
                 .close => {
                     slots[si].open = false;
+                    refocusAfterClosedSlot(si);
                     klog.info("builtin: close %s", .{titleOf(w.app)});
                 },
                 .minimize, .maximize => klog.info("builtin: min/max stub", .{}),
@@ -774,9 +812,11 @@ fn handleClientClick(si: usize, px: i32, py: i32, tb_h: i32) void {
 
 fn notepadClick(si: usize, px: i32, py: i32) void {
     const w = slots[si];
-    const btn_top = w.y + DEF_H - 26;
-    if (py < btn_top or py >= w.y + DEF_H - 4) return;
-    const mid = w.x + @divTrunc(DEF_W, 2);
+    const pyi = @as(i64, py);
+    const btn_top = @as(i64, w.y) + @as(i64, DEF_H) - 26;
+    const bottom = @as(i64, w.y) + @as(i64, DEF_H) - 4;
+    if (pyi < btn_top or pyi >= bottom) return;
+    const mid = clampI32FromI64(@as(i64, w.x) + @divTrunc(@as(i64, DEF_W), 2));
     if (px < mid) {
         _ = FileDialog.openText(demo_notepad_vfs_path);
     } else {
@@ -786,9 +826,11 @@ fn notepadClick(si: usize, px: i32, py: i32) void {
 
 fn wordpadClick(si: usize, px: i32, py: i32) void {
     const w = slots[si];
-    const btn_top = w.y + DEF_H - 26;
-    if (py < btn_top or py >= w.y + DEF_H - 4) return;
-    const mid = w.x + @divTrunc(DEF_W, 2);
+    const pyi = @as(i64, py);
+    const btn_top = @as(i64, w.y) + @as(i64, DEF_H) - 26;
+    const bottom = @as(i64, w.y) + @as(i64, DEF_H) - 4;
+    if (pyi < btn_top or pyi >= bottom) return;
+    const mid = clampI32FromI64(@as(i64, w.x) + @divTrunc(@as(i64, DEF_W), 2));
     if (px < mid) {
         _ = FileDialog.openTextWordpad(demo_notepad_vfs_path);
     } else {
@@ -1098,7 +1140,7 @@ pub fn pollKeyboardToFocused() bool {
     const arch_mod = @import("../../arch.zig");
     var dirty = false;
     while (arch_mod.readInputChar()) |c| {
-        if (!slots[focused_slot].open) continue;
+        if (focused_slot >= slots.len or !slots[focused_slot].open) continue;
         const app = slots[focused_slot].app;
         if (app != .notepad and app != .wordpad) continue;
         if (app == .notepad) {

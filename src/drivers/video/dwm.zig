@@ -6,12 +6,24 @@
 //!
 //! DesktopManagerSpec.md / Aero 路径：合成循环在「提交帧」前应尽快产出可显示内容；首帧可跳过盒式模糊。
 //! （仍保留 tint + 高光），在首次 `present()` 之后再跑全量模糊，避免双缓冲下长时间黑屏。
+//!
+//! 公开概念对照（clean-room，非 API 复制）：Microsoft Learn「Desktop Window Manager」— 合成启用、
+//! Blur behind、扩展非客户区等用户态契约见 <https://learn.microsoft.com/en-us/windows/win32/api/_dwm/> 与概述
+//! <https://learn.microsoft.com/en-us/windows/win32/learnwin32/the-desktop-window-manager>。
+//! 本内核 CPU 路径用 `blur_budget_*` 与 `renderGlassTintOnly`（无盒式模糊）对应文档中的性能与交互注意点。
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
 const theme = @import("theme.zig");
 const zircon_aero = @import("zircon_aero_defaults");
 const rgb = theme.rgb;
+
+/// 与 `zircon_aero_defaults.compositor_config_epoch` 一致；`display` 等仅通过本模块读取，避免重复依赖 `zircon_aero_defaults` 模块。
+pub const compositor_config_epoch: u32 = zircon_aero.compositor_config_epoch;
+
+fn clampCoordI64(v: i64) i32 {
+    return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
+}
 
 pub const DwmConfig = struct {
     glass_enabled: bool = zircon_aero.KernelDwm.glass_enabled,
@@ -200,7 +212,7 @@ fn renderGlassEffectInternal(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: 
             // Win7 标题栏/面板顶缘高光；任务栏用更柔和的顶线，避免纯白条过曝。
             if (chrome == .taskbar) {
                 fb.blendTintRect(x, y, w, 1, rgb(0xD8, 0xEC, 0xFF), 118, 255);
-                fb.blendTintRect(x, y + 1, w, 1, rgb(0x88, 0xA8, 0xC8), 45, 255);
+                fb.blendTintRect(x, clampCoordI64(@as(i64, y) + 1), w, 1, rgb(0x88, 0xA8, 0xC8), 45, 255);
             } else {
                 fb.drawHLine(x, y, w, rgb(0xFF, 0xFF, 0xFF));
             }
@@ -209,17 +221,17 @@ fn renderGlassEffectInternal(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: 
 
     switch (chrome) {
         .taskbar => {
-            fb.drawHLine(x, y + h - 1, w, rgb(0x08, 0x10, 0x20));
+            fb.drawHLine(x, clampCoordI64(@as(i64, y) + @as(i64, h) - 1), w, rgb(0x08, 0x10, 0x20));
             fb.drawVLine(x, y, h, rgb(0x42, 0x62, 0x86));
-            fb.drawVLine(x + w - 1, y, h, rgb(0x42, 0x62, 0x86));
+            fb.drawVLine(clampCoordI64(@as(i64, x) + @as(i64, w) - 1), y, h, rgb(0x42, 0x62, 0x86));
         },
         .caption => {
-            fb.drawHLine(x, y + h - 1, w, rgb(0x70, 0x90, 0xB8));
+            fb.drawHLine(x, clampCoordI64(@as(i64, y) + @as(i64, h) - 1), w, rgb(0x70, 0x90, 0xB8));
         },
         .panel => {
-            fb.drawHLine(x, y + h - 1, w, rgb(0x40, 0x60, 0x88));
+            fb.drawHLine(x, clampCoordI64(@as(i64, y) + @as(i64, h) - 1), w, rgb(0x40, 0x60, 0x88));
             fb.drawVLine(x, y, h, rgb(0x55, 0x75, 0x98));
-            fb.drawVLine(x + w - 1, y, h, rgb(0x55, 0x75, 0x98));
+            fb.drawVLine(clampCoordI64(@as(i64, x) + @as(i64, w) - 1), y, h, rgb(0x55, 0x75, 0x98));
         },
     }
 }
@@ -234,7 +246,15 @@ pub fn renderShadow(x: i32, y: i32, w: i32, h: i32, size: i32) void {
         const offset = size - layer * 2;
         if (offset <= 0) break;
         const shadow_alpha: u8 = @intCast(@as(u32, @intCast(25 - layer * 5)));
-        fb.blendTintRect(x + offset, y + offset, w, h, rgb(0x00, 0x00, 0x00), shadow_alpha, 255);
+        fb.blendTintRect(
+            clampCoordI64(@as(i64, x) + @as(i64, offset)),
+            clampCoordI64(@as(i64, y) + @as(i64, offset)),
+            w,
+            h,
+            rgb(0x00, 0x00, 0x00),
+            shadow_alpha,
+            255,
+        );
     }
 }
 

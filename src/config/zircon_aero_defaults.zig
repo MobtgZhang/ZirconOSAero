@@ -6,6 +6,9 @@
 //! 与 Win32 `COLORREF`/本内核帧缓冲一致；`src/desktop/aero/src/theme.zig` 的 `rgb()` 为 `r|(g<<8)|(b<<16)`，二者字节序相反。
 //! `glass_tint_color` 此处为内核侧 **u32 字面值**（与 `dwm.zig` / `theme.rgb` 一致）；勿直接复制到 Aero 库主题常量而不换算。
 
+/// 合成参数表版本：内核 `display` 与用户态 `desktop/aero` 变更默认时应 bump，便于检测双轨漂移（DesktopManagerSpec）。
+pub const compositor_config_epoch: u32 = 1;
+
 /// 内核 `dwm.zig` / `display.initAeroDwm` / `renderer_aero.initDwm` 使用的玻璃与行为开关
 pub const KernelDwm = struct {
     pub const glass_enabled = true;

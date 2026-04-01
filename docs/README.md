@@ -10,7 +10,7 @@ ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** imple
 |----------|-------------|
 | [Architecture.md](en/Architecture.md) | Overall architecture: layering, design principles, object model, security |
 | [Kernel.md](en/Kernel.md) | Kernel internals: scheduler, memory, interrupts, syscalls, IPC, Object Manager |
-| [Boot.md](en/Boot.md) | Boot path: ZBM / UEFI (no GRUB), kernel init phases (Phase 0–12) |
+| [Boot.md](en/Boot.md) | Boot path: ZBM / UEFI, kernel init phases (Phase 0–12) |
 | [Servers.md](en/Servers.md) | System services: Process Server, Session Manager, LPC ports |
 | [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/ZirconShell/user32/gdi32), WOW64, POSIX |
 | [BuildSystem.md](en/BuildSystem.md) | Build system: `build.conf`, Makefile, `build.zig`, `run.sh` |
@@ -40,7 +40,7 @@ The same documents are available in Chinese under [`cn/`](cn/):
 ```
 ZirconOSAero/
 ├── src/                   # Kernel and userland sources
-├── boot/                  # ZBM only (BIOS stage + UEFI); no GRUB
+├── boot/                  # ZBM (BIOS stage + UEFI)
 ├── link/                  # Per-architecture linker scripts
 ├── scripts/               # Build helpers (see scripts/README.md)
 ├── tests/                 # Test suite

@@ -98,9 +98,9 @@ src/
 
 ### 3.3 内核堆 (heap.zig)
 
-- **算法**：Bump 分配器
-- **大小**：512KB
-- **用途**：内核态动态内存分配
+- **算法**：Bump 高水位 + 每块元数据 + **空闲链表**；释放时按地址有序插入并与**相邻空闲块合并**（教科书式空闲链表堆，非 Windows 池实现复刻）。
+- **大小**：freestanding 下为 **VM 按需映射** 的可增长区（上限见配置 `memory.heap_size_kb`）；VM 初始化失败时回退静态区；主机单元测试仍为固定 512KB 静态缓冲。
+- **用途**：`mm/pool` 等内核动态分配的后备；完整组件说明见 [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md)。
 
 ## 4. 调度器 (ke/scheduler.zig)
 

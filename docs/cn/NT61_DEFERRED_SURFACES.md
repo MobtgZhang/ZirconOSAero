@@ -15,4 +15,4 @@
 
 ## 维护
 
-调整延后边界时，同步更新本文件、[NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与根 [README.md](../../README.md) 特性矩阵。
+调整延后边界时，同步更新本文件、[NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、根 [README.md](../../README.md) / [README_cn.md](../../README_cn.md) 的 Design 表述，以及 [docs/en/Subsystems.md](../en/Subsystems.md)、[docs/cn/Subsystems.md](Subsystems.md) 中的子系统状态列。

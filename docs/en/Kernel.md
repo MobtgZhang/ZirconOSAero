@@ -105,9 +105,9 @@ Identity mapping is used; kernel and framebuffer have dedicated mappings. Startu
 
 ### 3.3 Kernel heap (`heap.zig`)
 
-- **Algorithm**: Bump allocator  
-- **Size**: 512KB  
-- **Use**: Kernel dynamic allocation  
+- **Algorithm**: Bump high-water plus per-block metadata and a **free list** with **address-ordered insert and coalescing** of adjacent free blocks (textbook segregated free-list heap; not a Windows pool clone).  
+- **Size**: On freestanding builds, the arena is **VM-backed** (grows by mapping pages up to `memory.heap_size_kb` in config) with a static fallback if VM init fails; host unit tests use a fixed 512KB static buffer.  
+- **Use**: Backing store for `mm/pool` and general kernel dynamic allocation; see [MM_HEAP_POOL_SLAB.md](../cn/MM_HEAP_POOL_SLAB.md) (Chinese) for the full picture.  
 
 ## 4. Scheduler (`ke/scheduler.zig`)
 

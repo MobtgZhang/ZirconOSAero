@@ -4,11 +4,13 @@
 
 ## 1. 子系统总览
 
+状态与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md) 一致：**部分**表示公开文档对齐的**子集**，不表示与 Windows 7 用户态二进制逐位兼容。
+
 | 子系统 | 源码目录 | 状态 | 说明 |
 |--------|----------|------|------|
-| Native | — | 已实现 | ZirconOS 原生 API (ntdll) |
-| Win32 | `src/subsystems/win32/` | 已实现 | kernel32 / user32 / gdi32 兼容层 |
-| WOW64 | `src/subsystems/win32/wow64.zig` | 已实现 | 32 位 PE thunk + ABI 转换 |
+| Native | — | 部分 | `ntdll` Native API **子集** — 见契约矩阵 §3、§9 |
+| Win32 | `src/subsystems/win32/` | 部分 | kernel32 / user32 / gdi32 **子集**；csrss 风格服务器 — 非完整 Win32 |
+| WOW64 | `src/subsystems/win32/wow64.zig` | 部分 | PE32 + 32→64 thunk **子集**；PEB/TEB/SSDT 仍有缺口 — 见矩阵 |
 | POSIX | — | 规划中 | libc / POSIX API 映射 |
 
 ### 调用层次
@@ -24,9 +26,9 @@ Win32 应用程序
     │       │
     └─ ntdll.dll (Native API)
             │
-        syscall (int 0x80)
+        syscall / sysret（x86_64；见 [SyscallABI.md](SyscallABI.md)）
             │
-        Microkernel
+        内核
 ```
 
 ## 2. Native 子系统
@@ -188,17 +190,20 @@ WOW64 (Windows 32-bit on Windows 64-bit) 提供 32 位 Windows 应用的兼容�
 
 ## 6. 实现路线
 
+阶段以**里程碑**推进。此处「部分」与 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) 一致：完整 Win32 / 完整 WOW64 明确列为内核主里程碑之后的长期项。
+
 ```
- 已完成                                              规划中
+ 部分 / 推进中                                    规划中
 ────┬────────┬───────────┬──────────┬───────────┬──────────
     │        │           │          │           │
  Native   Win32      Win32 GUI   WOW64      POSIX
  (ntdll)  Console    (user32/    (32-bit    (libc/
-          (kernel32)  gdi32)     compat)    posix)
+ 子集     kernel32    gdi32)     compat     posix)
+         子集        子集        子集
 ```
 
-1. Native 子系统 (ntdll) — **已完成**
-2. Win32 Console (kernel32 基础 API) — **已完成**
-3. Win32 GUI (user32 / gdi32) — **已完成**
-4. WOW64 (32 位兼容) — **已完成**
+1. Native 子系统 (ntdll) — **部分**（SSDT 对齐子集；非数百个 `Nt*` 全覆盖）
+2. Win32 Console (kernel32) — **部分**
+3. Win32 GUI (user32 / gdi32) — **部分**（优先 Aero/壳路径；非完整 GDI）
+4. WOW64 — **部分**（thunk + 表；非完整 SysWOW64）
 5. POSIX 最小集 — **规划中**

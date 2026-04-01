@@ -1,6 +1,6 @@
 # ZirconOSAero 启动流程（仅 ZBM）
 
-本仓库**仅**使用自研 **ZirconOSAero Boot Manager (ZBM)**。**不包含 GRUB**：`Makefile` 在 `BOOTLOADER=grub` 时会报错。内核仍解析由 ZBM（UEFI 主程序等）构造的 **Multiboot2 风格信息块**；该格式见 **Multiboot2 公开规范**，与是否安装第三方 GRUB **无关**。
+本仓库**仅**使用自研 **ZirconOSAero Boot Manager (ZBM)**；`Makefile` 仅接受 `BOOTLOADER=zbm`。内核解析由 ZBM（UEFI 主程序等）构造的 **Multiboot2 风格信息块**；标签布局见 **Multiboot2 公开规范**。
 
 ## 1. 引导路径矩阵
 
@@ -28,7 +28,7 @@ BCD 与 Windows 的差异说明见 [boot/zbm/README.md](../../boot/zbm/README.md
 | `\EFI\BOOT\BOOT*.EFI` | 各架构 UEFI 应用，源自 `boot/zbm/uefi/` |
 | `\boot\kernel.elf` | ESP（或数据分区，视镜像脚本而定）上的内核 |
 
-分辨率与帧缓冲默认值由根目录 **`build.conf`** 的 `RESOLUTION` 经 `make sync-resolution` 写入 `src/config/*.conf`，**不再**使用任何 GRUB 专用配置段。
+分辨率与帧缓冲默认值由根目录 **`build.conf`** 的 `RESOLUTION` 经 `make sync-resolution` 写入 `src/config/*.conf`。
 
 ## 3. ZBM（ZirconOSAero Boot Manager）
 
@@ -146,7 +146,7 @@ _start64
 
 ### 8.2 产品式：UEFI + ESP + ZBM
 
-- 固件加载 `\EFI\BOOT\BOOTLOONGARCH64.EFI`（ZBM）。本仓库**无 GRUB**。
+- 固件加载 `\EFI\BOOT\BOOTLOONGARCH64.EFI`（ZBM）。
 - 构建：`make build ARCH=loongarch64` 后 `make build-zbm-loongarch-uefi`。
 - **`make run-loongarch64`**（`LOONGARCH64_QEMU_MODE=uefi`）需 `build-esp` 与 `QEMU_EFI.fd`。
 

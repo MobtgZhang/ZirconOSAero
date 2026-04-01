@@ -16,6 +16,17 @@
 
 **验证**：阶段完成度须与 `zig build test`、`.github/workflows/ci.yml`、[MVT_NT61.md](MVT_NT61.md) 及 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 中可复现步骤一致；禁止仅凭文档勾选「完成」。
 
+## Win32 兼容层：现实落差与项目边界
+
+商业 Windows 上的 **Win32 / csrss / WOW64 / ntdll** 覆盖数百个 Native 与 Win32 入口，每个入口在参数探测、NTSTATUS、`SetLastError`、同步与对象生命周期上都有大量细节；**GDI**（BitBlt ROP、字体光栅化、设备上下文与句柄表）与 **csrss**（窗口站、桌面、会话、与内核 / LPC 的完整协议）同样是多年工程。
+
+本仓库目标为：**在 clean-room 前提下（仅 Microsoft Learn、WDK、硬件规范及公开发表的 ABI 对照表），交付与 NT 6.1 **公开文档**可对齐、且可由 [MVT_NT61.md](MVT_NT61.md) / `tests/` 部分验证的子集**。不声称：
+
+- 与 Windows 7 官方用户态 DLL **二进制兼容**或行为逐位等价；
+- 已实现「完整」Win32、完整 SysWOW64、或完整 csrss 语义（这些与 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) 中的延后项一致）。
+
+对外表述须与 [API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)、[docs/en/Subsystems.md](../en/Subsystems.md) 状态列同源；扩大兼容性须在 PR 中同步矩阵与测试。详见下文 **WOW64**、**csrss / LPC** 分节。
+
 ## 0. 内核内存、虚拟内存与 SMP（基线）
 
 | 能力 | 模块 | 状态说明 |
@@ -111,6 +122,17 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 （随实现推进在 PR 中增删行并更新状态列。）
 
+### 3.1 ntdll / SSDT 三向锚点（契约 ↔ 实现 ↔ 测试）
+
+| 角色 | 路径 | 验证 |
+|------|------|------|
+| x64 公开服务号子集 | [`src/arch/x86_64/ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig) | `zig build test` → **ssdt**（文内 Win7 SP1 参考断言） |
+| 内核 syscall 分发与用户指针探测 | [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig) | 分支配对；扩展时补 `tests/` |
+| 用户态 `syscall` 薄层（与内核号一致） | [`src/sdk/ntdll_syscall_win64.zig`](../../src/sdk/ntdll_syscall_win64.zig) | **ssdt_stub_parity**（`Ssdt` 与 `ssdt_nt61` 同步子集） |
+| 内核内联 / 桩 Native 调用 | [`src/libs/ntdll.zig`](../../src/libs/ntdll.zig) | 服务号须与 `ssdt_nt61` 一致；未实现路径返回文档化 NTSTATUS |
+
+未在 `ssdt_nt61.zig` 列出的服务：分发器可返回 `STATUS_INVALID_PARAMETER` 等（见 [SyscallABI.md](SyscallABI.md)）；**不得**在文档中宣称「全量 Nt* 已完成」。
+
 ## 4. DWM 概念与内核/子系统实现对照（NT 6.1）
 
 | 能力（文档概念 / API） | 状态 | 仓库位置 | 备注 |
@@ -138,6 +160,19 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `CreateCompatibleDC` / `SelectObject` | 句柄与 STOCK 对象 | `gdi32.zig` |
 
 完整列表随子系统扩展在 PR 中追加行。
+
+### 5.1 user32 / gdi32：非目标边界与分阶段交付
+
+下列能力**不**作为当前里程碑的「完成」标准（可与 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) 对照）；实现以 **Aero / 内置 Shell 所需最小子集** 优先，每扩展一类 API 须更新上表与本节。
+
+| 领域 | 非目标 / 长期项 | 分阶段说明 |
+|------|-----------------|------------|
+| GDI BitBlt | 完整 ROP3、拉伸、颜色格式矩阵、与打印机 DC 的完整交互 | 当前为矩形/文本/位图子集；复杂 ROP 为 Planned |
+| 字体 | ClearType/Uniscribe 级排版、完整 GDI 字体链接与回退 | 当前位图字体路径；FreeType 等为路线图项（见 API 矩阵 gdi32 行） |
+| DC / 对象 | 完整 GDI 句柄表、跨进程 DC、元文件、路径 API | 以 `CreateCompatibleDC` / `SelectObject` 子集为主 |
+| user32 消息 | 完整输入法、挂钩链、DDE、剪贴板全语义 | 消息泵与 DWM 广播等为 **Partial**；随契约矩阵增行 |
+
+**user32**：优先保证 `GetMessage` / `PeekMessage`、`CreateWindowEx` 等与壳路径一致的入口；模态环与 NC 命中等为部分语义，须在 PR 中注明已知差距。
 
 ## 6. 配置语义：`nt_product_arch` 与宿主 CPU
 
@@ -168,7 +203,7 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 | 进程用户半区释放 + PML4 回收 | `src/mm/vm.zig` `releaseProcessAddressSpace`；`src/arch/x86_64/paging.zig` `releaseUserHalfAddressSpace` | 伙伴/连续帧：`src/mm/buddy.zig` 主机测试；内核路径见 [MVT_NT61.md](MVT_NT61.md) |
 | 调度切换 CR3 | `src/ke/scheduler.zig` `activateCr3ForProcessId` | QEMU：`scripts/ci-qemu-smoke.sh` |
 | 用户指针探测 | `src/mm/probe.zig`；`src/arch/x86_64/syscall.zig` | 各 syscall 分支配对；扩展时补 `tests/` |
-| 每 CPU 就绪队列与工作窃取 | `src/ke/scheduler.zig`（`home_cpu`、就绪链）；`src/ke/percpu_sched.zig` `assignCpuForNewThread` | `zig build test`（调度行为以烟测为主） |
+| 每 CPU 就绪队列与工作窃取 | `src/ke/scheduler.zig`（32 级分桶 FIFO、`non_empty`、窃取）；`percpu_sched.zig` `assignCpuForNewThread`；亲和 `setThreadAffinityMask` | `zig build test` → **scheduler_policy_host**（公式）；QEMU 烟测 |
 | TLB 一致性（SMP 前占位） | `src/hal/x86_64/tlb_broadcast.zig` | Debug 下多 CPU 时串口诊断；未来 IPI 用例 |
 | LPC 端口种类 | `src/lpc/port.zig` `PortKind` | `zig build test` → **lpc_portkind_host**；[LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) |
 | IRP 完成例程与栈下传 | `src/io/io.zig` `IoCompleteRequest`、`dispatchIrpThroughStack` | 主机：`tests/io_irp_host.zig`（完成例程 + 栈链镜像断言） |
@@ -178,7 +213,35 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 
 **合规**：实现仅依据 MS Learn / WDK 公开描述与硬件规范；提交前运行 `bash scripts/verify-compliance.sh`。
 
-## 9. Clean-room 内核里程碑跟踪（与实现 PR 同步）
+## 9. KUSER_SHARED_DATA / TEB / Win32k 分流（加载微软 ntdll — 长期）
+
+| 表面 | 公开依据 | 状态 |
+|------|----------|------|
+| `KUSER_SHARED_DATA` 用户映射页（时标、系统调用间隔等） | MSDN / WDK 概念 | **Planned** — 须固定用户 VA 并与 `syscall` 路径一致 |
+| PEB / TEB 中线程与进程信息 | Learn — 进程线程 | **Partial** |
+| Win32k 与 ntos SSDT 分流 | x64 上多表/MSR 行为（公开概述） | **Partial** — 本内核将部分用户消息 syscall 折叠进主 SSDT，见 [SyscallABI.md](SyscallABI.md) |
+| 用户态 `Nt*` → `syscall` 薄层 | AMD64 调用约定 | **Partial** — [`src/sdk/ntdll_syscall_win64.zig`](../../src/sdk/ntdll_syscall_win64.zig)；内核内联桩仍为 `src/libs/ntdll.zig` |
+
+### 9.1 WOW64：覆盖与已知缺口
+
+| 项目 | 状态说明 | 代码 / 文档 |
+|------|----------|-------------|
+| x86（32 位）原生服务号 **公开子集**（与 x64 表不同号） | **Partial** — 对照 j00ru `x86/json/nt-per-system.json` Win7 SP1 | [`ssdt_x86_win7_sp1.zig`](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)；主机测试 **wow64_ssdt_x86**、**ssdt_x64_x86_namespace** |
+| 64 位内核 SSDT 子集 | **Partial** | [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig) |
+| `translateSyscall32to64` | **演示 / 占位** — 当前 switch 使用与 x86 公开表 **不对齐** 的演示号；真实 SysWOW64 须走 64 位 SSDT + 独立映射 | [`wow64/thunk.zig`](../../src/subsystems/win32/wow64/thunk.zig)、[`wow64.zig`](../../src/subsystems/win32/wow64.zig) 文首注释、[SyscallABI.md](SyscallABI.md) |
+| 32 位 PEB / TEB 布局 | **Partial** — `PEB32` / `TEB32` 结构与部分字段填充；非完整 NT 6.1 用户态布局验证 | [`wow64/types.zig`](../../src/subsystems/win32/wow64/types.zig) |
+| 地址空间隔离 | **Partial** — WOW64 进程模型与栈/堆基址为简化演示 | `wow64.zig` |
+
+### 9.2 csrss 风格子系统与 LPC 里程碑
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| M1 | LPC 端口创建/连接、`PortKind` ABI 稳定；与 [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) 一致 | **Partial** — 见 `src/lpc/port.zig`、**lpc_portkind_host** |
+| M2 | `subsystem.zig` 中进程注册、会话/窗口站/桌面 **数据结构** 与 CSR API 号枚举 | **Partial** — [`subsystem.zig`](../../src/subsystems/win32/subsystem.zig) `CsrApiNumber`、Desktop/WindowStation |
+| M3 | 完整窗口站/桌面 **安全边界**、会话 0 隔离、与 LPC 大消息/节区视图握手的生产语义 | **Planned** — 握手占位见 LPC 文档 §与子系统 |
+| M4 | 与真实 csrss 相当的进程生命周期、控制台/ GUI 分流、全消息泵协议 | **长期** — 见文首「现实落差」与延后表面文档 |
+
+## 10. Clean-room 内核里程碑跟踪（与实现 PR 同步）
 
 | 门禁 / 能力 | 说明 | 验证 |
 |-------------|------|------|

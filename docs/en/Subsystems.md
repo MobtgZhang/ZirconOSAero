@@ -4,11 +4,13 @@ Subsystems provide application compatibility layers so different app types can r
 
 ## 1. Overview
 
+Status values match [NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md) and [API_COMPAT_MATRIX.md](../cn/API_COMPAT_MATRIX.md): **Partial** means a documented subset, not parity with Windows 7 user-mode binaries.
+
 | Subsystem | Path | Status | Notes |
 |-----------|------|--------|-------|
-| Native | — | Done | ZirconOS native API (ntdll) |
-| Win32 | `src/subsystems/win32/` | Done | kernel32 / user32 / gdi32 layer |
-| WOW64 | `src/subsystems/win32/wow64.zig` | Done | 32-bit PE thunk + ABI glue |
+| Native | — | Partial | `ntdll` Native API **subset** — see contract matrix §3, §9 |
+| Win32 | `src/subsystems/win32/` | Partial | kernel32 / user32 / gdi32 **subsets**; csrss-style server — not full Win32 |
+| WOW64 | `src/subsystems/win32/wow64.zig` | Partial | PE32 + 32→64 thunk **subset**; PEB/TEB/SSDT gaps — see matrix |
 | POSIX | — | Planned | libc/POSIX mapping |
 
 ### Call stack
@@ -24,9 +26,9 @@ Win32 application
     │       │
     └─ ntdll.dll (Native API)
             │
-        syscall (int 0x80)
+        syscall / sysret (x86_64; see [SyscallABI.md](../cn/SyscallABI.md))
             │
-        Microkernel
+        Kernel
 ```
 
 ## 2. Native subsystem
@@ -184,17 +186,20 @@ libc/POSIX mapping for Unix-style apps.
 
 ## 6. Implementation timeline
 
+Phasing is **milestone-driven**. “Partial” here matches [NT61_DEFERRED_SURFACES.md](../cn/NT61_DEFERRED_SURFACES.md): full Win32 / full WOW64 are explicitly deferred past core kernel milestones.
+
 ```
- Done                                              Planned
+ Partial / in progress                    Planned
 ────┬────────┬───────────┬──────────┬───────────┬──────────
     │        │           │          │           │
  Native   Win32      Win32 GUI   WOW64      POSIX
  (ntdll)  Console    (user32/    (32-bit    (libc/
-          (kernel32)  gdi32)     compat)    posix)
+ subset   (kernel32  gdi32)      compat     posix)
+          subset)    subsets     subset
 ```
 
-1. Native (ntdll) — **done**  
-2. Win32 console (kernel32) — **done**  
-3. Win32 GUI (user32/gdi32) — **done**  
-4. WOW64 — **done**  
+1. Native (ntdll) — **Partial** (SSDT-aligned subset; not hundreds of `Nt*`)  
+2. Win32 console (kernel32) — **Partial**  
+3. Win32 GUI (user32/gdi32) — **Partial** (Aero/shell path first; not full GDI)  
+4. WOW64 — **Partial** (thunk + tables; not full SysWOW64)  
 5. POSIX minimal set — **planned**  

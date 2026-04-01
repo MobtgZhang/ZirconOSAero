@@ -61,7 +61,7 @@ ZirconOSAero/
 │   ├── config/            #   配置解析器 + 嵌入式默认 *.conf（system/boot/desktop）
 │   ├── desktop/           #   桌面主题 Zig 工程（各主题含 resources/）
 │   └── fonts/             #   共享开源字体（make fonts）
-├── boot/                  # 引导代码（仅 ZBM：BIOS 阶段 + UEFI；无 GRUB）
+├── boot/                  # 引导代码（ZBM：BIOS 阶段 + UEFI）
 ├── link/                  # 各架构链接脚本
 ├── gnu-efi/               # LoongArch GNU-EFI 构建输出（gitignore）
 ├── scripts/               # 构建辅助脚本（见 scripts/README.md）

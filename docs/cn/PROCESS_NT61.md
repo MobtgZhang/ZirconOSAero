@@ -5,7 +5,7 @@
 ## 目标与约束
 
 - **内核与体系结构**：混合微内核思路与 NT 风格子系统分层；用户态服务与 Win32 兼容层按里程碑扩展。
-- **引导**：仅 **ZirconOSAero Boot Manager (ZBM)** — BIOS/MBR 链与 UEFI/GPT 链；**不使用 GRUB**。
+- **引导**：仅 **ZirconOSAero Boot Manager (ZBM)** — BIOS/MBR 链与 UEFI/GPT 链。
 - **视觉**：默认 **Aero** 桌面（`src/desktop/aero/`），与 Vista/7 玻璃、任务栏、DWM 组合方向一致。
 - **架构**：`x86_64`、`aarch64`、`loongarch64`、`riscv64`（及上游已有的 `mips64el`）；UEFI 由 Zig 直接产出（x86_64/aarch64），LoongArch 为 GNU-EFI 链接路径；**RISC-V UEFI** 在 Zig 工具链支持 PE/COFF 前见 `build.zig` 注释与下方阶段说明。
 
@@ -14,6 +14,7 @@
 - **微软官方 Windows 7 用户态二进制**仅面向 **x86 / x86_64**。其他架构在本仓库中为 **同名 NT API 子集 + 实验性 Shell**，不声称可加载 Windows 7 官方 PE 生态。
 - 契约粒度与「完成度」以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 为准；README 功能矩阵中的 **Partial / Stub** 表示非 Done。
 - 明确不阻塞内核主里程碑的能力见 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)（WDDM、完整 Win32、WOW64、AML 等）。
+- **Win32 栈的现实边界**（为何不能声称「全套已完成」）：见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 章节「Win32 兼容层：现实落差与项目边界」。本仓库交付的是 **可验证子集**，不声称与商业 Windows 用户态 **逐 API、逐错误码、逐同步语义** 等价。
 
 ## 阶段划分（必须按序）
 
@@ -26,7 +27,7 @@
 
 - **MBR**：`boot/zbm/bios/`（mbr/vbr/stage2）与 `build-zbm-disk` 生成的磁盘镜像在 QEMU 下可进入菜单并加载内核。
 - **UEFI**：`boot/zbm/uefi/main.zig`（及 LoongArch `main_loongarch64.zig`）构建 `.efi`，`make build-esp` 可生成 ESP；菜单文案与配色保持 **Windows 7 启动管理器** 风格（见 `boot/zbm/common/menu.zig`）。
-- **ISO**：`scripts/build/mkiso-uefi-zbm.sh` + `xorriso`，无 GRUB。
+- **ISO**：`scripts/build/mkiso-uefi-zbm.sh` + `xorriso`（内嵌 FAT ESP）。
 
 ### Phase 2 — 内核 NT 6.1 语义基线
 

@@ -52,7 +52,7 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 
 ### Phase 1 — Boot + early kernel
 
-- **ZBM only** in this repo (BIOS/MBR + UEFI); **no GRUB**
+- **ZBM only** in this repo (BIOS/MBR + UEFI)
 - Multiboot2 handoff where used (x86_64)
 - UEFI boot application
 - GDT/TSS

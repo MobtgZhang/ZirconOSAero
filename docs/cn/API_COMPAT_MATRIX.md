@@ -2,6 +2,8 @@
 
 本表用于路线图 **C-T09**：随实现推进在 PR 中更新行，不依赖逆向 Windows 二进制。
 
+**边界**：本表仅声明 **子集** 与 **Partial** 语义。完整 GDI（BitBlt ROP、字体光栅化、完整 DC 模型）、完整消息泵与 csrss 协议、完整 WOW64/SysWOW64 等均 **不** 由本表隐含「已完成」——见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §5.1、§9.1–§9.2 与 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
+
 **回归**：主机侧 `zig build test` 覆盖堆/池/SSDT/安全 DAC 镜像逻辑；Win32 API 行为测试随子系统以 `test` 块或 QEMU 场景追加。
 
 | 模块        | 代表 API              | 状态     | 备注 |

@@ -1,6 +1,6 @@
 # ZirconOSAero boot flow (ZBM only)
 
-This repository uses **only** the in-tree **ZirconOSAero Boot Manager (ZBM)**. **GRUB is not supported** (`Makefile` rejects `BOOTLOADER=grub`). The kernel still consumes a **Multiboot2-style information block** built by ZBM (or the UEFI ZBM application); that format is defined by the public Multiboot2 specification and is **not** tied to any particular third-party bootloader.
+This repository uses **only** the in-tree **ZirconOSAero Boot Manager (ZBM)**; the `Makefile` accepts `BOOTLOADER=zbm` only. The kernel consumes a **Multiboot2-style information block** produced by ZBM (or the UEFI ZBM application), as defined by the public Multiboot2 specification.
 
 ## 1. Boot path matrix
 
@@ -28,7 +28,7 @@ Paths below are **conventions used by this project** for a Win7-like boot experi
 | `\EFI\BOOT\BOOT*.EFI` | Architecture-specific UEFI application built from `boot/zbm/uefi/` |
 | `\boot\kernel.elf` | Kernel image on the ESP (or data partition, depending on image script) |
 
-Resolution and framebuffer defaults are synchronized from root **`build.conf`** (`RESOLUTION`) via `make sync-resolution` into `src/config/*.conf` — **not** from any GRUB-specific section.
+Resolution and framebuffer defaults are synchronized from root **`build.conf`** (`RESOLUTION`) via `make sync-resolution` into `src/config/*.conf`.
 
 ## 3. ZBM (ZirconOSAero Boot Manager)
 
@@ -139,7 +139,7 @@ Examples: `mode=cmd`, `mode=desktop`, `desktop=aero` / `theme=aero`.
 
 ### 8.2 Product-style: UEFI + ESP + ZBM
 
-- Firmware discovers `\EFI\BOOT\BOOTLOONGARCH64.EFI` (ZBM). **No GRUB** in this tree.
+- Firmware discovers `\EFI\BOOT\BOOTLOONGARCH64.EFI` (ZBM).
 - Build: `make build-zbm-loongarch-uefi` after `make build ARCH=loongarch64`.
 - **`make run-loongarch64`** with `LOONGARCH64_QEMU_MODE=uefi` uses `build-esp` + `QEMU_EFI.fd`.
 

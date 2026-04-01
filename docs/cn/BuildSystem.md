@@ -6,7 +6,7 @@
 |------|------|
 | Zig | 编译器与构建系统 (无 libc 依赖) |
 | Make | 便捷构建入口，读取 `build.conf` 并调用 `zig build` |
-| ZBM | 自研引导（BIOS/MBR + UEFI）；本仓库**不含 GRUB** |
+| ZBM | 自研引导（BIOS/MBR + UEFI） |
 | QEMU | 虚拟机运行环境 |
 | xorriso / mtools | ISO 镜像制作工具 |
 

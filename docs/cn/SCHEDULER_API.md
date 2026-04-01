@@ -3,52 +3,62 @@
 ## 目标
 
 - **抢占**：由 PIT IRQ0（约 100Hz）调用 `scheduler.tick()`，在启用调度后于就绪线程间切换。
-- **多级优先级**：数值 **越大越优先**；高优先级就绪时优先获得运行权。
-- **与进程管理解耦**：调度器仅管理 `Thread` 记录与 `ThreadContext`；`process_id` 为弱关联，供上层统计与 `#PF` 处理。
+- **32 级分桶就绪队列**：每逻辑 CPU 32 条 FIFO 链（优先级 0–31），`non_empty` 位图 + 最高优先级选取；同优先级严格 **FIFO**（跨 CPU 同优先级通过 `rr_cpu_cursor` 轮询取头）。
+- **与进程管理解耦**：调度器仅管理 `Thread` 与 `ThreadContext`；`process_id` 为弱关联。
 
-## 当前常量
+## 常量与刻度
 
-| 符号 | 值 | 说明 |
-|------|-----|------|
-| `PRIORITY_IDLE` | 1 | 空闲线程默认档（NT 0–31 刻度低端） |
-| `PRIORITY_NORMAL` | 8 | `createThread` 默认档 |
-| `PRIORITY_REALTIME` | 24 | 高优先级占位（可与设备线程绑定） |
-| `PRIORITY_CLASS_COUNT` | 8 | class → 基线优先级映射（见下） |
+| 符号 | 说明 |
+|------|------|
+| `PRIORITY_IDLE` / `PRIORITY_NORMAL` / `PRIORITY_REALTIME` | 常用档占位（1 / 8 / 24） |
+| `PRIORITY_DYNAMIC_MAX` (=15) | **动态**区间上界：仅当 `priority <= 15` 时参与防饥饿 `STARVATION_BOOST`；**实时**档（>15）不通过该路径被动态线程「抬走」 |
+| `PRIORITY_CLASS_COUNT` | 8 档 `priority_class`，影响时间片长度 |
+| `QUANTUM_BY_CLASS` | clean-room 量子表 `{4,5,6,7,8,10,12,14}` tick；见 `quantumTicksForClass` |
+| `TIME_SLICE_TICKS` | 兼容旧符号；实际量子为 `quantumTicksForThread` |
 
 ### 八档映射（`priorityFromClass`）
 
-`effective = 2 + class * 3`（class ∈ 0..7），裁剪到 **31**。`effectivePriority` 将 `priority + io_boost` 裁剪到 **0–31**。
+`effective 基线 = 2 + class * 3`（class ∈ 0..7），裁剪到 **31**。`effectivePriority` = `min(31, priority + io_boost)` 与 `mutex_inherit_floor` 取 max，再对动态线程施加饥饿提升。
 
 ### 防饥饿（clean-room）
 
-就绪线程（非当前运行）每 tick 累加 `starve_ticks`；超过 `STARVATION_TICK_THRESHOLD` 后在 `effectivePriority` 上临时 `+STARVATION_BOOST`（上限 31）。**非** Windows 精确动态优先级算法。
+就绪线程（非当前运行）每 tick 累加 `starve_ticks`；超过 `STARVATION_TICK_THRESHOLD` 后 **仅当** `priority <= PRIORITY_DYNAMIC_MAX` 时在有效优先级上 `+STARVATION_BOOST`（上限 31）。
 
-## 时间片
+### 互斥体优先级继承（最小子集）
 
-- `TIME_SLICE_TICKS`：在 **同等有效优先级**（见下）的就绪线程之间，当前运行线程的剩余 tick；耗尽后才在同优先级的线程间轮转。
-- `1` 与历史行为接近：每 tick 可发生同优先级切换。
+- `ke/sync.zig`：`Mutex.acquireWithInheritance` / `release` 调用 `scheduler.applyMutexInheritFloor` / `clearMutexInheritFloor`。
+- **限制**：多互斥同时持有时当前实现可能在 `release` 时过早清零 `mutex_inherit_floor`；单互斥或顺序持锁场景可用。
+
+### 处理器亲和
+
+- `Thread.affinity_mask`：位 i = 可运行于逻辑 CPU i；**0** 表示「当前构建可见的全部逻辑 CPU」（受 `MAX_SCHED_CPUS` 截断）。
+- `setThreadAffinityMask` / `home_cpu` 与 `percpu_sched.assignCpuForNewThread` 协同。
 
 ## I/O 唤醒提升（clean-room）
 
-- `unblockThread` 时：在 `IO_BOOST_DURATION_TICKS` 内将 `io_boost` 增加 `IO_BOOST_PRIORITY_DELTA`（不超过 `255 - priority`），使 `effectivePriority = priority + io_boost`。
-- 到期后 `tick()` 将 `io_boost` 清零。这是教科书式「阻塞结束短暂抬高优先级」的极简模型，**不是** Windows NT 调度器的精确复现。
+- `unblockThread`：`io_boost` 在 `IO_BOOST_DURATION_TICKS` 内增加 `IO_BOOST_PRIORITY_DELTA`。
+- 到期由 `tick()` 清零。
 
-## 与 NT 6.1 / Windows 内核的差异（明确非目标或未完成）
+## 与 NT 6.1 / Windows 内核的差异
 
 | 能力 | NT / 公开文档侧 | 本仓库 |
 |------|-----------------|--------|
-| 优先级级数 | 32 级 + 优先级类 | **0–31** 有效优先级刻度 + 防饥饿近似 |
-| 优先级提升 | I/O、前台、饥饿等多源规则 | 仅 `unblockThread` 固定增量 + 定时衰减 |
-| NUMA / 处理器亲和 | 存在 | 未实现 |
-| 实时带宽 / 公平份额 | 存在 | 未实现 |
-| 内核模式抢占边界 | IRQL / 锁协议 | 简化模型 |
+| 就绪组织 | 多级反馈 + 动态调整 | 32 分桶 FIFO + 显式 boost/饥饿/继承钩子 |
+| NUMA / 公平份额 | 有 | 未实现 |
+| IRQL / 抢占边界 | 严格 | 简化模型 |
 
 ## 公开入口
 
 - `init` / `enableScheduling` / `tick` / `yield`
 - `createThread` / `blockThread` / `unblockThread` / `terminateThread`
-- `setThreadPriority` / `getCurrentThread` / `getTicks`
+- `setThreadPriority` / `setThreadPriorityClass` / `setThreadAffinityMask`
+- `applyMutexInheritFloor` / `clearMutexInheritFloor`（通常由 `Mutex` 调用）
+- `getCurrentThread` / `getTicks` / `effectivePriorityForThread`
+
+## 测试
+
+主机策略公式回归：`zig build test` → **scheduler_policy_host**（与 `scheduler.zig` 数值策略保持同步）。
 
 ## 参考
 
-公开文献中的多级反馈队列 / 实时调度概念；算法独立实现，不参考 Windows 调度器源码。
+公开文献中的多级队列 / 实时调度概念；算法独立实现，不参考 Windows 调度器源码。

@@ -6,7 +6,7 @@
 |------|------|
 | Zig | Compiler and build system (no libc for kernel) |
 | Make | Convenience entry; reads `build.conf` and runs `zig build` |
-| ZBM | Boot manager (BIOS/MBR + UEFI); **no GRUB** in this repo |
+| ZBM | Boot manager (BIOS/MBR + UEFI) |
 | QEMU | Virtual machine |
 | xorriso / mtools | ISO creation |
 

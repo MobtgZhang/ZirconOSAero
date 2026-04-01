@@ -2,6 +2,8 @@
 
 本文件描述 ZirconOSAero 内核中 **LPC 端口** 与用户态 **csrss / Win32** 之间的 clean-room 约定；行为对齐 Microsoft 公开文档中的 **端口、连接、报文** 概念，**不**对照 Windows/ReactOS 源码实现。
 
+**分阶段里程碑**（已实现 vs 长期）：与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §9.2 **csrss 风格子系统与 LPC 里程碑** 交叉引用；本文侧重握手字段与 `PortKind`，不表示完整 csrss 协议已完成。
+
 ## 命名与端口类型
 
 - **服务器端口**：`NtCreatePort` 创建，由服务进程持有；名称经 `OBJECT_ATTRIBUTES` / `UNICODE_STRING` 传入（见 [src/lpc/port.zig](../../src/lpc/port.zig)）。

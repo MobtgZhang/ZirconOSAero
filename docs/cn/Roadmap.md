@@ -52,7 +52,7 @@
 
 ### Phase 1 — Boot + Early Kernel
 
-- **本仓库仅 ZBM**（BIOS/MBR + UEFI），**不含 GRUB**
+- **本仓库仅 ZBM**（BIOS/MBR + UEFI）
 - x86_64 上 Multiboot2 交接（如适用）
 - UEFI 启动应用
 - GDT / TSS

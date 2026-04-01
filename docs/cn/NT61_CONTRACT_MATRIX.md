@@ -2,9 +2,19 @@
 
 本表用于对照 **Microsoft Learn** 公开描述与仓库实现状态；实现须为 clean-room，禁止复制 Windows/ReactOS/Wine 源码。
 
+## 状态标签定义（与根 README 矩阵一致）
+
+| 标签 | 含义 |
+|------|------|
+| **Done** | 主路径在 QEMU/CI 烟测下可演示，且与本表对应行描述一致；**不表示**与商业 Windows 7 内核等价。 |
+| **Partial** | 子集实现或行为与文档仍有已知差距；见各「状态说明」列。 |
+| **Stub** | 符号/结构存在，运行路径未实现或仅占位。 |
+| **Planned** | 设计或路线图中有，代码未落地。 |
+| **Verified** | 含主机单元测试或 CI 步骤的自动化回归（见 [MVT_NT61.md](MVT_NT61.md)）。 |
+
 **图例**：已实现 / 部分 / 未实现 — 以 `src/` 代码为准。
 
-**验证**：阶段完成度须与 `zig build test`、`.github/workflows/ci.yml` 及 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 中可复现步骤一致；禁止仅凭文档勾选「完成」。
+**验证**：阶段完成度须与 `zig build test`、`.github/workflows/ci.yml`、[MVT_NT61.md](MVT_NT61.md) 及 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 中可复现步骤一致；禁止仅凭文档勾选「完成」。
 
 ## 0. 内核内存、虚拟内存与 SMP（基线）
 
@@ -136,6 +146,8 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 ## 7. 相关仓库文档
 
+- [MVT_NT61.md](MVT_NT61.md) — 最小可验证测试索引（主机测试 + CI）  
+- [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) — LPC 与 csrss 握手 ABI（clean-room）  
 - [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) — `NtAllocateVirtualMemory` / `MEM_*` 与帧缓冲映射对照  
 - [PROCESS_NT61.md](PROCESS_NT61.md) — 阶段与门禁  
 - [ExecutivePhase3_Milestones.md](ExecutivePhase3_Milestones.md) — Phase 3 子里程碑  

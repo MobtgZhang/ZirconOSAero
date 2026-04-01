@@ -2,6 +2,8 @@
 
 **主线**：NT 6.1 公开 ABI 契约、SSDT 子集与用户态 Win32 桩的 **回归与兼容测试以 x86_64 为唯一 Tier 1**。
 
+**Verified 路径**：自动化主机测试（`zig build test`）与 CI 烟测默认仅覆盖 **x86_64** 相关契约；Tier 2 行中「引导/桌面」不等价于 NT 6.1 syscall 或 Win32 全栈验证。详见 [MVT_NT61.md](MVT_NT61.md)。
+
 | 架构 | 级别 | 说明 |
 |------|------|------|
 | `x86_64` | Tier 1 | 完整引导、IDT、`syscall`/SSDT、Aero 桌面、VFS/注册表运行时 |

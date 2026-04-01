@@ -14,14 +14,23 @@ pub const PortState = enum {
     closed,
 };
 
+/// NT LPC：连接端口 vs 通信端口 的雏形标记（大块 Section 传输等待 ALPC 路线图）。
+pub const PortKind = enum(u8) {
+    message = 0,
+    connection_listener = 1,
+};
+
 pub const Port = struct {
     header: ob.ObjectHeader = .{ .obj_type = .port },
     id: u32 = 0,
     owner_pid: u32 = 0,
     state: PortState = .inactive,
+    kind: PortKind = .message,
     name: [32]u8 = [_]u8{0} ** 32,
     name_len: usize = 0,
     connected_port: u32 = 0,
+    /// 大块消息 / 视图共享占位：将来绑定 Section 映射句柄（见 `mm/section.zig` 路线图）。
+    section_view_handle: u32 = 0,
 
     pub fn init(id: u32, owner_pid: u32) Port {
         return .{
@@ -29,9 +38,11 @@ pub const Port = struct {
             .id = id,
             .owner_pid = owner_pid,
             .state = .inactive,
+            .kind = .message,
             .name = [_]u8{0} ** 32,
             .name_len = 0,
             .connected_port = 0,
+            .section_view_handle = 0,
         };
     }
 };
@@ -56,6 +67,15 @@ fn nameMatch(a: []const u8, b: []const u8) bool {
 }
 
 pub fn createPort(owner_pid: u32, name: []const u8) ?*Port {
+    return createPortWithKind(owner_pid, name, .message);
+}
+
+/// 命名连接监听端口（`PortKind.connection_listener`）；客户端 `connectPort` 仍创建普通通信端口并配对。
+pub fn createConnectionListenerPort(owner_pid: u32, name: []const u8) ?*Port {
+    return createPortWithKind(owner_pid, name, .connection_listener);
+}
+
+fn createPortWithKind(owner_pid: u32, name: []const u8, kind: PortKind) ?*Port {
     ensureInit();
     if (port_count >= MAX_PORTS) return null;
 
@@ -63,16 +83,21 @@ pub fn createPort(owner_pid: u32, name: []const u8) ?*Port {
     var port = &ports[port_count];
     port.* = Port.init(id, owner_pid);
     port.state = .listening;
+    port.kind = kind;
 
     const copy_len = @min(name.len, port.name.len);
     @memcpy(port.name[0..copy_len], name[0..copy_len]);
     port.name_len = copy_len;
 
     port_count += 1;
-    klog.debug("LPC: Port '%s' created (id=%u, owner=%u)", .{
-        name, id, owner_pid,
+    klog.debug("LPC: Port '%s' created (id=%u, owner=%u, kind=%u)", .{
+        name, id, owner_pid, @intFromEnum(kind),
     });
     return port;
+}
+
+pub fn setPortSectionView(port: *Port, view_handle: u32) void {
+    port.section_view_handle = view_handle;
 }
 
 pub fn findPort(name: []const u8) ?*Port {

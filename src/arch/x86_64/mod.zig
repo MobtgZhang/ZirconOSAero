@@ -15,6 +15,7 @@ comptime {
     if (@import("build_options").enable_idt) {
         _ = @import("isr.zig");
         _ = @import("syscall.zig");
+        _ = @import("syscall_msr.zig");
     }
 }
 

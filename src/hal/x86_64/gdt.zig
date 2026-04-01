@@ -38,6 +38,9 @@ const GDT_ENTRIES = 7;
 var gdt: [GDT_ENTRIES]GdtEntry align(16) = undefined;
 var tss: Tss = .{};
 
+/// `syscall`/`sysret` 入口切换内核栈时读取（见 `syscall_lstar.s`）；与 `tss.rsp0` 同步更新。
+pub export var zircon_x86_64_kernel_rsp0: u64 = 0;
+
 const GdtDescriptor = packed struct {
     limit: u16,
     base: u64,
@@ -84,11 +87,13 @@ pub fn init(kernel_stack: u64) void {
 fn setupTss(kernel_stack: u64) void {
     tss = .{};
     tss.rsp0 = kernel_stack;
+    zircon_x86_64_kernel_rsp0 = kernel_stack;
     tss.iopb_offset = @intCast(@sizeOf(Tss));
 }
 
 pub fn setKernelStack(stack: u64) void {
     tss.rsp0 = stack;
+    zircon_x86_64_kernel_rsp0 = stack;
 }
 
 extern fn load_gdt_flush(desc: *const GdtDescriptor) void;

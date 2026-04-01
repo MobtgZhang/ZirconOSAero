@@ -5,9 +5,29 @@ const std = @import("std");
 
 pub const panic = std.debug.FullPanic(panicImpl);
 
+fn writeHexU32ToConsole(n: u32) void {
+    var buf: [8]u8 = undefined;
+    var x = n;
+    var i: usize = 8;
+    while (i > 0) {
+        i -= 1;
+        const d: u4 = @truncate(x & 15);
+        const du = @as(u8, d);
+        buf[i] = if (d < 10) '0' + du else 'a' + (du - 10);
+        x >>= 4;
+    }
+    arch.consoleWrite(buf[0..]);
+}
+
 fn panicImpl(msg: []const u8, _: ?usize) noreturn {
     arch.consoleWrite("KERNEL PANIC: ");
     arch.consoleWrite(msg);
+    const phase = @import("rtl/panic_context.zig").getPhase();
+    if (builtin.mode == .Debug and phase != 0) {
+        arch.consoleWrite(" [phase=0x");
+        writeHexU32ToConsole(phase);
+        arch.consoleWrite("]");
+    }
     arch.consoleWrite("\n");
     arch.halt();
 }
@@ -23,6 +43,8 @@ comptime {
         .mips64el => _ = @import("arch/mips64el/mod.zig"),
         else => {},
     }
+    _ = @import("mm/pool.zig");
+    _ = @import("mm/section.zig");
 }
 
 /// UEFI/汇编以 64 位寄存器传参；首参截断为 u32 供 Multiboot2 magic 比对（与 LoongArch handoff 习惯一致）。
@@ -187,6 +209,8 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     if (@import("build_options").enable_idt) {
         const idt = @import("arch/x86_64/idt.zig");
         idt.init();
+        const syscall_msr = @import("arch/x86_64/syscall_msr.zig");
+        syscall_msr.initSyscallInstructionPath();
         klog.info("IDT initialized (256 vectors, vector 128 = syscall)", .{});
 
         timer.init();
@@ -523,7 +547,9 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
     var last_draw_cy: i32 = mouse.getY();
     const desktop_extra_input_polls: u32 = if (builtin.target.cpu.arch == .loongarch64) 32 else 16;
 
+    const panic_ctx = @import("rtl/panic_context.zig");
     while (true) {
+        panic_ctx.setPhase(0x0001_0001);
         input_hub.pollAll();
         const nudge = arch.takeCursorNudge();
         if (nudge.dx != 0 or nudge.dy != 0) mouse.injectNudge(nudge.dx, nudge.dy);
@@ -547,8 +573,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
                     if (display.handleClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
                 }
                 if (cur_buttons & 0x01 == 0 and prev_buttons & 0x01 != 0) {
-                    display.handleMouseRelease();
-                    needs_ui_paint = true;
+                    if (display.handleMouseRelease()) needs_ui_paint = true;
                 }
                 if (cur_buttons & 0x02 != 0 and prev_buttons & 0x02 == 0) {
                     if (display.handleRightClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
@@ -573,10 +598,13 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
         const interpolating = mouse.isInterpolating();
         const startmenu_repaint = move_paint.needs_startmenu_repaint;
         const drag_repaint = move_paint.needs_drag_repaint;
+        const shell_geometry_repaint = move_paint.needs_shell_frame_repaint;
         const caption_chrome_only = move_paint.needs_caption_chrome_only;
         const cursor_dirty = pixel_moved or mouse.hasCursorMoved() or move_paint.cursor_shape_changed;
 
-        const need_paint = scene_dirty or cursor_dirty or caption_chrome_only or drag_repaint or startmenu_repaint or interpolating;
+        // `interpolating` 不可删：`interpolateStep` 在 `renderDesktopFrameEx` 内执行；仅靠 `pixel_moved` 会在插值中间帧漏绘。
+        // 全屏重绘仅在 `display.renderDesktopFrameEx` 中 `moveOnly` 失败时回退（壳层打开时优先光标快路径）。
+        const need_paint = scene_dirty or cursor_dirty or caption_chrome_only or drag_repaint or startmenu_repaint or shell_geometry_repaint or interpolating;
 
         mouse_debug.setEventsPoppedLastTick(pop_count);
 
@@ -593,7 +621,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
                     display.desktopFramebufferWidth(),
                 });
             }
-            display.renderDesktopFrameEx(scene_dirty, caption_chrome_only, drag_repaint, startmenu_repaint);
+            display.renderDesktopFrameEx(scene_dirty, caption_chrome_only, drag_repaint, startmenu_repaint, shell_geometry_repaint);
             if (bisect) {
                 klog.debug("%s: post renderDesktopFrameEx pre-present ticks=%u", .{
                     bisect_log_prefix,

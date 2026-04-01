@@ -364,6 +364,7 @@ pub fn build(b: *std.Build) void {
         if (enable_idt_opt) {
             kernel.addAssemblyFile(b.path("src/arch/x86_64/isr_common.s"));
             kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_entry.s"));
+            kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_lstar.s"));
         }
     } else if (mem.eql(u8, arch_opt, "aarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/aarch64/start.S"));

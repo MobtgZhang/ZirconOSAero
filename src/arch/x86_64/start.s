@@ -1,5 +1,5 @@
 # ZirconOS x86_64 Boot Trampoline
-# GRUB Multiboot2 enters in 32-bit protected mode.
+# ZBM (BIOS path) delivers Multiboot2 in 32-bit protected mode per spec; UEFI path uses the same header for discovery.
 # This code sets up long mode page tables and transitions to 64-bit kernel.
 
 .set KERNEL_CS64, 0x08

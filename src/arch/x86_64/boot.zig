@@ -1,5 +1,5 @@
 //! Multiboot2 header and boot info parsing for x86_64
-//! Reference: https://www.gnu.org/software/grub/manual/multiboot2/multiboot2.html
+//! Multiboot2 tag layout (public spec): https://www.gnu.org/software/grub/manual/multiboot2/multiboot2.html
 
 const mb2 = @import("../../boot/multiboot2_parse.zig");
 

@@ -24,6 +24,10 @@ test "handle table alloc increments ref_count and handle_count" {
 test "normalizeNtObjectPath strips NT prefixes" {
     try std.testing.expectEqualStrings("REGISTRY\\A", ob.normalizeNtObjectPath("\\??\\REGISTRY\\A"));
     try std.testing.expectEqualStrings("X", ob.normalizeNtObjectPath("\\DosDevices\\X"));
+    try std.testing.expectEqualStrings("Vol", ob.normalizeNtObjectPath("\\\\?\\Vol"));
+    try std.testing.expectEqualStrings("", ob.normalizeNtObjectPath(""));
+    // 先剥 `\??\` 后，剩余串若无前导 `\` 则不再匹配 `\DosDevices\`（与当前实现一致，便于回归）
+    try std.testing.expectEqualStrings("DosDevices\\Vol", ob.normalizeNtObjectPath("\\??\\DosDevices\\Vol"));
 }
 
 test "handle table lookup and checkAccess" {

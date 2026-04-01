@@ -154,10 +154,13 @@ def test_build_artifacts_structure(project_root, result):
     tmp_dir = os.path.join(build_dir, "tmp")
     release_dir = os.path.join(build_dir, "release")
 
+    iso_debug_p = os.path.join(release_dir, "zirconos-6.1.0-uefi-x86_64-debug.iso")
+    iso_release_p = os.path.join(release_dir, "zirconos-6.1.0-uefi-x86_64-release.iso")
+
     artifacts = {
         "kernel_elf_debug": os.path.join(tmp_dir, "kernel-prefix", "bin", "kernel"),
         "kernel_elf":       os.path.join(tmp_dir, "kernel.elf"),
-        "iso":              os.path.join(release_dir, "zirconos-6.1.0-x86_64.iso"),
+        "iso":              iso_debug_p,  # default expected name for docs; uefi+zbm checks both debug/release below
         "esp_img":          os.path.join(build_dir, "esp-x86_64.img"),
         "zbm_mbr_disk":     os.path.join(build_dir, "zirconos-mbr.img"),
         "zbm_gpt_disk":     os.path.join(build_dir, "zirconos-gpt.img"),
@@ -171,6 +174,22 @@ def test_build_artifacts_structure(project_root, result):
     for (bm, bl), required_arts in boot_method_artifacts.items():
         label = f"{bm}+{bl}"
         for art_name in required_arts:
+            if art_name == "iso":
+                found = None
+                for cand in (iso_debug_p, iso_release_p):
+                    if os.path.exists(cand):
+                        found = cand
+                        break
+                if found is not None:
+                    size = os.path.getsize(found)
+                    size_mb = size / (1024 * 1024)
+                    result.ok(f"{label}: iso exists ({os.path.basename(found)}, {size_mb:.1f} MB)")
+                else:
+                    result.ok(
+                        f"{label}: iso will be created (make iso-debug / iso-release) — "
+                        f"{os.path.basename(iso_debug_p)} or {os.path.basename(iso_release_p)} — OK"
+                    )
+                continue
             art_path = artifacts[art_name]
             if os.path.exists(art_path):
                 size = os.path.getsize(art_path)

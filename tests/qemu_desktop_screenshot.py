@@ -2,10 +2,10 @@
 """
 Headless QEMU + framebuffer screendump for ZirconOS desktop smoke test.
 
-Requires: qemu-system-x86_64, a built ISO (make iso), optional netcat (nc) for monitor.
+Requires: qemu-system-x86_64, a built ISO (make iso-debug), optional netcat (nc) for monitor.
 
 Usage:
-  ZIRCON_ISO=build/release/zirconos-1.0.0-x86_64.iso python3 tests/qemu_desktop_screenshot.py
+  ZIRCON_ISO=build/release/zirconos-6.1.0-uefi-x86_64-debug.iso python3 tests/qemu_desktop_screenshot.py
 
 The script boots the ISO with serial logged, waits for the desktop phase in serial output,
 then sends `screendump` to the QEMU monitor (if reachable) to produce a PPM file.
@@ -101,6 +101,20 @@ def main() -> int:
             return 1
         print("OK: serial indicates desktop render phase reached")
         print(f"  log: {log_path}")
+
+        try:
+            with open(log_path, "r", errors="replace") as f:
+                final_serial = f.read()
+        except OSError:
+            final_serial = ""
+        if "KERNEL PANIC" in final_serial:
+            print("FAIL: serial log contains KERNEL PANIC (regression smoke)")
+            print(f"  log: {log_path}")
+            return 1
+        if "integer overflow" in final_serial.lower():
+            print("FAIL: serial log mentions integer overflow panic")
+            print(f"  log: {log_path}")
+            return 1
 
         if mon_host is not None and mon_port is not None and args.ppm_out:
             time.sleep(1.0)

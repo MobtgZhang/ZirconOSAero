@@ -166,6 +166,13 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             break :blk ntResult(st);
         },
         ssdt.NtCreateFile => blk: {
+            const proc_f = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            var asp_f = proc_f.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (p3 == 0 or p4 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (!probe.probeUserMemory(&asp_f, p3, 64, false))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (!probe.probeUserMemory(&asp_f, p4, @sizeOf(ntdll.IO_STATUS_BLOCK), true))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
             const io = p4;
             const alloc_sz = userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
             const fa = userStackArg(frame, 1) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);

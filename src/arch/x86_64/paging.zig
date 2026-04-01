@@ -390,8 +390,9 @@ fn releasePdptAll(pdpt_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) voi
     free_frame(ctx, pdpt_phys);
 }
 
-/// 释放 PML4 **低半区**（索引 0..256）下整棵用户页表子树及所有叶帧；**不**触碰 256..512（内核典型映射）。
-/// 调用后须由调用方释放 `pml4_phys` 自身（若该页专属于进程）。
+/// 释放 PML4 **用户子树**（索引 **0..255**，即 NT/x86_64 典型布局下 canonical **低半区** 的 PML4 槽位）。
+/// 索引 **256..511** 保留给内核共享映射（与内核 `CR3` 可能共享中间页表物理页），此处**绝不**释放，避免误拆内核页表。
+/// 调用后须由调用方释放顶层 `pml4_phys` 页本身（若专属于该进程）。
 pub fn releaseUserHalfAddressSpace(pml4_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) void {
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
     var i: usize = 0;

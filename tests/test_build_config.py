@@ -187,7 +187,7 @@ def test_theme_directories(project_root, values, result):
 
 
 def test_zbm_iso_script(project_root, result):
-    """UEFI ISO helper (no GRUB) is present."""
+    """UEFI ISO helper script is present."""
     print("\n=== ZBM ISO Script ===")
     script = os.path.join(project_root, "scripts", "build", "mkiso-uefi-zbm.sh")
     if os.path.isfile(script):

@@ -2,7 +2,7 @@
 """
 ZirconOSAero x86-64 Boot Combination Tests
 
-Tests boot methods with ZBM only (no GRUB): MBR+ZBM, UEFI+ZBM.
+Tests boot methods with ZBM: MBR+ZBM, UEFI+ZBM.
 Verifies Makefile acceptance and expected artifact paths.
 
 Usage:
@@ -88,19 +88,19 @@ def test_makefile_targets(project_root, result):
             result.fail(f"{label}: make -n timed out")
 
     try:
-        proc_grub = subprocess.run(
-            ["make", "-n", "show-config", "ARCH=x86_64", "BOOT_METHOD=uefi", "BOOTLOADER=grub", "DESKTOP=aero"],
+        proc_bad_bl = subprocess.run(
+            ["make", "-n", "show-config", "ARCH=x86_64", "BOOT_METHOD=uefi", "BOOTLOADER=unsupported", "DESKTOP=aero"],
             capture_output=True, text=True, timeout=15,
             cwd=project_root,
         )
-        if proc_grub.returncode != 0:
-            result.ok("x86_64+grub: Makefile correctly rejects (ZBM-only)")
+        if proc_bad_bl.returncode != 0:
+            result.ok("x86_64+invalid BOOTLOADER: Makefile correctly rejects (ZBM-only)")
         else:
-            result.fail("x86_64+grub: Makefile should reject GRUB")
+            result.fail("x86_64+invalid BOOTLOADER: Makefile should reject non-zbm")
     except FileNotFoundError:
-        result.fail("grub rejection test: make not found")
+        result.fail("invalid BOOTLOADER rejection test: make not found")
 
-    # LoongArch64: BOOTLOADER=zbm only (no GRUB)
+    # LoongArch64: BOOTLOADER=zbm only
     try:
         proc_ok = subprocess.run(
             ["make", "-n", "show-config",
@@ -120,22 +120,22 @@ def test_makefile_targets(project_root, result):
     try:
         proc_bad = subprocess.run(
             ["make", "-n", "show-config",
-             "ARCH=loongarch64", "BOOT_METHOD=uefi", "BOOTLOADER=grub", "DESKTOP=aero"],
+             "ARCH=loongarch64", "BOOT_METHOD=uefi", "BOOTLOADER=unsupported", "DESKTOP=aero"],
             capture_output=True, text=True, timeout=15,
             cwd=project_root,
         )
         if proc_bad.returncode != 0:
-            result.ok("loongarch64+grub: Makefile correctly rejects (ZBM-only)")
+            result.ok("loongarch64+invalid BOOTLOADER: Makefile correctly rejects (ZBM-only)")
         else:
-            result.fail("loongarch64+grub: Makefile should reject GRUB")
+            result.fail("loongarch64+invalid BOOTLOADER: Makefile should reject non-zbm")
     except FileNotFoundError:
-        result.fail("loongarch64 grub test: make not found")
+        result.fail("loongarch64 invalid BOOTLOADER test: make not found")
     except subprocess.TimeoutExpired:
-        result.fail("loongarch64+grub: timed out")
+        result.fail("loongarch64+invalid BOOTLOADER: timed out")
 
 
 def test_zbm_iso_helper(project_root, result):
-    """UEFI ISO without GRUB."""
+    """UEFI ISO helper script (ZBM / embedded ESP)."""
     print("\n=== ZBM UEFI ISO helper ===")
     script = os.path.join(project_root, "scripts", "build", "mkiso-uefi-zbm.sh")
     if os.path.isfile(script):

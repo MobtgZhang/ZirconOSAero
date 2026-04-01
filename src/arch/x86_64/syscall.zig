@@ -224,6 +224,37 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             const st = ntdll.NtUnmapViewOfSection(p1, p2);
             break :blk ntResult(st);
         },
+        ssdt.NtQueryVirtualMemory => blk: {
+            const proc_qv = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            var asp_qv = proc_qv.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            const len: u32 = @truncate(userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION));
+            const retlen_ptr = userStackArg(frame, 1) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (p4 != 0 and len > 0 and !probe.probeUserMemory(&asp_qv, p4, len, true))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (!probe.probeUserMemory(&asp_qv, retlen_ptr, @sizeOf(u32), true))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const rl: *u32 = @ptrFromInt(retlen_ptr);
+            const buf: ?*anyopaque = if (p4 == 0) null else @ptrFromInt(p4);
+            const st = ntdll.NtQueryVirtualMemory(p1, p2, @truncate(p3), buf, len, rl);
+            break :blk ntResult(st);
+        },
+        ssdt.NtOpenProcess => blk: {
+            const proc_op = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            var asp_op = proc_op.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (p1 == 0 or p3 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (!probe.probeUserMemory(&asp_op, p1, @sizeOf(ntdll.HANDLE), true))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (!probe.probeUserMemory(&asp_op, p3, 64, false))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const client_id = userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (client_id != 0 and !probe.probeUserMemory(&asp_op, client_id, 16, false))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            var local: ntdll.HANDLE = 0;
+            const st = ntdll.NtOpenProcess(&local, @truncate(p2), @ptrFromInt(p3), if (client_id == 0) null else @ptrFromInt(client_id));
+            if (st != ntdll.STATUS_SUCCESS) break :blk ntResult(st);
+            @as(*volatile ntdll.HANDLE, @ptrFromInt(p1)).* = local;
+            break :blk 0;
+        },
         else => blk: {
             klog.warn("Unknown NT syscall idx 0x%x", .{idx});
             break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);

@@ -43,6 +43,10 @@ pub const NtCreateSection = 0x47;
 pub const NtMapViewOfSection = 0x48;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtUnmapViewOfSection = 0x2A;
+/// Ref: j00ru `nt-per-system.json` — Windows 7 SP1（与 NtCreatePort 0x9D 等同表）。
+pub const NtQueryVirtualMemory = 0x20;
+/// Ref: j00ru `nt-per-system.json` — Windows 7 SP1。
+pub const NtOpenProcess = 0x23;
 
 const std = @import("std");
 
@@ -57,4 +61,6 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtCreateSection == 0x47);
     try std.testing.expect(NtMapViewOfSection == 0x48);
     try std.testing.expect(NtQuerySystemInformation == 0x25);
+    try std.testing.expect(NtQueryVirtualMemory == 0x20);
+    try std.testing.expect(NtOpenProcess == 0x23);
 }

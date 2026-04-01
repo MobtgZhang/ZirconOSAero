@@ -29,7 +29,7 @@
 
 [![CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml/badge.svg)](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
 
-**CI 与本地复现**：`zig build test`（堆、SSDT、安全 DAC 主机测试）；`zig build install -Doptimize=ReleaseSafe -Darch=x86_64`；无头烟测 `bash scripts/ci-qemu-smoke.sh`（构建 ZBM MBR 盘、校验内核 ELF 内嵌横幅，并可选串口增强断言）。详见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
+**CI 与本地复现**：`zig build test`（堆、池、buddy、SSDT、对象句柄表、安全 DAC 等）；`zig build install -Doptimize=ReleaseSafe -Darch=x86_64`；无头烟测 `bash scripts/ci-qemu-smoke.sh`。**MVT 索引**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。详见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
 
 **推荐编译器版本**：与 CI 一致，当前为 **Zig 0.15.2**（见 `zig version` 与 workflow）。
 
@@ -48,7 +48,7 @@
 
 **开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
 
-**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。
+**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
 
 **实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
@@ -167,6 +167,10 @@ make help
 zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 ```
 
+## 完成度说明（与 [README.md](README.md) 英文版一致）
+
+矩阵中 **Done** 仅表示 QEMU/CI 烟测主路径可演示且与契约矩阵一致，**不表示**与商业 Windows 7 内核等价。须以契约矩阵、[MVT_NT61.md](docs/cn/MVT_NT61.md) 与 `zig build test` 为准。
+
 ## Phase 0–11 功能矩阵（继承上游能力）
 
 状态以代码与契约为准；**Partial / Stub** 非「全部完成」。
@@ -177,21 +181,21 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | UEFI 引导 | Done | UEFI 应用，Debug/Release，Phase 0–11 横幅 |
 | VGA | Done | 文本控制台 |
 | 串口 | Done | COM1 |
-| 物理帧分配器 | Done | 位图分配器 |
-| 分页 | Done | 四级页表，恒等映射 |
+| 物理帧分配器 | Partial | 位图 + mmap 过滤；伙伴连续页见 `phys_buddy.zig`（契约矩阵 §0） |
+| 分页 | Partial | 四级表、恒等映射；每进程 CR3/SMEP 见契约矩阵 |
 | 内核堆 | Partial | Bump + 空闲链表回收 + `mm/pool` 档位；完整池化见契约矩阵 |
-| Section 对象 | Stub | `NtCreateSection` / `NtMapViewOfSection` 占位（见 NT61_CONTRACT_MATRIX） |
+| Section 对象 | Partial | 匿名节 + `ntdll`/`section.zig`；syscall 分发节区 API（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)） |
 | IPC (LPC) | Partial | 队列、端口；连接/通信端口分离雏形、`section_view_handle` 占位 |
-| 系统调用 | Partial | `int 0x80` + `syscall`/`sysret`；NT 6.1 x64 SSDT 子集（Win7 SP1 索引参考；无 `0x0010_0000` 内部号）（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
+| 系统调用 | Partial | `int 0x80` + `syscall`/`sysret`；SSDT 子集；`NtQuerySystemInformation` 等对用户缓冲 `probe`（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
 | IDT/ISR | Done | 256 向量 |
 | 调度器 | Partial | 多优先级就绪队列；完整 NT 32 级与饥饿策略见契约矩阵 |
 | 定时器 | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
 | 同步 | Done | Event、mutex、semaphore、spinlock |
-| Object Manager | Done | 类型、句柄表、命名空间、可等待对象 |
-| Process Manager | Done | 进程/线程、Process Server |
+| Object Manager | Partial | 类型、句柄表、命名空间子集；主机测试 [zircon_host_ob_test.zig](src/zircon_host_ob_test.zig) |
+| Process Manager | Partial | 进程/线程、Process Server；CR3/隔离见契约矩阵 §0 |
 | Session Manager | Done | SMSS、会话、子系统注册 |
 | Security | Done | Token、SID、访问检查 |
-| I/O Manager | Done | 设备、驱动、IRP 分发 |
+| I/O Manager | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP；PCI 早期见 `acpi_pci_early.zig` |
 | VFS | Done | 挂载点 |
 | FAT32 | Done | `C:\` 上文件与目录 |
 | NTFS | Done | MFT，`D:\` 上文件与目录 |

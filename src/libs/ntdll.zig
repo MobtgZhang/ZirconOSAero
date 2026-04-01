@@ -3,6 +3,7 @@
 //! system information queries, RTL utilities, and debug support.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const klog = @import("../rtl/klog.zig");
 const process = @import("../ps/process.zig");
 const ob = @import("../ob/object.zig");
@@ -679,6 +680,17 @@ comptime {
     std.debug.assert(@sizeOf(SYSTEM_BASIC_INFO) == 64);
 }
 
+/// `SYSTEM_PROCESSOR_INFORMATION` 公开字段子集（架构/级别）；完整 WDK 结构更大，调用方须按 `ReturnLength` 扩展。
+pub const SYSTEM_PROCESSOR_INFORMATION_STUB = extern struct {
+    processor_architecture: u16 = 0,
+    processor_level: u16 = 0,
+    processor_revision: u16 = 0,
+    reserved: u16 = 0,
+};
+comptime {
+    std.debug.assert(@sizeOf(SYSTEM_PROCESSOR_INFORMATION_STUB) == 8);
+}
+
 pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u32) NTSTATUS {
     const osv = @import("../config/os_version.zig");
     switch (info_class) {
@@ -686,9 +698,30 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             const need = @sizeOf(SYSTEM_BASIC_INFO);
             return_length.* = need;
             if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
-            const sample = SYSTEM_BASIC_INFO{};
-            const src = std.mem.asBytes(&sample);
-            @memcpy(buffer[0..need], src);
+            var sample = SYSTEM_BASIC_INFO{};
+            if (builtin.cpu.arch == .x86_64) {
+                const madt = @import("../hal/x86_64/madt.zig");
+                const n = madt.logical_cpu_count;
+                sample.number_of_processors = @truncate(@min(n, 255));
+                sample.active_processors = n;
+            }
+            @memcpy(buffer[0..need], std.mem.asBytes(&sample));
+            return STATUS_SUCCESS;
+        },
+        SystemProcessorInformation => {
+            const need = @sizeOf(SYSTEM_PROCESSOR_INFORMATION_STUB);
+            return_length.* = need;
+            if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
+            var inf = SYSTEM_PROCESSOR_INFORMATION_STUB{
+                .processor_architecture = switch (builtin.cpu.arch) {
+                    .x86_64 => 9, // PROCESSOR_ARCHITECTURE_AMD64 (public winnt.h)
+                    else => 0,
+                },
+                .processor_level = 6,
+                .processor_revision = 0,
+                .reserved = 0,
+            };
+            @memcpy(buffer[0..need], std.mem.asBytes(&inf));
             return STATUS_SUCCESS;
         },
         SystemTimeOfDayInformation => {
@@ -696,7 +729,6 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             return STATUS_NOT_IMPLEMENTED;
         },
         SystemProcessInformation,
-        SystemProcessorInformation,
         SystemPerformanceInformation,
         => {
             return_length.* = 0;
@@ -729,7 +761,8 @@ pub fn NtOpenKey(key_handle: *HANDLE, desired_access: u32, object_attributes: ?*
     const attrs = object_attributes orelse return STATUS_INVALID_PARAMETER;
     const uname = attrs.object_name orelse return STATUS_INVALID_PARAMETER;
     if (uname.length == 0) return STATUS_OBJECT_NAME_NOT_FOUND;
-    const path = uname.buffer[0..uname.length];
+    const raw = uname.buffer[0..uname.length];
+    const path = ob.normalizeNtObjectPath(raw);
     const idx = registry.openKeyByNtPath(path) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     const hdr = registry.keyHeaderPtr(idx) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     const mask = ob.GENERIC_READ;

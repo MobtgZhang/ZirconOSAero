@@ -29,7 +29,7 @@ pub const Port = struct {
     name: [32]u8 = [_]u8{0} ** 32,
     name_len: usize = 0,
     connected_port: u32 = 0,
-    /// 大块消息 / 视图共享占位：将来绑定 Section 映射句柄（见 `mm/section.zig` 路线图）。
+    /// 与 `mm/vm.zig` `AddressSpace.section_view_*` 登记配套的 **用户态句柄/索引** 占位；`mapViewIntoProcess` 成功时由会话层写入，供 LPC 大块传输绑定。
     section_view_handle: u32 = 0,
 
     pub fn init(id: u32, owner_pid: u32) Port {

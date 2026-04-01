@@ -52,3 +52,6 @@ pub fn freeBytes() usize {
 pub fn totalBytes() usize {
     return HEAP_SIZE;
 }
+
+/// 非分页池子集（固定档位空闲链表）；见 `mm/pool.zig`。
+pub const pool = @import("pool.zig");

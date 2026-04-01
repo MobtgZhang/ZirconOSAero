@@ -3,7 +3,7 @@
 #
 # Requires: zig, qemu-system-* (per ARCH), OVMF/EDK2 firmware, xorriso, mtools, dosfstools
 
-.PHONY: all build build-release iso run run-debug \
+.PHONY: all build build-release iso iso-debug iso-release run run-debug \
 	build-zbm-uefi build-zbm-loongarch-uefi build-zbm-riscv64-uefi build-zbm-loongarch64-stub build-zbm-bios build-zbm-disk build-esp \
 	build-desktop build-desktop-all build-desktop-dll \
 	fetch-themes fetch-firmware fetch-gnu-efi fetch-gnu-efi-riscv64 fetch-loongarch-boot-efi fonts resources \
@@ -37,6 +37,8 @@ ENABLE_IDT   ?= true
 DEBUG_LOG    ?= true
 # 鼠标诊断：串口/控制台 [MOUSEDBG] + 底栏显示 ptr x,y（不依赖 DEBUG_LOG）
 MOUSE_DEBUG  ?= false
+# 桌面合成 bisect：zig build -Ddesktop_bisect=true 等效；panic 行尾 [phase=0x…] 见 rtl/panic_context.zig
+DESKTOP_BISECT ?= false
 # Cursor 调试会话：内核经串口输出 AGENT_LOG:{...}，make run 2>&1 | bash scripts/agent-ingest-serial.sh
 AGENT_NDJSON ?= false
 # x86_64：枚举 AMD 1002 显示类 PCI、映射 MMIO；无硬件时静默回退 GOP。真机 Intel 可另开 INTEL_IGPU
@@ -106,7 +108,9 @@ SYNC_RESOLUTION_CMD = if [ "$(origin RESOLUTION)" = "command line" ] || [ "$(ori
 
 KERNEL_ELF_DEBUG := $(TMP_DIR)/kernel-prefix/bin/kernel
 KERNEL_ELF       := $(TMP_DIR)/kernel.elf
-ISO              := $(RELEASE_DIR)/zirconos-$(VERSION)-$(ARCH).iso
+# UEFI 可启动 ISO：debug = 串口 + 屏幕 klog；release = ReleaseSafe + 无屏幕文本日志（便于后续开机动画）
+ISO_DEBUG        := $(RELEASE_DIR)/zirconos-$(VERSION)-uefi-$(ARCH)-debug.iso
+ISO_RELEASE      := $(RELEASE_DIR)/zirconos-$(VERSION)-uefi-$(ARCH)-release.iso
 TEST_RESULTS_DIR := $(BUILD_DIR)/test-results
 
 # ── Firmware Paths (EDK2 nightly: https://retrage.github.io/edk2-nightly/) ──
@@ -189,6 +193,31 @@ QEMU_GTK_EXTRA ?= ,grab-on-hover=on
 QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
 	-display gtk,zoom-to-fit=on,show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
 	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci
+
+# x86_64 UEFI（OVMF）：与仓库根目录 run-iso.sh 一致 — q35、kvm（有 /dev/kvm）否则 tcg、-cpu host/max、smp、双 pflash、ESP 用 virtio-blk。
+# 勿在 UEFI 路径复用 QEMU_COMMON_X86 的 -machine pc：OVMF 在 QEMU 上通常与 q35 组合测试；裸 -drive file=esp 在 pc/q35 上总线语义易混。
+# 覆盖：QEMU_X86_UEFI_MACHINE、QEMU_X86_UEFI_ACCEL、QEMU_X86_UEFI_CPU、QEMU_SMP_UEFI；关网：QEMU_X86_UEFI_NET=0
+QEMU_X86_UEFI_MACHINE ?= q35
+ifeq ($(shell test -r /dev/kvm && echo yes),yes)
+QEMU_X86_UEFI_ACCEL ?= kvm
+QEMU_X86_UEFI_CPU ?= -cpu host
+else
+QEMU_X86_UEFI_ACCEL ?= tcg
+QEMU_X86_UEFI_CPU ?= -cpu max
+endif
+QEMU_SMP_UEFI ?= 2
+QEMU_X86_UEFI_NET ?= 1
+ifeq ($(QEMU_X86_UEFI_NET),1)
+QEMU_X86_UEFI_NETDEV := -netdev user,id=net0 -device virtio-net-pci,netdev=net0
+else
+QEMU_X86_UEFI_NETDEV :=
+endif
+QEMU_COMMON_X86_UEFI := -machine $(QEMU_X86_UEFI_MACHINE),accel=$(QEMU_X86_UEFI_ACCEL) \
+	$(QEMU_X86_UEFI_CPU) -smp $(QEMU_SMP_UEFI) -m $(QEMU_MEM) \
+	-serial stdio -no-reboot -no-shutdown \
+	-display gtk,zoom-to-fit=on,show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
+	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci \
+	$(QEMU_X86_UEFI_NETDEV)
 
 # highmem-ecam=off：PCIe ECAM 固定在 0x3f00_0000，与内核 pcie.zig 一致（否则默认 ECAM 可落在 >4GiB）
 QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
@@ -306,6 +335,7 @@ show-config:
 	@echo "║  ENABLE_IDT   = $(ENABLE_IDT)"
 	@echo "║  DEBUG_LOG    = $(DEBUG_LOG)"
 	@if [ "$(ARCH)" = "x86_64" ]; then \
+		echo "║  UEFI QEMU  = $(QEMU_X86_UEFI_MACHINE) accel=$(QEMU_X86_UEFI_ACCEL) smp=$(QEMU_SMP_UEFI) net=$(QEMU_X86_UEFI_NET)  (对齐 run-iso.sh; 关网: QEMU_X86_UEFI_NET=0)"; \
 		echo "║  AMD_IGPU   = $(AMD_IGPU)  (false=skip AMD PCI/MMIO probe)"; \
 		echo "║  AMD_IGPU_DEFER_PROBE = $(AMD_IGPU_DEFER_PROBE)  (true=probe after GOP resolve)"; \
 		echo "║  AMD_KMS_EXPERIMENTAL = $(AMD_KMS_EXPERIMENTAL)"; \
@@ -385,7 +415,8 @@ help:
 	@echo "  make build-desktop          Build desktop theme (EXE + LIB + DLL)"
 	@echo "  make build-desktop-all      Build all desktop themes"
 	@echo "  make build-desktop-dll      Build desktop theme DLL only"
-	@echo "  make iso                    Build UEFI bootable ISO (ZBM, xorriso; no GRUB)"
+	@echo "  make iso / iso-debug        UEFI ISO (Debug + -Ddebug=true): 串口与屏幕均显示 klog → zirconos-$(VERSION)-uefi-x86_64-debug.iso"
+	@echo "  make iso-release            UEFI ISO (ReleaseSafe + -Ddebug=false): 屏幕不刷文本日志 → …-release.iso（后续可接 logo 动画）"
 	@echo "  make build-zbm-uefi        Build ZBM UEFI application"
 	@echo "  make build-zbm-bios        Build ZBM BIOS components"
 	@echo "  make build-zbm-disk        Build ZBM bootable disk images"
@@ -406,7 +437,7 @@ help:
 	@echo "Override examples:"
 	@echo "  make DESKTOP=aero                        Aero desktop (default)"
 	@echo "  make BOOT_METHOD=mbr BOOTLOADER=zbm      BIOS/MBR + ZBM (raw disk)"
-	@echo "  make BOOT_METHOD=uefi BOOTLOADER=zbm     UEFI + ZBM (ESP)"
+	@echo "  make BOOT_METHOD=uefi BOOTLOADER=zbm     UEFI + ZBM (ESP)：QEMU 为 q35+OVMF pflash+virtio-blk ESP，与 run-iso.sh 固件方式一致"
 	@echo "  make DESKTOP=none                        Text/CMD mode"
 	@echo "  make AMD_IGPU=false MOUSE_DEBUG=true     对照指针：排除 AMD 探测 + VirtIO 串口跟踪"
 	@echo "  make INTEL_IGPU=false                    x86：关闭 Intel 8086 显示 PCI 探测（默认与 AMD 并存，解析链 Intel 先于 AMD）"
@@ -468,6 +499,7 @@ build: sync-resolution
 		-Dloongson_igpu_defer_probe=$(LOONGSON_IGPU_DEFER_PROBE) \
 		-Dloongson_kms_experimental=$(LOONGSON_KMS_EXPERIMENTAL) \
 		-Ddesktop_idle_spin=$(DESKTOP_IDLE_SPIN) \
+		-Ddesktop_bisect=$(DESKTOP_BISECT) \
 		-Ddefault_desktop=$(DESKTOP) \
 		--cache-dir $(TMP_DIR)/zig-cache \
 		--prefix $(TMP_DIR)/kernel-prefix
@@ -538,6 +570,7 @@ else
 		-Doptimize=$(OPTIMIZE) \
 		-Darch=$(ARCH) \
 		-Ddesktop=$(DESKTOP) \
+		-Ddebug=$(DEBUG_LOG) \
 		--cache-dir $(UEFI_CACHE) \
 		--prefix $(UEFI_PREFIX)
 	@echo "[ZirconOS] UEFI app: $(UEFI_EFI)"
@@ -682,18 +715,40 @@ endif
 
 # ══════════════════════════════════════════════════════
 #  ISO (UEFI only — embedded FAT ESP + xorriso; no GRUB)
+#  iso-debug：内核/ ZBM -Ddebug=true → klog 走串口 + 帧缓冲/VGA（屏幕可见日志）
+#  iso-release：ReleaseSafe + -Ddebug=false → 屏幕不输出 klog 文本（串口仍为 ERR 及以上）；便于后续全屏 logo
+#  VirtualBox：系统 → 主板 → 勾选「启用 EFI」；存储 → 光驱挂载本 ISO。
 # ══════════════════════════════════════════════════════
 
-iso: build
+iso: iso-debug
+
+iso-debug:
 ifneq ($(ARCH),x86_64)
-	$(error iso target is implemented for ARCH=x86_64 UEFI ISO only; use build-esp + QEMU for $(ARCH))
+	$(error iso-debug is for ARCH=x86_64 only; use build-esp + QEMU for $(ARCH))
 endif
-	@echo "[ZirconOSAero] Building UEFI ISO (ZBM, desktop=$(DESKTOP))..."
-	@$(MAKE) build-zbm-uefi
+	@command -v xorriso >/dev/null 2>&1 || { echo "[ZirconOSAero] xorriso required (e.g. apt install xorriso)" >&2; exit 1; }
+	@echo "[ZirconOSAero] UEFI ISO (DEBUG) — arch=$(ARCH) desktop=$(DESKTOP) → $(notdir $(ISO_DEBUG))"
+	@$(MAKE) build OPTIMIZE=Debug DEBUG_LOG=true
+	@$(MAKE) build-zbm-uefi OPTIMIZE=Debug DEBUG_LOG=true DESKTOP=$(DESKTOP)
 	@test -f "$(UEFI_EFI)" || { echo "[ZirconOSAero] missing $(UEFI_EFI) (zig build uefi failed?)" >&2; exit 1; }
 	@mkdir -p $(RELEASE_DIR)
-	bash $(ROOT_DIR)/scripts/build/mkiso-uefi-zbm.sh "$(ISO)" "$(KERNEL_ELF)" "$(UEFI_EFI)"
-	@echo "[ZirconOSAero] ISO: $(ISO)"
+	bash $(ROOT_DIR)/scripts/build/mkiso-uefi-zbm.sh "$(ISO_DEBUG)" "$(KERNEL_ELF)" "$(UEFI_EFI)" "$(ARCH)" "$(VERSION)" "debug"
+	@echo "[ZirconOSAero] ISO (debug): $(ISO_DEBUG)"
+	@echo "[ZirconOSAero] VirtualBox: enable EFI; attach this ISO as optical drive."
+
+iso-release:
+ifneq ($(ARCH),x86_64)
+	$(error iso-release is for ARCH=x86_64 only; use build-esp + QEMU for $(ARCH))
+endif
+	@command -v xorriso >/dev/null 2>&1 || { echo "[ZirconOSAero] xorriso required (e.g. apt install xorriso)" >&2; exit 1; }
+	@echo "[ZirconOSAero] UEFI ISO (RELEASE) — arch=$(ARCH) desktop=$(DESKTOP) → $(notdir $(ISO_RELEASE))"
+	@$(MAKE) build OPTIMIZE=ReleaseSafe DEBUG_LOG=false
+	@$(MAKE) build-zbm-uefi OPTIMIZE=ReleaseSafe DEBUG_LOG=false DESKTOP=$(DESKTOP)
+	@test -f "$(UEFI_EFI)" || { echo "[ZirconOSAero] missing $(UEFI_EFI) (zig build uefi failed?)" >&2; exit 1; }
+	@mkdir -p $(RELEASE_DIR)
+	bash $(ROOT_DIR)/scripts/build/mkiso-uefi-zbm.sh "$(ISO_RELEASE)" "$(KERNEL_ELF)" "$(UEFI_EFI)" "$(ARCH)" "$(VERSION)" "release"
+	@echo "[ZirconOSAero] ISO (release): $(ISO_RELEASE)"
+	@echo "[ZirconOSAero] VirtualBox: enable EFI; attach this ISO as optical drive."
 
 # ══════════════════════════════════════════════════════
 #  run: unified entry point driven by build.conf
@@ -723,14 +778,15 @@ _run-zbm-bios: build-zbm-disk
 
 # ── ZBM + UEFI ──
 _run-zbm-uefi: build-esp
-	@echo "[ZirconOS] UEFI + ZBM → $(DESKTOP) Desktop ($(QEMU_MEM))..."
+	@echo "[ZirconOS] UEFI + ZBM ($(QEMU_X86_UEFI_MACHINE)+OVMF, virtio ESP) → $(DESKTOP) ($(QEMU_MEM))..."
 	@mkdir -p $(TMP_DIR)
 	@cp -f $(OVMF_VARS) $(TMP_DIR)/OVMF_VARS.fd
 	qemu-system-x86_64 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=$(TMP_DIR)/OVMF_VARS.fd \
-		-drive format=raw,file=$(ESP_IMG) \
-		$(QEMU_COMMON_X86)
+		-drive if=none,id=zircon-esp0,file=$(ESP_IMG),format=raw \
+		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
+		$(QEMU_COMMON_X86_UEFI)
 
 # ── Debug mode (GDB) — ZBM MBR disk (same kernel path as build-zbm-disk) ──
 run-debug: build-zbm-disk

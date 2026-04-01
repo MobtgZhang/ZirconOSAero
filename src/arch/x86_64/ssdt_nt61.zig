@@ -7,6 +7,7 @@
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 // Ref: 公开 syscall 枚举（如社区维护的 NT 构建版本表 j00ru/windows-syscalls）；本文件仅收录本内核已实现或桩实现的服务号。
+// Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K7（扩展须双端 ntdll/syscall + probe）。
 
 //! x64 `syscall` 调用约定（与 AMD64 长模式一致）：`RAX`=下表索引；第 1 参在 **`R10`**（因 `RCX` 存返回 RIP）；
 //! 第 2–4 参为 `RDX`、`R8`、`R9`；更多参数在**用户栈**上（相对于 SYSCALL 时 `RSP`，第 5 参常为 `+0x28`）。
@@ -55,4 +56,5 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtRequestWaitReplyPort == 0x1F);
     try std.testing.expect(NtCreateSection == 0x47);
     try std.testing.expect(NtMapViewOfSection == 0x48);
+    try std.testing.expect(NtQuerySystemInformation == 0x25);
 }

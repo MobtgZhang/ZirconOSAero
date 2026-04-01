@@ -23,6 +23,10 @@
 | ReactOS 目录/模块说明 | [`src/registry/registry.zig`](src/registry/registry.zig)、[`src/drivers/video/vga.zig`](src/drivers/video/vga.zig)、[`src/drivers/video/hdmi.zig`](src/drivers/video/hdmi.zig)、[`src/drivers/mod.zig`](src/drivers/mod.zig)、[`src/desktop/aero/src/root.zig`](src/desktop/aero/src/root.zig) 等 |
 | Microsoft Learn / WDM 概念 | [`docs/cn/DesktopManagerSpec.md`](docs/cn/DesktopManagerSpec.md)、部分显示栈注释 |
 
+## LGPL-2.1 与 Win32 兼容层（分发备忘）
+
+本仓库许可证为 **LGPL-2.1**（见根目录 `COPYING`）时：若以 **动态链接** 方式向第三方提供与 ntdll/kernel32 同类的兼容库，LGPL 可能对 **修改后的库本身** 及 **链接机制** 提出源码可得性等要求；**不构成法律意见**。若项目目标包含与闭源应用「随意静态链接」并存，建议维护者另行评估 **许可证策略**（如 LGPL 例外、双许可或独立用户态仓库），并在发行说明中写明链接方式。
+
 ## 合规自检（维护者）
 
 1. **禁止**：粘贴 Windows 泄漏源码、未授权 SDK 片段、对闭源二进制反汇编后「抄写」实现。  

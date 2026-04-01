@@ -27,6 +27,10 @@
 
 **中文说明**：[README_cn.md](README_cn.md)
 
+[![CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml/badge.svg)](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
+
+**CI 与本地复现**：`zig build test`（堆、SSDT、安全 DAC 主机测试）；`zig build install -Doptimize=ReleaseSafe -Darch=x86_64`；无头烟测 `bash scripts/ci-qemu-smoke.sh`（构建 ZBM MBR 盘、校验内核 ELF 内嵌横幅，并可选串口增强断言）。详见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
+
 ## Design
 
 - **NT-style hybrid microkernel**: scheduling, virtual memory, IPC, interrupts, and syscalls in the kernel
@@ -36,7 +40,7 @@
 - **Win32 execution engine**: PE loading, DLL binding, process creation, API dispatch
 - **Graphics subsystem**: user32 (windows/messages) and gdi32 (drawing/fonts/bitmaps)
 - **WOW64**: PE32 loading, 32→64 syscall thunking, 32-bit PEB/TEB
-- **Dual shell**: CMD and PowerShell-style shells
+- **Dual shell**: CMD and **ZirconShell** (PowerShell-style cmdlet subset, not compatible with Microsoft PowerShell)
 - **Dual filesystem**: FAT32 (system volume) and NTFS (data volume)
 - **Multi-architecture**: x86_64 (primary), aarch64, loongarch64, riscv64, mips64el
 
@@ -196,7 +200,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | gdi32 | Partial | DC/原语/字体/位图子集；分阶段见 `gdi32.zig` 头注释与契约矩阵 |
 | Console | Done | Console runtime |
 | CMD | Done | dir, cd, set, ver, systeminfo, tasklist, … |
-| PowerShell | Done | cmdlet-style commands |
+| ZirconShell (PowerShell-style) | Partial | cmdlet 子集；非 Microsoft PowerShell / CLR |
 | csrss | Partial | Win32 server, stations, desktops, GUI dispatch |
 | Exec engine | Partial | PE load, DLL bind, lifecycle |
 | WOW64 | Partial | PE32, thunk；32→64 服务号须对齐 `ssdt_nt61.zig`（与旧 `SYS_*` 已分离）— 见 `wow64.zig` |

@@ -36,7 +36,7 @@
 - **Win32 应用执行引擎**：PE 加载 + DLL 绑定 + 进程创建 + API dispatch
 - **图形子系统**：user32 (窗口/消息) + gdi32 (绘图/字体/位图)
 - **WOW64 兼容层**：PE32 加载 + 32→64 位 syscall thunking + 32 位 PEB/TEB
-- **双 Shell 环境**：CMD 命令提示符 + PowerShell 高级 Shell
+- **双 Shell 环境**：CMD 命令提示符 + **ZirconShell**（PowerShell 风格 cmdlet 子集，非 Microsoft PowerShell）
 - **双文件系统**：FAT32 (系统分区) + NTFS (数据分区)
 - **多架构支持**：x86_64（主要）、aarch64、loongarch64、riscv64、mips64el
 
@@ -95,7 +95,7 @@ ZirconOS/
 │           ├── gdi32.zig      图形设备接口 API
 │           ├── console.zig    控制台运行时
 │           ├── cmd.zig        CMD 命令提示符
-│           ├── powershell.zig PowerShell
+│           ├── powershell.zig ZirconShell（PowerShell 风格）
 │           └── wow64.zig      WOW64 32位兼容层
 ├── src/desktop/           # 各主题 Zig 工程；每主题含 `resources/`（壁纸/图标等）
 ├── src/fonts/             # 全主题共享开源字体（make fonts / scripts/fonts/fetch-fonts.sh）
@@ -191,7 +191,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | kernel32 | 部分 | Win32 子集 |
 | user32 | 部分 | NC HitTest、DWM 广播子集 |
 | gdi32 | 部分 | 区域/路径/字体分阶段 |
-| Console / CMD / PowerShell | 完成 | 见各模块 |
+| Console / CMD / ZirconShell | 部分 | cmdlet 子集；见契约矩阵 |
 | csrss / Exec | 部分 | 子系统服务器与执行引擎子集 |
 | WOW64 | 部分 | 32→64 thunk 与 `ssdt_nt61` / SysWOW64 真实表仍不对齐 — [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md) |
 | 注册表 | 部分 | 内存树 + `Mouse`/`Desktop`/`DWM`/`Memory Management` 等；RegF **计划** |
@@ -210,7 +210,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 - **Phase 5** ✅ IPC + System Services (SMSS/LPC)
 - **Phase 6** ✅ I/O + File System (FAT32/NTFS) + Driver
 - **Phase 7** ✅ Loader (PE32/PE32+/ELF, DLL管理, 导入解析, 重定位)
-- **Phase 8** ✅ Native Userland (ntdll/kernel32 完整API/CMD/PowerShell)
+- **Phase 8** ✅ Native Userland (ntdll/kernel32 子集 / CMD / ZirconShell)
 - **Phase 9** ✅ Win32 Subsystem (csrss/exec引擎/应用执行/DLL绑定)
 - **Phase 10** ✅ Graphical Subsystem (user32窗口管理/gdi32绘图/消息队列/GUI分发)
 - **Phase 11** ✅ WOW64 (PE32加载/syscall thunking/32位PEB-TEB/兼容性测试)

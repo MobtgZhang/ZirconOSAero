@@ -21,6 +21,11 @@ test "handle table alloc increments ref_count and handle_count" {
     try std.testing.expectEqual(@as(u32, 0), hdr.handle_count);
 }
 
+test "normalizeNtObjectPath strips NT prefixes" {
+    try std.testing.expectEqualStrings("REGISTRY\\A", ob.normalizeNtObjectPath("\\??\\REGISTRY\\A"));
+    try std.testing.expectEqualStrings("X", ob.normalizeNtObjectPath("\\DosDevices\\X"));
+}
+
 test "handle table lookup and checkAccess" {
     var table = ob.HandleTable.init(99);
     var hdr = ob.ObjectHeader{ .obj_type = .mutex, .ref_count = 0, .handle_count = 0 };

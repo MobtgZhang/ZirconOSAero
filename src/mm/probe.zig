@@ -13,6 +13,16 @@ const paging = arch.impl.paging;
 const vm = @import("vm.zig");
 
 /// 校验 `[va, va+len)` 是否落在用户 canonical 区且每页已映射；`writable` 时检查 PTE/PDE 可写位。
+/// 等价于公开文档中 **ProbeForRead** 子集：仅校验映射与 U/S，不修改页状态。
+pub fn probeForRead(space: *vm.AddressSpace, va: u64, len: u64) bool {
+    return probeUserMemory(space, va, len, false);
+}
+
+/// 等价于 **ProbeForWrite** 子集：要求 PTE 可写（若架构提供 `isPageWritable`）。
+pub fn probeForWrite(space: *vm.AddressSpace, va: u64, len: u64) bool {
+    return probeUserMemory(space, va, len, true);
+}
+
 pub fn probeUserMemory(space: *vm.AddressSpace, va: u64, len: u64, writable: bool) bool {
     if (len == 0) return true;
     if (va +% len < va) return false;

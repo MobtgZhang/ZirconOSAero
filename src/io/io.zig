@@ -48,6 +48,11 @@ pub const Irp = struct {
     }
 };
 
+/// 与 WDK 中 `IoCompleteRequest` 公开语义对齐的最小子集：写回状态与传输字节数（无 IoReleaseCancelSpinLock 等）。
+pub fn IoCompleteRequest(irp: *Irp, status: IoStatus, transferred: usize) void {
+    irp.complete(status, transferred);
+}
+
 pub const MAX_DEVICES: usize = 32;
 
 pub const DeviceType = enum(u32) {

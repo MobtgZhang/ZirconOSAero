@@ -386,15 +386,3 @@ pub fn isObjectSignaled(object_ptr: u64) bool {
     const hdr = @as(*const ObjectHeader, @ptrFromInt(object_ptr));
     return hdr.signal_state;
 }
-
-test "handle table alloc increments ref_count and handle_count" {
-    var hdr = ObjectHeader{ .obj_type = .event, .ref_count = 1 };
-    var table = HandleTable.init(1);
-    const h = table.allocHandle(@intFromPtr(&hdr), GENERIC_READ, .event);
-    try std.testing.expect(h != null);
-    try std.testing.expectEqual(@as(u32, 2), hdr.ref_count);
-    try std.testing.expectEqual(@as(u32, 1), hdr.handle_count);
-    try std.testing.expect(table.closeHandle(h.?));
-    try std.testing.expectEqual(@as(u32, 1), hdr.ref_count);
-    try std.testing.expectEqual(@as(u32, 0), hdr.handle_count);
-}

@@ -157,6 +157,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const mitigations = @import("hal/x86_64/mitigations.zig");
     mitigations.enableSmepIfAvailable();
     klog.info("x86_64: SMEP set when CPUID leaf 7 reports support", .{});
+    klog.info("x86_64: SMAP available via mitigations.enableSmapIfAvailable() after user-page access audit (stac/clac)", .{});
 
     const stack_top_addr = @intFromPtr(&stack_top);
     const kernel_end = ((stack_top_addr + (4 * 1024 * 1024) - 1) / (4 * 1024 * 1024)) * (4 * 1024 * 1024);

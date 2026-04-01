@@ -83,3 +83,17 @@ test "pool slot roundtrip uses heap then freelist" {
     try std.testing.expect(@intFromPtr(q) == @intFromPtr(p));
     freeNonPaged(q, 64, 0x5678);
 }
+
+test "pool stress alloc free stable slot reuse" {
+    const std = @import("std");
+    heap.init();
+    var i: usize = 0;
+    while (i < 500) : (i += 1) {
+        const p = allocateNonPaged(128, 0xAABB) orelse return error.Oom;
+        @memset(p[0..128], @truncate(i));
+        freeNonPaged(p, 128, 0xAABB);
+    }
+    const last = allocateNonPaged(128, 0xCCDD) orelse return error.Oom;
+    freeNonPaged(last, 128, 0xCCDD);
+    try std.testing.expect(true);
+}

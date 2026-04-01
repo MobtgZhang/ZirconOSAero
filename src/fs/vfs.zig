@@ -325,35 +325,34 @@ pub fn dispatchFileObjectIrp(file: *FileObject, irp: *io.Irp) io.IoStatus {
     switch (irp.major_function) {
         .read => {
             if (irp.buffer_ptr == 0 or irp.buffer_size == 0) {
-                irp.status = .invalid_device;
+                io.IoCompleteRequest(irp, .invalid_device, 0);
                 return irp.status;
             }
             const buf: [*]u8 = @ptrFromInt(irp.buffer_ptr);
             const rr = read(file, buf[0..irp.buffer_size]);
-            irp.bytes_transferred = rr.bytes_read;
-            irp.status = fileStatusToIoStatus(rr.status);
+            const st = fileStatusToIoStatus(rr.status);
+            io.IoCompleteRequest(irp, st, rr.bytes_read);
             return irp.status;
         },
         .write => {
             if (irp.buffer_ptr == 0) {
-                irp.status = .invalid_device;
+                io.IoCompleteRequest(irp, .invalid_device, 0);
                 return irp.status;
             }
             const buf: [*]const u8 = @ptrFromInt(irp.buffer_ptr);
             const wr = write(file, buf[0..irp.buffer_size]);
-            irp.bytes_transferred = wr.bytes_written;
-            irp.status = fileStatusToIoStatus(wr.status);
+            const st = fileStatusToIoStatus(wr.status);
+            io.IoCompleteRequest(irp, st, wr.bytes_written);
             return irp.status;
         },
         .close => {
             _ = close(file);
-            irp.bytes_transferred = 0;
-            irp.status = .success;
-            return .success;
+            io.IoCompleteRequest(irp, .success, 0);
+            return irp.status;
         },
         else => {
-            irp.status = .not_implemented;
-            return .not_implemented;
+            io.IoCompleteRequest(irp, .not_implemented, 0);
+            return irp.status;
         },
     }
 }

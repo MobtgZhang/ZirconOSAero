@@ -86,7 +86,7 @@ ifeq ($(filter $(BOOT_METHOD),$(VALID_BOOT_METHODS)),)
 $(error Invalid BOOT_METHOD='$(BOOT_METHOD)'. Valid: $(VALID_BOOT_METHODS))
 endif
 
-# Bootloader: ZBM only (no GRUB in this tree)
+# Bootloader: ZBM only
 VALID_BOOTLOADERS := zbm
 ifeq ($(filter $(BOOTLOADER),$(VALID_BOOTLOADERS)),)
 $(error Invalid BOOTLOADER='$(BOOTLOADER)'. This project uses ZBM only: zbm)
@@ -724,7 +724,7 @@ endif
 	@echo "[ZirconOSAero] ESP image: $(ESP_IMG)"
 
 # ══════════════════════════════════════════════════════
-#  ISO (UEFI only — embedded FAT ESP + xorriso; no GRUB)
+#  ISO (UEFI only — embedded FAT ESP + xorriso)
 #  iso-debug：内核/ ZBM -Ddebug=true → klog 走串口 + 帧缓冲/VGA（屏幕可见日志）
 #  iso-release：ReleaseSafe + -Ddebug=false → 屏幕不输出 klog 文本（串口仍为 ERR 及以上）；便于后续全屏 logo
 #  VirtualBox：系统 → 主板 → 勾选「启用 EFI」；存储 → 光驱挂载本 ISO。

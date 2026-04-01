@@ -441,6 +441,26 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_tests = b.addRunArtifact(ssdt_tests);
 
+    const ntdll_syscall_stub_mod = b.createModule(.{
+        .root_source_file = b.path("src/sdk/ntdll_syscall_win64.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const ssdt_stub_parity_mod = b.createModule(.{
+        .root_source_file = b.path("tests/ssdt_stub_parity.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "ssdt", .module = ssdt_test_mod },
+            .{ .name = "stub", .module = ntdll_syscall_stub_mod },
+        },
+    });
+    const ssdt_stub_parity_tests = b.addTest(.{
+        .root_module = ssdt_stub_parity_mod,
+        .name = "ssdt_stub_parity",
+    });
+    const run_ssdt_stub_parity_tests = b.addRunArtifact(ssdt_stub_parity_tests);
+
     const se_token_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/se_token.zig"),
         .target = b.graph.host,
@@ -573,12 +593,50 @@ pub fn build(b: *std.Build) void {
     });
     const run_fs_vfs_constants_tests = b.addRunArtifact(fs_vfs_constants_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, SSDT, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host)");
+    const sched_policy_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/scheduler_policy_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const sched_policy_tests = b.addTest(.{
+        .root_module = sched_policy_host_mod,
+        .name = "scheduler_policy_host",
+    });
+    const run_sched_policy_tests = b.addRunArtifact(sched_policy_tests);
+
+    const wow64_ssdt_x86_mod = b.createModule(.{
+        .root_source_file = b.path("src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const wow64_ssdt_x86_tests = b.addTest(.{
+        .root_module = wow64_ssdt_x86_mod,
+        .name = "wow64_ssdt_x86",
+    });
+    const run_wow64_ssdt_x86_tests = b.addRunArtifact(wow64_ssdt_x86_tests);
+
+    const ssdt_x64_x86_namespace_mod = b.createModule(.{
+        .root_source_file = b.path("tests/ssdt_x64_x86_namespace.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "ssdt_x64", .module = ssdt_test_mod },
+            .{ .name = "ssdt_x86", .module = wow64_ssdt_x86_mod },
+        },
+    });
+    const ssdt_x64_x86_namespace_tests = b.addTest(.{
+        .root_module = ssdt_x64_x86_namespace_mod,
+        .name = "ssdt_x64_x86_namespace",
+    });
+    const run_ssdt_x64_x86_namespace_tests = b.addRunArtifact(ssdt_x64_x86_namespace_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, scheduler_policy_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
     test_step.dependOn(&run_slab_tests.step);
     test_step.dependOn(&run_ssdt_tests.step);
+    test_step.dependOn(&run_ssdt_stub_parity_tests.step);
     test_step.dependOn(&run_se_token_tests.step);
     test_step.dependOn(&run_smp_atomic_tests.step);
     test_step.dependOn(&run_wow64_types_tests.step);
@@ -591,6 +649,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mdl_tests.step);
     test_step.dependOn(&run_pci_bind_tests.step);
     test_step.dependOn(&run_fs_vfs_constants_tests.step);
+    test_step.dependOn(&run_sched_policy_tests.step);
+    test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
+    test_step.dependOn(&run_ssdt_x64_x86_namespace_tests.step);
 
     buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
     buildZbm(b, cpu_arch, optimize, debug_mode);

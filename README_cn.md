@@ -1,6 +1,6 @@
 # ZirconOSAero（NT 6.1 目标）
 
-**ZirconOSAero** 以 **NT 6.1（Windows 7）** ABI/体验为目标，独立 clean-room 实现；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。**不复制 Windows/ReactOS 源码**。
+**ZirconOSAero** 以 **NT 6.1（Windows 7）** ABI/体验为目标，独立 clean-room 实现；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI）。**不复制 Windows/ReactOS 源码**。
 
 **独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
 
@@ -37,18 +37,18 @@
 
 - **NT 风格混合微内核**：调度、虚拟内存、IPC、中断与系统调用在内核中实现
 - **用户态系统服务**：Object Manager、Process Manager、I/O Manager、Security 等
-- **Win32 兼容层**：ntdll、kernel32、kernelbase 与控制台子系统
-- **Win32 子系统服务器**：csrss 风格管理、窗口站与桌面
-- **Win32 执行引擎**：PE 加载、DLL 绑定、进程创建、API 分发
-- **图形子系统**：user32（窗口/消息）与 gdi32（绘图/字体/位图）
-- **WOW64**：PE32 加载、32→64 系统调用 thunk、32 位 PEB/TEB
+- **Win32 兼容层**（**子集**，按里程碑推进；**不**声称与微软 DLL 二进制兼容）：仓库内 ntdll/kernel32/kernelbase 风格 API 与控制台 — 见 [NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)
+- **Win32 子系统服务器**（**部分**）：csrss 风格进程注册与消息桥接；完整窗口站/桌面生命周期分阶段 — [LPC_NT61_HANDSHAKE.md](docs/cn/LPC_NT61_HANDSHAKE.md)
+- **Win32 执行引擎**（**子集**）：PE 加载、DLL 绑定、进程创建、API 分发（仅已支持路径）
+- **图形子系统**（**部分**）：user32（窗口/消息）与 gdi32（绘图/字体/位图），优先 Aero/壳场景 — **非**完整 GDI（ROP、完整字体光栅化、完整 DC 对象模型）
+- **WOW64**（**部分**）：PE32 加载、32→64 syscall thunk、已实现的 32 位 PEB/TEB；完整 SysWOW64 见 [延后表面](docs/cn/NT61_DEFERRED_SURFACES.md)
 - **双 Shell**：CMD 与 **ZirconShell**（PowerShell 风格 cmdlet 子集，与 Microsoft PowerShell 不兼容）
 - **双文件系统**：FAT32（系统卷）与 NTFS（数据卷）
 - **多架构**：x86_64（主路径）、aarch64、loongarch64、riscv64、mips64el
 
 **开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
 
-**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
+**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**明确延后的大能力**（完整 Win32 / 完整 WOW64 等）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
 
 **实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
@@ -131,7 +131,7 @@ color_scheme = zircon_blue
 
 ## 依赖
 
-Ubuntu/Debian（**无需** GRUB；ISO 由 xorriso + ZBM 生成）：
+Ubuntu/Debian（ISO 由 xorriso + ZBM 生成）：
 
 ```bash
 sudo apt update
@@ -147,7 +147,7 @@ Zig：从 [ziglang.org](https://ziglang.org/download/) 安装并加入 PATH；�
 # run.sh（推荐）
 ./run.sh build              # 内核 (Debug)
 ./run.sh build-release      # 内核 (Release)
-./run.sh iso                # UEFI ISO（ZBM，无 GRUB；x86_64）
+./run.sh iso                # UEFI ISO（ZBM；x86_64）
 ./run.sh run                # 按 build.conf 运行 QEMU（默认 UEFI+ZBM）
 ./run.sh run-debug          # ZBM MBR 磁盘 + GDB
 ./run.sh run-release        # Release 内核运行
@@ -171,7 +171,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 矩阵中 **Done** 仅表示 QEMU/CI 烟测主路径可演示且与契约矩阵一致，**不表示**与商业 Windows 7 内核等价。须以契约矩阵、[MVT_NT61.md](docs/cn/MVT_NT61.md) 与 `zig build test` 为准。
 
-**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 交叉编译内核与 ZBM 相关目标，x86_64 另构建 **无 GRUB** 的 UEFI ISO 烟测；引导说明见 [Boot.md](docs/cn/Boot.md)。
+**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 交叉编译内核与 ZBM 相关目标，x86_64 另构建 UEFI ISO 烟测；引导说明见 [Boot.md](docs/cn/Boot.md)。
 
 ## Phase 0–11 功能矩阵（继承上游能力）
 

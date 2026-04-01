@@ -1,6 +1,6 @@
 # ZirconOSAero（NT 6.1 目标）
 
-**ZirconOSAero** 是以 **NT 6.1（Windows 7）** ABI/体验为目标的独立 clean-room 内核与用户态栈；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI），**不包含 GRUB**。**本仓库实现与文档均为独立演进，不复制 Windows/ReactOS 源码**。
+**ZirconOSAero** 是以 **NT 6.1（Windows 7）** ABI/体验为目标的独立 clean-room 内核与用户态栈；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI）。**本仓库实现与文档均为独立演进，不复制 Windows/ReactOS 源码**。
 
 **独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
 
@@ -35,18 +35,18 @@
 
 - **NT-style hybrid microkernel**: scheduling, virtual memory, IPC, interrupts, and syscalls in the kernel
 - **User-mode system services**: Object Manager, Process Manager, I/O Manager, Security, etc.
-- **Win32 compatibility layer**: ntdll, kernel32, kernelbase, and the console subsystem
-- **Win32 subsystem server**: csrss-style management, window stations, and desktops
-- **Win32 execution engine**: PE loading, DLL binding, process creation, API dispatch
-- **Graphics subsystem**: user32 (windows/messages) and gdi32 (drawing/fonts/bitmaps)
-- **WOW64**: PE32 loading, 32→64 syscall thunking, 32-bit PEB/TEB
+- **Win32 compatibility layer** (**subset**, milestone-driven; not binary-compatible with Microsoft DLLs): in-repo ntdll/kernel32/kernelbase-style APIs and the console — see [NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md), [API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)
+- **Win32 subsystem server** (**partial**): csrss-style process registration and messaging hooks; full window-station/desktop lifecycle is phased — [LPC_NT61_HANDSHAKE.md](docs/cn/LPC_NT61_HANDSHAKE.md)
+- **Win32 execution engine** (**subset**): PE loading, DLL binding, process creation, API dispatch for supported paths only
+- **Graphics subsystem** (**partial**): user32 (windows/messages) and gdi32 (drawing/fonts/bitmaps) for Aero/shell scenarios — not full GDI (ROP, full font rasterization, full DC model)
+- **WOW64** (**partial**): PE32 loading, 32→64 syscall thunking, 32-bit PEB/TEB where implemented — full SysWOW64 is [deferred](docs/cn/NT61_DEFERRED_SURFACES.md)
 - **Dual shell**: CMD and **ZirconShell** (PowerShell-style cmdlet subset, not compatible with Microsoft PowerShell)
 - **Dual filesystem**: FAT32 (system volume) and NTFS (data volume)
 - **Multi-architecture**: x86_64 (primary), aarch64, loongarch64, riscv64, mips64el
 
 **开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
 
-**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
+**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**Deferred surfaces**（full Win32 / full WOW64, etc.）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
 
 **实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖骨架见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
@@ -145,7 +145,7 @@ Install Zig from [ziglang.org](https://ziglang.org/download/) and add it to `PAT
 # run.sh (recommended)
 ./run.sh build              # Kernel (Debug)
 ./run.sh build-release      # Kernel (Release)
-./run.sh iso                # UEFI ISO（ZBM，无 GRUB；x86_64）
+./run.sh iso                # UEFI ISO（ZBM；x86_64）
 ./run.sh run                # 按 build.conf 运行 QEMU（默认 UEFI+ZBM）
 ./run.sh run-debug          # ZBM MBR 磁盘 + GDB
 ./run.sh run-release        # Release 内核运行
@@ -171,7 +171,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 特性矩阵中的 **Done** 仅表示：在 **QEMU/CI 烟测** 路径上该模块有 **可运行的主路径演示**，并与 [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md) 中的契约描述一致。**Done 不表示**与商业版 Windows 7 内核在完整性、边界行为、性能或安全属性上已等价。许多组件仍为 **Partial / Stub**（子集实现或占位）；历史上若出现「全盘 Done」类表述，应视为过时——**以契约矩阵 + 自动化测试 + 源码注释为准**。完整 NT 6.1 级内核是多年工程；本项目的现实定位是 **可验证的研究与渐进兼容**，而非「已复刻完成」的产品声明。
 
-**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 做内核与 ZBM 相关交叉编译，x86_64 另生成 **无 GRUB** 的 UEFI ISO 烟测产物；详见 [docs/en/Boot.md](docs/en/Boot.md)。
+**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 做内核与 ZBM 相关交叉编译，x86_64 另生成 UEFI ISO 烟测产物；详见 [docs/en/Boot.md](docs/en/Boot.md)。
 
 ## Phase 0–11 feature matrix（继承上游能力）
 

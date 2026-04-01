@@ -3,7 +3,7 @@
 ZirconOS Multiboot2 Header & Kernel ELF Verification Tests
 
 Validates that the kernel ELF binary meets Multiboot2 spec requirements
-and has a correct structure for GRUB/UEFI boot.
+and has a correct structure for ZBM (and any Multiboot2-compliant loader).
 
 Usage:
     python3 tests/test_multiboot.py [--kernel PATH]
@@ -230,7 +230,7 @@ def test_multiboot2_header(data, result):
     else:
         result.fail(
             f"Header at {pos} bytes, exceeds 32KB limit",
-            "GRUB cannot find the multiboot2 header"
+            "Multiboot2 loaders require the header in the first 32KB of the image"
         )
 
     if pos % 8 == 0:

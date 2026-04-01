@@ -1,5 +1,5 @@
-//! Shared Multiboot2 boot info parsing (UEFI ZBM / GRUB 风格信息块).
-//! Reference: https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html
+//! Multiboot2 boot info parsing for the handoff block built by **ZBM** (UEFI or BIOS stage).
+//! Format reference (public spec): https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html
 
 const std = @import("std");
 

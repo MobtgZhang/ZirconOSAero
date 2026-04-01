@@ -1,6 +1,6 @@
 # ZirconOSAero Boot Manager (ZBM)
 
-In-tree boot manager only — **this repository does not use GRUB** (`Makefile` enforces `BOOTLOADER=zbm`).
+In-tree boot manager only — `Makefile` accepts `BOOTLOADER=zbm`.
 
 ## Windows 7–style paths (project convention)
 

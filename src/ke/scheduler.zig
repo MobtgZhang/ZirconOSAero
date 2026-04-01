@@ -2,11 +2,11 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/ke/scheduler.zig
-// Purpose: 定时器驱动的多级优先级就绪调度（抢占式）；API 说明见 docs/cn/SCHEDULER_API.md。
-// NT 6.1 文档中的 32 级优先级、boost/反饥饿等为路线图近似实现，不阻塞 MM/SMP；见 docs/en/Roadmap.md Deferred surfaces。
+// Purpose: 定时器驱动的每 CPU 32 级优先级分桶就绪队列 + 时间片（按优先级类）+ 动态/实时分野 + 互斥体继承钩子。
+// API 说明见 docs/cn/SCHEDULER_API.md。
 //
 // This is an independent clean-room implementation.
-// Reference: OS textbook priority scheduling; MS Learn — threading (behavioral only).
+// Reference: MS Learn — scheduling (conceptual); OS textbook MLQ; Intel SDM for syscall path elsewhere.
 
 const builtin = @import("builtin");
 const klog = @import("../rtl/klog.zig");
@@ -56,11 +56,15 @@ pub const ThreadContext = struct {
 
 const MAX_THREADS: usize = 32;
 const STACK_SIZE: usize = 8192;
-/// 就绪链分桶上界（与 `madt.logical_cpu_count` 取 min）；AP 未进调度前仅 BSP 桶活跃。
 const MAX_SCHED_CPUS: usize = 8;
+const NUM_PRI: usize = 32;
 
-var ready_head: [MAX_SCHED_CPUS]i32 = @splat(-1);
-var ready_tail: [MAX_SCHED_CPUS]i32 = @splat(-1);
+var ready_head: [MAX_SCHED_CPUS][NUM_PRI]i32 = @splat(@splat(-1));
+var ready_tail: [MAX_SCHED_CPUS][NUM_PRI]i32 = @splat(@splat(-1));
+/// Bit `p` set if bucket `(cpu, p)` 非空。
+var non_empty: [MAX_SCHED_CPUS]u32 = @splat(0);
+/// 同优先级跨 CPU 取头的轮询起点（近似全局 FIFO）。
+var rr_cpu_cursor: [NUM_PRI]u8 = @splat(0);
 
 fn schedNumCpus() usize {
     if (builtin.cpu.arch == .x86_64) {
@@ -76,68 +80,200 @@ fn homeCpuSchedSlot(home: u32) usize {
     return @intCast(home % n);
 }
 
-fn resetReadyQueues() void {
-    for (&ready_head) |*h| h.* = -1;
-    for (&ready_tail) |*t| t.* = -1;
+/// 亲和：位掩码为 0 表示「允许当前构建中全部逻辑 CPU」。
+fn affinityCpuMask(t: *const Thread) u64 {
+    if (t.affinity_mask == 0) {
+        const n = schedNumCpus();
+        if (n >= 64) return 0xFFFFFFFFFFFFFFFF;
+        return (@as(u64, 1) << @intCast(n)) - 1;
+    }
+    return t.affinity_mask;
 }
 
+fn pickHomeCpuForAffinity(mask: u64) u32 {
+    const n = schedNumCpus();
+    var c: u32 = 0;
+    while (c < n) : (c += 1) {
+        if ((mask & (@as(u64, 1) << @intCast(c))) != 0) return c;
+    }
+    return 0;
+}
+
+fn resetReadyQueues() void {
+    for (&ready_head) |*row| {
+        for (row) |*h| h.* = -1;
+    }
+    for (&ready_tail) |*row| {
+        for (row) |*t| t.* = -1;
+    }
+    for (&non_empty) |*m| m.* = 0;
+    for (&rr_cpu_cursor) |*c| c.* = 0;
+}
+
+fn refreshNonEmptyBit(cpu: usize, pri: u8) void {
+    const bit: u32 = @as(u32, 1) << @intCast(pri);
+    if (ready_head[cpu][pri] < 0) {
+        non_empty[cpu] &= ~bit;
+    } else {
+        non_empty[cpu] |= bit;
+    }
+}
+
+fn unlinkFromBucket(cpu: usize, pri: u8, tid: usize) void {
+    var prev: i32 = -1;
+    var cur = ready_head[cpu][pri];
+    while (cur >= 0) {
+        const ct: usize = @intCast(cur);
+        if (ct == tid) {
+            const next = threads[ct].next_ready;
+            if (prev < 0) {
+                ready_head[cpu][pri] = next;
+            } else {
+                threads[@intCast(prev)].next_ready = next;
+            }
+            if (ready_tail[cpu][pri] == cur) {
+                ready_tail[cpu][pri] = prev;
+            }
+            threads[ct].next_ready = -1;
+            refreshNonEmptyBit(cpu, pri);
+            return;
+        }
+        prev = cur;
+        cur = threads[ct].next_ready;
+    }
+}
+
+fn removeFromBucketForTid(tid: usize) void {
+    if (tid >= thread_count) return;
+    if (!threads[tid].in_ready_queue) return;
+    const cpu: usize = @intCast(threads[tid].ready_sched_cpu);
+    const pri = threads[tid].ready_bucket_pri;
+    if (pri >= NUM_PRI) return;
+    unlinkFromBucket(cpu, @truncate(pri), tid);
+    threads[tid].in_ready_queue = false;
+    threads[tid].ready_bucket_pri = 255;
+}
+
+fn enqueueToBucket(cpu: usize, pri: u8, tid: usize) void {
+    if (tid >= thread_count) return;
+    threads[tid].next_ready = -1;
+    threads[tid].in_ready_queue = true;
+    threads[tid].ready_bucket_pri = pri;
+    threads[tid].ready_sched_cpu = @truncate(cpu);
+    const th: i32 = @intCast(tid);
+    const tail = ready_tail[cpu][pri];
+    if (tail < 0) {
+        ready_head[cpu][pri] = th;
+        ready_tail[cpu][pri] = th;
+    } else {
+        threads[@intCast(tail)].next_ready = th;
+        ready_tail[cpu][pri] = th;
+    }
+    non_empty[cpu] |= @as(u32, 1) << @intCast(pri);
+}
+
+/// 按当前 `effectivePriority` 入队（`home_cpu` 决定 CPU 槽；受亲和掩码约束）。
 fn enqueueReady(tid: usize) void {
     if (tid >= thread_count) return;
     if (threads[tid].in_ready_queue) return;
-    const cpu = homeCpuSchedSlot(threads[tid].home_cpu);
-    threads[tid].next_ready = -1;
-    threads[tid].in_ready_queue = true;
-    const th: i32 = @intCast(tid);
-    const tail = ready_tail[cpu];
-    if (tail < 0) {
-        ready_head[cpu] = th;
-        ready_tail[cpu] = th;
-    } else {
-        threads[@intCast(tail)].next_ready = th;
-        ready_tail[cpu] = th;
+    const ep = effectivePriority(&threads[tid]);
+    var slot = homeCpuSchedSlot(threads[tid].home_cpu);
+    const mask = affinityCpuMask(&threads[tid]);
+    if ((mask & (@as(u64, 1) << @intCast(slot % schedNumCpus()))) == 0) {
+        threads[tid].home_cpu = pickHomeCpuForAffinity(mask);
+        slot = homeCpuSchedSlot(threads[tid].home_cpu);
     }
+    enqueueToBucket(slot, ep, tid);
 }
 
 fn removeFromReadyQueue(tid: usize) void {
-    if (tid >= thread_count or !threads[tid].in_ready_queue) return;
-    threads[tid].in_ready_queue = false;
-    const n = schedNumCpus();
-    var c: usize = 0;
-    while (c < n) : (c += 1) {
-        var prev: i32 = -1;
-        var cur_tid = ready_head[c];
-        while (cur_tid >= 0) {
-            const ct: usize = @intCast(cur_tid);
-            const next = threads[ct].next_ready;
-            if (ct == tid) {
-                if (prev < 0) {
-                    ready_head[c] = next;
-                } else {
-                    threads[@intCast(prev)].next_ready = next;
-                }
-                if (ready_tail[c] == cur_tid) {
-                    ready_tail[c] = prev;
-                }
-                threads[ct].next_ready = -1;
-                return;
-            }
-            prev = cur_tid;
-            cur_tid = next;
-        }
-    }
-    threads[tid].next_ready = -1;
+    removeFromBucketForTid(tid);
 }
 
-fn popHeadQueue(cpu: usize) ?usize {
-    const h = ready_head[cpu];
+fn rebalanceReadyBuckets() void {
+    var tid: usize = 0;
+    while (tid < thread_count) : (tid += 1) {
+        if (!threads[tid].in_ready_queue) continue;
+        const want = effectivePriority(&threads[tid]);
+        if (threads[tid].ready_bucket_pri == want) continue;
+        removeFromBucketForTid(tid);
+        enqueueReady(tid);
+    }
+}
+
+fn popHeadBucket(cpu: usize, pri: u8) ?usize {
+    const h = ready_head[cpu][pri];
     if (h < 0) return null;
     const tid: usize = @intCast(h);
     const next = threads[tid].next_ready;
-    ready_head[cpu] = next;
-    if (next < 0) ready_tail[cpu] = -1;
+    ready_head[cpu][pri] = next;
+    if (next < 0) ready_tail[cpu][pri] = -1;
     threads[tid].next_ready = -1;
     threads[tid].in_ready_queue = false;
+    threads[tid].ready_bucket_pri = 255;
+    refreshNonEmptyBit(cpu, pri);
     return tid;
+}
+
+fn popHeadFairAtPriority(pri: u8) ?usize {
+    const n = schedNumCpus();
+    if (n == 0) return null;
+    const start: usize = @intCast(rr_cpu_cursor[pri] % n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const cpu = (start + i) % n;
+        if ((non_empty[cpu] & (@as(u32, 1) << @intCast(pri))) != 0) {
+            rr_cpu_cursor[pri] = @truncate((cpu + 1) % n);
+            return popHeadBucket(cpu, pri);
+        }
+    }
+    return null;
+}
+
+fn maxNonemptyPriAcrossCpus() ?u8 {
+    var combined: u32 = 0;
+    const n = schedNumCpus();
+    var c: usize = 0;
+    while (c < n) : (c += 1) {
+        combined |= non_empty[c];
+    }
+    if (combined == 0) return null;
+    return @intCast(31 - @clz(combined));
+}
+
+fn hasOtherReadyAtPriority(pri: u8, except_tid: usize) bool {
+    const n = schedNumCpus();
+    var cpu: usize = 0;
+    while (cpu < n) : (cpu += 1) {
+        var t = ready_head[cpu][pri];
+        while (t >= 0) {
+            const ct: usize = @intCast(t);
+            if (ct != except_tid) return true;
+            t = threads[ct].next_ready;
+        }
+    }
+    return false;
+}
+
+fn popHeadHighestGlobal() ?usize {
+    const mp = maxNonemptyPriAcrossCpus() orelse return null;
+    var p: u8 = mp;
+    while (true) {
+        if (popHeadFairAtPriority(p)) |tid| return tid;
+        if (p == 0) return null;
+        p -= 1;
+    }
+}
+
+fn popHeadHighestFromCpu(cpu: usize) ?usize {
+    const m = non_empty[cpu];
+    if (m == 0) return null;
+    const pri: u8 = @intCast(31 - @clz(m));
+    return popHeadBucket(cpu, pri);
+}
+
+fn cpuHasAnyReady(cpu: usize) bool {
+    return non_empty[cpu] != 0;
 }
 
 fn isBspIdleThreadForSteal() bool {
@@ -151,17 +287,20 @@ fn workStealBalanceIfIdleImpl() void {
     if (n <= 1) return;
     if (!isBspIdleThreadForSteal()) return;
     const here: usize = 0;
-    if (ready_head[here] >= 0) return;
+    if (cpuHasAnyReady(here)) return;
     var best_c: usize = 0;
     var best_len: usize = 0;
     var c: usize = 0;
     while (c < n) : (c += 1) {
         if (c == here) continue;
         var len: usize = 0;
-        var t = ready_head[c];
-        while (t >= 0) {
-            len += 1;
-            t = threads[@intCast(t)].next_ready;
+        var pri: usize = 0;
+        while (pri < NUM_PRI) : (pri += 1) {
+            var t = ready_head[c][pri];
+            while (t >= 0) {
+                len += 1;
+                t = threads[@intCast(t)].next_ready;
+            }
         }
         if (len > best_len) {
             best_len = len;
@@ -169,7 +308,7 @@ fn workStealBalanceIfIdleImpl() void {
         }
     }
     if (best_len == 0) return;
-    const stolen = popHeadQueue(best_c) orelse return;
+    const stolen = popHeadHighestFromCpu(best_c) orelse return;
     threads[stolen].home_cpu = @intCast(here);
     enqueueReady(stolen);
 }
@@ -181,61 +320,78 @@ fn isSchedulable(idx: usize) bool {
     return t.state == .ready and t.in_ready_queue;
 }
 
-/// NT 6.1 风格 **0–31** 数值档（越大越优先）；idle 取低端，交互/实时取高端。
+/// NT 6.1 风格 **0–31**（越大越优先）。
 pub const PRIORITY_IDLE: u8 = 1;
 pub const PRIORITY_NORMAL: u8 = 8;
 pub const PRIORITY_REALTIME: u8 = 24;
 
-/// 仍支持 0..7 **class** 到基线优先级的映射（见 `priorityFromClass`）。
 pub const PRIORITY_CLASS_COUNT: usize = 8;
 
-/// 同等最高优先级线程间：连续占用的定时器 tick 数（`1` = 每 tick 可切换，兼容既有行为）。
-pub const TIME_SLICE_TICKS: u32 = 1;
+/// 动态优先级区间上界（含）：`priority <=` 此值时参与防饥饿抬升；**实时**线程通常保持基线不被动态饿死（clean-room 近似）。
+pub const PRIORITY_DYNAMIC_MAX: u8 = 15;
 
-/// 从 `blocked` 唤醒时叠加到 `priority` 上的临时增量（clean-room 近似 I/O 完成提升）。
+/// 兼容旧名：默认定时器 tick 数（已由 `quantumTicksForThread` 取代）。
+pub const TIME_SLICE_TICKS: u32 = 6;
+
 pub const IO_BOOST_PRIORITY_DELTA: u8 = 2;
-
-/// I/O 提升持续的 tick 数（PIT ~100Hz 时约 `N * 10ms` 量级）。
 pub const IO_BOOST_DURATION_TICKS: u64 = 20;
-
-/// 就绪过久临时抬升阈值（tick）；减轻纯优先级饿死（非 Windows 精确算法）。
 pub const STARVATION_TICK_THRESHOLD: u64 = 200;
 pub const STARVATION_BOOST: u8 = 2;
 
-/// `class` 0..7 → 0..31 内的基线优先级。
+/// 每 **优先级类** 的量子（timer tick）；数值越大同优先级占用越久。clean-room，非 Windows 内部表。
+const QUANTUM_BY_CLASS: [PRIORITY_CLASS_COUNT]u32 = .{ 4, 5, 6, 7, 8, 10, 12, 14 };
+
 pub fn priorityFromClass(class: u8) u8 {
     const c: u32 = @min(@as(u32, class), PRIORITY_CLASS_COUNT - 1);
     const p: u32 = 2 + c * 3;
     return @truncate(@min(p, 31));
 }
 
+pub fn quantumTicksForClass(class: u8) u32 {
+    const c: usize = @min(@as(usize, class), PRIORITY_CLASS_COUNT - 1);
+    return QUANTUM_BY_CLASS[c];
+}
+
+fn quantumTicksForThread(t: *const Thread) u32 {
+    const c: usize = @min(@as(usize, t.priority_class), PRIORITY_CLASS_COUNT - 1);
+    return QUANTUM_BY_CLASS[c];
+}
+
 pub const Thread = struct {
     id: usize = 0,
     process_id: u32 = 0,
-    /// 目标运行 CPU（SMP 演进：`assignCpuForNewThread`）。
     home_cpu: u32 = 0,
+    /// 亲和掩码：位 i = 可运行在逻辑 CPU i；0 = 全部允许（受 `MAX_SCHED_CPUS` 截断）。
+    affinity_mask: u64 = 0,
     state: ThreadState = .ready,
     context: ThreadContext = .{},
     stack: [STACK_SIZE]u8 align(16) = undefined,
     stack_top: usize = 0,
-    /// 基线优先级（`setThreadPriority` / 创建线程时设置）。
     priority: u8 = 0,
-    /// 唤醒提升增量，在 `boost_deadline_tick` 之前参与调度。
+    /// 0..7，影响时间片长度（`QUANTUM_BY_CLASS`）。
+    priority_class: u8 = 4,
     io_boost: u8 = 0,
     boost_deadline_tick: u64 = 0,
-    /// 当前运行周期剩余时间片（仅 `running` 时递减）。
     slice_remaining: u32 = TIME_SLICE_TICKS,
-    /// 每 CPU 就绪链（`home_cpu` 分桶）；`running` / `blocked` 不在链上。
     next_ready: i32 = -1,
     in_ready_queue: bool = false,
+    /// 当前就绪桶优先级；255 = 不在任何桶。
+    ready_bucket_pri: u8 = 255,
+    ready_sched_cpu: u8 = 0,
+    /// 互斥体等待者抬升的**下限**（effective 至少为此值）；单互斥场景下 release 清零。
+    mutex_inherit_floor: u8 = 0,
     name: [16]u8 = [_]u8{0} ** 16,
 };
 
 fn effectivePriority(t: *const Thread) u8 {
     const sum = @as(u16, t.priority) + @as(u16, t.io_boost);
-    const capped: u16 = @min(sum, 31);
-    var p: u8 = @intCast(capped);
-    if (t.state == .ready and t.in_ready_queue and starve_ticks[t.id] > STARVATION_TICK_THRESHOLD) {
+    var p: u8 = @intCast(@min(sum, @as(u16, 31)));
+    p = @max(p, t.mutex_inherit_floor);
+    if (t.priority <= PRIORITY_DYNAMIC_MAX and
+        t.state == .ready and
+        t.in_ready_queue and
+        starve_ticks[t.id] > STARVATION_TICK_THRESHOLD)
+    {
         p = @min(31, p +| STARVATION_BOOST);
     }
     return p;
@@ -268,11 +424,13 @@ fn createIdleThread() ?usize {
     threads[idx] = .{};
     threads[idx].id = idx;
     threads[idx].home_cpu = percpu_sched.assignCpuForNewThread();
+    threads[idx].affinity_mask = 0;
     threads[idx].state = .running;
     threads[idx].priority = PRIORITY_IDLE;
+    threads[idx].priority_class = 0;
     threads[idx].io_boost = 0;
     threads[idx].boost_deadline_tick = 0;
-    threads[idx].slice_remaining = TIME_SLICE_TICKS;
+    threads[idx].slice_remaining = quantumTicksForThread(&threads[idx]);
 
     const idle_name = "idle";
     @memcpy(threads[idx].name[0..idle_name.len], idle_name);
@@ -292,11 +450,13 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
     threads[idx].id = idx;
     threads[idx].process_id = process_id;
     threads[idx].home_cpu = percpu_sched.assignCpuForNewThread();
+    threads[idx].affinity_mask = 0;
     threads[idx].state = .ready;
     threads[idx].priority = PRIORITY_NORMAL;
+    threads[idx].priority_class = 4;
     threads[idx].io_boost = 0;
     threads[idx].boost_deadline_tick = 0;
-    threads[idx].slice_remaining = TIME_SLICE_TICKS;
+    threads[idx].slice_remaining = quantumTicksForThread(&threads[idx]);
 
     const stack_base = @intFromPtr(&threads[idx].stack);
     const stack_end = stack_base + STACK_SIZE;
@@ -358,59 +518,40 @@ pub fn tick() void {
         }
     }
     if (cur < thread_count) starve_ticks[cur] = 0;
+
+    rebalanceReadyBuckets();
+
+    if (cur >= thread_count) return;
+
     if (threads[cur].state == .running and threads[cur].slice_remaining > 0) {
         threads[cur].slice_remaining -= 1;
     }
 
-    var max_pri: u8 = 0;
-    i = 0;
-    while (i < thread_count) : (i += 1) {
-        if (!isSchedulable(i)) continue;
-        const ep = effectivePriority(&threads[i]);
-        if (ep > max_pri) max_pri = ep;
-    }
-
     const cur_ep = effectivePriority(&threads[cur]);
-    const higher = max_pri > cur_ep;
+    const max_ready_pri = maxNonemptyPriAcrossCpus() orelse 0;
+    const higher = max_ready_pri > cur_ep;
     const slice_done = threads[cur].slice_remaining == 0;
-    const rr = !higher and slice_done and max_pri == cur_ep;
+    const rr = !higher and slice_done and max_ready_pri == cur_ep and
+        hasOtherReadyAtPriority(cur_ep, cur);
 
     if (!higher and !rr) return;
 
-    var next: usize = cur;
-    if (higher) {
-        i = 0;
-        while (i < thread_count) : (i += 1) {
-            if (!isSchedulable(i)) continue;
-            if (effectivePriority(&threads[i]) == max_pri) {
-                next = i;
-                break;
-            }
-        }
-    } else {
-        var off: usize = 1;
-        while (off <= thread_count) : (off += 1) {
-            const idx = (cur + off) % thread_count;
-            if (!isSchedulable(idx)) continue;
-            if (effectivePriority(&threads[idx]) == max_pri) {
-                next = idx;
-                break;
-            }
-        }
-    }
+    const next: usize = if (higher)
+        popHeadHighestGlobal() orelse return
+    else
+        popHeadFairAtPriority(cur_ep) orelse return;
 
-    if (next != cur and threads[next].state != .terminated) {
-        removeFromReadyQueue(next);
-        if (threads[cur].state == .running) {
-            threads[cur].state = .ready;
-            threads[cur].slice_remaining = TIME_SLICE_TICKS;
-            enqueueReady(cur);
-        }
-        threads[next].state = .running;
-        threads[next].slice_remaining = TIME_SLICE_TICKS;
-        current_thread = next;
-        activateCr3ForProcessId(threads[next].process_id);
+    if (next == cur or threads[next].state == .terminated) return;
+
+    if (threads[cur].state == .running) {
+        threads[cur].state = .ready;
+        threads[cur].slice_remaining = quantumTicksForThread(&threads[cur]);
+        enqueueReady(cur);
     }
+    threads[next].state = .running;
+    threads[next].slice_remaining = quantumTicksForThread(&threads[next]);
+    current_thread = next;
+    activateCr3ForProcessId(threads[next].process_id);
 }
 
 pub fn yield() void {
@@ -465,6 +606,34 @@ pub fn setThreadPriority(tid: usize, priority: u8) void {
     threads[tid].priority = priority;
 }
 
+pub fn setThreadPriorityClass(tid: usize, class: u8) void {
+    if (tid >= thread_count) return;
+    threads[tid].priority_class = @min(class, PRIORITY_CLASS_COUNT - 1);
+}
+
+pub fn setThreadAffinityMask(tid: usize, mask: u64) void {
+    if (tid >= thread_count) return;
+    threads[tid].affinity_mask = mask;
+    threads[tid].home_cpu = pickHomeCpuForAffinity(affinityCpuMask(&threads[tid]));
+}
+
+/// 互斥体：等待者有效优先级 `waiter_effective` 抬升持有者（**单互斥**场景下 `release` 应配对 `clearMutexInheritFloor`）。
+pub fn applyMutexInheritFloor(owner_tid: usize, waiter_effective_pri: u8) void {
+    if (owner_tid >= thread_count) return;
+    threads[owner_tid].mutex_inherit_floor = @max(threads[owner_tid].mutex_inherit_floor, waiter_effective_pri);
+}
+
+pub fn clearMutexInheritFloor(owner_tid: usize) void {
+    if (owner_tid >= thread_count) return;
+    threads[owner_tid].mutex_inherit_floor = 0;
+}
+
 pub fn isInitialized() bool {
     return initialized;
+}
+
+/// 供测试或调试对照 `effectivePriority`（与内部算法一致）。
+pub fn effectivePriorityForThread(tid: usize) ?u8 {
+    if (tid >= thread_count) return null;
+    return effectivePriority(&threads[tid]);
 }

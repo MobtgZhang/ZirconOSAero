@@ -13,6 +13,7 @@ const builtin = @import("builtin");
 var assign_cpu_rot: u32 = 0;
 
 /// 新线程默认落在的 CPU；SMP 就绪后按 `madt.logical_cpu_count` 轮询占位（AP 队列就绪后换最短队列策略）。
+/// 与 `scheduler.setThreadAffinityMask` / `Thread.home_cpu` 配合；窃取路径见 `scheduler.zig` `workStealBalanceIfIdleImpl`。
 pub fn assignCpuForNewThread() u32 {
     if (builtin.cpu.arch == .x86_64) {
         const madt = @import("../hal/x86_64/madt.zig");

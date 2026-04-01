@@ -49,6 +49,8 @@ comptime {
     _ = @import("ke/roadmap_hooks.zig");
     _ = @import("mm/slab.zig");
     _ = @import("mm/phys_buddy.zig");
+    _ = @import("mm/heap_boot.zig");
+    _ = @import("mm/ex_pool.zig");
     _ = @import("mm/probe.zig");
     _ = @import("ke/spinlock.zig");
     _ = @import("ke/percpu_sched.zig");
@@ -73,6 +75,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const frame = @import("mm/frame.zig");
     const vm = @import("mm/vm.zig");
     const heap = @import("mm/heap.zig");
+    const heap_boot = @import("mm/heap_boot.zig");
     const server = @import("servers/server.zig");
     const smss = @import("servers/smss.zig");
     const ob = @import("ob/object.zig");
@@ -193,9 +196,6 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         alloc.total_frames, frame.FRAME_SIZE,
     });
 
-    heap.init();
-    klog.info("Kernel heap: %u bytes available", .{heap.freeBytes()});
-
     // Parse boot mode and desktop theme from multiboot2 command line.
     // When cmdline omits `desktop=`, use compile-time default (Makefile DESKTOP → zig -Ddesktop=).
     const boot_mode: boot.BootMode = if (boot_info) |info| info.boot_mode else .normal;
@@ -308,6 +308,29 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     kernel_space.activate();
     vm.bindKernelAddressSpace(&kernel_space);
     klog.info("VM: Kernel page tables loaded", .{});
+
+    const heap_kb_x86: u64 = @min(sys_config.getHeapSizeKb(), @as(u64, 512 * 1024));
+    const heap_kb32: u32 = @truncate(@min(heap_kb_x86, @as(u64, std.math.maxInt(u32))));
+    heap_boot.initKernelHeapAfterVm(&kernel_space, heap_kb32);
+    klog.info("Kernel heap: growable=%u base=0x%x cap=%uKB committed=%uB live=%uB freelist_nodes=%u", .{
+        @intFromBool(heap.isGrowableBacked()),
+        heap.kernelHeapBaseVirt(),
+        heap.capacityBytes() / 1024,
+        heap.totalBytes(),
+        heap.usedBytes(),
+        heap.freeListDebug().nodes,
+    });
+
+    const phys_buddy = @import("mm/phys_buddy.zig");
+    phys_buddy.initKernelContiguousBuddy(&alloc);
+    if (phys_buddy.kernelContiguousBuddyReady()) {
+        klog.info("PhysBuddy: contiguous arena leaf_pages=%u (order<=%u)", .{
+            phys_buddy.kernelContiguousLeafPages(),
+            phys_buddy.kernel_contiguous_max_order,
+        });
+    } else {
+        klog.warn("PhysBuddy: no contiguous carve (DMA multi-page may use bitmap scan only)", .{});
+    }
 
     // ═══ Phase 4: Object / Handle / Process Core ═══
     klog.info("--- Phase 4: Object / Handle / Process Core ---", .{});
@@ -832,6 +855,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     var loong_kernel_space: ?vm.AddressSpace = null;
     const frame = @import("mm/frame.zig");
     const heap = @import("mm/heap.zig");
+    const heap_boot = @import("mm/heap_boot.zig");
     const server = @import("servers/server.zig");
     const smss = @import("servers/smss.zig");
     const ob = @import("ob/object.zig");
@@ -1256,8 +1280,28 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         alloc.total_frames, frame.FRAME_SIZE,
     });
 
-    heap.init();
-    klog.info("Kernel heap: %u bytes available", .{heap.freeBytes()});
+    const heap_kb_gen: u64 = @min(sys_config.getHeapSizeKb(), @as(u64, 512 * 1024));
+    const heap_kb_gen32: u32 = @truncate(@min(heap_kb_gen, @as(u64, std.math.maxInt(u32))));
+    if (vm.kernelAddressSpace()) |ks| {
+        heap_boot.initKernelHeapAfterVm(ks, heap_kb_gen32);
+    } else {
+        heap.init();
+    }
+    klog.info("Kernel heap: growable=%u base=0x%x cap=%uKB committed=%uB live=%uB", .{
+        @intFromBool(heap.isGrowableBacked()),
+        heap.kernelHeapBaseVirt(),
+        heap.capacityBytes() / 1024,
+        heap.totalBytes(),
+        heap.usedBytes(),
+    });
+
+    const phys_buddy = @import("mm/phys_buddy.zig");
+    phys_buddy.initKernelContiguousBuddy(&alloc);
+    if (phys_buddy.kernelContiguousBuddyReady()) {
+        klog.info("PhysBuddy: leaf_pages=%u", .{phys_buddy.kernelContiguousLeafPages()});
+    } else {
+        klog.warn("PhysBuddy: contiguous carve unavailable", .{});
+    }
 
     klog.info("--- Phase 2: Scheduler + Timer ---", .{});
     scheduler.init();

@@ -7,6 +7,7 @@
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-ntcreatesection
+// Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K1.6
 
 const ob = @import("../ob/object.zig");
 const process = @import("../ps/process.zig");

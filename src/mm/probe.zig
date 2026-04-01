@@ -5,7 +5,8 @@
 // Purpose: 用户态指针探测（MmProbeUserMemory 语义子集），供 syscall 与 I/O 路径校验。
 //
 // This is an independent clean-room implementation.
-// Reference: MS Learn — kernel buffer validation concepts (behavioral only); Intel SDM — U/S and #PF.
+// Reference: MS Learn — kernel buffer validation concepts (behavioral only); Intel SDM — U/S and #PF。
+// 全 syscall 覆盖须与 docs/cn/NT61_CONTRACT_MATRIX.md、MVT 中「用户指针探测」行同步审计。
 
 const builtin = @import("builtin");
 const arch = @import("../arch.zig");

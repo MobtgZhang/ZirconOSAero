@@ -7,6 +7,11 @@
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 // Ref: WDK — Pool Types / ExAllocatePoolWithTag (公开行为描述)
+// Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K1.2
+//
+// IRQL 语义（与 WDK 文档对齐的 **目标**；当前实现差异）：
+// - **NonPagedPool**：文档要求可在 DISPATCH_LEVEL 及以下安全分配且不引发页故障；本模块使用 bump/slab 后备，在单核早期内核中与该约束方向一致，但未做完整 IRQL 断言。
+// - **PagedPool**：文档要求仅在可分页 IRQL 访问；此处为逻辑计数分离，**尚未**接真正分页换出，调用点须在注释中声明当前上限。
 
 const heap = @import("heap.zig");
 

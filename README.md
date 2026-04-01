@@ -42,6 +42,8 @@
 
 **开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
 
+**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。
+
 Documentation: [`docs/README.md`](docs/README.md) · [`docs/en/Architecture.md`](docs/en/Architecture.md) · [`docs/en/Kernel.md`](docs/en/Kernel.md) · [`docs/en/Boot.md`](docs/en/Boot.md) · [`docs/en/Servers.md`](docs/en/Servers.md) · [`docs/en/Subsystems.md`](docs/en/Subsystems.md) · [`docs/en/BuildSystem.md`](docs/en/BuildSystem.md) · [`docs/en/Roadmap.md`](docs/en/Roadmap.md)
 
 ## Repository layout
@@ -167,12 +169,13 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | Serial | Done | COM1 |
 | Frame allocator | Done | Bitmap allocator |
 | Paging | Done | Four-level tables, identity map |
-| Kernel heap | Done | Bump allocator |
-| IPC (LPC) | Done | Queues, send/receive, ports |
-| Syscall | Done | int 0x80 dispatch |
+| Kernel heap | Partial | Bump + tagged `mm/pool` NonPaged 档位；Paged 语义与完整池化见契约矩阵 |
+| Section objects | Stub | `NtCreateSection` / `NtMapViewOfSection` 占位（[MM 路线图](docs/cn/NT61_CONTRACT_MATRIX.md)） |
+| IPC (LPC) | Partial | Queues, ports；连接/通信端口分离雏形、`section_view_handle` 占位（[Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md)） |
+| Syscall | Partial | `int 0x80` + x86_64 `syscall`/LSTAR 共用分发；非 Windows SSDT 索引（[SyscallABI.md](docs/cn/SyscallABI.md), [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md)） |
 | IDT/ISR | Done | 256 vectors |
-| Scheduler | Done | Round-robin |
-| Timer | Done | PIC + PIT ~100Hz |
+| Scheduler | Partial | 优先级内轮转；饥饿/前台提升可选后续 |
+| Timer | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
 | Sync | Done | Event, mutex, semaphore, spinlock |
 | Object Manager | Done | Types, handle table, namespace, waitable |
 | Process Manager | Done | Processes/threads, Process Server |
@@ -183,18 +186,20 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | FAT32 | Done | Files/dirs on `C:\` |
 | NTFS | Done | MFT, files/dirs on `D:\` |
 | PE32+ loader | Done | Headers, DLLs, imports, relocs, PEB/TEB |
-| PE32 loader | Done | 32-bit PE, WOW64 |
+| PE32 loader | Partial | 32-bit PE + WOW64；与官方 SysWOW64/SSDT 不对齐 |
 | ELF loader | Done | ELF64 headers, segments, shared objects |
-| ntdll | Done | Native API surface |
-| kernel32 | Done | Win32 base API |
-| user32 | Done | Windows, messages, classes, UI primitives, input |
-| gdi32 | Done | DC, primitives, fonts, bitmaps, BitBlt |
+| ntdll | Partial | Native API 子集；服务号见 SSDT 路线图 |
+| kernel32 | Partial | Win32 base API 子集 |
+| user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集；完整 NC 序列见契约矩阵 |
+| gdi32 | Partial | DC/原语/字体/位图子集；分阶段见 `gdi32.zig` 头注释与契约矩阵 |
 | Console | Done | Console runtime |
 | CMD | Done | dir, cd, set, ver, systeminfo, tasklist, … |
 | PowerShell | Done | cmdlet-style commands |
-| csrss | Done | Win32 server, stations, desktops, GUI dispatch |
-| Exec engine | Done | PE load, DLL bind, lifecycle |
-| WOW64 | Done | PE32, syscall thunking, 32-bit PEB/TEB |
+| csrss | Partial | Win32 server, stations, desktops, GUI dispatch |
+| Exec engine | Partial | PE load, DLL bind, lifecycle |
+| WOW64 | Partial | PE32, thunk；与 64 位 `SYS_*` / 微软 ntdll 路径差距见 `wow64.zig` 与 [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md) |
+| Registry runtime | Partial | 内存树 + `HKCU\Control Panel\Mouse` 等默认值；RegF/hive 持久化 Planned |
+| Aero / DWM (kernel shell) | Partial | 脏矩形/分层路径与 `compositor_config_epoch` 握手 trace；CPU 合成与 Win7 WDDM 差异见 [DesktopManagerSpec.md](docs/cn/DesktopManagerSpec.md) |
 
 ## Milestones
 

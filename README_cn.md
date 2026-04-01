@@ -156,44 +156,48 @@ make help                   # 查看帮助
 zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 ```
 
-## v1.0 已实现 (Phase 0-11)
+## v1.0 功能矩阵 (Phase 0-11)
+
+完成度与 [NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md) 交叉引用；**部分 / 占位 / 计划** 表示非「完成」。
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| GRUB Boot | ✅ | Multiboot2 启动, x86_64, 多种启动模式 |
-| UEFI Boot | ✅ | UEFI 启动应用, Debug/Release, Phase 0-11 信息 |
-| VGA Output | ✅ | 文本模式控制台 |
-| Serial | ✅ | COM1 串口输出 |
-| Frame Allocator | ✅ | 位图物理帧分配器 |
-| Paging | ✅ | 四级页表, identity mapping |
-| Kernel Heap | ✅ | Bump 分配器 |
-| IPC (LPC) | ✅ | 消息队列, send/receive, Port |
-| Syscall | ✅ | int 0x80 分发 |
-| IDT/ISR | ✅ | 中断描述符表 256 vectors |
-| Scheduler | ✅ | Round-Robin 调度器 |
-| Timer | ✅ | PIC + PIT ~100Hz |
-| Sync | ✅ | Event, Mutex, Semaphore, SpinLock |
-| Object Manager | ✅ | 对象类型/句柄表/命名空间/Waitable |
-| Process Manager | ✅ | 进程/线程, Process Server |
-| Session Manager | ✅ | SMSS, 会话管理, 子系统注册 |
-| Security | ✅ | Token, SID, 访问检查 |
-| I/O Manager | ✅ | 设备/驱动/IRP 分发 |
-| VFS | ✅ | 虚拟文件系统, 挂载点 |
-| FAT32 | ✅ | 文件创建/读写/目录/删除 (C:\) |
-| NTFS | ✅ | MFT, 文件/目录操作 (D:\) |
-| PE32+ Loader | ✅ | PE 头解析, DLL加载, 导入解析, 重定位, PEB/TEB |
-| PE32 Loader | ✅ | 32位 PE 支持, WOW64 兼容 |
-| ELF Loader | ✅ | ELF64 头解析, 段加载, 共享对象 |
-| ntdll | ✅ | Native API (进程/线程/文件/同步/内存/IPC/系统/注册表/调试) |
-| kernel32 | ✅ | Win32 Base API (进程/文件搜索/控制台/内存/模块/同步/环境) |
-| user32 | ✅ | 窗口管理, 消息队列, 窗口类, UI 原语, 输入处理 |
-| gdi32 | ✅ | 设备上下文, 绘图原语, 字体, 位图, BitBlt |
-| Console | ✅ | 控制台运行时 |
-| CMD Shell | ✅ | 命令提示符 (dir, cd, set, ver, systeminfo, tasklist 等) |
-| PowerShell | ✅ | 高级 Shell (Get-Process, Get-ChildItem, Get-Service 等) |
-| csrss | ✅ | Win32 子系统服务器, 窗口站, 桌面, 进程注册, GUI 分发 |
-| Exec Engine | ✅ | Win32 应用执行引擎, PE加载, DLL绑定, 生命周期管理 |
-| WOW64 | ✅ | 32位兼容层, PE32加载, syscall thunking, 32位PEB/TEB |
+| ZBM Boot | 完成 | BIOS/MBR + UEFI；Windows 7 风格菜单（本仓库无 GRUB） |
+| UEFI Boot | 完成 | UEFI 应用, Debug/Release |
+| VGA Output | 完成 | 文本模式控制台 |
+| Serial | 完成 | COM1 |
+| Frame Allocator | 完成 | 位图物理帧分配器 |
+| Paging | 完成 | 四级页表 |
+| Kernel Heap | 部分 | Bump + `mm/pool` NonPaged 档位 |
+| Section 对象 | 占位 | `NtCreateSection` / `NtMapViewOfSection` 未实现 |
+| IPC (LPC) | 部分 | 队列与端口；连接监听端口、`section_view_handle` 占位 |
+| Syscall | 部分 | `int 0x80` + x86_64 `syscall`；非 Windows SSDT 索引 |
+| IDT/ISR | 完成 | 256 vectors |
+| Scheduler | 部分 | 优先级内轮转 |
+| Timer | 部分 | PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
+| Sync | 完成 | Event, Mutex, Semaphore, SpinLock |
+| Object Manager | 完成 | 句柄表、命名空间 |
+| Process Manager | 完成 | 进程/线程 |
+| Session Manager | 完成 | SMSS |
+| Security | 完成 | Token, SID |
+| I/O Manager | 完成 | 设备/IRP |
+| VFS | 完成 | 挂载点 |
+| FAT32 | 完成 | C:\ |
+| NTFS | 完成 | D:\ |
+| PE32+ Loader | 完成 | PE32+ |
+| PE32 Loader | 部分 | WOW64 与官方 SysWOW64 路径不对齐 |
+| ELF Loader | 完成 | ELF64 |
+| ntdll | 部分 | Native API 子集 |
+| kernel32 | 部分 | Win32 子集 |
+| user32 | 部分 | NC HitTest、DWM 广播子集 |
+| gdi32 | 部分 | 区域/路径/字体分阶段 |
+| Console / CMD / PowerShell | 完成 | 见各模块 |
+| csrss / Exec | 部分 | 子系统服务器与执行引擎子集 |
+| WOW64 | 部分 | 见 [SSDT_Roadmap.md](docs/cn/SSDT_Roadmap.md) |
+| 注册表 | 部分 | 内存树；RegF 持久化 **计划** |
+| Aero 内核壳 | 部分 | 脏区策略、`compositor_config_epoch` trace |
+| 多架构说明 | 必读 | [PROCESS_NT61.md](docs/cn/PROCESS_NT61.md) 二进制边界 |
+| Win32k 架构 | 备忘 | [Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md) |
 
 ## 里程碑
 

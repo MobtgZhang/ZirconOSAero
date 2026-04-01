@@ -479,7 +479,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_ob_object_tests = b.addRunArtifact(ob_object_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap + pool + buddy + slab + SSDT + se/token + smp_atomic_host + wow64_types + object host)");
+    const io_irp_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/io_irp_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const io_irp_tests = b.addTest(.{
+        .root_module = io_irp_host_mod,
+        .name = "io_irp_host",
+    });
+    const run_io_irp_tests = b.addRunArtifact(io_irp_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap + pool + buddy + slab + SSDT + se/token + smp_atomic_host + wow64_types + object + io_irp_host)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -489,6 +500,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_smp_atomic_tests.step);
     test_step.dependOn(&run_wow64_types_tests.step);
     test_step.dependOn(&run_ob_object_tests.step);
+    test_step.dependOn(&run_io_irp_tests.step);
 
     buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
     buildZbm(b, cpu_arch, optimize, debug_mode);

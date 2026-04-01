@@ -17,8 +17,23 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: Unit tests (heap + SSDT)
+      - name: Install smoke deps (QEMU MBR + binutils)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 binutils python3 make
+
+      - name: Unit tests (heap + SSDT + se token)
         run: zig build test
 
-      - name: Kernel (x86_64)
+      - name: Kernel (x86_64, Debug)
         run: zig build kernel -Darch=x86_64
+
+      - name: Kernel install (x86_64, ReleaseSafe)
+        run: zig build install -Darch=x86_64 -Doptimize=ReleaseSafe
+
+      - name: QEMU serial smoke (ZBM MBR, headless)
+        run: bash scripts/ci-qemu-smoke.sh
+
+      - name: Kernel (aarch64 cross-compile smoke)
+        run: zig build kernel -Darch=aarch64

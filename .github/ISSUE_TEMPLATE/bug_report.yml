@@ -1,0 +1,40 @@
+name: Bug 报告
+description: 构建失败、启动异常、功能错误
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请勿粘贴 Windows/ReactOS 等受限源码。环境请写清 Zig 版本、目标架构、QEMU/真机。
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 实际发生了什么？
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. zig build ...
+        2. make run ...
+    validations:
+      required: true
+  - type: input
+    id: zig
+    attributes:
+      label: Zig 版本
+      placeholder: e.g. 0.15.2
+  - type: input
+    id: arch
+    attributes:
+      label: 架构 / 目标
+      placeholder: e.g. x86_64-freestanding-none

@@ -1,0 +1,22 @@
+name: 功能与设计
+description: 新特性、文档、路线图调整
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 背景 / 要解决的问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案（可选）
+      description: 若涉及 NT API，请附 Microsoft Learn / WDK 等公开链接（行为级即可）。
+  - type: checkboxes
+    id: copyright
+    attributes:
+      label: 合规确认
+      options:
+        - label: 我理解实现须为 clean-room，不复制 Windows/ReactOS/Wine 源码
+          required: true

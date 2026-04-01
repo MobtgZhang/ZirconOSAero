@@ -391,6 +391,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_heap_tests = b.addRunArtifact(heap_tests);
 
+    const pool_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/mm/pool.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const pool_tests = b.addTest(.{
+        .root_module = pool_test_mod,
+        .name = "pool",
+    });
+    const run_pool_tests = b.addRunArtifact(pool_tests);
+
     const ssdt_test_mod = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/ssdt_nt61.zig"),
         .target = b.graph.host,
@@ -402,9 +413,22 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_tests = b.addRunArtifact(ssdt_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap + SSDT layout)");
+    const se_token_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/se_token.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const se_token_tests = b.addTest(.{
+        .root_module = se_token_host_mod,
+        .name = "se_token",
+    });
+    const run_se_token_tests = b.addRunArtifact(se_token_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap + pool + SSDT + se/token host)");
     test_step.dependOn(&run_heap_tests.step);
+    test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_ssdt_tests.step);
+    test_step.dependOn(&run_se_token_tests.step);
 
     buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
     buildZbm(b, cpu_arch, optimize, debug_mode);

@@ -23,11 +23,11 @@ jobs:
       - name: Compliance phrase scan (src/boot)
         run: bash scripts/verify-compliance.sh
 
-      - name: Install smoke deps (QEMU MBR + binutils)
+      - name: Install smoke deps (QEMU MBR + binutils + ISO tools)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 binutils python3 make
+            qemu-system-x86 binutils python3 make xorriso dosfstools mtools
 
       - name: Unit tests (heap + SSDT + se token)
         run: zig build test
@@ -38,8 +38,29 @@ jobs:
       - name: Kernel install (x86_64, ReleaseSafe)
         run: zig build install -Darch=x86_64 -Doptimize=ReleaseSafe
 
+      - name: ZBM library (x86_64) + UEFI ZBM (x86_64, aarch64)
+        run: |
+          zig build zbm
+          zig build uefi -Darch=x86_64
+          zig build uefi -Darch=aarch64
+
+      - name: Kernel + ZBM objects (aarch64, riscv64, loongarch64)
+        run: |
+          zig build kernel -Darch=aarch64
+          zig build kernel -Darch=riscv64
+          zig build kernel -Darch=loongarch64
+          zig build zbm-riscv64-uefi
+          zig build zbm-loongarch-uefi
+
       - name: QEMU serial smoke (ZBM MBR, headless)
         run: bash scripts/ci-qemu-smoke.sh
 
-      - name: Kernel (aarch64 cross-compile smoke)
-        run: zig build kernel -Darch=aarch64
+      - name: UEFI ISO artifact (x86_64 ZBM, no GRUB)
+        run: |
+          mkdir -p build/test-results
+          ISO=build/test-results/zircon-ci-smoke.iso
+          test -f zig-out/bin/kernel
+          EFI=zig-out/bin/BOOTX64.efi
+          test -f "$EFI" || EFI=zig-out/bin/BOOTX64.EFI
+          test -f "$EFI"
+          bash scripts/build/mkiso-uefi-zbm.sh "$ISO" zig-out/bin/kernel "$EFI" x86_64 ci-smoke release

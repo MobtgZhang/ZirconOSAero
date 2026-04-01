@@ -16,4 +16,5 @@
 ## 验证
 
 - 连接/创建路径：见 [MVT_NT61.md](MVT_NT61.md) 中 CI 与用户态用例（随测试增加而扩充）。
+- `PortKind` 枚举底层值（`message = 0`、`connection_listener = 1`）由主机测试 **lpc_portkind_host** 固定；修改 `src/lpc/port.zig` 时须同步更新 [tests/lpc_portkind_host.zig](../../tests/lpc_portkind_host.zig)。
 - 回归：对 `NtCreatePort` / `NtConnectPort` 的修改须保持 `zig build test` 与现有 syscall 分发探测（用户指针 `probe`）不回归。

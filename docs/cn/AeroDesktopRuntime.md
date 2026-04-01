@@ -146,6 +146,14 @@
 - **GTK 多标签**：默认 `**QEMU_LOONGARCH64_GTK_OPTS`** 含 `**show-tabs=on**`；若主标签仍是 UEFI 字而串口已有 `**Desktop: first frame**`，在 QEMU 窗口顶部 **切换到另一显示标签**（常为 ramfb 扫描输出）。
 - 确认 `**LOONGARCH64_VIRT_GRAPHICS=on`**（`build.conf` / `Makefile`），且命令行仍带 `**-device ramfb**`（默认 `QEMU_LOONGARCH64_DEVICES` 已含）。
 
+#### 4.2.1.3 QEMU GTK 缩放、客体分辨率与高分 CPU 模糊（x86_64 / 通用）
+
+- **`QEMU_GTK_ZOOM`**（`Makefile`，默认 `zoom-to-fit=on`）：GTK 将客体画面缩放到当前 QEMU 窗口客户区，故「窗口看起来小」常与**宿主未最大化**有关，不一定是 GOP 低分辨率。需要 **1:1 像素**时可 `**make QEMU_GTK_ZOOM=zoom-to-fit=off run**` 后最大化窗口；或改用 SDL/VNC（需改 `QEMU_COMMON_*`，LoongArch 节已有示例）。
+- **客体 WxH** 仍以根目录 `**build.conf` → `**make sync-resolution**`** 为权威（见 §4.2.1）。
+- **高分辨率卡顿**：CPU 盒式模糊成本随像素数上升；可用 `**make AERO_BLUR_LIGHT=true**`（`zig -Daero_blur_light`）或 `**make run-fb-large**`（`2560×1440` + 轻模糊）；并见 `[src/config/nt61_aero_defaults.zig](../../src/config/nt61_aero_defaults.zig)` 中 `blur_budget_*`。
+- **PR 门禁与计划落地**：[NT61_PR_GATES.md](NT61_PR_GATES.md)、[mdcs/composer2/content1.3.md](../../mdcs/composer2/content1.3.md) 中的 QEMU/显示待办与本节一致。
+- **Virtio-GPU**：非 WDDM 加速台阶；x86 默认 `-vga std`，实验矩阵见 [DriverMilestones_NT61.md](DriverMilestones_NT61.md)、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)。
+
 ### 4.2.2 AArch64 桌面与 VirtIO-GPU：预期说明
 
 - **默认 QEMU 目标（`AARCH64_QEMU_VIRTIO_GPU=0`）不依赖** 内核 **VirtIO-GPU PCI（1af4:1050）** 驱动。可见桌面路径为：**UEFI GOP 线性帧缓冲**（Multiboot2 传递）与/或 `**ramfb` + `fw_cfg`**（`[src/hal/aarch64/ramfb.zig](../../src/hal/aarch64/ramfb.zig)`），由 `[src/main.zig](../../src/main.zig)` Phase 1 组合。

@@ -20,4 +20,8 @@
 
 ## 占位代码
 
-`src/drivers/net/minimal_stack.zig` 提供类型与函数占位，便于 `zig build` 引用与后续填充。
+`src/drivers/net/minimal_stack.zig` 提供 IPv4 固定首部解析（RFC 791）、协议号常量与 `NetStackPhase`；主机回归见 `zig build test` → **minimal_net**。阶段 B 将在此之上接 ARP/UDP。
+
+## 存储（AHCI / NVMe）
+
+块设备驱动与 VirtIO-blk 以外的 **AHCI / NVMe** 里程碑见 [Roadmap.md](../en/Roadmap.md) Next steps；依赖 `acpi_pci_early` ECAM 枚举与 PCI 类码过滤（与阶段 A 同一总线路径）。

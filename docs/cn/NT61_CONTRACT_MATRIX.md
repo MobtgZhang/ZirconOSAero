@@ -146,7 +146,11 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 ## 7. 相关仓库文档
 
+- [NT61_PR_GATES.md](NT61_PR_GATES.md) — **K0 PR 门禁勾选清单**（契约矩阵、MVT、syscall 注释、合规扫描）  
+- [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) — **NT 6.1 内核模式分阶段待办（K0–K8）**与 clean-room 门禁；PR 与契约矩阵 §8 同步推进  
 - [MVT_NT61.md](MVT_NT61.md) — 最小可验证测试索引（主机测试 + CI）  
+- [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) — 不阻塞内核主里程碑的延后能力（WDDM / 完整 Win32 / WOW64 / AML 等）  
+- [mdcs/composer2/content1.1.md](../../mdcs/composer2/content1.1.md) — 与 NT 6.1 目标之差距综述（与契约矩阵交叉引用）  
 - [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) — LPC 与 csrss 握手 ABI（clean-room）  
 - [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) — `NtAllocateVirtualMemory` / `MEM_*` 与帧缓冲映射对照  
 - [PROCESS_NT61.md](PROCESS_NT61.md) — 阶段与门禁  
@@ -165,11 +169,26 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 | 调度切换 CR3 | `src/ke/scheduler.zig` `activateCr3ForProcessId` | QEMU：`scripts/ci-qemu-smoke.sh` |
 | 用户指针探测 | `src/mm/probe.zig`；`src/arch/x86_64/syscall.zig` | 各 syscall 分支配对；扩展时补 `tests/` |
 | 每 CPU 就绪队列与工作窃取 | `src/ke/scheduler.zig`（`home_cpu`、就绪链）；`src/ke/percpu_sched.zig` `assignCpuForNewThread` | `zig build test`（调度行为以烟测为主） |
-| TLB 一致性（SMP 前占位） | `src/hal/x86_64/tlb_broadcast.zig` | 文档 + 未来 IPI 用例 |
-| LPC 端口种类 | `src/lpc/port.zig` `PortKind` | 主机/集成见路线图 |
-| IRP 完成例程 | `src/io/io.zig` `IoCompleteRequest` | 主机：`tests/io_irp_host.zig`（与 `io.zig` 同步的契约断言） |
+| TLB 一致性（SMP 前占位） | `src/hal/x86_64/tlb_broadcast.zig` | Debug 下多 CPU 时串口诊断；未来 IPI 用例 |
+| LPC 端口种类 | `src/lpc/port.zig` `PortKind` | `zig build test` → **lpc_portkind_host**；[LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) |
+| IRP 完成例程与栈下传 | `src/io/io.zig` `IoCompleteRequest`、`dispatchIrpThroughStack` | 主机：`tests/io_irp_host.zig`（完成例程 + 栈链镜像断言） |
 | 对象路径规范化 | `src/ob/object.zig` `normalizeNtObjectPath` | `zig build test` → `object` |
 | 合规短语扫描 | `scripts/verify-compliance.sh` | CI：`Compliance phrase scan (src/boot)` |
 | `NtQuerySystemInformation` 子集 | `src/libs/ntdll.zig` | syscall + ntdll 一致性审查 |
 
 **合规**：实现仅依据 MS Learn / WDK 公开描述与硬件规范；提交前运行 `bash scripts/verify-compliance.sh`。
+
+## 9. Clean-room 内核里程碑跟踪（与实现 PR 同步）
+
+| 门禁 / 能力 | 说明 | 验证 |
+|-------------|------|------|
+| 合规短语扫描 | 禁止违规来源表述；`src/`、`boot/` 源扫描 | `bash scripts/verify-compliance.sh`；CI **Compliance phrase scan** |
+| ECAM 偏移公式 | PCIe MCFG MMIO 布局与 `acpi_pci_early` 一致 | `zig build test` → **ecam_layout** |
+| HPET GCAP_ID 解码 | IA-PC HPET 规范位域（无 MMIO 依赖） | `zig build test` → **hpet_id** |
+| LPC `PortKind` 判别值 | csrss 握手 ABI 稳定 | `zig build test` → **lpc_portkind_host**；[LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) |
+| IPv4 首部解析子集 | RFC 791 固定头（网络栈原型） | `zig build test` → **minimal_net** |
+| MDL 最小子集 | WDK MDL 概念：VA/长度、内联 PFN 槽、恒等映射填 PFN 占位（无真实锁页 / 散列 DMA） | `zig build test` → **mdl_host**；[NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K1.7 |
+| IRP MJ PnP/Power 占位 | WDK 概念对齐的 major 序号 | `src/io/io.zig` `comptime` 断言；主机 **io_irp_host**（完成例程契约 + PnP/Power 序号） |
+| VFS 访问掩码常量 | `FileAccessMode` 与 NT 风格 GENERIC 位一致 | `zig build test` → **fs_vfs_constants_host** |
+| PCI 类/厂商 → 驱动绑定表（占位） | `src/drivers/bus/pci_driver_bind.zig`；供 USB/显示等枚举后选型 | `zig build test` → **pci_driver_bind_host** |
+| SMP TLB 占位诊断 | 多逻辑 CPU 时 BSP 本地 flush 的串口提示 | Debug 构建 + `tlb_broadcast.requestGlobalFlushStub` |

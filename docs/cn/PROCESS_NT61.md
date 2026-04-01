@@ -13,6 +13,7 @@
 
 - **微软官方 Windows 7 用户态二进制**仅面向 **x86 / x86_64**。其他架构在本仓库中为 **同名 NT API 子集 + 实验性 Shell**，不声称可加载 Windows 7 官方 PE 生态。
 - 契约粒度与「完成度」以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 为准；README 功能矩阵中的 **Partial / Stub** 表示非 Done。
+- 明确不阻塞内核主里程碑的能力见 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)（WDDM、完整 Win32、WOW64、AML 等）。
 
 ## 阶段划分（必须按序）
 
@@ -53,8 +54,10 @@
 1. 默认配置下可完整构建。
 2. 与本阶段相关的 `make test-*` 或脚本测试通过（随仓库更新）。
 3. 文档（本文件 + `docs/en/Boot.md`）中引导路径描述与实现一致。
+4. **内核相关 PR**：对照 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 相应行；新增行为尽量增加 [MVT_NT61.md](MVT_NT61.md) 或 `tests/` 条目；提交前运行 `bash scripts/verify-compliance.sh`（与 CI 一致）。
 
 ## 参考
 
 - 完成度与契约：[NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)
+- 内核分阶段待办：[NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md)
 - 英文引导说明：`docs/en/Boot.md`（仅 ZBM 策略）。

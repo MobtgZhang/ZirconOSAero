@@ -294,6 +294,30 @@ pub fn collectAmdDisplayDevices(out: []DisplayGfxPciInfo, max_bus: u8) usize {
     return collectDisplayDevicesByVendor(PCI_VENDOR_AMD_ATI, out, max_bus);
 }
 
+fn isPciMassStorageClass(class_dword: u32) bool {
+    return @as(u8, @truncate(class_dword >> 24)) == 0x01;
+}
+
+/// 统计 PCI class **0x01**（大容量存储控制器）的在位功能数，供块设备驱动发现与串口诊断（AHCI/NVMe/VirtIO-blk 等接线点）。
+pub fn countMassStorageFunctions(max_bus: u8) usize {
+    if (!supports_pci_config) return 0;
+    var n: usize = 0;
+    var b: u8 = 0;
+    while (b <= max_bus) : (b += 1) {
+        var d: u8 = 0;
+        while (d < 32) : (d += 1) {
+            var f: u8 = 0;
+            while (f < 8) : (f += 1) {
+                const id = readConfigDword(b, d, f, 0);
+                if (id == 0xFFFFFFFF) continue;
+                const cls = readConfigDword(b, d, f, 0x08);
+                if (isPciMassStorageClass(cls)) n += 1;
+            }
+        }
+    }
+    return n;
+}
+
 /// 扫描 PCI，收集龙芯（0014）显示控制器（class 0x03）
 pub fn collectLoongsonDisplayDevices(out: []DisplayGfxPciInfo, max_bus: u8) usize {
     return collectDisplayDevicesByVendor(PCI_VENDOR_LOONGSON, out, max_bus);

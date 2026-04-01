@@ -38,8 +38,8 @@
 //!     - Proceeds same as MBR path from there
 //!
 //!   UEFI/GPT Boot Path:
-//!     UEFI → ESP → zbmfw.efi (ZBM UEFI app) → kernel.elf
-//!     - UEFI firmware loads zbmfw.efi from ESP
+//!     UEFI → ESP → BOOT*.EFI (ZBM UEFI app, e.g. BOOTX64) → kernel.elf
+//!     - UEFI firmware loads the ZBM application from ESP
 //!     - ZBM uses UEFI protocols for disk/file access
 //!     - Displays boot menu via UEFI console
 //!     - Loads kernel.elf via UEFI Simple File System
@@ -148,8 +148,7 @@ pub fn prepareKernelBoot(ctx: *BootContext, selection: usize) void {
 pub const MULTIBOOT2_MAGIC: u32 = 0x36D76289;
 
 /// Build a Multiboot2-compatible info structure at the given address.
-/// This allows the kernel to use the same boot info parsing regardless
-/// of whether it was booted via GRUB or ZBM.
+/// The kernel parses this block from ZBM (BIOS Stage2 or UEFI loader); layout follows the public Multiboot2 tag spec.
 pub fn buildMultiboot2Info(
     base_addr: u64,
     mem_lower_kb: u32,

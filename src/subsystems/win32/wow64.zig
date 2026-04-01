@@ -1,6 +1,9 @@
 //! WOW64 - 32-bit on 64-bit Compatibility Layer
 //! Phase 11: PE32 loading, 32-bit syscall thunking, address space
 //! management, 32-bit ntdll/kernel32 shim, and compatibility testing.
+//!
+//! **与真实 SysWOW64 的差距**：本层 thunk 使用内核内部 `SYS_*` 服务号（见 `docs/cn/SyscallABI.md`、`docs/cn/SSDT_Roadmap.md`），
+//! 与微软 64 位内核 SSDT 索引及官方 `ntdll.dll` / SysWOW64 路径不对齐；加载 Windows 自带用户态二进制前须完成服务号兼容策略。
 
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");

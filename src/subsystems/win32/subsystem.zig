@@ -303,6 +303,9 @@ var gui_message_count: u64 = 0;
 pub fn initGuiSubsystem() void {
     gui_subsystem_active = true;
     klog.info("csrss: GUI subsystem activated", .{});
+    user32.broadcastDwmCompositionChanged(user32.TRUE);
+    user32.broadcastDwmColorizationChanged(0xFF_70_90_D0, user32.TRUE);
+    user32.broadcastDwmNcRenderingChanged(user32.TRUE);
 }
 
 pub fn registerGuiWindow(pid: u32, hwnd: u64) bool {

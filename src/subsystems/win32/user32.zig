@@ -86,6 +86,44 @@ pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_USER: u32 = 0x0400;
 pub const WM_APP: u32 = 0x8000;
 
+// DWM 广播（与 MSDN 常量值一致；Shell 感知桌面合成）
+pub const WM_DWMCOMPOSITIONCHANGED: u32 = 0x031E;
+pub const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
+pub const WM_DWMNCRENDERINGCHANGED: u32 = 0x031F;
+pub const WM_DWMSENDICONICTHUMBNAIL: u32 = 0x0323;
+
+// 非客户区命中与移动（MSDN 常量值）
+pub const WM_NCMOUSEMOVE: u32 = 0x00A0;
+pub const WM_NCLBUTTONDOWN: u32 = 0x00A1;
+pub const WM_NCLBUTTONUP: u32 = 0x00A2;
+pub const WM_NCHITTEST: u32 = 0x0084;
+pub const WM_MOVING: u32 = 0x0216;
+
+pub const HTERROR: i32 = -2;
+pub const HTTRANSPARENT: i32 = -1;
+pub const HTNOWHERE: i32 = 0;
+pub const HTCLIENT: i32 = 1;
+pub const HTCAPTION: i32 = 2;
+pub const HTSYSMENU: i32 = 3;
+pub const HTGROWBOX: i32 = 4;
+pub const HTMENU: i32 = 5;
+pub const HTHSCROLL: i32 = 6;
+pub const HTVSCROLL: i32 = 7;
+pub const HTMINBUTTON: i32 = 8;
+pub const HTMAXBUTTON: i32 = 9;
+pub const HTLEFT: i32 = 10;
+pub const HTRIGHT: i32 = 11;
+pub const HTTOP: i32 = 12;
+pub const HTTOPLEFT: i32 = 13;
+pub const HTTOPRIGHT: i32 = 14;
+pub const HTBOTTOM: i32 = 15;
+pub const HTBOTTOMLEFT: i32 = 16;
+pub const HTBOTTOMRIGHT: i32 = 17;
+pub const HTBORDER: i32 = 18;
+pub const HTOBJECT: i32 = 19;
+pub const HTCLOSE: i32 = 20;
+pub const HTHELP: i32 = 21;
+
 // ── Show Window Commands ──
 
 pub const SW_HIDE: u32 = 0;
@@ -338,6 +376,39 @@ pub fn getScreenWidth() i32 {
 
 pub fn getScreenHeight() i32 {
     return screen_height;
+}
+
+/// 向已创建窗口投递 `WM_DWMCOMPOSITIONCHANGED`（合成启用/关闭）；供 csrss / 壳层在 DWM 状态变化时调用。
+pub fn broadcastDwmCompositionChanged(composition_on: BOOL) void {
+    const wp: WPARAM = if (composition_on != 0) 1 else 0;
+    var wi: usize = 0;
+    while (wi < window_count) : (wi += 1) {
+        if (windows[wi].is_valid) {
+            _ = windows[wi].postMessage(WM_DWMCOMPOSITIONCHANGED, wp, 0);
+        }
+    }
+}
+
+/// `WM_DWMCOLORIZATIONCOLORCHANGED`：`wParam` 为 `COLORREF` 风格 ARGB，`lParam` 非零表示启用混合（简化语义）。
+pub fn broadcastDwmColorizationChanged(argb: u32, blend_enabled: BOOL) void {
+    const wp: WPARAM = argb;
+    const lp: LPARAM = if (blend_enabled != 0) 1 else 0;
+    var wi: usize = 0;
+    while (wi < window_count) : (wi += 1) {
+        if (windows[wi].is_valid) {
+            _ = windows[wi].postMessage(WM_DWMCOLORIZATIONCOLORCHANGED, wp, lp);
+        }
+    }
+}
+
+pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
+    const wp: WPARAM = if (policy_enabled != 0) 1 else 0;
+    var wi: usize = 0;
+    while (wi < window_count) : (wi += 1) {
+        if (windows[wi].is_valid) {
+            _ = windows[wi].postMessage(WM_DWMNCRENDERINGCHANGED, wp, 0);
+        }
+    }
 }
 
 var user32_initialized: bool = false;
@@ -713,8 +784,7 @@ pub fn TranslateMessage(_: *const MSG) BOOL {
 
 pub fn DispatchMessageA(msg: *const MSG) LRESULT {
     total_messages_processed += 1;
-    _ = msg;
-    return 0;
+    return DefWindowProcA(msg.hwnd, msg.message, msg.wparam, msg.lparam);
 }
 
 pub fn PostMessageA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) BOOL {
@@ -869,8 +939,78 @@ pub fn GetWindowLongA(hwnd: HWND, index: i32) u64 {
     };
 }
 
-pub fn DefWindowProcA(_: HWND, msg: u32, _: WPARAM, _: LPARAM) LRESULT {
+fn pointFromLParam(lp: LPARAM) POINT {
+    const u: u32 = @truncate(@as(u64, @bitCast(lp)));
+    const lx: u16 = @truncate(u & 0xFFFF);
+    const ly: u16 = @truncate(u >> 16);
+    return .{
+        .x = @as(i16, @bitCast(lx)),
+        .y = @as(i16, @bitCast(ly)),
+    };
+}
+
+fn defNcHitTestForWindow(wnd: *const Window, screen_x: i32, screen_y: i32) LRESULT {
+    const r = wnd.rect;
+    if (screen_x < r.left or screen_y < r.top or screen_x >= r.right or screen_y >= r.bottom)
+        return HTNOWHERE;
+
+    const st = wnd.style;
+    const thick = (st & WS_THICKFRAME) != 0;
+    const frame: i32 = if (thick) 6 else 0;
+    const cap_h: i32 = if ((st & WS_CAPTION) != 0) 32 else 0;
+
+    const left = r.left;
+    const right = r.right;
+    const top = r.top;
+    const bottom = r.bottom;
+
+    if (thick) {
+        if (screen_y < top + frame) {
+            if (screen_x < left + frame) return HTTOPLEFT;
+            if (screen_x >= right - frame) return HTTOPRIGHT;
+            return HTTOP;
+        }
+        if (screen_y >= bottom - frame) {
+            if (screen_x < left + frame) return HTBOTTOMLEFT;
+            if (screen_x >= right - frame) return HTBOTTOMRIGHT;
+            return HTBOTTOM;
+        }
+        if (screen_x < left + frame) return HTLEFT;
+        if (screen_x >= right - frame) return HTRIGHT;
+    }
+
+    if (cap_h > 0 and screen_y < top + cap_h) {
+        const inner_right = right - frame;
+        const btn: i32 = 42;
+        const x_from_right = inner_right - screen_x;
+        const has_chrome = (st & WS_MINIMIZEBOX) != 0 or (st & WS_MAXIMIZEBOX) != 0 or (st & WS_SYSMENU) != 0;
+        if (has_chrome) {
+            if (x_from_right > 0 and x_from_right <= btn) return HTCLOSE;
+            if ((st & WS_MAXIMIZEBOX) != 0 and x_from_right > btn and x_from_right <= 2 * btn) return HTMAXBUTTON;
+            if ((st & WS_MINIMIZEBOX) != 0 and x_from_right > 2 * btn and x_from_right <= 3 * btn) return HTMINBUTTON;
+        }
+        if ((st & WS_SYSMENU) != 0 and screen_x < left + frame + 28) return HTSYSMENU;
+        return HTCAPTION;
+    }
+    return HTCLIENT;
+}
+
+pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRESULT {
     switch (msg) {
+        WM_NCHITTEST => {
+            const wnd = findWindow(hwnd) orelse return HTNOWHERE;
+            const pt = pointFromLParam(lparam);
+            return defNcHitTestForWindow(wnd, pt.x, pt.y);
+        },
+        WM_NCLBUTTONDOWN => {
+            if (wparam == @as(WPARAM, @intCast(HTCAPTION))) {
+                if (findWindow(hwnd)) |w| {
+                    // 真实 Windows 上 `lParam` 为 `RECT*`；此处投递占位消息供消息泵/契约测试。
+                    _ = w.postMessage(WM_MOVING, 1, 0);
+                }
+            }
+            return 0;
+        },
         WM_CLOSE => return 0,
         WM_DESTROY => return 0,
         WM_PAINT => return 0,

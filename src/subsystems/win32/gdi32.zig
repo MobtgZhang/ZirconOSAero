@@ -1,6 +1,9 @@
 //! gdi32 - Win32 Graphics Device Interface API Subset
 //! Phase 10: Device contexts, drawing primitives, brushes, pens,
 //! fonts, bitmaps, and text rendering for framebuffer GUI.
+//!
+//! **分阶段扩展**：区域（HRGN）、路径、字体子集等按 [NT61_CONTRACT_MATRIX.md](../../../docs/cn/NT61_CONTRACT_MATRIX.md)
+//! 中「返回值 vs 功能完整」标注推进；当前部分 API 为存根或简化几何。
 
 const klog = @import("../../rtl/klog.zig");
 const kernel32 = @import("../../libs/kernel32.zig");

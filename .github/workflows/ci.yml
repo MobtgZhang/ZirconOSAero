@@ -55,7 +55,7 @@ jobs:
       - name: QEMU serial smoke (ZBM MBR, headless)
         run: bash scripts/ci-qemu-smoke.sh
 
-      - name: UEFI ISO artifact (x86_64 ZBM, no GRUB)
+      - name: UEFI ISO artifact (x86_64 ZBM)
         run: |
           mkdir -p build/test-results
           ISO=build/test-results/zircon-ci-smoke.iso

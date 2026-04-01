@@ -1,6 +1,7 @@
 .zig-cache/
 zig-out/
-build/
+# Root output dir only; plain `build/` wrongly ignores `scripts/build/*.sh`.
+/build/
 mdcs/
 run-iso.sh
 firmware/

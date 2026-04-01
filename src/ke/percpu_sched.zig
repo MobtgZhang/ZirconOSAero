@@ -24,5 +24,5 @@ pub fn assignCpuForNewThread() u32 {
     return 0;
 }
 
-/// 占位：空闲 CPU 从邻队窃取就绪线程；依赖 `scheduler` 导出 per-CPU 队列后实现。
+/// 工作窃取已并入 `ke/scheduler.zig` 的 `tick`（`workStealBalanceIfIdleImpl`）；保留空符号避免旧调用点破坏链接。
 pub fn workStealBalanceIfIdle() void {}

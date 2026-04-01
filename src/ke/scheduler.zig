@@ -55,6 +55,130 @@ pub const ThreadContext = struct {
 
 const MAX_THREADS: usize = 32;
 const STACK_SIZE: usize = 8192;
+/// 就绪链分桶上界（与 `madt.logical_cpu_count` 取 min）；AP 未进调度前仅 BSP 桶活跃。
+const MAX_SCHED_CPUS: usize = 8;
+
+var ready_head: [MAX_SCHED_CPUS]i32 = @splat(-1);
+var ready_tail: [MAX_SCHED_CPUS]i32 = @splat(-1);
+
+fn schedNumCpus() usize {
+    if (builtin.cpu.arch == .x86_64) {
+        const madt = @import("../hal/x86_64/madt.zig");
+        const n: u32 = madt.logical_cpu_count;
+        return @max(@as(usize, 1), @min(@as(usize, @intCast(n)), MAX_SCHED_CPUS));
+    }
+    return 1;
+}
+
+fn homeCpuSchedSlot(home: u32) usize {
+    const n = schedNumCpus();
+    return @intCast(home % n);
+}
+
+fn resetReadyQueues() void {
+    for (&ready_head) |*h| h.* = -1;
+    for (&ready_tail) |*t| t.* = -1;
+}
+
+fn enqueueReady(tid: usize) void {
+    if (tid >= thread_count) return;
+    if (threads[tid].in_ready_queue) return;
+    const cpu = homeCpuSchedSlot(threads[tid].home_cpu);
+    threads[tid].next_ready = -1;
+    threads[tid].in_ready_queue = true;
+    const th: i32 = @intCast(tid);
+    const tail = ready_tail[cpu];
+    if (tail < 0) {
+        ready_head[cpu] = th;
+        ready_tail[cpu] = th;
+    } else {
+        threads[@intCast(tail)].next_ready = th;
+        ready_tail[cpu] = th;
+    }
+}
+
+fn removeFromReadyQueue(tid: usize) void {
+    if (tid >= thread_count or !threads[tid].in_ready_queue) return;
+    threads[tid].in_ready_queue = false;
+    const n = schedNumCpus();
+    var c: usize = 0;
+    while (c < n) : (c += 1) {
+        var prev: i32 = -1;
+        var cur_tid = ready_head[c];
+        while (cur_tid >= 0) {
+            const ct: usize = @intCast(cur_tid);
+            const next = threads[ct].next_ready;
+            if (ct == tid) {
+                if (prev < 0) {
+                    ready_head[c] = next;
+                } else {
+                    threads[@intCast(prev)].next_ready = next;
+                }
+                if (ready_tail[c] == cur_tid) {
+                    ready_tail[c] = prev;
+                }
+                threads[ct].next_ready = -1;
+                return;
+            }
+            prev = cur_tid;
+            cur_tid = next;
+        }
+    }
+    threads[tid].next_ready = -1;
+}
+
+fn popHeadQueue(cpu: usize) ?usize {
+    const h = ready_head[cpu];
+    if (h < 0) return null;
+    const tid: usize = @intCast(h);
+    const next = threads[tid].next_ready;
+    ready_head[cpu] = next;
+    if (next < 0) ready_tail[cpu] = -1;
+    threads[tid].next_ready = -1;
+    threads[tid].in_ready_queue = false;
+    return tid;
+}
+
+fn isBspIdleThreadForSteal() bool {
+    return current_thread < thread_count and
+        threads[current_thread].id == 0 and
+        threads[current_thread].priority == PRIORITY_IDLE;
+}
+
+fn workStealBalanceIfIdleImpl() void {
+    const n = schedNumCpus();
+    if (n <= 1) return;
+    if (!isBspIdleThreadForSteal()) return;
+    const here: usize = 0;
+    if (ready_head[here] >= 0) return;
+    var best_c: usize = 0;
+    var best_len: usize = 0;
+    var c: usize = 0;
+    while (c < n) : (c += 1) {
+        if (c == here) continue;
+        var len: usize = 0;
+        var t = ready_head[c];
+        while (t >= 0) {
+            len += 1;
+            t = threads[@intCast(t)].next_ready;
+        }
+        if (len > best_len) {
+            best_len = len;
+            best_c = c;
+        }
+    }
+    if (best_len == 0) return;
+    const stolen = popHeadQueue(best_c) orelse return;
+    threads[stolen].home_cpu = @intCast(here);
+    enqueueReady(stolen);
+}
+
+fn isSchedulable(idx: usize) bool {
+    if (idx >= thread_count) return false;
+    const t = &threads[idx];
+    if (t.state == .running) return true;
+    return t.state == .ready and t.in_ready_queue;
+}
 
 /// NT 6.1 风格 **0–31** 数值档（越大越优先）；idle 取低端，交互/实时取高端。
 pub const PRIORITY_IDLE: u8 = 1;
@@ -100,6 +224,9 @@ pub const Thread = struct {
     boost_deadline_tick: u64 = 0,
     /// 当前运行周期剩余时间片（仅 `running` 时递减）。
     slice_remaining: u32 = TIME_SLICE_TICKS,
+    /// 每 CPU 就绪链（`home_cpu` 分桶）；`running` / `blocked` 不在链上。
+    next_ready: i32 = -1,
+    in_ready_queue: bool = false,
     name: [16]u8 = [_]u8{0} ** 16,
 };
 
@@ -107,7 +234,7 @@ fn effectivePriority(t: *const Thread) u8 {
     const sum = @as(u16, t.priority) + @as(u16, t.io_boost);
     const capped: u16 = @min(sum, 31);
     var p: u8 = @intCast(capped);
-    if (t.state == .ready and starve_ticks[t.id] > STARVATION_TICK_THRESHOLD) {
+    if (t.state == .ready and t.in_ready_queue and starve_ticks[t.id] > STARVATION_TICK_THRESHOLD) {
         p = @min(31, p +| STARVATION_BOOST);
     }
     return p;
@@ -123,6 +250,7 @@ var scheduling_enabled: bool = false;
 var starve_ticks: [MAX_THREADS]u64 = @splat(0);
 
 pub fn init() void {
+    resetReadyQueues();
     thread_count = 0;
     current_thread = 0;
     tick_count = 0;
@@ -190,6 +318,7 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
     threads[idx].context.rip = entry;
 
     thread_count += 1;
+    enqueueReady(idx);
 
     klog.debug("Scheduler: thread %u created (entry=0x%x, pid=%u)", .{
         idx, entry, process_id,
@@ -207,7 +336,7 @@ pub fn tick() void {
     defer sched_irq_lock.unlock();
 
     tick_count += 1;
-    percpu_sched.workStealBalanceIfIdle();
+    workStealBalanceIfIdleImpl();
 
     if (!scheduling_enabled or thread_count <= 1) return;
 
@@ -221,7 +350,7 @@ pub fn tick() void {
     const cur = current_thread;
     i = 0;
     while (i < thread_count) : (i += 1) {
-        if (threads[i].state == .ready and i != cur) {
+        if (threads[i].state == .ready and threads[i].in_ready_queue and i != cur) {
             starve_ticks[i] += 1;
         } else if (threads[i].state != .ready) {
             starve_ticks[i] = 0;
@@ -235,11 +364,9 @@ pub fn tick() void {
     var max_pri: u8 = 0;
     i = 0;
     while (i < thread_count) : (i += 1) {
-        const t = &threads[i];
-        if (t.state == .ready or t.state == .running) {
-            const ep = effectivePriority(t);
-            if (ep > max_pri) max_pri = ep;
-        }
+        if (!isSchedulable(i)) continue;
+        const ep = effectivePriority(&threads[i]);
+        if (ep > max_pri) max_pri = ep;
     }
 
     const cur_ep = effectivePriority(&threads[cur]);
@@ -253,8 +380,8 @@ pub fn tick() void {
     if (higher) {
         i = 0;
         while (i < thread_count) : (i += 1) {
-            const t = &threads[i];
-            if ((t.state == .ready or t.state == .running) and effectivePriority(t) == max_pri) {
+            if (!isSchedulable(i)) continue;
+            if (effectivePriority(&threads[i]) == max_pri) {
                 next = i;
                 break;
             }
@@ -263,8 +390,8 @@ pub fn tick() void {
         var off: usize = 1;
         while (off <= thread_count) : (off += 1) {
             const idx = (cur + off) % thread_count;
-            const t = &threads[idx];
-            if ((t.state == .ready or t.state == .running) and effectivePriority(t) == max_pri) {
+            if (!isSchedulable(idx)) continue;
+            if (effectivePriority(&threads[idx]) == max_pri) {
                 next = idx;
                 break;
             }
@@ -272,9 +399,11 @@ pub fn tick() void {
     }
 
     if (next != cur and threads[next].state != .terminated) {
+        removeFromReadyQueue(next);
         if (threads[cur].state == .running) {
             threads[cur].state = .ready;
             threads[cur].slice_remaining = TIME_SLICE_TICKS;
+            enqueueReady(cur);
         }
         threads[next].state = .running;
         threads[next].slice_remaining = TIME_SLICE_TICKS;
@@ -298,6 +427,7 @@ pub fn getCurrentThreadId() usize {
 
 pub fn blockThread(tid: usize) void {
     if (tid < thread_count) {
+        removeFromReadyQueue(tid);
         threads[tid].state = .blocked;
     }
 }
@@ -309,11 +439,13 @@ pub fn unblockThread(tid: usize) void {
         const nb = @as(u16, threads[tid].io_boost) + @as(u16, IO_BOOST_PRIORITY_DELTA);
         threads[tid].io_boost = @truncate(@min(nb, cap));
         threads[tid].boost_deadline_tick = tick_count + IO_BOOST_DURATION_TICKS;
+        enqueueReady(tid);
     }
 }
 
 pub fn terminateThread(tid: usize) void {
     if (tid < thread_count) {
+        removeFromReadyQueue(tid);
         threads[tid].state = .terminated;
         klog.debug("Scheduler: thread %u terminated", .{tid});
     }

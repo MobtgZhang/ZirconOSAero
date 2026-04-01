@@ -14,6 +14,7 @@ pub fn flushLocal() void {
 }
 
 /// 当前无在线 AP 时等价于 `flushLocal`。SMP 就绪后：在修改**内核共享**页表项后应经 IPI 触发各核 `INVLPG`/全 TLB 刷新（见 Intel SDM TLB 一致性；本函数暂为 BSP 占位）。
+/// `vm.releaseProcessAddressSpace` 在释放他进程页表后调用本函数，避免当前核残留陈旧 global 项（与 PCID/INVPCID 策略见契约矩阵）。
 pub fn requestGlobalFlushStub() void {
     flushLocal();
 }

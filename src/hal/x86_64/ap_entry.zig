@@ -10,6 +10,7 @@
 const klog = @import("../../rtl/klog.zig");
 
 /// BSP 在唤醒 AP 后跳转的 C 约定入口（当前为停机占位）。
+/// 后续：在此核上初始化 `IA32_KERNEL_GS_BASE`、进入 `scheduler` 每 CPU 空闲循环前须完成 TLB/ICR 握手（见 `tlb_broadcast.zig`）。
 pub export fn apKernelEntry(cpu_index: u32) callconv(.c) noreturn {
     klog.info("SMP: AP cpu_index=%u entered (stub idle)", .{cpu_index});
     while (true) {

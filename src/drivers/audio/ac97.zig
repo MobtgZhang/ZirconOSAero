@@ -12,9 +12,15 @@ else
         pub fn outb(_: u16, _: u8) void {}
         pub fn outw(_: u16, _: u16) void {}
         pub fn outl(_: u16, _: u32) void {}
-        pub fn inb(_: u16) u8 { return 0; }
-        pub fn inw(_: u16) u16 { return 0; }
-        pub fn inl(_: u16) u32 { return 0; }
+        pub fn inb(_: u16) u8 {
+            return 0;
+        }
+        pub fn inw(_: u16) u16 {
+            return 0;
+        }
+        pub fn inl(_: u16) u32 {
+            return 0;
+        }
         pub fn ioWait() void {}
     };
 

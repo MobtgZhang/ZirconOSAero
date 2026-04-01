@@ -8,6 +8,10 @@
 |------|------|--------|
 | Source Sans Pro | [`src/fonts/western/SourceSansPro/`](src/fonts/western/SourceSansPro/) | 见同目录 `LICENSE.md`（SIL Open Font License） |
 
+### GPL / Copyleft 图标或主题（若未来引入）
+
+若从 **GPL-3.0** 等 copyleft 项目（例如 Papirus 等桌面图标主题）复制资源入仓：须在表中登记路径与许可证，并评估与根目录 **LGPL-2.1** 的组合分发策略；**不得** 在未声明的情况下将大段第三方实现混入内核源码树。
+
 ## 上游与品牌
 
 | 来源 | 关系 |

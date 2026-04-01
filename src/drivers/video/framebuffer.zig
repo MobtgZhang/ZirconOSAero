@@ -1491,9 +1491,8 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
     driver_idx = io.registerDriver("\\Driver\\Framebuf", fbDispatch) orelse {
         klog.err("Framebuffer: Failed to register IO driver (rendering still works)", .{});
         klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
-            width, height, bpp, pitch, addr,
-            if (double_buffer_active) "ON" else "OFF",
-            if (triple_buffer_active) "ON" else "OFF",
+            width,                                     height,                                    bpp, pitch, addr,
+            if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF",
         });
         return;
     };
@@ -1501,9 +1500,8 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
     device_idx = io.createDevice("\\Device\\Framebuf0", .framebuffer, driver_idx) orelse {
         klog.err("Framebuffer: Failed to create IO device (rendering still works)", .{});
         klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
-            width, height, bpp, pitch, addr,
-            if (double_buffer_active) "ON" else "OFF",
-            if (triple_buffer_active) "ON" else "OFF",
+            width,                                     height,                                    bpp, pitch, addr,
+            if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF",
         });
         return;
     };
@@ -1511,10 +1509,8 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
     driver_initialized = true;
 
     klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s offscreen_B=%u", .{
-        width, height, bpp, pitch, addr,
-        if (double_buffer_active) "ON" else "OFF",
-        if (triple_buffer_active) "ON" else "OFF",
-        @as(u32, @truncate(getOffscreenReservedBytes())),
+        width,                                     height,                                    bpp,                                              pitch, addr,
+        if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF", @as(u32, @truncate(getOffscreenReservedBytes())),
     });
     logFramebufferMemorySummary();
 }

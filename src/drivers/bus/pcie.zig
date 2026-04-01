@@ -40,7 +40,6 @@ pub const supports_pci_config: bool = builtin.target.cpu.arch == .x86_64 or
 
 pub const IOCTL_PCI_READ_CONFIG_DWORD: u32 = 0x00070000;
 /// buffer_ptr layout: (bus:u8)<<24 | (dev:u8)<<19 | (func:u8)<<16 | (offset:u8) — offset dword-aligned
-
 var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;

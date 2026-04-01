@@ -146,7 +146,7 @@ pub fn loadCr3(phys: u64) void {
     const satp_val: u64 = (8 << 60) | ppn;
     asm volatile ("csrw satp, %[val]\nsfence.vma zero, zero"
         :
-        : [val] "r" (satp_val)
+        : [val] "r" (satp_val),
     );
 }
 

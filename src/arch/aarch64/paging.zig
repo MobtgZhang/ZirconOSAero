@@ -149,7 +149,7 @@ pub fn unmapPage(pgd_phys: u64, virt: u64, _: AllocFrameFn, _: ?*anyopaque) bool
 pub fn loadCr3(phys: u64) void {
     asm volatile ("msr ttbr0_el1, %[phys]\ntlbi vmalle1\ndsb sy\nisb"
         :
-        : [phys] "r" (phys)
+        : [phys] "r" (phys),
     );
 }
 

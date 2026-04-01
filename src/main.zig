@@ -257,6 +257,15 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         id_st.leaf_pages,
     });
 
+    if (builtin.cpu.arch == .x86_64) {
+        if (boot_info) |bi| {
+            if (bi.acpi_rsdp_phys != 0) {
+                const acpi_pci = @import("hal/x86_64/acpi_pci_early.zig");
+                acpi_pci.initFromRsdp(bi.acpi_rsdp_phys);
+            }
+        }
+    }
+
     // Map framebuffer region if it lies outside the identity-mapped area
     if (boot_info) |binfo| {
         if (binfo.fb_info) |fb_i| {

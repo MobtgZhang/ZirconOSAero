@@ -122,17 +122,20 @@ pub fn init() void {
             if (video.loongson_igpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
-        if (is_x86 and bopts_log.nvidia_gpu) blk: {
+        if (is_x86 and bopts_log.nvidia_gpu)
+        blk: {
             if (video.nvidia_gpu.isDeferredProbePending()) break :blk "defer";
             if (video.nvidia_gpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
-        if (is_x86 and bopts_log.amd_igpu) blk: {
+        if (is_x86 and bopts_log.amd_igpu)
+        blk: {
             if (video.amd_igpu.isDeferredProbePending()) break :blk "defer";
             if (video.amd_igpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
-        if (is_x86 and bopts_log.intel_igpu) blk: {
+        if (is_x86 and bopts_log.intel_igpu)
+        blk: {
             if (video.intel_igpu.isDeferredProbePending()) break :blk "defer";
             if (video.intel_igpu.isActive()) break :blk "yes";
             break :blk "no";

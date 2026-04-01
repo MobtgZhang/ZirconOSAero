@@ -56,6 +56,15 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | IRQL、DPC | 同步级别约束（简化实现须在注释声明） | `src/ke/dpc.zig`, `interrupt_x86.zig` | 最小 DPC：输入轮询延后至 IRQ 出口 |
 | 内存管理器 | 池标签、`Mdl`（长期） | `src/mm/` |
 
+## 2.1 HAL / 总线与网络（阶段性）
+
+| 主题 | 状态 | 仓库位置 / 说明 |
+|------|------|------------------|
+| ACPI RSDP（Multiboot2 tag 14/15）→ XSDT/RSDT → MCFG | 部分 | `src/boot/multiboot2_parse.zig`、`src/hal/x86_64/acpi_pci_early.zig`；无 AML 解释器 |
+| PCIe ECAM MMIO `configRead32` | 部分 | 同上；启动时探测总线 0 设备 0 |
+| USB XHCI / HID | 未 | 路线图：[HAL_USB_NET_ROADMAP.md](HAL_USB_NET_ROADMAP.md) |
+| IPv4 / ARP / UDP 原型 | 未 | 路线图同上；TCP 非当前里程碑 |
+
 ## 3. 关键 Native API 与文档链接（示例）
 
 | API | 参考（公开文档） | 备注 |

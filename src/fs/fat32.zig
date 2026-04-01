@@ -184,7 +184,10 @@ pub const Fat32Volume = struct {
         var i: usize = 0;
         var dot_pos: usize = name.len;
         for (name, 0..) |c, idx| {
-            if (c == '.') { dot_pos = idx; break; }
+            if (c == '.') {
+                dot_pos = idx;
+                break;
+            }
         }
 
         while (i < 8 and i < dot_pos) : (i += 1) {
@@ -194,7 +197,10 @@ pub const Fat32Volume = struct {
         if (dot_pos < name.len) {
             var j: usize = 0;
             var k = dot_pos + 1;
-            while (j < 3 and k < name.len) : ({ j += 1; k += 1; }) {
+            while (j < 3 and k < name.len) : ({
+                j += 1;
+                k += 1;
+            }) {
                 entry.ext[j] = toUpper(name[k]);
             }
         }
@@ -283,7 +289,10 @@ fn matchName(entry: *const DirEntry83, name: []const u8) bool {
     }
     var has_ext = false;
     for (entry.ext) |c| {
-        if (c != ' ') { has_ext = true; break; }
+        if (c != ' ') {
+            has_ext = true;
+            break;
+        }
     }
     if (has_ext) {
         short[pos] = '.';
@@ -378,17 +387,29 @@ fn fat32Readdir(_: *vfs.FileObject, entries: []vfs.DirEntry) usize {
         var pos: usize = 0;
         for (fat_entry.name) |c| {
             if (c == ' ') break;
-            if (pos < e.name.len) { e.name[pos] = c; pos += 1; }
+            if (pos < e.name.len) {
+                e.name[pos] = c;
+                pos += 1;
+            }
         }
         var has_ext = false;
         for (fat_entry.ext) |c| {
-            if (c != ' ') { has_ext = true; break; }
+            if (c != ' ') {
+                has_ext = true;
+                break;
+            }
         }
         if (has_ext) {
-            if (pos < e.name.len) { e.name[pos] = '.'; pos += 1; }
+            if (pos < e.name.len) {
+                e.name[pos] = '.';
+                pos += 1;
+            }
             for (fat_entry.ext) |c| {
                 if (c == ' ') break;
-                if (pos < e.name.len) { e.name[pos] = c; pos += 1; }
+                if (pos < e.name.len) {
+                    e.name[pos] = c;
+                    pos += 1;
+                }
             }
         }
         e.name_len = pos;

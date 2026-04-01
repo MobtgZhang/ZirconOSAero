@@ -75,7 +75,6 @@ pub fn main() noreturn {
 
 // (Menu display moved to menu_common.zig)
 
-
 // ── Boot Progress Display ──
 
 fn displayBootProgress(out: anytype) void {
@@ -634,8 +633,7 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
             \\ic iallu
             \\dsb sy
             \\isb
-            ::: .{ .memory = true }
-        ),
+            ::: .{ .memory = true }),
         .riscv64 => asm volatile ("fence.i" ::: .{ .memory = true }),
         else => {},
     }
@@ -659,8 +657,7 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
                   [magic] "r" (@as(u64, MULTIBOOT2_MAGIC)),
                   [info] "r" (@as(u64, boot_info_addr)),
                   [stack] "r" (kernel_stack),
-                : .{ .rdi = true, .rsi = true, .rsp = true, .rbp = true }
-            );
+                : .{ .rdi = true, .rsi = true, .rsp = true, .rbp = true });
         },
         .aarch64 => {
             asm volatile (
@@ -804,8 +801,11 @@ fn buildBootInfo(
 
 fn uefiToMb2MemType(t: uefi.tables.MemoryType) u32 {
     return switch (t) {
-        .conventional_memory, .loader_code, .loader_data,
-        .boot_services_code, .boot_services_data,
+        .conventional_memory,
+        .loader_code,
+        .loader_data,
+        .boot_services_code,
+        .boot_services_data,
         => 1, // available
         .acpi_reclaim_memory => 3,
         .acpi_memory_nvs => 4,

@@ -133,7 +133,10 @@ pub fn CreateProcessA(
     _ = cmd_line;
     var handle: ntdll.HANDLE = 0;
     const status = ntdll.NtCreateProcess(
-        &handle, 0, null, @intCast(process.getCurrentPid()),
+        &handle,
+        0,
+        null,
+        @intCast(process.getCurrentPid()),
     );
     if (status == ntdll.STATUS_SUCCESS) {
         process_info.process_id = @intCast(handle);

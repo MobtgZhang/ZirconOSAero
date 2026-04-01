@@ -106,6 +106,8 @@ pub const BootInfo = struct {
     /// 仅当本结构由 `parseMultiboot2` 完整解析时有效：Multiboot2 信息块占用区间，供帧分配器保留，避免再次对 handoff 指针解引用（UEFI 回退路径下 `info_addr` 可能不可访问）。
     multiboot_handoff_start: usize = 0,
     multiboot_handoff_end_exclusive: usize = 0,
+    /// Multiboot2 ACPI 标签（type 14/15）内嵌 RSDP 的**物理地址**（与恒等映射一致）；无标签时为 `0`。
+    acpi_rsdp_phys: usize = 0,
 
     pub fn getMmapEntry(self: BootInfo, i: usize) ?MmapEntry {
         if (i >= self.mmap_entry_count or self.mmap_entry_size < 24) return null;
@@ -186,6 +188,16 @@ pub fn parseMultiboot2(phys_addr: usize) ?BootInfo {
                     .fb_type = fb_type_val,
                     .pixel_bgr = pixel_bgr,
                 };
+            },
+            14, 15 => {
+                const body = addr + offset + 8;
+                const body_len = tag_size -| 8;
+                if (body_len >= 20) {
+                    const sig = @as([*]const u8, @ptrFromInt(body))[0..8];
+                    if (std.mem.eql(u8, sig, "RSD PTR ")) {
+                        info.acpi_rsdp_phys = body;
+                    }
+                }
             },
             else => {},
         }

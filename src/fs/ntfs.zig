@@ -130,9 +130,9 @@ pub const NtfsVolume = struct {
 
     fn createSystemRecords(self: *NtfsVolume) void {
         const system_names = [_][]const u8{
-            "$MFT", "$MFTMirr", "$LogFile", "$Volume",
-            "$AttrDef", ".", "$Bitmap", "$Boot",
-            "$BadClus", "$Secure", "$UpCase",
+            "$MFT",     "$MFTMirr", "$LogFile", "$Volume",
+            "$AttrDef", ".",        "$Bitmap",  "$Boot",
+            "$BadClus", "$Secure",  "$UpCase",
         };
         for (system_names, 0..) |name, i| {
             var rec = &self.mft[i];
@@ -204,7 +204,10 @@ pub const NtfsVolume = struct {
             if (rec.file_name_len != name.len) continue;
             var match = true;
             for (rec.file_name[0..rec.file_name_len], name) |a, b| {
-                if (toUpperN(a) != toUpperN(b)) { match = false; break; }
+                if (toUpperN(a) != toUpperN(b)) {
+                    match = false;
+                    break;
+                }
             }
             if (match) return rec;
         }

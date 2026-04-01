@@ -11,7 +11,7 @@ pub const SmpPhase = enum { not_started, planned, bringup };
 pub const NetPhase = enum { not_started, planned, virtio_net };
 pub const StoragePhase = enum { not_started, planned, ahci_nvme };
 pub const PosixPhase = enum { not_started, planned, musl };
-pub const AcpiPhase = enum { not_started, planned, acpica };
+pub const AcpiPhase = enum { not_started, planned, rsdp_mcfg_walk, acpica };
 pub const HwBringupPhase = enum { qemu_only, uefi_real_hw };
 
 pub fn smpStatus() SmpPhase {
@@ -31,7 +31,7 @@ pub fn posixStatus() PosixPhase {
 }
 
 pub fn acpiStatus() AcpiPhase {
-    return .planned;
+    return .rsdp_mcfg_walk;
 }
 
 pub fn hwBringupStatus() HwBringupPhase {

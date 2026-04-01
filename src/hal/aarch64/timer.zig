@@ -10,27 +10,27 @@ pub fn init() void {
 
 pub fn getFrequency() u64 {
     return asm ("mrs %[result], cntfrq_el0"
-        : [result] "=r" (-> u64)
+        : [result] "=r" (-> u64),
     );
 }
 
 pub fn getCounter() u64 {
     return asm ("mrs %[result], cntpct_el0"
-        : [result] "=r" (-> u64)
+        : [result] "=r" (-> u64),
     );
 }
 
 fn setCval(val: u64) void {
     asm volatile ("msr cntp_cval_el0, %[val]"
         :
-        : [val] "r" (val)
+        : [val] "r" (val),
     );
 }
 
 fn setCtl(val: u64) void {
     asm volatile ("msr cntp_ctl_el0, %[val]"
         :
-        : [val] "r" (val)
+        : [val] "r" (val),
     );
 }
 

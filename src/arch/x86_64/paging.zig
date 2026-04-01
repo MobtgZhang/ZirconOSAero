@@ -326,15 +326,14 @@ pub fn unmapPage(pml4_phys: u64, virt: u64, alloc_frame: AllocFrameFn, alloc_ctx
 pub fn loadCr3(phys: u64) void {
     asm volatile ("mov %[phys], %%cr3"
         :
-        : [phys] "r" (phys)
-        : .{ .memory = true }
-    );
+        : [phys] "r" (phys),
+        : .{ .memory = true });
 }
 
 /// 读取 CR3
 pub fn readCr3() u64 {
     return asm ("mov %%cr3, %[result]"
-        : [result] "=r" (-> u64)
+        : [result] "=r" (-> u64),
     );
 }
 

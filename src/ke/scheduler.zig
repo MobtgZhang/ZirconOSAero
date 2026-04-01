@@ -40,6 +40,12 @@ pub const PRIORITY_CLASS_COUNT: usize = 8;
 /// 同等最高优先级线程间：连续占用的定时器 tick 数（`1` = 每 tick 可切换，兼容既有行为）。
 pub const TIME_SLICE_TICKS: u32 = 1;
 
+/// 从 `blocked` 唤醒时叠加到 `priority` 上的临时增量（clean-room 近似 I/O 完成提升，非 NT 精确语义）。
+pub const IO_BOOST_PRIORITY_DELTA: u8 = 2;
+
+/// I/O 提升持续的 tick 数（PIT ~100Hz 时约 `N * 10ms` 量级）。
+pub const IO_BOOST_DURATION_TICKS: u64 = 20;
+
 /// `class` 0..7 → 单调升高的优先级值（裁剪到 u8）。
 pub fn priorityFromClass(class: u8) u8 {
     const c: u32 = @min(@as(u32, class), PRIORITY_CLASS_COUNT - 1);
@@ -54,9 +60,20 @@ pub const Thread = struct {
     context: ThreadContext = .{},
     stack: [STACK_SIZE]u8 align(16) = undefined,
     stack_top: usize = 0,
+    /// 基线优先级（`setThreadPriority` / 创建线程时设置）。
     priority: u8 = 0,
+    /// 唤醒提升增量，在 `boost_deadline_tick` 之前参与调度。
+    io_boost: u8 = 0,
+    boost_deadline_tick: u64 = 0,
+    /// 当前运行周期剩余时间片（仅 `running` 时递减）。
+    slice_remaining: u32 = TIME_SLICE_TICKS,
     name: [16]u8 = [_]u8{0} ** 16,
 };
+
+fn effectivePriority(t: *const Thread) u8 {
+    const sum = @as(u16, t.priority) + @as(u16, t.io_boost);
+    return @truncate(@min(sum, @as(u16, 255)));
+}
 
 var threads: [MAX_THREADS]Thread = undefined;
 var thread_count: usize = 0;
@@ -83,6 +100,9 @@ fn createIdleThread() ?usize {
     threads[idx].id = idx;
     threads[idx].state = .running;
     threads[idx].priority = PRIORITY_IDLE;
+    threads[idx].io_boost = 0;
+    threads[idx].boost_deadline_tick = 0;
+    threads[idx].slice_remaining = TIME_SLICE_TICKS;
 
     const idle_name = "idle";
     @memcpy(threads[idx].name[0..idle_name.len], idle_name);
@@ -103,6 +123,9 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
     threads[idx].process_id = process_id;
     threads[idx].state = .ready;
     threads[idx].priority = PRIORITY_NORMAL;
+    threads[idx].io_boost = 0;
+    threads[idx].boost_deadline_tick = 0;
+    threads[idx].slice_remaining = TIME_SLICE_TICKS;
 
     const stack_base = @intFromPtr(&threads[idx].stack);
     const stack_end = stack_base + STACK_SIZE;
@@ -142,29 +165,64 @@ pub fn tick() void {
 
     if (!scheduling_enabled or thread_count <= 1) return;
 
-    var max_pri: u8 = 0;
     var i: usize = 0;
+    while (i < thread_count) : (i += 1) {
+        if (tick_count >= threads[i].boost_deadline_tick) {
+            threads[i].io_boost = 0;
+        }
+    }
+
+    const cur = current_thread;
+    if (threads[cur].state == .running and threads[cur].slice_remaining > 0) {
+        threads[cur].slice_remaining -= 1;
+    }
+
+    var max_pri: u8 = 0;
+    i = 0;
     while (i < thread_count) : (i += 1) {
         const t = &threads[i];
         if (t.state == .ready or t.state == .running) {
-            if (t.priority > max_pri) max_pri = t.priority;
+            const ep = effectivePriority(t);
+            if (ep > max_pri) max_pri = ep;
         }
     }
 
-    var next: usize = current_thread;
-    var off: usize = 1;
-    while (off <= thread_count) : (off += 1) {
-        const idx = (current_thread + off) % thread_count;
-        const t = &threads[idx];
-        if ((t.state == .ready or t.state == .running) and t.priority == max_pri) {
-            next = idx;
-            break;
+    const cur_ep = effectivePriority(&threads[cur]);
+    const higher = max_pri > cur_ep;
+    const slice_done = threads[cur].slice_remaining == 0;
+    const rr = !higher and slice_done and max_pri == cur_ep;
+
+    if (!higher and !rr) return;
+
+    var next: usize = cur;
+    if (higher) {
+        i = 0;
+        while (i < thread_count) : (i += 1) {
+            const t = &threads[i];
+            if ((t.state == .ready or t.state == .running) and effectivePriority(t) == max_pri) {
+                next = i;
+                break;
+            }
+        }
+    } else {
+        var off: usize = 1;
+        while (off <= thread_count) : (off += 1) {
+            const idx = (cur + off) % thread_count;
+            const t = &threads[idx];
+            if ((t.state == .ready or t.state == .running) and effectivePriority(t) == max_pri) {
+                next = idx;
+                break;
+            }
         }
     }
 
-    if (next != current_thread and threads[next].state != .terminated) {
-        threads[current_thread].state = .ready;
+    if (next != cur and threads[next].state != .terminated) {
+        if (threads[cur].state == .running) {
+            threads[cur].state = .ready;
+            threads[cur].slice_remaining = TIME_SLICE_TICKS;
+        }
         threads[next].state = .running;
+        threads[next].slice_remaining = TIME_SLICE_TICKS;
         current_thread = next;
     }
 }
@@ -191,6 +249,10 @@ pub fn blockThread(tid: usize) void {
 pub fn unblockThread(tid: usize) void {
     if (tid < thread_count and threads[tid].state == .blocked) {
         threads[tid].state = .ready;
+        const cap = @as(u16, 255) - @as(u16, threads[tid].priority);
+        const nb = @as(u16, threads[tid].io_boost) + @as(u16, IO_BOOST_PRIORITY_DELTA);
+        threads[tid].io_boost = @truncate(@min(nb, cap));
+        threads[tid].boost_deadline_tick = tick_count + IO_BOOST_DURATION_TICKS;
     }
 }
 

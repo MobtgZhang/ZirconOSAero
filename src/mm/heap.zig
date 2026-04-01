@@ -170,3 +170,57 @@ test "heap interleaved alloc free reuses bump region" {
     const again = alloc(48, 16) orelse std.debug.panic("again", .{});
     kfree(again, 48, 16);
 }
+
+test "heap random alloc free stress" {
+    init();
+    const max_live = 48;
+    var live_p: [max_live][*]u8 = undefined;
+    var live_sz: [max_live]usize = undefined;
+    var live_al: [max_live]usize = undefined;
+    var n: usize = 0;
+
+    var prng = std.Random.DefaultPrng.init(0x5A49_5243);
+    const rnd = prng.random();
+    const sizes = [_]usize{ 16, 24, 32, 48, 64, 96, 128, 192 };
+    const aligns = [_]usize{ 8, 16 };
+
+    for (0..1200) |_| {
+        const want_free = n > 0 and (n == max_live or rnd.float(f32) < 0.42);
+        if (want_free) {
+            const idx = rnd.uintLessThan(usize, n);
+            n -= 1;
+            kfree(live_p[idx], live_sz[idx], live_al[idx]);
+            if (idx != n) {
+                live_p[idx] = live_p[n];
+                live_sz[idx] = live_sz[n];
+                live_al[idx] = live_al[n];
+            }
+        } else {
+            const sz = sizes[rnd.uintLessThan(usize, sizes.len)];
+            const al = aligns[rnd.uintLessThan(usize, aligns.len)];
+            if (alloc(sz, al)) |p| {
+                if (n < max_live) {
+                    live_p[n] = p;
+                    live_sz[n] = sz;
+                    live_al[n] = al;
+                    n += 1;
+                } else {
+                    kfree(p, sz, al);
+                }
+            }
+        }
+    }
+
+    while (n > 0) {
+        n -= 1;
+        kfree(live_p[n], live_sz[n], live_al[n]);
+    }
+
+    // Drained free list + bump high-water should still allow repeated medium blocks.
+    for (0..40) |_| {
+        const p = alloc(512, 16) orelse {
+            return std.testing.expect(false); // leak or fragmentation beyond test budget
+        };
+        kfree(p, 512, 16);
+    }
+}

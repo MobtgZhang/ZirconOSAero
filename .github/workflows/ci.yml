@@ -17,6 +17,12 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Zig fmt check
+        run: zig fmt --check src boot tests build.zig build.zig.zon
+
+      - name: Compliance phrase scan (src/boot)
+        run: bash scripts/verify-compliance.sh
+
       - name: Install smoke deps (QEMU MBR + binutils)
         run: |
           sudo apt-get update

@@ -104,12 +104,12 @@ pub fn unmaskIrq(irq: u8) void {
 
 pub fn enableInterrupts() void {
     var crmd: u64 = asm ("csrrd %[result], 0x0"
-        : [result] "=r" (-> u64)
+        : [result] "=r" (-> u64),
     );
     crmd |= 0x4;
     asm volatile ("csrwr %[val], 0x0"
         :
-        : [val] "r" (crmd)
+        : [val] "r" (crmd),
     );
 }
 
@@ -119,12 +119,12 @@ pub fn initFramebuffer(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8
 
 pub fn disableInterrupts() void {
     var crmd: u64 = asm ("csrrd %[result], 0x0"
-        : [result] "=r" (-> u64)
+        : [result] "=r" (-> u64),
     );
     crmd &= ~@as(u64, 0x4);
     asm volatile ("csrwr %[val], 0x0"
         :
-        : [val] "r" (crmd)
+        : [val] "r" (crmd),
     );
 }
 

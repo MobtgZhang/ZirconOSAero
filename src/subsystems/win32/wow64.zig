@@ -4,195 +4,62 @@
 //!
 //! **与真实 SysWOW64 的差距**：64 位内核侧已提供 **NT 6.1 SSDT 子集**（`src/arch/x86_64/ssdt_nt61.zig`）与 **Zircon 遗留基址** `0x0010_0000`（旧 `SYS_*`）。
 //! 本层 `translateSyscall32to64` 仍使用 **32 位 PE 常见 syscall 号** 演示 thunk；与 SysWOW64 转 64 位 `syscall` 的真实映射表不对齐，见 `docs/cn/SyscallABI.md`。
+//!
+//! 模块化：`wow64/types.zig`、`wow64/thunk.zig`、`wow64/redirect.zig`。
 
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");
 const ntdll = @import("../../libs/ntdll.zig");
-const kernel32 = @import("../../libs/kernel32.zig");
-const process = @import("../../ps/process.zig");
 const subsystem = @import("subsystem.zig");
-const exec = @import("exec.zig");
 const console_mod = @import("console.zig");
 
-// ── WOW64 Constants ──
+const types = @import("wow64/types.zig");
+const thunk = @import("wow64/thunk.zig");
+const redirect = @import("wow64/redirect.zig");
 
-pub const WOW64_VERSION: []const u8 = "ZirconOS WOW64 v1.0";
+pub const WOW64_VERSION = types.WOW64_VERSION;
+pub const WOW64_MAX_ADDR = types.WOW64_MAX_ADDR;
+pub const WOW64_STACK_SIZE = types.WOW64_STACK_SIZE;
+pub const WOW64_HEAP_SIZE = types.WOW64_HEAP_SIZE;
+pub const WOW64_TLS_SLOTS = types.WOW64_TLS_SLOTS;
+pub const PE32_IMAGE_BASE = types.PE32_IMAGE_BASE;
+pub const WOW64_NTDLL_BASE = types.WOW64_NTDLL_BASE;
+pub const WOW64_KERNEL32_BASE = types.WOW64_KERNEL32_BASE;
+pub const WOW64_USER32_BASE = types.WOW64_USER32_BASE;
+pub const Wow64State = types.Wow64State;
+pub const ThunkType = types.ThunkType;
+pub const CONTEXT32 = types.CONTEXT32;
+pub const PEB32 = types.PEB32;
+pub const TEB32 = types.TEB32;
+pub const Wow64Process = types.Wow64Process;
+pub const ThunkEntry = types.ThunkEntry;
 
-pub const WOW64_MAX_ADDR: u64 = 0x7FFFFFFF;
-pub const WOW64_STACK_SIZE: u32 = 0x100000;
-pub const WOW64_HEAP_SIZE: u32 = 0x100000;
-pub const WOW64_TLS_SLOTS: usize = 64;
+pub const translateSyscall32to64 = thunk.translateSyscall32to64;
+pub const convertPtr32to64 = thunk.convertPtr32to64;
+pub const convertPtr64to32 = thunk.convertPtr64to32;
+pub const convertHandle32to64 = thunk.convertHandle32to64;
+pub const convertHandle64to32 = thunk.convertHandle64to32;
 
-pub const PE32_IMAGE_BASE: u32 = 0x00400000;
-pub const WOW64_NTDLL_BASE: u32 = 0x77000000;
-pub const WOW64_KERNEL32_BASE: u32 = 0x76000000;
-pub const WOW64_USER32_BASE: u32 = 0x75000000;
+pub const shouldRedirectSystem32ToSyswow64 = redirect.shouldRedirectSystem32ToSyswow64;
+pub const noteRegistryWow64Node = redirect.noteRegistryWow64Node;
 
-pub const WOW64_SIZE_OF_80387_REGISTERS: usize = 80;
-
-// ── WOW64 State ──
-
-pub const Wow64State = enum(u8) {
-    inactive = 0,
-    initializing = 1,
-    active = 2,
-    suspended = 3,
-    error_state = 4,
-};
-
-pub const ThunkType = enum(u8) {
-    none = 0,
-    syscall_32to64 = 1,
-    ptr_32to64 = 2,
-    ptr_64to32 = 3,
-    struct_convert = 4,
-    handle_convert = 5,
-};
-
-// ── 32-bit Context ──
-
-pub const CONTEXT32 = struct {
-    context_flags: u32 = 0x10001F,
-    dr0: u32 = 0,
-    dr1: u32 = 0,
-    dr2: u32 = 0,
-    dr3: u32 = 0,
-    dr6: u32 = 0,
-    dr7: u32 = 0,
-    float_save: [WOW64_SIZE_OF_80387_REGISTERS]u8 = [_]u8{0} ** WOW64_SIZE_OF_80387_REGISTERS,
-    seg_gs: u32 = 0,
-    seg_fs: u32 = 0x003B,
-    seg_es: u32 = 0x0023,
-    seg_ds: u32 = 0x0023,
-    edi: u32 = 0,
-    esi: u32 = 0,
-    ebx: u32 = 0,
-    edx: u32 = 0,
-    ecx: u32 = 0,
-    eax: u32 = 0,
-    ebp: u32 = 0,
-    eip: u32 = 0,
-    seg_cs: u32 = 0x0023,
-    eflags: u32 = 0x00000202,
-    esp: u32 = 0,
-    seg_ss: u32 = 0x002B,
-};
-
-// ── 32-bit PEB/TEB ──
-
-pub const PEB32 = struct {
-    inherited_address_space: u8 = 0,
-    read_image_file_exec_options: u8 = 0,
-    being_debugged: u8 = 0,
-    spare_bool: u8 = 0,
-    mutant: u32 = 0,
-    image_base_address: u32 = 0,
-    ldr: u32 = 0,
-    process_parameters: u32 = 0,
-    sub_system_data: u32 = 0,
-    process_heap: u32 = 0,
-    fast_peb_lock: u32 = 0,
-    os_major_version: u32 = 0,
-    os_minor_version: u32 = 0,
-    os_build_number: u16 = 0,
-    os_csd_version: u16 = 0,
-    os_platform_id: u32 = 0,
-    image_subsystem: u32 = 0,
-    image_subsystem_major_version: u32 = 0,
-    image_subsystem_minor_version: u32 = 0,
-    number_of_processors: u32 = 0,
-    nt_global_flag: u32 = 0,
-    session_id: u32 = 0,
-};
-
-pub const TEB32 = struct {
-    nt_tib_exception_list: u32 = 0,
-    nt_tib_stack_base: u32 = 0,
-    nt_tib_stack_limit: u32 = 0,
-    nt_tib_sub_system_tib: u32 = 0,
-    nt_tib_fiber_data: u32 = 0,
-    nt_tib_arbitrary_user_pointer: u32 = 0,
-    nt_tib_self: u32 = 0,
-    environment_pointer: u32 = 0,
-    process_id: u32 = 0,
-    thread_id: u32 = 0,
-    active_rpc_handle: u32 = 0,
-    thread_local_storage: u32 = 0,
-    peb: u32 = 0,
-    last_error_value: u32 = 0,
-    count_of_owned_critical_sections: u32 = 0,
-    wow64_reserved: u32 = 0,
-    locale_id: u32 = 0,
-    tls_slots: [WOW64_TLS_SLOTS]u32 = [_]u32{0} ** WOW64_TLS_SLOTS,
-};
-
-// ── WOW64 Process ──
-
-const MAX_WOW64_PROCESSES: usize = 32;
-
-pub const Wow64Process = struct {
-    pid: u32 = 0,
-    state: Wow64State = .inactive,
-    is_active: bool = false,
-    context: CONTEXT32 = .{},
-    peb32: PEB32 = .{},
-    teb32: TEB32 = .{},
-    image_name: [64]u8 = [_]u8{0} ** 64,
-    image_name_len: usize = 0,
-    image_base: u32 = 0,
-    entry_point: u32 = 0,
-    stack_base: u32 = 0,
-    stack_limit: u32 = 0,
-    heap_base: u32 = 0,
-    parent_pid: u32 = 0,
-    exit_code: u32 = 0,
-    syscall_count: u64 = 0,
-    thunk_count: u64 = 0,
-
-    pub fn getName(self: *const Wow64Process) []const u8 {
-        return self.image_name[0..self.image_name_len];
-    }
-};
-
-// ── Thunk Entry ──
-
-const MAX_THUNK_ENTRIES: usize = 128;
-
-pub const ThunkEntry = struct {
-    name: [64]u8 = [_]u8{0} ** 64,
-    name_len: usize = 0,
-    native_syscall_id: u32 = 0,
-    thunk_type: ThunkType = .none,
-    is_active: bool = false,
-    call_count: u64 = 0,
-    target_module: [32]u8 = [_]u8{0} ** 32,
-    target_module_len: usize = 0,
-};
-
-// ── Global State ──
-
-var wow64_processes: [MAX_WOW64_PROCESSES]Wow64Process = [_]Wow64Process{.{}} ** MAX_WOW64_PROCESSES;
+var wow64_processes: [types.MAX_WOW64_PROCESSES]Wow64Process = [_]Wow64Process{.{}} ** types.MAX_WOW64_PROCESSES;
 var wow64_process_count: usize = 0;
 var next_wow64_pid: u32 = 2000;
 
-var thunk_table: [MAX_THUNK_ENTRIES]ThunkEntry = [_]ThunkEntry{.{}} ** MAX_THUNK_ENTRIES;
+var thunk_table: [types.MAX_THUNK_ENTRIES]ThunkEntry = [_]ThunkEntry{.{}} ** types.MAX_THUNK_ENTRIES;
 var thunk_count: usize = 0;
 
 var wow64_state: Wow64State = .inactive;
-var wow64_initialized: bool = false;
 var total_thunks: u64 = 0;
-var total_syscall_translations: u64 = 0;
-var total_ptr_conversions: u64 = 0;
 
-// ── Thunk Registration ──
-
-fn registerThunk(name: []const u8, syscall_id: u32, thunk_type: ThunkType, module: []const u8) void {
-    if (thunk_count >= MAX_THUNK_ENTRIES) return;
+fn registerThunk(name: []const u8, syscall_id: u32, tt: ThunkType, module: []const u8) void {
+    if (thunk_count >= types.MAX_THUNK_ENTRIES) return;
     var entry = &thunk_table[thunk_count];
     entry.* = .{};
     entry.is_active = true;
     entry.native_syscall_id = syscall_id;
-    entry.thunk_type = thunk_type;
+    entry.thunk_type = tt;
 
     const n = @min(name.len, entry.name.len);
     @memcpy(entry.name[0..n], name[0..n]);
@@ -205,76 +72,8 @@ fn registerThunk(name: []const u8, syscall_id: u32, thunk_type: ThunkType, modul
     thunk_count += 1;
 }
 
-fn findThunk(name: []const u8) ?*ThunkEntry {
-    for (thunk_table[0..thunk_count]) |*entry| {
-        if (!entry.is_active) continue;
-        if (entry.name_len == name.len) {
-            var match = true;
-            for (entry.name[0..entry.name_len], name) |a, b| {
-                if (a != b) {
-                    match = false;
-                    break;
-                }
-            }
-            if (match) return entry;
-        }
-    }
-    return null;
-}
-
-// ── Syscall Translation (32-bit -> 64-bit) ──
-
-pub fn translateSyscall32to64(wow_proc: *Wow64Process, syscall_num: u32) ntdll.NTSTATUS {
-    wow_proc.syscall_count += 1;
-    total_syscall_translations += 1;
-
-    return switch (syscall_num) {
-        0x0001 => ntdll.STATUS_SUCCESS, // NtCreateProcess (translated)
-        0x0002 => ntdll.STATUS_SUCCESS, // NtTerminateProcess
-        0x0003 => ntdll.STATUS_SUCCESS, // NtCreateThread
-        0x0004 => ntdll.STATUS_SUCCESS, // NtTerminateThread
-        0x0006 => ntdll.STATUS_SUCCESS, // NtCreateFile
-        0x0007 => ntdll.STATUS_SUCCESS, // NtOpenFile
-        0x0008 => ntdll.STATUS_SUCCESS, // NtReadFile
-        0x0009 => ntdll.STATUS_SUCCESS, // NtWriteFile
-        0x000C => ntdll.STATUS_SUCCESS, // NtClose
-        0x0011 => ntdll.STATUS_SUCCESS, // NtAllocateVirtualMemory
-        0x0012 => ntdll.STATUS_SUCCESS, // NtFreeVirtualMemory
-        0x0018 => ntdll.STATUS_SUCCESS, // NtCreateEvent
-        0x001A => ntdll.STATUS_SUCCESS, // NtWaitForSingleObject
-        0x001F => ntdll.STATUS_SUCCESS, // NtQuerySystemInformation
-        0x0025 => ntdll.STATUS_SUCCESS, // NtCreatePort
-        0x0036 => ntdll.STATUS_SUCCESS, // NtQueryInformationProcess
-        else => ntdll.STATUS_NOT_IMPLEMENTED,
-    };
-}
-
-// ── Pointer Conversion ──
-
-pub fn convertPtr32to64(ptr32: u32) u64 {
-    total_ptr_conversions += 1;
-    if (ptr32 == 0) return 0;
-    return @as(u64, ptr32);
-}
-
-pub fn convertPtr64to32(ptr64: u64) u32 {
-    total_ptr_conversions += 1;
-    if (ptr64 > WOW64_MAX_ADDR) return 0;
-    return @intCast(ptr64 & 0xFFFFFFFF);
-}
-
-pub fn convertHandle32to64(handle32: u32) u64 {
-    return @as(u64, handle32);
-}
-
-pub fn convertHandle64to32(handle64: u64) u32 {
-    return @intCast(handle64 & 0xFFFFFFFF);
-}
-
-// ── WOW64 Process Management ──
-
 pub fn createWow64Process(name: []const u8, parent_pid: u32) ?*Wow64Process {
-    if (wow64_process_count >= MAX_WOW64_PROCESSES) return null;
+    if (wow64_process_count >= types.MAX_WOW64_PROCESSES) return null;
 
     var proc = &wow64_processes[wow64_process_count];
     proc.* = .{};
@@ -351,8 +150,6 @@ pub fn isWow64Process(pid: u32) bool {
     return findWow64Process(pid) != null;
 }
 
-// ── WOW64 API Wrappers (32-bit versions) ──
-
 pub fn Wow64NtCreateProcess(proc: *Wow64Process, _: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
@@ -383,8 +180,6 @@ pub fn Wow64NtWaitForSingleObject(proc: *Wow64Process, _: u32) ntdll.NTSTATUS {
     return translateSyscall32to64(proc, 0x001A);
 }
 
-// ── Statistics ──
-
 pub fn getActiveWow64Count() usize {
     var count: usize = 0;
     for (wow64_processes[0..wow64_process_count]) |*proc| {
@@ -406,18 +201,16 @@ pub fn getTotalThunkCalls() u64 {
 }
 
 pub fn getTotalSyscallTranslations() u64 {
-    return total_syscall_translations;
+    return thunk.total_syscall_translations;
 }
 
 pub fn getTotalPtrConversions() u64 {
-    return total_ptr_conversions;
+    return thunk.total_ptr_conversions;
 }
 
 pub fn getState() Wow64State {
     return wow64_state;
 }
-
-// ── Demo ──
 
 pub fn runWow64Demo() void {
     klog.info("wow64: --- WOW64 Compatibility Demo ---", .{});
@@ -477,8 +270,6 @@ pub fn runWow64Demo() void {
     });
 }
 
-// ── Thunk Table Initialization ──
-
 fn initThunkTable() void {
     registerThunk("NtCreateProcess", 0x0001, .syscall_32to64, "ntdll");
     registerThunk("NtTerminateProcess", 0x0002, .syscall_32to64, "ntdll");
@@ -510,7 +301,7 @@ fn initWow64Dlls() void {
     if (wow64_ntdll.image) |img| {
         img.subsystem = pe_loader.IMAGE_SUBSYSTEM_NATIVE;
         img.size_of_image = 0x180000;
-        img.machine = 0x014C; // IMAGE_FILE_MACHINE_I386
+        img.machine = 0x014C;
         img.addSection(".text", 0x1000, 0xC0000, pe_loader.IMAGE_SCN_MEM_READ | pe_loader.IMAGE_SCN_MEM_EXECUTE | pe_loader.IMAGE_SCN_CNT_CODE);
         img.addSection(".data", 0xC1000, 0x20000, pe_loader.IMAGE_SCN_MEM_READ | pe_loader.IMAGE_SCN_MEM_WRITE | pe_loader.IMAGE_SCN_CNT_INITIALIZED_DATA);
         img.addExport("NtCreateProcess", 0x1000, 1);
@@ -560,15 +351,13 @@ fn initWow64Dlls() void {
     }
 }
 
-// ── Initialization ──
-
 pub fn init() void {
     wow64_process_count = 0;
     next_wow64_pid = 2000;
     thunk_count = 0;
     total_thunks = 0;
-    total_syscall_translations = 0;
-    total_ptr_conversions = 0;
+    thunk.total_syscall_translations = 0;
+    thunk.total_ptr_conversions = 0;
 
     wow64_state = .initializing;
 
@@ -576,7 +365,6 @@ pub fn init() void {
     initWow64Dlls();
 
     wow64_state = .active;
-    wow64_initialized = true;
 
     klog.info("wow64: WOW64 Compatibility Layer initialized", .{});
     klog.info("wow64: Syscall thunk table: %u entries", .{thunk_count});

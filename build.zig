@@ -402,6 +402,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_pool_tests = b.addRunArtifact(pool_tests);
 
+    const buddy_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/mm/buddy.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const buddy_tests = b.addTest(.{
+        .root_module = buddy_test_mod,
+        .name = "buddy",
+    });
+    const run_buddy_tests = b.addRunArtifact(buddy_tests);
+
     const ssdt_test_mod = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/ssdt_nt61.zig"),
         .target = b.graph.host,
@@ -424,11 +435,24 @@ pub fn build(b: *std.Build) void {
     });
     const run_se_token_tests = b.addRunArtifact(se_token_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap + pool + SSDT + se/token host)");
+    const wow64_types_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/subsystems/win32/wow64/types.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const wow64_types_tests = b.addTest(.{
+        .root_module = wow64_types_test_mod,
+        .name = "wow64_types",
+    });
+    const run_wow64_types_tests = b.addRunArtifact(wow64_types_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap + pool + buddy + SSDT + se/token + wow64_types host)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
+    test_step.dependOn(&run_buddy_tests.step);
     test_step.dependOn(&run_ssdt_tests.step);
     test_step.dependOn(&run_se_token_tests.step);
+    test_step.dependOn(&run_wow64_types_tests.step);
 
     buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
     buildZbm(b, cpu_arch, optimize, debug_mode);

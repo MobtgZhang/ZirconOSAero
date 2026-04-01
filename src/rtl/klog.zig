@@ -21,8 +21,8 @@ const LEVEL_PREFIX: [8][]const u8 = .{
 };
 
 const LEVEL_NAME: [8][]const u8 = .{
-    "EMERG", "ALERT", "CRIT", "ERR",
-    "WARN", "NOTICE", "INFO", "DEBUG",
+    "EMERG", "ALERT",  "CRIT", "ERR",
+    "WARN",  "NOTICE", "INFO", "DEBUG",
 };
 
 pub const DEBUG_MODE: bool = @import("build_options").debug;
@@ -180,11 +180,27 @@ pub fn mouseDbg(comptime fmt: []const u8, args: anytype) void {
     output("\n");
 }
 
-pub fn emerg(comptime fmt: []const u8, args: anytype) void { klog(.emerg, fmt, args); }
-pub fn alert(comptime fmt: []const u8, args: anytype) void { klog(.alert, fmt, args); }
-pub fn crit(comptime fmt: []const u8, args: anytype) void { klog(.crit, fmt, args); }
-pub fn err(comptime fmt: []const u8, args: anytype) void { klog(.err, fmt, args); }
-pub fn warn(comptime fmt: []const u8, args: anytype) void { klog(.warning, fmt, args); }
-pub fn notice(comptime fmt: []const u8, args: anytype) void { klog(.notice, fmt, args); }
-pub fn info(comptime fmt: []const u8, args: anytype) void { klog(.info, fmt, args); }
-pub fn debug(comptime fmt: []const u8, args: anytype) void { klog(.debug, fmt, args); }
+pub fn emerg(comptime fmt: []const u8, args: anytype) void {
+    klog(.emerg, fmt, args);
+}
+pub fn alert(comptime fmt: []const u8, args: anytype) void {
+    klog(.alert, fmt, args);
+}
+pub fn crit(comptime fmt: []const u8, args: anytype) void {
+    klog(.crit, fmt, args);
+}
+pub fn err(comptime fmt: []const u8, args: anytype) void {
+    klog(.err, fmt, args);
+}
+pub fn warn(comptime fmt: []const u8, args: anytype) void {
+    klog(.warning, fmt, args);
+}
+pub fn notice(comptime fmt: []const u8, args: anytype) void {
+    klog(.notice, fmt, args);
+}
+pub fn info(comptime fmt: []const u8, args: anytype) void {
+    klog(.info, fmt, args);
+}
+pub fn debug(comptime fmt: []const u8, args: anytype) void {
+    klog(.debug, fmt, args);
+}

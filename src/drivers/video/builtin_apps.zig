@@ -228,10 +228,10 @@ pub const BuiltinAppId = enum(u16) {
 
 /// 侧栏高度有限；条目数变更时请同步 `docs/*/BuiltinApps_NT61_Roadmap.md`「与代码对齐」。
 pub const ALL_PROGRAMS: []const BuiltinAppId = &.{
-    .notepad,     .wordpad,       .paint,        .calculator,
-    .minesweeper, .solitaire,     .spider_solitaire, .freecell,
-    .hearts,
-    .osk,         .charmap,      .cmd_shell,    .powershell_shell,
+    .notepad,          .wordpad,   .paint,            .calculator,
+    .minesweeper,      .solitaire, .spider_solitaire, .freecell,
+    .hearts,           .osk,       .charmap,          .cmd_shell,
+    .powershell_shell,
 };
 
 pub fn allProgramsCount() usize {

@@ -1,4 +1,6 @@
-# ZirconOS roadmap
+# ZirconOSAero roadmap
+
+**Implementation status** is **not** implied by the phase list below. Use [NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md) and [API_COMPAT_MATRIX.md](../cn/API_COMPAT_MATRIX.md) as the single source of truth (`Stub` / `Partial` / `Done` / `Verified`).
 
 ## 1. Goal layers
 
@@ -39,31 +41,34 @@ On top of a stable kernel:
 
 ## 2. Milestones (Phase 0–11)
 
-### Phase 0 — Tooling ✅
+Phase headings describe **scope**, not “all done”. See the contract matrix for each subsystem.
 
-- Zig cross-compilation
+### Phase 0 — Tooling
+
+- Zig cross-compilation (CI pins **Zig 0.15.2**; see `docs/REPRODUCE_BUILD.md`)
 - QEMU debugging
 - Serial logging
-- Build system (`build.zig` / Makefile / `run.sh`)
+- Build system (`build.zig` / optional Makefile / `run.sh`)
 
-### Phase 1 — Boot + early kernel ✅
+### Phase 1 — Boot + early kernel
 
-- GRUB Multiboot2
+- **ZBM only** in this repo (BIOS/MBR + UEFI); **no GRUB**
+- Multiboot2 handoff where used (x86_64)
 - UEFI boot application
 - GDT/TSS
 - Physical memory discovery + frame allocator
-- Kernel heap (bump growth + per-block free list + `mm/pool` size classes; buddy/slab 为后续里程碑，见 `docs/cn/MM_HEAP_POOL_SLAB.md`)
+- Kernel heap (bump growth + per-block free list + `mm/pool` size classes; buddy/slab roadmap: `docs/cn/MM_HEAP_POOL_SLAB.md`)
 - VGA text + serial
 
-### Phase 2 — Interrupts / timer / scheduler ✅
+### Phase 2 — Interrupts / timer / scheduler
 
 - IDT (256 vectors)
 - PIC + PIT (~100 Hz)
-- Round-robin scheduler
-- Keyboard/mouse drivers
+- Preemptive **multi-priority** ready queues (not NT 32-level; see `docs/cn/SCHEDULER_API.md`)
+- Keyboard/mouse drivers (platform-dependent; many paths still partial)
 - Sync primitives (spinlock, event, mutex, semaphore)
 
-### Phase 3 — Virtual memory ✅
+### Phase 3 — Virtual memory
 
 - Four-level page tables
 - Identity mapping
@@ -71,7 +76,7 @@ On top of a stable kernel:
 - User/kernel separation
 - Page table switches
 
-### Phase 4 — Objects / handles / process core ✅
+### Phase 4 — Objects / handles / process core
 
 - Object Manager (headers, types, namespace)
 - Per-process handle tables
@@ -79,7 +84,7 @@ On top of a stable kernel:
 - Security tokens
 - Waitable objects
 
-### Phase 5 — IPC + services ✅
+### Phase 5 — IPC + services
 
 - LPC ports
 - Synchronous request/reply
@@ -87,16 +92,16 @@ On top of a stable kernel:
 - Session Manager / SMSS (PID 2)
 - System LPC port registration
 
-### Phase 6 — I/O + filesystem + drivers ✅
+### Phase 6 — I/O + filesystem + drivers
 
 - I/O Manager (driver/device/IRP)
 - VFS
 - FAT32 (`C:\`)
 - NTFS (`D:\`)
-- Registry
-- Video/audio/input drivers
+- Registry (in-memory subset; hive persistence planned)
+- Video / framebuffer path partial; **ACPI / PCIe / USB / full audio** — see roadmap “Next steps”
 
-### Phase 7 — Loaders ✅
+### Phase 7 — Loaders
 
 - ELF64 loader
 - PE32+ loader
@@ -104,45 +109,44 @@ On top of a stable kernel:
 - DLL loading and import resolution
 - Base relocations
 
-### Phase 8 — Userland foundation ✅
+### Phase 8 — Userland foundation
 
-- ntdll (Native API)
-- kernel32 (Win32 base)
+- ntdll (Native API **subset**)
+- kernel32 (Win32 base **subset**)
 - Console runtime
 - CMD
-- PowerShell
+- ZirconShell (PowerShell-**style** cmdlet subset; not Microsoft PowerShell)
 
-### Phase 9 — Win32 subsystem ✅
+### Phase 9 — Win32 subsystem
 
 - csrss server
 - Win32 execution engine
 - PE load + DLL binding
 - Process lifecycle
 
-### Phase 10 — Graphics ✅
+### Phase 10 — Graphics
 
-- user32 (windows, messages, classes, input)
-- gdi32 (DC, drawing, fonts, bitmaps)
+- user32 / gdi32 (**partial**; see contract matrix)
 - GUI dispatch
-- Desktop theme scaffolding (Classic/Luna/Aero/Modern/Fluent/Sun Valley)
+- **ZirconOSAero** ships **Aero-only** built-in desktop (`src/desktop/aero/`); other themes are out of scope unless reintroduced upstream
 
-### Phase 11 — WOW64 + audio ✅
+### Phase 11 — WOW64 + audio
 
-- WOW64 (PE32, syscall thunking, 32-bit PEB/TEB)
-- AC97 audio driver
-- Audio event path
+- WOW64 (PE32, syscall thunking, 32-bit PEB/TEB) — **partial**; modular layout under `src/subsystems/win32/wow64/`
+- AC97 / audio — stub or partial; not production-ready
 
 ## 3. Next steps
 
 | Area | Notes | Priority |
 |------|-------|----------|
+| ACPI + PCI | Table walk, ECAM enumeration (QEMU first) | High |
+| USB | XHCI HID for keyboard/mouse in QEMU | High |
+| Networking | ARP + IPv4 + UDP prototype; TCP later | Medium |
 | POSIX subsystem | libc/POSIX mapping | Medium |
 | SMP | Multi-core scheduling (APIC/IOAPIC) | Medium |
-| Networking | TCP/IP, sockets | Medium |
 | Real process isolation | Full user/kernel address separation | High |
 | User-mode services | Split Object/I/O/Security servers | High |
 | Disk drivers | AHCI/NVMe | Medium |
-| ACPI | Power management | Low |
 | Other architectures | aarch64/riscv64 polish | Low |
 
 ## 4. Principles

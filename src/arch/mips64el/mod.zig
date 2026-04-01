@@ -49,23 +49,23 @@ pub fn initTimer() void {
     const freq: u32 = 100_000_000;
     const interval: u32 = freq / 100;
     var count: u32 = asm ("mfc0 %[result], $9"
-        : [result] "=r" (-> u32)
+        : [result] "=r" (-> u32),
     );
     count +%= interval;
     asm volatile ("mtc0 %[val], $11"
         :
-        : [val] "r" (count)
+        : [val] "r" (count),
     );
 }
 
 pub fn initPic() void {
     var status: u32 = asm ("mfc0 %[result], $12"
-        : [result] "=r" (-> u32)
+        : [result] "=r" (-> u32),
     );
     status |= 0x8001;
     asm volatile ("mtc0 %[val], $12"
         :
-        : [val] "r" (status)
+        : [val] "r" (status),
     );
 }
 
@@ -73,22 +73,22 @@ pub fn unmaskIrq(_: u8) void {}
 
 pub fn enableInterrupts() void {
     var status: u32 = asm ("mfc0 %[result], $12"
-        : [result] "=r" (-> u32)
+        : [result] "=r" (-> u32),
     );
     status |= 0x1;
     asm volatile ("mtc0 %[val], $12"
         :
-        : [val] "r" (status)
+        : [val] "r" (status),
     );
 }
 
 pub fn disableInterrupts() void {
     var status: u32 = asm ("mfc0 %[result], $12"
-        : [result] "=r" (-> u32)
+        : [result] "=r" (-> u32),
     );
     status &= ~@as(u32, 0x1);
     asm volatile ("mtc0 %[val], $12"
         :
-        : [val] "r" (status)
+        : [val] "r" (status),
     );
 }

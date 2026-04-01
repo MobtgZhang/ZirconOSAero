@@ -51,6 +51,7 @@ pub const BootInfo = struct {
     fb_info: ?FramebufferInfo = null,
     multiboot_handoff_start: usize = 0,
     multiboot_handoff_end_exclusive: usize = 0,
+    acpi_rsdp_phys: usize = 0,
 
     pub fn getMmapEntry(_: BootInfo, i: usize) ?MmapEntry {
         if (i < static_mmap.len) return static_mmap[i];

@@ -25,8 +25,23 @@
 
 ## 时间片
 
-- `TIME_SLICE_TICKS`：在 **同等最高优先级** 的就绪线程之间，每线程连续运行的 **定时器 tick** 预算（`1` 表示与历史行为一致：每 tick 可发生切换）。
-- 后续可扩展：每线程独立剩余片计、`priority inheritance` 占位。
+- `TIME_SLICE_TICKS`：在 **同等有效优先级**（见下）的就绪线程之间，当前运行线程的剩余 tick；耗尽后才在同优先级的线程间轮转。
+- `1` 与历史行为接近：每 tick 可发生同优先级切换。
+
+## I/O 唤醒提升（clean-room）
+
+- `unblockThread` 时：在 `IO_BOOST_DURATION_TICKS` 内将 `io_boost` 增加 `IO_BOOST_PRIORITY_DELTA`（不超过 `255 - priority`），使 `effectivePriority = priority + io_boost`。
+- 到期后 `tick()` 将 `io_boost` 清零。这是教科书式「阻塞结束短暂抬高优先级」的极简模型，**不是** Windows NT 调度器的精确复现。
+
+## 与 NT 6.1 / Windows 内核的差异（明确非目标或未完成）
+
+| 能力 | NT / 公开文档侧 | 本仓库 |
+|------|-----------------|--------|
+| 优先级级数 | 32 级 + 优先级类 | 8 档映射到约 4–18 的 u8 阶梯 |
+| 优先级提升 | I/O、前台、饥饿等多源规则 | 仅 `unblockThread` 固定增量 + 定时衰减 |
+| NUMA / 处理器亲和 | 存在 | 未实现 |
+| 实时带宽 / 公平份额 | 存在 | 未实现 |
+| 内核模式抢占边界 | IRQL / 锁协议 | 简化模型 |
 
 ## 公开入口
 

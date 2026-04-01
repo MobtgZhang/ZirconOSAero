@@ -25,8 +25,7 @@ pub fn initSerial() void {
     asm volatile ("csrw stvec, %[p]"
         :
         : [p] "r" (@intFromPtr(&riscv_early_trap_entry)),
-        : .{ .memory = true }
-    );
+        : .{ .memory = true });
 }
 
 pub fn serialWrite(s: []const u8) void {
@@ -71,12 +70,12 @@ pub fn sendEoi(irq: u8) void {
 
 pub fn initTimer() void {
     var sie: u64 = asm ("csrr %[result], sie"
-        : [result] "=r" (-> u64)
+        : [result] "=r" (-> u64),
     );
     sie |= (1 << 5);
     asm volatile ("csrw sie, %[val]"
         :
-        : [val] "r" (sie)
+        : [val] "r" (sie),
     );
 }
 

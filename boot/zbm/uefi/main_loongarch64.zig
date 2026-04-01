@@ -229,7 +229,6 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
     haltLa();
 }
 
-
 fn displayBootProgress(out: anytype) void {
     _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
     puts(out, "\r\n");

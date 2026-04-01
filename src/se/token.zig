@@ -2,6 +2,8 @@
 //! Token, SID, and access check mechanism
 //!
 //! 访问检查失败时，调用方可经 `se/audit.zig` 的 `logAccessDenied` / `logObjectOpenDenied` 写入审计（与 `NTSTATUS` 返回值配合）。
+//!
+//! 里程碑（clean-room，仅 WDK/MS Learn 行为描述）：**令牌模拟（impersonation）**、完整 **SACL/ACL** 编辑器与对象审计策略为长期项；当前为演示路径子集。跟踪：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K6.3。
 
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");

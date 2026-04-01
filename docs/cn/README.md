@@ -12,7 +12,7 @@ ZirconOS 是一个基于 Zig 语言实现的 **NT 风格混合微内核操作系
 | [Kernel.md](Kernel.md) | 内核内部实现：调度器、内存管理、中断、系统调用、IPC、对象管理器 |
 | [Boot.md](Boot.md) | 启动流程：GRUB / ZBM / UEFI 引导路径、内核初始化阶段 (Phase 0–12) |
 | [Servers.md](Servers.md) | 系统服务：Process Server、Session Manager、LPC 端口 |
-| [Subsystems.md](Subsystems.md) | 子系统：Win32 (CMD/PowerShell/user32/gdi32)、WOW64、POSIX |
+| [Subsystems.md](Subsystems.md) | 子系统：Win32 (CMD/ZirconShell/user32/gdi32)、WOW64、POSIX |
 | [BuildSystem.md](BuildSystem.md) | 构建系统：build.conf 配置、Makefile、build.zig、run.sh 用法 |
 | [Roadmap.md](Roadmap.md) | 开发路线图：里程碑 Phase 0–11、设计目标与非目标、风险分析 |
 | [PROCESS_NT61.md](PROCESS_NT61.md) | ZirconOSAero（NT 6.1 风格）阶段流程与验证门禁 |
@@ -23,6 +23,13 @@ ZirconOS 是一个基于 Zig 语言实现的 **NT 风格混合微内核操作系
 | [NT61_ShellIcons.md](NT61_ShellIcons.md) | NT 6.1 壳层图标对照、`zircon_shell32_res.dll` 与 Win32 兼容说明 |
 | [BuiltinApps_NT61_Roadmap.md](BuiltinApps_NT61_Roadmap.md) | Windows 7 风格内置应用路线图、实现状态与 clean-room 参考方式 |
 | [DpiDesktop.md](DpiDesktop.md) | 高 DPI 与逻辑像素策略（Aero Shell） |
+| [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md) | 堆 / 池边界与伙伴、slab 演进说明 |
+| [VM_ISOLATION.md](VM_ISOLATION.md) | 用户/内核地址空间隔离现状与 #PF 路径 |
+| [SCHEDULER_API.md](SCHEDULER_API.md) | 调度器 API 与八档优先级文档 |
+| [LPC_USER_SERVERS_CONTRACT.md](LPC_USER_SERVERS_CONTRACT.md) | 用户态 Object/I/O/Security 服务 LPC 契约草案 |
+| [STORAGE_IO_ROADMAP.md](STORAGE_IO_ROADMAP.md) | AHCI/NVMe 与 IRP 集成路线 |
+| [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) | 软件合成器、Aero 与 WDDM 差异说明 |
+| [ARCH_SMP_NET_MATRIX.md](ARCH_SMP_NET_MATRIX.md) | 多架构 / SMP / 网络状态矩阵 |
 
 **用户态显示与 DPI 规范（外部索引）**：姊妹仓库中的 Win32 **`desktop-src`** 文档树（路径形如 `ZirconOSFluentRust/references/win32/desktop-src`）仅作 **ChangeDisplaySettings / 高 DPI / 多显示器** 等**用户态**行为与 MSDN 对照的**长期参考**，**不用于** LoongArch UEFI GOP、`ramfb` 或 QEMU 串口排错；后者见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md)。**可检索对照**：**PE #108**（LoongArch UEFI PE 文本重定位讨论）见 [`scripts/tools/PE_LOONGARCH_UEFI.md`](../../scripts/tools/PE_LOONGARCH_UEFI.md) 与 [loongson-community/discussions#108](https://github.com/loongson-community/discussions/issues/108)；与 **`desktop-src`** 无包含关系。
 

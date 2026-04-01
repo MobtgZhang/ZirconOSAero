@@ -52,7 +52,7 @@ On top of a stable kernel:
 - UEFI boot application
 - GDT/TSS
 - Physical memory discovery + frame allocator
-- Kernel heap (bump allocator)
+- Kernel heap (bump growth + per-block free list + `mm/pool` size classes; buddy/slab 为后续里程碑，见 `docs/cn/MM_HEAP_POOL_SLAB.md`)
 - VGA text + serial
 
 ### Phase 2 — Interrupts / timer / scheduler ✅

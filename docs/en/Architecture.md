@@ -43,7 +43,7 @@ The kernel provides only **mechanisms**, not policy:
 
 | Area | Role |
 |------|------|
-| Scheduling | Threads, priorities, time slices (round-robin) |
+| Scheduling | Threads, multi-level priorities, timer preempt (`ke/scheduler.zig`; see [SCHEDULER_API.md](../cn/SCHEDULER_API.md)) |
 | Virtual memory | Address spaces, map/unmap, protection |
 | IPC | LPC ports, synchronous request/reply, message queues |
 | Interrupts/exceptions | IDT dispatch, IRQ handling, fault delivery |

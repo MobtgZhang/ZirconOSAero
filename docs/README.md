@@ -12,7 +12,7 @@ ZirconOS is an **NT-style hybrid microkernel operating system** implemented in Z
 | [Kernel.md](en/Kernel.md) | Kernel internals: scheduler, memory, interrupts, syscalls, IPC, Object Manager |
 | [Boot.md](en/Boot.md) | Boot path: GRUB / ZBM / UEFI, kernel init phases (Phase 0–12) |
 | [Servers.md](en/Servers.md) | System services: Process Server, Session Manager, LPC ports |
-| [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/PowerShell/user32/gdi32), WOW64, POSIX |
+| [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/ZirconShell/user32/gdi32), WOW64, POSIX |
 | [BuildSystem.md](en/BuildSystem.md) | Build system: `build.conf`, Makefile, `build.zig`, `run.sh` |
 | [Roadmap.md](en/Roadmap.md) | Roadmap: Phase 0–11 milestones, goals, non-goals, risks |
 | [NT61_ShellIcons.md](en/NT61_ShellIcons.md) | Shell icons vs Win7, Zircon PE DLL, Win32 API notes |

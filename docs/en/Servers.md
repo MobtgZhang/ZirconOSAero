@@ -2,6 +2,8 @@
 
 System services run in user mode and talk to the microkernel over LPC/IPC. They implement policy and higher-level management.
 
+**LPC 用户态拆分契约（草案）**：[docs/cn/LPC_USER_SERVERS_CONTRACT.md](../cn/LPC_USER_SERVERS_CONTRACT.md)（Object / I/O / Security 策略外移时的消息边界）。
+
 ## 1. Service architecture
 
 ```

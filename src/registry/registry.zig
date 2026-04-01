@@ -8,6 +8,8 @@
 //!   HKCC  - HKEY_CURRENT_CONFIG (current hardware profile)
 //!
 //! Layout inspired by the NT registry; **no code copied** from ReactOS or Windows (see THIRD_PARTY.md).
+//!
+//! **持久化**：当前为内存内树；磁盘 **RegF / hive** 加载与回写为独立里程碑（与 `HKCU\Control Panel\Mouse` 等运行时默认值并存）。
 
 const std = @import("std");
 const klog = @import("../rtl/klog.zig");
@@ -103,6 +105,9 @@ pub const RegKey = struct {
 var keys: [MAX_KEYS]RegKey = [_]RegKey{.{}} ** MAX_KEYS;
 var key_count: usize = 0;
 var initialized: bool = false;
+
+/// `HKCU\Control Panel\Mouse` 键索引（供指针子系统读取 MouseSensitivity 等）；`init()` 后有效。
+pub var hkcu_control_panel_mouse_key: ?u16 = null;
 
 fn strCopy(dst: []u8, src: []const u8) u16 {
     const len = @min(dst.len, src.len);
@@ -403,7 +408,12 @@ fn populateDefaults() void {
     _ = setValueSz(colors_key, "ButtonFace", "236 233 216");
 
     const mouse_key = createKey(.hkcu, cp_key, "Mouse") orelse return;
+    hkcu_control_panel_mouse_key = mouse_key;
     _ = setValueSz(mouse_key, "MouseSpeed", "1");
+    // 与公开文档中「鼠标」面板 DWORD 名对齐；驱动按 queryValueDword 读取（PointerPolicy_NT61）。
+    _ = setValueDword(mouse_key, "MouseSensitivity", 10);
+    _ = setValueDword(mouse_key, "MouseThreshold1", 6);
+    _ = setValueDword(mouse_key, "MouseThreshold2", 10);
     _ = setValueSz(mouse_key, "DoubleClickSpeed", "500");
 
     const sound_key = createKey(.hkcu, cp_key, "Sound") orelse return;

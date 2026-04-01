@@ -745,7 +745,21 @@ pub fn registerWithIo() void {
     klog.info("Mouse: class driver registered (\\Device\\Mouse0)", .{});
 }
 
+fn syncFromRegistry() void {
+    const reg = @import("../../registry/registry.zig");
+    if (reg.hkcu_control_panel_mouse_key) |k| {
+        if (reg.queryValueDword(k, "MouseSensitivity")) |v| {
+            if (v >= 1 and v <= 20) setSensitivity(@intCast(v));
+        }
+        if (reg.queryValueDword(k, "MouseThreshold1")) |v| {
+            const th: i32 = @intCast(@min(v, 64));
+            setAcceleration(mouse_state.acceleration_enabled, th);
+        }
+    }
+}
+
 pub fn init() void {
     initHardware();
     registerWithIo();
+    syncFromRegistry();
 }

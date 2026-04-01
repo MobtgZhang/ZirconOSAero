@@ -34,7 +34,7 @@ if [ "${BOOTLOADER}" = "zbm" ] && [ -n "${ZBM_LOONGARCH64_EFI}" ] && [ -f "${ZBM
 fi
 
 if [ "${BOOTLOADER}" = "zbm" ] && [ -z "${BOOT_EFI}" ]; then
-	echo "[ZirconOS] ERROR: LoongArch64 需要 ZBM EFI（本架构不支持 GRUB）。" >&2
+	echo "[ZirconOS] ERROR: LoongArch64 需要 ZBM EFI。" >&2
 	echo "  运行: make build-zbm-loongarch-uefi（需 zig + fetch-gnu-efi + 支持 efi-app-loongarch64 的 objcopy）" >&2
 	echo "  或设置 ZBM_LOONGARCH64_EFI 为有效的 .efi 路径。" >&2
 	exit 1

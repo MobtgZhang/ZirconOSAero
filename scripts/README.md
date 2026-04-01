@@ -3,7 +3,7 @@
 | 路径 | 说明 |
 |------|------|
 | `configure.py` | 交互式编辑根目录 `build.conf` |
-| `build/mkiso-uefi-zbm.sh` | 生成无 GRUB 的 UEFI 可启动 ISO（`xorriso` + 内嵌 FAT ESP） |
+| `build/mkiso-uefi-zbm.sh` | 生成 UEFI 可启动 ISO（`xorriso` + 内嵌 FAT ESP） |
 | `build/fetch-gnu-efi.sh` | 克隆并编译 GNU-EFI（LoongArch），输出到 `gnu-efi/loongarch64-built/` |
 | `build/fetch-firmware.sh` | 下载 QEMU 用 EDK2 nightly 固件到 `firmware/` |
 | `build/zbm-loongarch64-efi.sh` | 将 `zbm_loongarch64.o` 链接为 `BOOTLOONGARCH64.EFI` |

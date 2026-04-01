@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a UEFI-bootable ISO using an embedded FAT ESP image (ZBM / BOOTX64.EFI).
-# Does not use GRUB. Requires: dd, mkfs.vfat (dosfstools), mcopy (mtools), xorriso.
+# Requires: dd, mkfs.vfat (dosfstools), mcopy (mtools), xorriso.
 # Optional: <arch> <version> <flavor> — flavor = debug|release (kernel log policy); written to UEFI_BOOT_INFO.txt.
 set -euo pipefail
 
@@ -30,7 +30,7 @@ mkdir -p "$ISO_ROOT"
 # Visible when mounting the ISO in the host (not inside the ESP): architecture + VirtualBox UEFI hints.
 UEFI_INFO="$ISO_ROOT/UEFI_BOOT_INFO.txt"
 {
-  echo "ZirconOSAero — UEFI bootable optical image (ZBM, no GRUB)"
+  echo "ZirconOSAero — UEFI bootable optical image (ZBM)"
   echo "Project version: ${PROJ_VERSION}"
   echo "Target CPU architecture: ${ARCH_LABEL}"
   if [ -n "${FLAVOR}" ]; then

@@ -3,13 +3,14 @@
 # x86_64 `syscall` 入口（IA32_LSTAR）：构造与 `int 0x80` 一致的 InterruptFrame 后调用 `isr_common_handler`；
 # 返回时使用 **sysretq**（需 GDT 中用户 SS 选择子比用户 CS 小 8，见 `hal/x86_64/gdt.zig`）。
 # 约定：RAX=服务号；NT 路径第 1 参在 R10（RCX/R11 由 SYSCALL 破坏）；与 `syscall.zig` 一致。
-# Ref: Intel SDM Vol.2 SYSCALL/SYSRET；Vol.4 IA32_STAR
+# 使用 SWAPGS + %gs:0 读取 per-CPU RSP0（`hal/x86_64/percpu.zig`），与 IA32_KERNEL_GS_BASE 配对。
+# Ref: Intel SDM Vol.2 SYSCALL/SYSRET, SWAPGS；Vol.4 IA32_STAR, IA32_KERNEL_GS_BASE
 
-.extern zircon_x86_64_kernel_rsp0
 .global syscall_lstar_entry
 syscall_lstar_entry:
+    swapgs
     movq %rsp, %r12
-    movq zircon_x86_64_kernel_rsp0(%rip), %rsp
+    movq %gs:0, %rsp
 
     pushq $0x1B
     pushq %r12
@@ -63,4 +64,5 @@ syscall_lstar_entry:
     popq %rsi
     addq $8, %rsp
     movq %rsi, %rsp
+    swapgs
     sysretq

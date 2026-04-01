@@ -509,6 +509,8 @@ pub const MEM_RESERVE: u32 = 0x2000;
 pub const MEM_RELEASE: u32 = 0x8000;
 pub const PAGE_READWRITE: u32 = 0x04;
 
+var user_alloc_va_salt: u32 = 0x9E37_79B9;
+
 pub fn NtAllocateVirtualMemory(
     process_handle: HANDLE,
     base_address: *u64,
@@ -536,7 +538,9 @@ pub fn NtAllocateVirtualMemory(
 
     var base = base_address.*;
     if (base == 0) {
-        base = 0x0000_0000_4000_0000;
+        user_alloc_va_salt = user_alloc_va_salt *% 1664525 +% 1013904223;
+        const slide_pages: u64 = @as(u64, user_alloc_va_salt % 512);
+        base = 0x0000_0000_4000_0000 + slide_pages * page_size;
         while (space.getPhysical(base) != null or vm.isVirtInReservedRange(&space, base, num_pages)) {
             base += page_size;
         }

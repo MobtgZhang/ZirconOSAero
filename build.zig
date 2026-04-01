@@ -380,6 +380,32 @@ pub fn build(b: *std.Build) void {
     const step = b.step("kernel", "Build the kernel ELF");
     step.dependOn(&kernel.step);
 
+    const heap_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/mm/heap.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const heap_tests = b.addTest(.{
+        .root_module = heap_test_mod,
+        .name = "heap",
+    });
+    const run_heap_tests = b.addRunArtifact(heap_tests);
+
+    const ssdt_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/ssdt_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const ssdt_tests = b.addTest(.{
+        .root_module = ssdt_test_mod,
+        .name = "ssdt",
+    });
+    const run_ssdt_tests = b.addRunArtifact(ssdt_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap + SSDT layout)");
+    test_step.dependOn(&run_heap_tests.step);
+    test_step.dependOn(&run_ssdt_tests.step);
+
     buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
     buildZbm(b, cpu_arch, optimize, debug_mode);
     if (cpu_arch == .loongarch64) {

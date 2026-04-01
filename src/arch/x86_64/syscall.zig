@@ -11,6 +11,7 @@ const vm = @import("../../mm/vm.zig");
 const ntdll = @import("../../libs/ntdll.zig");
 const ssdt = @import("ssdt_nt61.zig");
 const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
+const user32 = @import("../../subsystems/win32/user32.zig");
 
 fn ntResult(s: ntdll.NTSTATUS) i64 {
     return @intCast(s);
@@ -109,7 +110,12 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
     const p4 = frame.r9;
 
     return switch (idx) {
-        ssdt.NtWaitForSingleObject => STATUS_SUCCESS,
+        ssdt.NtWaitForSingleObject => blk: {
+            const alertable = p2 != 0;
+            const timeout_ptr: ?*const i64 = if (p3 == 0) null else @ptrFromInt(p3);
+            const st = ntdll.NtWaitForSingleObject(p1, alertable, timeout_ptr);
+            break :blk ntResult(st);
+        },
         ssdt.NtAllocateVirtualMemory => blk: {
             const a5 = userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
             const a6 = userStackArg(frame, 1) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
@@ -177,7 +183,12 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             break :blk ntResult(st);
         },
         ssdt.NtReadFile, ssdt.NtWriteFile => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
-        ssdt.NtUserGetMessage, ssdt.NtUserPeekMessage => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
+        ssdt.NtUserGetMessage => ntResult(user32.ntUserGetMessageSyscall(p1, p2, @truncate(p3), @truncate(p4))),
+        ssdt.NtUserPeekMessage => blk: {
+            const a5 = userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const st = user32.ntUserPeekMessageSyscall(p1, p2, @truncate(p3), @truncate(p4), @truncate(a5));
+            break :blk ntResult(st);
+        },
         else => blk: {
             klog.warn("Unknown NT syscall idx 0x%x", .{idx});
             break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);

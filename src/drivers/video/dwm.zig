@@ -1,4 +1,4 @@
-//! Desktop Window Manager (DWM) compositor configuration and glass effects.
+//! Desktop Window Manager — **ZirconDWM**：合成配置与 Aero 玻璃效果（清洁室实现，非 Windows DWM 代码）。
 //!
 //! Provides the Aero Glass pipeline: backdrop sample → blur → tint blend →
 //! specular highlight → chrome decoration. Also used by Fluent (Acrylic)
@@ -132,7 +132,12 @@ pub fn getConfig() *const DwmConfig {
 }
 
 pub fn setGlass(enabled: bool) void {
+    if (config.glass_enabled == enabled) return;
     config.glass_enabled = enabled;
+    const user32 = @import("../../subsystems/win32/user32.zig");
+    user32.broadcastDwmCompositionChanged(if (enabled) user32.TRUE else user32.FALSE);
+    user32.broadcastDwmNcRenderingChanged(user32.TRUE);
+    user32.broadcastDwmColorizationChanged(0, user32.FALSE);
 }
 
 pub fn getCursorLerpFactor() i32 {

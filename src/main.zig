@@ -46,6 +46,7 @@ comptime {
     _ = @import("mm/pool.zig");
     _ = @import("mm/section.zig");
     _ = @import("ke/apc.zig");
+    _ = @import("ke/roadmap_hooks.zig");
 }
 
 /// UEFI/汇编以 64 位寄存器传参；首参截断为 u32 供 Multiboot2 magic 比对（与 LoongArch handoff 习惯一致）。
@@ -143,6 +144,10 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const kernel_stack_addr = @intFromPtr(&stack_top);
     arch.initGdt(kernel_stack_addr);
     klog.info("GDT/TSS initialized (kernel stack=0x%x)", .{kernel_stack_addr});
+
+    const mitigations = @import("hal/x86_64/mitigations.zig");
+    mitigations.enableSmepIfAvailable();
+    klog.info("x86_64: SMEP set when CPUID leaf 7 reports support", .{});
 
     const stack_top_addr = @intFromPtr(&stack_top);
     const kernel_end = ((stack_top_addr + (4 * 1024 * 1024) - 1) / (4 * 1024 * 1024)) * (4 * 1024 * 1024);

@@ -25,6 +25,15 @@ pub const NtTerminateProcess = 0x29;
 pub const NtCreateThread = 0x4D;
 pub const NtWriteFile = 0x08;
 pub const NtReadFile = 0x07;
-/// Win32k 子系统服务在真实系统上为独立 SSDT；此处仅占位，返回 `STATUS_NOT_IMPLEMENTED`。
-pub const NtUserGetMessage = 0x1000;
-pub const NtUserPeekMessage = 0x1001;
+/// Win32k 在真实 Windows 上为独立服务表；本内核将用户消息 syscall 折叠进同一分发器。
+/// 索引与项目路线图（NT 6.1 x64 公开对照表）对齐；完整核对见 j00ru/windows-syscalls 等公开枚举。
+pub const NtUserGetMessage = 0x58;
+pub const NtUserPeekMessage = 0x59;
+
+const std = @import("std");
+
+test "SSDT indices stay below Zircon legacy syscall base" {
+    try std.testing.expect(NtUserGetMessage < zircon_legacy_syscall_base);
+    try std.testing.expect(NtUserPeekMessage < zircon_legacy_syscall_base);
+    try std.testing.expect(NtAllocateVirtualMemory == 0x18);
+}

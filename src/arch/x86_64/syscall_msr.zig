@@ -82,7 +82,10 @@ pub fn initSyscallInstructionPath() void {
 
     wrmsr(IA32_FMASK, 1 << 9);
 
+    const percpu = @import("../../hal/x86_64/percpu.zig");
+    percpu.syncKernelRsp0(gdt.zircon_x86_64_kernel_rsp0);
+
     if (klog.DEBUG_MODE) {
-        klog.debug("syscall: IA32_LSTAR enabled (int 0x80 vector 128 still active)", .{});
+        klog.debug("syscall: IA32_LSTAR + per-CPU KERNEL_GS_BASE (SWAPGS) enabled; int 0x80 vector 128 still active", .{});
     }
 }

@@ -87,7 +87,7 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
     if (vector == 14) {
         var cr2: u64 = 0;
         asm volatile ("mov %%cr2, %[cr2]"
-            : [cr2] "=r" (cr2)
+            : [cr2] "=r" (cr2),
         );
         const user_fault = (frame.error_code & 4) != 0;
         if (user_fault) {
@@ -98,6 +98,12 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
                         proc.address_space = asp;
                         return;
                     }
+                    const pid = proc.pid;
+                    _ = process.terminateProcess(pid, 0xC0000005);
+                    klog.err("User page fault: ACCESS_VIOLATION (addr=0x%x) PID=%u — process terminated", .{
+                        cr2, pid,
+                    });
+                    arch.halt();
                 }
             }
         }

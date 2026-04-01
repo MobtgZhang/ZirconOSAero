@@ -1,5 +1,7 @@
 //! 内核堆：bump 后备 + **空闲链表**（块首 `FreeBlock` 元数据，用户指针在元数据之后）。
 
+const std = @import("std");
+
 const HEAP_SIZE: usize = 512 * 1024;
 var heap_storage: [HEAP_SIZE]u8 align(16) = undefined;
 var heap_pos: usize = 0;
@@ -48,6 +50,16 @@ pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
             } else {
                 free_head = b.next;
             }
+            const rest = b.size - total;
+            const min_split = blockOverhead() + 16;
+            if (rest >= min_split) {
+                const remainder: *FreeBlock = @ptrFromInt(@intFromPtr(b) + total);
+                remainder.size = rest;
+                remainder.next = free_head;
+                free_head = remainder;
+            }
+            b.size = total;
+            b.next = null;
             return takeFromFreeBlock(b);
         }
         prev = b;
@@ -64,6 +76,9 @@ pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
 }
 
 /// `ptr` / `user_size` / `alignment` 须与同次 `alloc(size, alignment)` 一致。
+/// 与路线图「kfree」命名对齐的别名。
+pub const kfree = free;
+
 pub fn free(ptr: [*]u8, user_size: usize, alignment: usize) void {
     if (!heap_initialized or user_size == 0) return;
     const hdr = blockOverhead();
@@ -110,3 +125,27 @@ pub fn totalBytes() usize {
 }
 
 pub const pool = @import("pool.zig");
+
+test "heap alloc kfree roundtrip" {
+    init();
+    const p = alloc(64, 16) orelse {
+        std.debug.panic("alloc", .{});
+    };
+    @memset(p[0..64], 0xAA);
+    kfree(p, 64, 16);
+    const q = alloc(64, 16) orelse {
+        std.debug.panic("realloc after free", .{});
+    };
+    try std.testing.expect(@intFromPtr(q) != 0);
+    kfree(q, 64, 16);
+}
+
+test "heap split large free block" {
+    init();
+    const big = alloc(256, 8) orelse {
+        std.debug.panic("big", .{});
+    };
+    kfree(big, 256, 8);
+    _ = alloc(32, 8) orelse std.debug.panic("a", .{});
+    _ = alloc(32, 8) orelse std.debug.panic("b", .{});
+}

@@ -1,6 +1,8 @@
 //! x86_64 GDT (Global Descriptor Table) and TSS (Task State Segment)
 //! Sets up kernel/user segments and task state for Ring 0/3 transitions
 
+const percpu_mod = @import("percpu.zig");
+
 const GdtEntry = packed struct(u64) {
     limit_low: u16 = 0,
     base_low: u16 = 0,
@@ -95,12 +97,14 @@ fn setupTss(kernel_stack: u64) void {
     tss = .{};
     tss.rsp0 = kernel_stack;
     zircon_x86_64_kernel_rsp0 = kernel_stack;
+    percpu_mod.syncKernelRsp0(kernel_stack);
     tss.iopb_offset = @intCast(@sizeOf(Tss));
 }
 
 pub fn setKernelStack(stack: u64) void {
     tss.rsp0 = stack;
     zircon_x86_64_kernel_rsp0 = stack;
+    percpu_mod.syncKernelRsp0(stack);
 }
 
 extern fn load_gdt_flush(desc: *const GdtDescriptor) void;

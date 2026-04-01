@@ -373,10 +373,19 @@ pub fn CreateFontA(
 
 pub fn CreateFontIndirectA(lf: *const LOGFONTA) HFONT {
     return CreateFontA(
-        lf.height, lf.width, lf.escapement, lf.orientation,
-        lf.weight, lf.italic, lf.underline, lf.strikeout,
-        lf.charset, lf.out_precision, lf.clip_precision,
-        lf.quality, lf.pitch_and_family,
+        lf.height,
+        lf.width,
+        lf.escapement,
+        lf.orientation,
+        lf.weight,
+        lf.italic,
+        lf.underline,
+        lf.strikeout,
+        lf.charset,
+        lf.out_precision,
+        lf.clip_precision,
+        lf.quality,
+        lf.pitch_and_family,
         lf.face_name[0..lf.face_name_len],
     );
 }
@@ -514,6 +523,7 @@ pub fn Polygon(_: HDC, _: []const user32.POINT) BOOL {
 
 // ── Text APIs ──
 
+/// 当前为位图字体路径；路线图 C-T05：可在此接入 FreeType/HarfBuzz + 次像素渲染（许可见 THIRD_PARTY）。
 pub fn TextOutA(hdc: HDC, _: i32, _: i32, text: []const u8) BOOL {
     _ = hdc;
     _ = text;

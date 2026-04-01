@@ -8,6 +8,8 @@ const kernel32 = @import("../../libs/kernel32.zig");
 const build_options = @import("build_options");
 const console_mod = @import("console.zig");
 const subsystem = @import("subsystem.zig");
+const process = @import("../../ps/process.zig");
+const ntdll = @import("../../libs/ntdll.zig");
 
 pub const BOOL = kernel32.BOOL;
 pub const TRUE = kernel32.TRUE;
@@ -853,6 +855,54 @@ pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
     return FALSE;
 }
 
+fn userVirtRangeMapped(va: u64, len: u64) bool {
+    if (len == 0) return false;
+    const proc = process.getCurrentProcess() orelse return false;
+    var space = proc.address_space orelse return false;
+    const page: u64 = 4096;
+    var a = va;
+    const end = va +% len;
+    if (end < va) return false;
+    while (a < end) {
+        const pg = a & ~(page - 1);
+        if (space.getPhysical(pg) == null) return false;
+        a = pg + page;
+    }
+    return true;
+}
+
+/// `NtUserGetMessage` 内核路径：AMD64 约定第 1 参在 `R10`（`MSG *`）。
+pub fn ntUserGetMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_msg: u32) ntdll.NTSTATUS {
+    const msg_len: u64 = @sizeOf(MSG);
+    if ((msg_user_va & 7) != 0) return ntdll.STATUS_INVALID_PARAMETER;
+    if (!userVirtRangeMapped(msg_user_va, msg_len)) return ntdll.STATUS_ACCESS_VIOLATION;
+    var km: MSG = undefined;
+    if (GetMessageA(&km, hwnd, min_msg, max_msg) == FALSE) {
+        const um: *volatile MSG = @ptrFromInt(msg_user_va);
+        um.* = .{};
+        return ntdll.STATUS_PENDING;
+    }
+    const um: *volatile MSG = @ptrFromInt(msg_user_va);
+    um.* = km;
+    return ntdll.STATUS_SUCCESS;
+}
+
+/// `NtUserPeekMessage`：第 5 参 `wRemoveMsg`（如 `PM_REMOVE`）在用户栈上。
+pub fn ntUserPeekMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_msg: u32, remove_flags: u32) ntdll.NTSTATUS {
+    const msg_len: u64 = @sizeOf(MSG);
+    if ((msg_user_va & 7) != 0) return ntdll.STATUS_INVALID_PARAMETER;
+    if (!userVirtRangeMapped(msg_user_va, msg_len)) return ntdll.STATUS_ACCESS_VIOLATION;
+    var km: MSG = undefined;
+    if (PeekMessageA(&km, hwnd, min_msg, max_msg, remove_flags) == FALSE) {
+        const um: *volatile MSG = @ptrFromInt(msg_user_va);
+        um.* = .{};
+        return ntdll.STATUS_PENDING;
+    }
+    const um: *volatile MSG = @ptrFromInt(msg_user_va);
+    um.* = km;
+    return ntdll.STATUS_SUCCESS;
+}
+
 pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
     if (hwnd != 0) {
         const wnd = findWindow(hwnd) orelse return FALSE;
@@ -1182,6 +1232,7 @@ pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRES
             }
             return 0;
         },
+        WM_DWMCOMPOSITIONCHANGED, WM_DWMNCRENDERINGCHANGED, WM_DWMCOLORIZATIONCOLORCHANGED => return 0,
         WM_CLOSE => return 0,
         WM_DESTROY => return 0,
         WM_PAINT => return 0,

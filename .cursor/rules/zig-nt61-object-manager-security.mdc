@@ -1,0 +1,282 @@
+---
+description: ZirconOSAero 对象管理器（Ob）与安全子系统（Se）规则
+globs: ["**/kernel/ob/**/*.zig", "**/kernel/se/**/*.zig"]
+---
+
+# 对象管理器与安全子系统规则
+
+## 对象管理器（Ob）概述
+
+NT 内核通过对象管理器（Object Manager）统一管理所有内核对象（文件、进程、线程、
+事件、互斥体等）。所有对象共享统一的对象头（Object Header），支持引用计数、
+命名空间（对象目录）、安全描述符和句柄表。
+
+参考：https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/object-manager-routines
+
+---
+
+## 对象头（OBJECT_HEADER）
+
+```zig
+/// NT 对象头（每个内核对象都有此头部，紧跟在对象体之前）
+/// 通过 CONTAINING_RECORD 从对象体指针向回找到头部
+pub const ObjectHeader = extern struct {
+    /// 指向引用者的指针数（用于调试/追踪，非引用计数本身）
+    pointer_count:  i64,
+    /// 句柄计数（打开的句柄数）或下一个对象头链接
+    handle_count_or_next: extern union {
+        handle_count: i64,
+        next_to_free: ?*anyopaque,
+    },
+    /// 指向 OBJECT_TYPE 的指针
+    type_info:      ?*ObjectType,
+    /// 对象的访问控制信息索引
+    info_mask:      u8,
+    /// 对象标志位
+    flags:          u8,
+    _reserved:      u16,
+    _pad:           u32,
+    // 紧跟其后的是可选的 OBJECT_HEADER_NAME_INFO / QUOTA_INFO 等
+
+    // 标志位常量（来自公开 WDK 文档）
+    pub const OBJ_FLAG_KERNEL_OBJECT:     u8 = 0x10;
+    pub const OBJ_FLAG_PERMANENT_OBJECT:  u8 = 0x02;
+    pub const OBJ_FLAG_EXCLUSIVE_OBJECT:  u8 = 0x08;
+
+    /// 从对象体指针获取其对象头
+    pub fn fromBody(comptime T: type, body: *T) *ObjectHeader {
+        return @ptrFromInt(@intFromPtr(body) - @sizeOf(ObjectHeader));
+    }
+
+    /// 从对象头获取对象体
+    pub fn getBody(self: *ObjectHeader, comptime T: type) *T {
+        return @ptrFromInt(@intFromPtr(self) + @sizeOf(ObjectHeader));
+    }
+};
+
+/// 对象类型描述符（每种对象类型只有一个全局实例）
+pub const ObjectType = extern struct {
+    type_list:          ListEntry,
+    name:               UnicodeString,
+    default_object:     ?*anyopaque,
+    index:              u8,
+    total_number_of_objects:   u32,
+    total_number_of_handles:   u32,
+    high_water_number_of_objects: u32,
+    high_water_number_of_handles: u32,
+    type_info:          ObjectTypeInitializer,
+    type_lock:          SpinLock,
+    key:                u32,
+    callback_list:      ListEntry,
+};
+
+/// 对象类型初始化参数（用于 ObCreateObjectType）
+pub const ObjectTypeInitializer = extern struct {
+    length:                 u16,
+    object_type_flags:      u8,
+    _pad:                   u8,
+    object_type_code:       u32,
+    invalid_attributes:     u32,
+    generic_mapping:        GenericMapping,
+    valid_access_mask:      u32,
+    retain_access:          u32,
+    pool_type:              PoolType,
+    default_paged_pool_charge: u32,
+    default_non_paged_pool_charge: u32,
+    /// 以下为函数指针（类型方法）
+    dump_procedure:         ?*anyopaque,
+    open_procedure:         ?*anyopaque,
+    close_procedure:        ?*anyopaque,
+    delete_procedure:       ?*anyopaque,
+    parse_procedure:        ?*anyopaque,
+    security_procedure:     ?*anyopaque,
+    query_name_procedure:   ?*anyopaque,
+    okay_to_close_procedure: ?*anyopaque,
+};
+
+/// 通用权限映射（ACCESS_MASK 的通用到特定权限转换）
+pub const GenericMapping = extern struct {
+    generic_read:    u32,
+    generic_write:   u32,
+    generic_execute: u32,
+    generic_all:     u32,
+};
+```
+
+---
+
+## 引用计数 API
+
+```zig
+/// 增加对象引用计数（防止对象被销毁）
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obfreferenceobject
+pub fn obReferenceObject(object: *anyopaque) void {
+    const header = ObjectHeader.fromBody(anyopaque, object);
+    _ = @atomicRmw(i64, &header.pointer_count, .Add, 1, .seq_cst);
+}
+
+/// 减少对象引用计数，若归零则触发删除例程
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obdereferenceobject
+pub fn obDereferenceObject(object: *anyopaque) void {
+    const header = ObjectHeader.fromBody(anyopaque, object);
+    const prev = @atomicRmw(i64, &header.pointer_count, .Sub, 1, .seq_cst);
+    if (prev == 1) {
+        // 引用计数到零，触发对象的 DeleteProcedure
+        if (header.type_info) |type_info| {
+            if (type_info.type_info.delete_procedure) |del| {
+                // 调用对象类型的删除回调
+                const delete_fn: *const fn (*anyopaque) callconv(.winapi) void = @ptrCast(del);
+                delete_fn(object);
+            }
+        }
+        // 释放对象内存
+        exFreePoolWithTag(@ptrCast(header), makeTag("ObHd"));
+    }
+}
+```
+
+---
+
+## 句柄表（Handle Table）
+
+```zig
+/// 句柄表条目
+pub const HandleTableEntry = extern struct {
+    /// 指向对象头的指针（低位编码了访问掩码等标志）
+    object:         ?*ObjectHeader,
+    /// 句柄授予的访问权限
+    granted_access: u32,
+    attributes:     u32,
+};
+
+/// 句柄表（每个进程一个）
+pub const HandleTable = struct {
+    /// 句柄表条目数组（简化版，生产中应使用多层树结构）
+    entries: []HandleTableEntry,
+    lock:    SpinLock,
+    /// 下一个可用句柄值（NT 句柄是 4 的倍数）
+    next_handle: u32,
+
+    pub fn init(allocator: std.mem.Allocator, initial_capacity: usize) !HandleTable {
+        return .{
+            .entries     = try allocator.alloc(HandleTableEntry, initial_capacity),
+            .lock        = SpinLock.init(),
+            .next_handle = 4,
+        };
+    }
+
+    /// 创建句柄，返回句柄值
+    pub fn createHandle(
+        self: *HandleTable,
+        object: *ObjectHeader,
+        desired_access: u32,
+    ) ?HANDLE {
+        const irql = self.lock.acquire();
+        defer self.lock.release(irql);
+
+        const index = self.next_handle / 4;
+        if (index >= self.entries.len) return null;
+
+        obReferenceObject(object.getBody(anyopaque));
+        self.entries[index] = .{
+            .object         = object,
+            .granted_access = desired_access,
+            .attributes     = 0,
+        };
+        const handle: HANDLE = @ptrFromInt(self.next_handle);
+        self.next_handle += 4;
+        return handle;
+    }
+
+    /// 查找句柄对应的对象
+    pub fn lookupObject(self: *HandleTable, handle: HANDLE) ?*ObjectHeader {
+        const value = @intFromPtr(handle);
+        if (value == 0 or value % 4 != 0) return null;
+        const index = value / 4;
+        if (index >= self.entries.len) return null;
+        return self.entries[index].object;
+    }
+};
+```
+
+---
+
+## 安全子系统（Se）基础
+
+```zig
+/// 访问掩码常量（来自 WDK 公开文档）
+pub const AccessMask = struct {
+    // 通用权限
+    pub const GENERIC_READ:    u32 = 0x80000000;
+    pub const GENERIC_WRITE:   u32 = 0x40000000;
+    pub const GENERIC_EXECUTE: u32 = 0x20000000;
+    pub const GENERIC_ALL:     u32 = 0x10000000;
+    // 标准权限
+    pub const DELETE:                u32 = 0x00010000;
+    pub const READ_CONTROL:          u32 = 0x00020000;
+    pub const WRITE_DAC:             u32 = 0x00040000;
+    pub const WRITE_OWNER:           u32 = 0x00080000;
+    pub const SYNCHRONIZE:           u32 = 0x00100000;
+    pub const STANDARD_RIGHTS_ALL:   u32 = 0x001F0000;
+    pub const STANDARD_RIGHTS_READ:  u32 = READ_CONTROL;
+    pub const STANDARD_RIGHTS_WRITE: u32 = READ_CONTROL;
+};
+
+/// 访问状态检查结果
+pub const AccessState = struct {
+    granted_access:     u32,
+    remaining_access:   u32,
+    privileges_used:    bool,
+};
+
+/// 访问检查（简化版）
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck
+pub fn seAccessCheck(
+    security_descriptor: ?*anyopaque,
+    subject_context:     ?*anyopaque,
+    subject_context_locked: bool,
+    desired_access:      u32,
+    previously_granted_access: u32,
+    generic_mapping:     *const GenericMapping,
+    granted_access:      *u32,
+    access_status:       *NtStatus,
+) bool {
+    // Clean-room 实现要点（基于文档行为描述）：
+    // 1. 若 security_descriptor 为 null，拒绝访问。
+    // 2. 将通用权限（GENERIC_*）通过 generic_mapping 映射为特定权限。
+    // 3. 遍历 DACL（自主访问控制列表）中的 ACE。
+    // 4. 按顺序匹配 Deny ACE（优先于 Allow ACE）。
+    // 5. 若所有 desired_access 位均被允许，返回 true 并设置 granted_access。
+    _ = security_descriptor;
+    _ = subject_context;
+    _ = subject_context_locked;
+    _ = generic_mapping;
+    _ = previously_granted_access;
+    // 初期简化：内核调用者拥有所有权限
+    granted_access.* = desired_access;
+    access_status.*  = .success;
+    return true;
+}
+```
+
+---
+
+## 命名空间（对象目录）规范
+
+NT 对象命名空间以 `\` 为根，使用目录树结构（类似文件系统路径）。
+
+```
+对象目录规范（Clean-room，基于公开 NT 文档）：
+- 根目录：\
+- 设备对象：\Device\<名称>
+- 驱动对象：\Driver\<名称>
+- 符号链接：\??\C: -> \Device\HarddiskVolume2
+- Windows 对象管理器命名空间文档：
+  https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/object-names
+
+实现要求：
+1. 对象目录本身也是一个内核对象（OBJECT_DIRECTORY 类型）。
+2. 目录采用哈希表加速查找（37 个 bucket，使用对象名称哈希）。
+3. 插入/查找操作需持有目录的读写锁。
+4. 路径解析支持符号链接跟随（最大 32 跳，防止循环）。
+```

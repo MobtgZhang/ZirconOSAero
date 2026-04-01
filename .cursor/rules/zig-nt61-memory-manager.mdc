@@ -1,0 +1,236 @@
+---
+description: ZirconOSAero 内存管理子系统（Mm）规则：页表、池分配器、虚拟内存管理
+globs: ["**/kernel/mm/**/*.zig", "**/hal/**/paging.zig", "**/kernel/arch/**/paging.zig"]
+---
+
+# 内存管理子系统规则（Mm）
+
+## 设计目标
+参照 NT6.1 内存管理器的公开行为规范（来自 Microsoft Learn、WDK 文档及学术论文），
+使用 Zig 实现独立的内存管理子系统。不参考任何 Windows 或 ReactOS 源代码。
+
+---
+
+## 内存布局（x86_64 NT6.1 规范）
+
+```
+虚拟地址空间布局（NT6.1 x86_64，参考 MSDN 文档）:
+┌─────────────────────────────┐ 0xFFFFFFFFFFFFFFFF
+│  内核非分页池（上部）         │
+│  内核分页池                  │
+│  内核映像 / 驱动              │
+│  系统 PTE 区域               │
+│  HAL 区域                    │
+│  超空间 / 工作集              │
+├─────────────────────────────┤ 0xFFFF800000000000（内核空间起始）
+│                             │
+│  不可访问区域（规范地址洞）   │
+│                             │
+├─────────────────────────────┤ 0x00007FFFFFFFFFFF（用户空间上限）
+│  用户栈                      │
+│  用户堆                      │
+│  用户映像（DLL / EXE）        │
+│  TEB / PEB                   │
+└─────────────────────────────┘ 0x0000000000000000
+```
+
+```zig
+// 内核空间边界常量（NT6.1 x86_64 规范值）
+pub const KERNEL_SPACE_START: usize = 0xFFFF800000000000;
+pub const USER_SPACE_END:     usize = 0x00007FFFFFFFFFFF;
+pub const PAGE_SIZE:          usize = 0x1000;       // 4 KiB
+pub const LARGE_PAGE_SIZE:    usize = 0x200000;     // 2 MiB
+pub const HUGE_PAGE_SIZE:     usize = 0x40000000;   // 1 GiB
+```
+
+---
+
+## 池类型定义
+
+```zig
+/// 内核内存池类型（参考 WDK 公开文档 POOL_TYPE 枚举）
+/// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_pool_type
+pub const PoolType = enum(u32) {
+    /// 非分页池：任何 IRQL 可访问，物理内存常驻
+    non_paged        = 0,
+    /// 分页池：仅 IRQL < DISPATCH_LEVEL 可访问，可被换出
+    paged            = 1,
+    /// 非分页池（带 NX 执行保护，NT6.1 新增）
+    non_paged_nx     = 512,
+    _,
+};
+
+/// 内存池分配标签（4 字节，用于调试/内存泄漏检测）
+pub const PoolTag = u32;
+
+/// 从 ASCII 字符串构建池标签（comptime，倒序存储）
+pub fn makeTag(comptime s: *const [4]u8) PoolTag {
+    return @as(PoolTag, s[3]) |
+           (@as(PoolTag, s[2]) << 8)  |
+           (@as(PoolTag, s[1]) << 16) |
+           (@as(PoolTag, s[0]) << 24);
+}
+// 用法：const MY_TAG = makeTag("MyDr");
+```
+
+---
+
+## 池分配接口
+
+```zig
+/// 分配内核内存池（等价于 ExAllocatePoolWithTag 的 Zig 签名）
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithtag
+pub fn exAllocatePoolWithTag(
+    pool_type: PoolType,
+    number_of_bytes: usize,
+    tag: PoolTag,
+) ?[*]u8 {
+    // 实现要点（Clean-room）：
+    // 1. IRQL 检查：分页池只能在 IRQL < DISPATCH_LEVEL 时分配
+    // 2. 大小对齐至 POOL_BLOCK_SIZE（通常 16 字节）
+    // 3. 从对应类型的空闲链表中查找合适的块
+    // 4. 若无合适块，扩展池区域（从 PFN 数据库请求物理页）
+    // 5. 在块头部写入 PoolTag 和大小信息（用于 ExFreePoolWithTag 验证）
+    _ = pool_type;
+    _ = number_of_bytes;
+    _ = tag;
+    @panic("MmAllocatePool: not implemented");
+}
+
+/// 释放内核内存池
+pub fn exFreePoolWithTag(ptr: [*]u8, tag: PoolTag) void {
+    // 实现要点（Clean-room）：
+    // 1. 验证 tag 与分配时记录的 tag 一致（调试模式）
+    // 2. 将块归还对应的空闲链表
+    // 3. 尝试合并相邻空闲块（防止碎片化）
+    _ = ptr;
+    _ = tag;
+    @panic("MmFreePool: not implemented");
+}
+```
+
+### 分配规范
+- 所有内核内存分配必须指定 `PoolTag`，禁止使用 `0` 作为标签。
+- 分配后必须检查返回值是否为 `null`，返回 `NtStatus.no_memory`。
+- 对应的释放操作必须使用相同的 `PoolTag`。
+- 内存块大小必须在注释中说明（便于池分配器选择合适的空闲链表）。
+
+---
+
+## 页表管理（x86_64 四级页表）
+
+```zig
+/// x86_64 四级页表条目（每级页表通用格式）
+/// 参考: Intel 64 and IA-32 Architectures Software Developer's Manual, Vol.3A, §4.5
+pub const PageTableEntry = packed struct(u64) {
+    present:          u1,   // bit 0:  P  - 页面存在
+    writable:         u1,   // bit 1:  R/W
+    user_accessible:  u1,   // bit 2:  U/S
+    write_through:    u1,   // bit 3:  PWT
+    cache_disabled:   u1,   // bit 4:  PCD
+    accessed:         u1,   // bit 5:  A
+    dirty:            u1,   // bit 6:  D（仅 PTE）
+    huge_page:        u1,   // bit 7:  PS（PDE/PDPTE 中表示大页）
+    global:           u1,   // bit 8:  G
+    _available:       u3,   // bit 9-11: 软件可用
+    phys_addr:        u40,  // bit 12-51: 物理地址（右移 12 位）
+    _reserved:        u11,  // bit 52-62: 保留
+    no_execute:       u1,   // bit 63: NX（需要 EFER.NXE = 1）
+
+    pub fn getPhysAddr(self: PageTableEntry) usize {
+        return @as(usize, self.phys_addr) << 12;
+    }
+
+    pub fn setPhysAddr(self: *PageTableEntry, addr: usize) void {
+        std.debug.assert(addr & 0xFFF == 0); // 必须页对齐
+        self.phys_addr = @intCast(addr >> 12);
+    }
+};
+
+/// 页表级别
+pub const PageLevel = enum { pml4, pdpt, pd, pt };
+
+/// 从虚拟地址提取各级页表索引
+pub fn getPageIndex(vaddr: usize, level: PageLevel) usize {
+    return switch (level) {
+        .pml4 => (vaddr >> 39) & 0x1FF,
+        .pdpt => (vaddr >> 30) & 0x1FF,
+        .pd   => (vaddr >> 21) & 0x1FF,
+        .pt   => (vaddr >> 12) & 0x1FF,
+    };
+}
+```
+
+### 页表操作规范
+- 所有页表写操作后必须执行 `invlpg`（TLB 刷新）或完整的 `mov cr3` 刷新。
+- 修改内核全局映射时，所有 CPU 核心必须同步刷新（IPI shootdown）。
+- 物理地址必须来自 PFN 数据库，禁止硬编码物理地址（HAL 层除外）。
+- 页表修改必须在持有对应自旋锁的情况下进行。
+
+---
+
+## 物理内存管理（PFN 数据库）
+
+```zig
+/// 物理页帧状态（简化版，参考 NT 内存管理公开文档）
+pub const PfnState = enum(u8) {
+    active,      // 页面正在使用
+    free,        // 空闲（零化或未零化）
+    zeroed,      // 已零化的空闲页
+    standby,     // 备用（已修改但可被回收）
+    modified,    // 已修改（需写回分页文件）
+    bad,         // 硬件损坏
+};
+
+/// PFN 数据库条目
+pub const PfnEntry = extern struct {
+    list_entry:     ListEntry,  // 连接空闲/备用/修改链表
+    pte_address:    ?*PageTableEntry, // 指向映射此页的 PTE
+    state:          PfnState,
+    reference_count: u16,
+    _pad:           [5]u8,
+};
+```
+
+---
+
+## 虚拟内存分配（NtAllocateVirtualMemory 实现规范）
+
+```
+实现要点（Clean-room，参考 MSDN 文档行为描述）：
+1. 验证地址范围在调用进程的用户空间内（用户态调用）。
+2. 将 BaseAddress 向下对齐到页边界，RegionSize 向上对齐到页大小。
+3. 在进程的 VAD（虚拟地址描述符）树中插入新节点。
+4. 若 MEM_COMMIT：从 PFN 数据库分配物理页，更新页表。
+5. 若 MEM_RESERVE：仅在 VAD 树中标记，不分配物理页。
+6. 返回实际分配的基地址和大小（通过输出参数）。
+```
+
+---
+
+## Zig 内核分配器接口
+
+内核代码需要一个符合 `std.mem.Allocator` 接口的包装器，以便使用 Zig 数据结构：
+
+```zig
+/// 内核非分页池分配器（可在任意 IRQL 使用）
+pub const kernel_allocator = std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc   = nonPagedAlloc,
+        .resize  = nonPagedResize,
+        .free    = nonPagedFree,
+        .remap   = null,
+    },
+};
+
+fn nonPagedAlloc(
+    _: *anyopaque,
+    len: usize,
+    alignment: std.mem.Alignment,
+    _: usize,
+) ?[*]u8 {
+    _ = alignment; // 池分配器保证至少 16 字节对齐
+    return exAllocatePoolWithTag(.non_paged, len, makeTag("ZigA"));
+}
+```

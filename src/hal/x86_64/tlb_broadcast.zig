@@ -6,8 +6,23 @@
 //
 // This is an independent clean-room implementation.
 // Reference: Intel SDM — INVLPG / TLB; MS Learn — multiprocessor TLB invalidation (conceptual).
+// Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K2.5（IPI shootdown）。
 
+const builtin = @import("builtin");
+const std = @import("std");
 const paging = @import("../../arch/x86_64/paging.zig");
+const klog = @import("../../rtl/klog.zig");
+
+/// SMP 就绪后由页表更新路径递增；当前仅占位，供诊断与将来 IPI 批处理。
+var pending_shootdown_hint: std.atomic.Value(u32) = .init(0);
+
+pub fn notePendingGlobalShootdown() void {
+    _ = pending_shootdown_hint.fetchAdd(1, .monotonic);
+}
+
+pub fn pendingShootdownHint() u32 {
+    return pending_shootdown_hint.load(.monotonic);
+}
 
 pub fn flushLocal() void {
     paging.flushTlb();
@@ -17,4 +32,13 @@ pub fn flushLocal() void {
 /// `vm.releaseProcessAddressSpace` 在释放他进程页表后调用本函数，避免当前核残留陈旧 global 项（与 PCID/INVPCID 策略见契约矩阵）。
 pub fn requestGlobalFlushStub() void {
     flushLocal();
+    pending_shootdown_hint.store(0, .monotonic);
+    if (builtin.cpu.arch == .x86_64) {
+        const madt = @import("madt.zig");
+        if (madt.logical_cpu_count > 1 and @import("build_options").debug) {
+            klog.debug("TLB: global flush is BSP-local; SMP IPI shootdown not yet wired (cpus=%u)", .{
+                madt.logical_cpu_count,
+            });
+        }
+    }
 }

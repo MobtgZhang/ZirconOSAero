@@ -6,8 +6,10 @@
 //
 // This is an independent clean-room implementation.
 // Reference: ACPI spec (RSDP, XSDT, MCFG); PCI Express ECAM layout. No Windows/ReactOS code.
+// Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K3（表遍历、ECAM；AML 见延后项）。
 
 const std = @import("std");
+const ecam_layout = @import("ecam_layout.zig");
 const klog = @import("../../rtl/klog.zig");
 
 const rsdp_sig = "RSD PTR ";
@@ -57,7 +59,15 @@ fn walkRoot(phys: u64) void {
     var sig: [4]u8 = undefined;
     @memcpy(sig[0..4], rh[0..4]);
     const len = readU32(rh, 4);
-    if (len < 40) return;
+    // ACPI 表头最小 36 + 至少一项指针；过大则视为损坏，避免 walk 越界。
+    if (len < 40 or len > 0x0100_0000) {
+        if (len < 40) {
+            klog.warn("ACPI: root table at 0x%x length %u too small", .{ phys, len });
+        } else {
+            klog.warn("ACPI: root table at 0x%x length %u suspicious (skipped)", .{ phys, len });
+        }
+        return;
+    }
 
     if (std.mem.eql(u8, sig[0..4], "XSDT")) {
         const n = (len - 36) / 8;
@@ -105,16 +115,35 @@ pub fn initFromRsdp(rsdp_phys: usize) void {
         @as(u16, @truncate(id_lo & 0xffff)),
         @as(u16, @truncate(id_lo >> 16)),
     });
+    if (DEBUG_MODE) logBus0Function0Snapshot();
+}
+
+const DEBUG_MODE = @import("build_options").debug;
+
+/// Debug-only：枚举 PCI 总线 0、功能 0 上非空插槽（VID != 0xFFFF），为 XHCI/AHCI 等驱动接线提供早期拓扑线索。
+fn logBus0Function0Snapshot() void {
+    var present: u32 = 0;
+    var d: u8 = 0;
+    while (d < 32) : (d += 1) {
+        const id = configRead32(0, d, 0, 0);
+        const ven = @as(u16, @truncate(id & 0xffff));
+        if (ven == 0xffff) continue;
+        present += 1;
+        if (present <= 12) {
+            klog.debug("ACPI/PCI: bus0 dev%u func0 vid=0x%x did=0x%x", .{
+                d,
+                ven,
+                @as(u16, @truncate(id >> 16)),
+            });
+        }
+    }
+    klog.debug("ACPI/PCI: bus0 function0 present count=%u (up to 12 logged)", .{present});
 }
 
 pub fn configRead32(bus: u8, dev: u8, func: u8, reg: u8) u32 {
     if (ecam_base_phys == 0) return 0xffff_ffff;
     if (bus < ecam_bus_lo or bus > ecam_bus_hi) return 0xffff_ffff;
-    const r = reg & 0xfc;
-    const off: u64 = (@as(u64, bus - ecam_bus_lo) << 20) |
-        (@as(u64, dev & 0x1f) << 15) |
-        (@as(u64, func & 7) << 12) |
-        @as(u64, r);
+    const off = ecam_layout.pciConfigDwordOffset(bus - ecam_bus_lo, dev, func, reg);
     const addr = ecam_base_phys + off;
     const ptr: *align(1) const u32 = @ptrFromInt(@as(usize, @truncate(addr)));
     return ptr.*;

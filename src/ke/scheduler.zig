@@ -2,7 +2,8 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/ke/scheduler.zig
-// Purpose: 定时器驱动的多级优先级就绪调度（抢占式）；API 说明见 docs/cn/SCHEDULER_API.md
+// Purpose: 定时器驱动的多级优先级就绪调度（抢占式）；API 说明见 docs/cn/SCHEDULER_API.md。
+// NT 6.1 文档中的 32 级优先级、boost/反饥饿等为路线图近似实现，不阻塞 MM/SMP；见 docs/en/Roadmap.md Deferred surfaces。
 //
 // This is an independent clean-room implementation.
 // Reference: OS textbook priority scheduling; MS Learn — threading (behavioral only).

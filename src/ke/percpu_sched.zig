@@ -6,6 +6,7 @@
 //
 // This is an independent clean-room implementation.
 // Reference: OS textbook work stealing (conceptual).
+// Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K2.6（`home_cpu`、AP 就绪队列）。
 
 const builtin = @import("builtin");
 

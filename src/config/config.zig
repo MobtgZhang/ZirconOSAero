@@ -268,8 +268,9 @@ pub fn isSplashEnabled() bool {
     return boot_config.getBoolOr("boot", "splash_enabled", true);
 }
 
-pub fn getGrubGfxMode() []const u8 {
-    return boot_config.getOr("grub", "gfxmode", "1024x768x32");
+/// Preferred WxHxdepth string for ZBM / early boot (from `boot.conf` [display], synced from `build.conf` RESOLUTION).
+pub fn getPreferredGfxMode() []const u8 {
+    return boot_config.getOr("display", "gfxmode", "1024x768x32");
 }
 
 pub fn getTotalConfigEntries() usize {

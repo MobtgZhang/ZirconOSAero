@@ -6,7 +6,7 @@
 
 | 组件 | 版本 |
 |------|------|
-| Zig | **0.15.2**（与 CI `mlugg/setup-zig` 一致） |
+| Zig | **0.15.2**（与 CI `mlugg/setup-zig@v2` 一致） |
 | QEMU（烟测） | `qemu-system-x86`（Ubuntu `ubuntu-latest` 包） |
 
 安装 Zig：<https://ziglang.org/download/>

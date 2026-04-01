@@ -154,3 +154,22 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 - [SyscallABI.md](SyscallABI.md) — 本机 syscall 与 Windows SSDT 关系  
 - [MM_Section_Roadmap.md](MM_Section_Roadmap.md) — 段对象与映射  
 - [PointerPolicy_NT61.md](PointerPolicy_NT61.md) — 指针速度/加速与 `mouse.zig` 字段对照（桌面体验）  
+
+## 8. 内核路线图：契约条目 ↔ 代码路径 ↔ 自动化验证（三向跟踪）
+
+PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** 须指向具体测试目标或 CI 步骤名。
+
+| 契约能力（与 §0–2 对应） | 主代码路径 | 测试 / CI |
+|--------------------------|------------|-----------|
+| 进程用户半区释放 + PML4 回收 | `src/mm/vm.zig` `releaseProcessAddressSpace`；`src/arch/x86_64/paging.zig` `releaseUserHalfAddressSpace` | 伙伴/连续帧：`src/mm/buddy.zig` 主机测试；内核路径见 [MVT_NT61.md](MVT_NT61.md) |
+| 调度切换 CR3 | `src/ke/scheduler.zig` `activateCr3ForProcessId` | QEMU：`scripts/ci-qemu-smoke.sh` |
+| 用户指针探测 | `src/mm/probe.zig`；`src/arch/x86_64/syscall.zig` | 各 syscall 分支配对；扩展时补 `tests/` |
+| 每 CPU 就绪队列与工作窃取 | `src/ke/scheduler.zig`（`home_cpu`、就绪链）；`src/ke/percpu_sched.zig` `assignCpuForNewThread` | `zig build test`（调度行为以烟测为主） |
+| TLB 一致性（SMP 前占位） | `src/hal/x86_64/tlb_broadcast.zig` | 文档 + 未来 IPI 用例 |
+| LPC 端口种类 | `src/lpc/port.zig` `PortKind` | 主机/集成见路线图 |
+| IRP 完成例程 | `src/io/io.zig` `IoCompleteRequest` | 主机：`tests/io_irp_host.zig`（与 `io.zig` 同步的契约断言） |
+| 对象路径规范化 | `src/ob/object.zig` `normalizeNtObjectPath` | `zig build test` → `object` |
+| 合规短语扫描 | `scripts/verify-compliance.sh` | CI：`Compliance phrase scan (src/boot)` |
+| `NtQuerySystemInformation` 子集 | `src/libs/ntdll.zig` | syscall + ntdll 一致性审查 |
+
+**合规**：实现仅依据 MS Learn / WDK 公开描述与硬件规范；提交前运行 `bash scripts/verify-compliance.sh`。

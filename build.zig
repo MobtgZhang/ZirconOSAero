@@ -160,6 +160,11 @@ pub fn build(b: *std.Build) void {
         "desktop_idle_spin",
         "x86_64 desktop loop: spin instead of sti;hlt (smoother input polling in QEMU; higher guest CPU use; Makefile DESKTOP_IDLE_SPIN)",
     ) orelse true;
+    const aero_blur_light_opt = b.option(
+        bool,
+        "aero_blur_light",
+        "Reduce default Aero glass box-blur radius/passes (high-res QEMU); Makefile AERO_BLUR_LIGHT",
+    ) orelse false;
     var cpu_arch: std.Target.Cpu.Arch = .x86_64;
     if (mem.eql(u8, arch_opt, "x86_64")) {
         cpu_arch = .x86_64;
@@ -275,6 +280,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "loongson_igpu_defer_probe", loongson_igpu_defer_probe_opt);
     build_opts.addOption(bool, "loongson_kms_experimental", loongson_kms_experimental_opt);
     build_opts.addOption(bool, "desktop_idle_spin", desktop_idle_spin_opt);
+    build_opts.addOption(bool, "aero_blur_light", aero_blur_light_opt);
     build_opts.addOption(bool, "usb_xhci", usb_xhci_opt);
     build_opts.addOption(bool, "usb_ehci", usb_ehci_opt);
     build_opts.addOption([]const u8, "default_desktop", desktop_default);
@@ -490,7 +496,84 @@ pub fn build(b: *std.Build) void {
     });
     const run_io_irp_tests = b.addRunArtifact(io_irp_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap + pool + buddy + slab + SSDT + se/token + smp_atomic_host + wow64_types + object + io_irp_host)");
+    const ecam_layout_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/hal/x86_64/ecam_layout.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const ecam_layout_tests = b.addTest(.{
+        .root_module = ecam_layout_test_mod,
+        .name = "ecam_layout",
+    });
+    const run_ecam_layout_tests = b.addRunArtifact(ecam_layout_tests);
+
+    const hpet_id_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/hal/x86_64/hpet_id.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const hpet_id_tests = b.addTest(.{
+        .root_module = hpet_id_test_mod,
+        .name = "hpet_id",
+    });
+    const run_hpet_id_tests = b.addRunArtifact(hpet_id_tests);
+
+    const lpc_portkind_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/lpc_portkind_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const lpc_portkind_tests = b.addTest(.{
+        .root_module = lpc_portkind_host_mod,
+        .name = "lpc_portkind_host",
+    });
+    const run_lpc_portkind_tests = b.addRunArtifact(lpc_portkind_tests);
+
+    const minimal_net_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/net/minimal_stack.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const minimal_net_tests = b.addTest(.{
+        .root_module = minimal_net_test_mod,
+        .name = "minimal_net",
+    });
+    const run_minimal_net_tests = b.addRunArtifact(minimal_net_tests);
+
+    const mdl_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/mm/mdl.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const mdl_tests = b.addTest(.{
+        .root_module = mdl_test_mod,
+        .name = "mdl_host",
+    });
+    const run_mdl_tests = b.addRunArtifact(mdl_tests);
+
+    const pci_bind_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/bus/pci_driver_bind.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const pci_bind_tests = b.addTest(.{
+        .root_module = pci_bind_test_mod,
+        .name = "pci_driver_bind_host",
+    });
+    const run_pci_bind_tests = b.addRunArtifact(pci_bind_tests);
+
+    const fs_vfs_constants_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/fs_vfs_constants_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const fs_vfs_constants_tests = b.addTest(.{
+        .root_module = fs_vfs_constants_host_mod,
+        .name = "fs_vfs_constants_host",
+    });
+    const run_fs_vfs_constants_tests = b.addRunArtifact(fs_vfs_constants_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, SSDT, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -501,6 +584,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_wow64_types_tests.step);
     test_step.dependOn(&run_ob_object_tests.step);
     test_step.dependOn(&run_io_irp_tests.step);
+    test_step.dependOn(&run_ecam_layout_tests.step);
+    test_step.dependOn(&run_hpet_id_tests.step);
+    test_step.dependOn(&run_lpc_portkind_tests.step);
+    test_step.dependOn(&run_minimal_net_tests.step);
+    test_step.dependOn(&run_mdl_tests.step);
+    test_step.dependOn(&run_pci_bind_tests.step);
+    test_step.dependOn(&run_fs_vfs_constants_tests.step);
 
     buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
     buildZbm(b, cpu_arch, optimize, debug_mode);

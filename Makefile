@@ -7,7 +7,7 @@
 	build-zbm-uefi build-zbm-loongarch-uefi build-zbm-riscv64-uefi build-zbm-loongarch64-stub build-zbm-bios build-zbm-disk build-esp \
 	build-desktop build-desktop-all build-desktop-dll \
 	fetch-themes fetch-firmware fetch-gnu-efi fetch-gnu-efi-riscv64 fetch-loongarch-boot-efi fonts resources \
-	run-aarch64 run-riscv64 run-loongarch64 run-loongarch64-autozbm run-loongarch64-serial-debug run-aarch64-debug run-riscv64-debug run-loongarch64-debug \
+	run-fb-large run-aarch64 run-riscv64 run-loongarch64 run-loongarch64-autozbm run-loongarch64-serial-debug run-aarch64-debug run-riscv64-debug run-loongarch64-debug \
 	test test-kernel test-config test-boot test-all smoke-qemu-mbr \
 	clean help show-config configure sync-resolution
 
@@ -39,6 +39,10 @@ DEBUG_LOG    ?= true
 MOUSE_DEBUG  ?= false
 # 桌面合成 bisect：zig build -Ddesktop_bisect=true 等效；panic 行尾 [phase=0x…] 见 rtl/panic_context.zig
 DESKTOP_BISECT ?= false
+# 高分 QEMU：减轻盒式模糊默认半径/遍数（zig build -Daero_blur_light=true）
+AERO_BLUR_LIGHT ?= false
+# GTK 显示子选项片段（默认缩放适配窗口；嫌窗口显小可改 `zoom-to-fit=off` 后最大化宿主窗口）
+QEMU_GTK_ZOOM ?= zoom-to-fit=on
 # Cursor 调试会话：内核经串口输出 AGENT_LOG:{...}，make run 2>&1 | bash scripts/agent-ingest-serial.sh
 AGENT_NDJSON ?= false
 # x86_64：枚举 AMD 1002 显示类 PCI、映射 MMIO；无硬件时静默回退 GOP。真机 Intel 可另开 INTEL_IGPU
@@ -191,7 +195,7 @@ QEMU_GTK_EXTRA ?= ,grab-on-hover=on
 # x86 pc：默认 -vga std（Bochs/Cirrus 类，PCI 上无 10DE / 无 virtio-gpu）。验证 NVIDIA 驱动探测需真机或自行附加 -device 含 10DE:0300；
 # 虚拟 VirtIO 显示为 1af4:1050（virtio-gpu-pci），与本 NVIDIA 路径不同。
 QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
-	-display gtk,zoom-to-fit=on,show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
+	-display gtk,$(QEMU_GTK_ZOOM),show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
 	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci
 
 # x86_64 UEFI（OVMF）：与仓库根目录 run-iso.sh 一致 — q35、kvm（有 /dev/kvm）否则 tcg、-cpu host/max、smp、双 pflash、ESP 用 virtio-blk。
@@ -215,7 +219,7 @@ endif
 QEMU_COMMON_X86_UEFI := -machine $(QEMU_X86_UEFI_MACHINE),accel=$(QEMU_X86_UEFI_ACCEL) \
 	$(QEMU_X86_UEFI_CPU) -smp $(QEMU_SMP_UEFI) -m $(QEMU_MEM) \
 	-serial stdio -no-reboot -no-shutdown \
-	-display gtk,zoom-to-fit=on,show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
+	-display gtk,$(QEMU_GTK_ZOOM),show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
 	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci \
 	$(QEMU_X86_UEFI_NETDEV)
 
@@ -347,6 +351,8 @@ show-config:
 		echo "║  NVIDIA_KMS_EXPERIMENTAL = $(NVIDIA_KMS_EXPERIMENTAL)"; \
 		echo "║  NVIDIA_HDMI_SYNC = $(NVIDIA_HDMI_SYNC)  (true=sync HDMI stub on NVIDIA probe)"; \
 		echo "║  DESKTOP_IDLE_SPIN = $(DESKTOP_IDLE_SPIN)  (true=no HLT in desktop loop)"; \
+		echo "║  AERO_BLUR_LIGHT = $(AERO_BLUR_LIGHT)  (true=lighter Aero box blur for QEMU)"; \
+		echo "║  QEMU_GTK_ZOOM = $(QEMU_GTK_ZOOM)  (gtk 子选项；off=zoom-to-fit=off)"; \
 	fi
 	@echo "║  FIRMWARE_DIR = $(FIRMWARE_DIR)"
 	@if [ "$(ARCH)" = "loongarch64" ]; then \
@@ -424,6 +430,7 @@ help:
 	@echo ""
 	@echo "Run (auto-selects from build.conf):"
 	@echo "  make run                    Build + run per build.conf"
+	@echo "  make run-fb-large           RESOLUTION=2560x1440x32 + AERO_BLUR_LIGHT=true（高分 + 轻模糊）"
 	@echo "  make run-debug              Run with GDB server on :1234"
 	@echo "  make run-aarch64            UEFI boot on QEMU AArch64 (EDK2 nightly; 默认 ramfb+REL 键鼠)"
 	@echo "  make run-riscv64            UEFI boot on QEMU RISC-V64 virt (VIRT.fd + ESP; 默认 ramfb+REL)"
@@ -443,6 +450,8 @@ help:
 	@echo "  make INTEL_IGPU=false                    x86：关闭 Intel 8086 显示 PCI 探测（默认与 AMD 并存，解析链 Intel 先于 AMD）"
 	@echo "  make NVIDIA_GPU=false                    x86：关闭 NVIDIA 10DE 显示 PCI 探测（解析链：龙芯→NVIDIA→Intel→AMD）"
 	@echo "  make DESKTOP_IDLE_SPIN=true              桌面循环不 HLT（调试 IRQ/鼠标）"
+	@echo "  make AERO_BLUR_LIGHT=true                内核 Aero 盒式模糊默认半径/遍数下调（zig -Daero_blur_light）"
+	@echo "  make QEMU_GTK_ZOOM=zoom-to-fit=off run   GTK 不按窗口缩放客体画面（常配合宿主最大化）"
 	@echo "  make run-aarch64 AARCH64_QEMU_VIRTIO_GPU=1 / run-riscv64 RISCV64_QEMU_VIRTIO_GPU=1  附加 virtio-gpu（易 Display not active）"
 	@echo ""
 	@echo "Test:"
@@ -500,6 +509,7 @@ build: sync-resolution
 		-Dloongson_kms_experimental=$(LOONGSON_KMS_EXPERIMENTAL) \
 		-Ddesktop_idle_spin=$(DESKTOP_IDLE_SPIN) \
 		-Ddesktop_bisect=$(DESKTOP_BISECT) \
+		-Daero_blur_light=$(AERO_BLUR_LIGHT) \
 		-Ddefault_desktop=$(DESKTOP) \
 		--cache-dir $(TMP_DIR)/zig-cache \
 		--prefix $(TMP_DIR)/kernel-prefix
@@ -753,6 +763,10 @@ endif
 # ══════════════════════════════════════════════════════
 #  run: unified entry point driven by build.conf
 # ══════════════════════════════════════════════════════
+
+# 2.5K 帧缓冲 + 默认收紧 Aero 模糊（仍可能 CPU 瓶颈；可调 `nt61_aero_defaults`）
+run-fb-large:
+	@$(MAKE) run RESOLUTION=2560x1440x32 AERO_BLUR_LIGHT=true
 
 run:
 ifeq ($(ARCH),aarch64)

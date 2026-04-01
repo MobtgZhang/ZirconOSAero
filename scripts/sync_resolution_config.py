@@ -7,7 +7,7 @@ Priority:
   2) build.conf 中首个未注释行 RESOLUTION=WxHxdepth
 
 Writes:
-  - src/config/*.conf  ([resolution], boot grub/uefi, system [display] default_*)
+  - src/config/*.conf  ([resolution], boot [display]/[uefi], system [display] default_*)
   - build/tmp/zircon_pref_fb.h          (LoongArch C EFI stub #include)
   - build/tmp/kernel_pref_fb_wh.txt     (two lines: width, height)
 
@@ -87,7 +87,7 @@ def patch_boot(content: str, w: int, h: int, d: int) -> str:
         s = line.strip()
         if s.startswith("[") and s.endswith("]"):
             section = s[1:-1].strip().lower()
-        elif section == "grub" and re.match(r"^\s*gfxmode\s*=", line):
+        elif section == "display" and re.match(r"^\s*gfxmode\s*=", line):
             line = re.sub(r"=\s*\S+", f"= {gfx}", line, count=1)
         elif section == "uefi" and re.match(r"^\s*resolution\s*=", line):
             line = re.sub(r"=\s*\S+", f"= {uefi_res}", line, count=1)

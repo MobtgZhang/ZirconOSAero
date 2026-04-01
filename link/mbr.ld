@@ -24,10 +24,7 @@ SECTIONS
         *(.rodata .rodata.*)
     }
 
-    . = 0x7C00 + 510;
-    .sig : {
-        SHORT(0xAA55)
-    }
+    /* Boot signature 0xAA55 is emitted by mbr.s (`boot_signature` after `.org 446`). */
 
     /DISCARD/ : {
         *(.eh_frame*)

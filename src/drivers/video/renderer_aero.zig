@@ -263,7 +263,8 @@ fn dragFrameDirtyUnion(scr_w: i32, scr_h: i32, ds: display.DragState, pad: i32) 
 }
 
 fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: display.DragState, draw_cursor: bool) void {
-    const dirty_pad: i32 = 14;
+    // 略大于拖影/伪阴影外扩，避免局部重绘与 `paint_icons`/`paint_taskbar` 判定漏区。
+    const dirty_pad: i32 = 22;
     const dirty_u = dragFrameDirtyUnion(w, h, ds, dirty_pad);
 
     patchDragBackground(w, h);
@@ -314,7 +315,7 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
         const wr = display.getWindowRect(w, h);
         const cur = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
         var u = display.rectUnion(ds.explorer_prev, cur);
-        u = display.rectInflate(u, 14);
+        u = display.rectInflate(u, dirty_pad);
         u = display.rectClampToScreen(u, w, h);
         fb.markDirtyRegion(u.x, u.y, u.w, u.h);
     }
@@ -323,7 +324,7 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
         const tm_sz = display.getTaskMgrSize();
         const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_sz.w, .h = tm_sz.h };
         var u = display.rectUnion(ds.taskmgr_prev, cur);
-        u = display.rectInflate(u, 14);
+        u = display.rectInflate(u, dirty_pad);
         u = display.rectClampToScreen(u, w, h);
         fb.markDirtyRegion(u.x, u.y, u.w, u.h);
     }
@@ -331,7 +332,7 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
         if (builtin_apps.topDraggedWindowRect()) |br| {
             const cur = display.ShellRect{ .x = br.x, .y = br.y, .w = br.w, .h = br.h };
             var u = display.rectUnion(ds.builtin_prev, cur);
-            u = display.rectInflate(u, 14);
+            u = display.rectInflate(u, dirty_pad);
             u = display.rectClampToScreen(u, w, h);
             fb.markDirtyRegion(u.x, u.y, u.w, u.h);
         }
@@ -723,7 +724,8 @@ fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme
 }
 
 fn patchDragBackground(scr_w: i32, scr_h: i32) void {
-    const pad: i32 = 10;
+    // 与全帧 `renderWallpaperByPreset` 一致：拖动态必须用嵌入壁纸 cover 修补，否则脏区是 Harmony 渐变块、其余是 PNG，出现「方块留影」。
+    const pad: i32 = 20;
     const drag_state = display.getDragState();
     if (drag_state.explorer_active) {
         const wr = display.getWindowRect(scr_w, scr_h);
@@ -732,7 +734,7 @@ fn patchDragBackground(scr_w: i32, scr_h: i32) void {
         u = display.rectInflate(u, pad);
         u = display.rectClampToScreen(u, scr_w, scr_h);
         if (u.w > 0 and u.h > 0) {
-            patchHarmonyRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
+            display.patchHarmonyWallpaperRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
         }
         display.setExplorerDragPrev(cur);
     }
@@ -744,7 +746,7 @@ fn patchDragBackground(scr_w: i32, scr_h: i32) void {
         u = display.rectInflate(u, pad);
         u = display.rectClampToScreen(u, scr_w, scr_h);
         if (u.w > 0 and u.h > 0) {
-            patchHarmonyRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
+            display.patchHarmonyWallpaperRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
         }
         display.setTaskMgrDragPrev(cur);
     }
@@ -755,49 +757,9 @@ fn patchDragBackground(scr_w: i32, scr_h: i32) void {
             u = display.rectInflate(u, pad);
             u = display.rectClampToScreen(u, scr_w, scr_h);
             if (u.w > 0 and u.h > 0) {
-                patchHarmonyRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
+                display.patchHarmonyWallpaperRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
             }
         }
         builtin_apps.advanceBuiltinDragPrev();
-    }
-}
-
-fn patchHarmonyRegion(scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw: i32, rh: i32) void {
-    const topc = rgb(0x08, 0x1E, 0x42);
-    const botc = rgb(0x04, 0x12, 0x28);
-    display.patchVerticalGradientRegion(scr_w, scr_h, rx, ry, rw, rh, topc, botc);
-    var r = display.ShellRect{ .x = rx, .y = ry, .w = rw, .h = rh };
-    r = display.rectClampToScreen(r, scr_w, scr_h);
-    if (r.w <= 0 or r.h <= 0) return;
-    const bloom1 = display.ShellRect{ .x = @divTrunc(scr_w, 4), .y = @divTrunc(scr_h, 10), .w = @divTrunc(scr_w, 2), .h = @divTrunc(scr_h * 2, 5) };
-    if (display.rectIntersection(r, bloom1)) |is| {
-        fb.blendTintRect(is.x, is.y, is.w, is.h, rgb(0x28, 0x58, 0x90), 20, 255);
-    }
-    const mx = @divTrunc(scr_w, 2);
-    const my = @divTrunc(scr_h * 2, 5);
-    const bloom2 = display.ShellRect{ .x = mx - 200, .y = my - 130, .w = 400, .h = 300 };
-    if (display.rectIntersection(r, bloom2)) |is| {
-        fb.blendTintRect(is.x, is.y, is.w, is.h, rgb(0x38, 0x68, 0xA0), 16, 255);
-    }
-    const bloom3 = display.ShellRect{ .x = @divTrunc(scr_w, 8), .y = @divTrunc(scr_h, 6), .w = @divTrunc(scr_w, 3), .h = @divTrunc(scr_h, 4) };
-    if (display.rectIntersection(r, bloom3)) |is| {
-        fb.blendTintRect(is.x, is.y, is.w, is.h, rgb(0x50, 0x78, 0xA8), 12, 255);
-    }
-    const vstrip: i32 = 28;
-    const vig_top = display.ShellRect{ .x = 0, .y = 0, .w = scr_w, .h = vstrip };
-    if (display.rectIntersection(r, vig_top)) |is| {
-        fb.blendTintRect(is.x, is.y, is.w, is.h, rgb(0x00, 0x04, 0x12), 38, 255);
-    }
-    const vig_bot = display.ShellRect{ .x = 0, .y = scr_h - vstrip, .w = scr_w, .h = vstrip };
-    if (display.rectIntersection(r, vig_bot)) |is| {
-        fb.blendTintRect(is.x, is.y, is.w, is.h, rgb(0x00, 0x02, 0x0A), 48, 255);
-    }
-    const vig_left = display.ShellRect{ .x = 0, .y = 0, .w = vstrip, .h = scr_h };
-    if (display.rectIntersection(r, vig_left)) |is| {
-        fb.blendTintRect(is.x, is.y, is.w, is.h, rgb(0x00, 0x04, 0x10), 32, 255);
-    }
-    const vig_right = display.ShellRect{ .x = scr_w - vstrip, .y = 0, .w = vstrip, .h = scr_h };
-    if (display.rectIntersection(r, vig_right)) |is| {
-        fb.blendTintRect(is.x, is.y, is.w, is.h, rgb(0x00, 0x04, 0x10), 32, 255);
     }
 }

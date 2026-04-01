@@ -9,6 +9,8 @@ set -euo pipefail
 #   ./run.sh run                      Same as above
 #   ./run.sh build                    Build kernel only
 #   ./run.sh run DESKTOP=aero         Override desktop theme
+#   ./run.sh run-qemu-sdl             x86 QEMU with SDL display (vs default GTK)
+#   ./run.sh run-qemu-zoom-fit        GTK scale guest FB to window (vs default 1:1)
 #   ./run.sh run BOOT_METHOD=mbr BOOTLOADER=zbm
 #   ./run.sh configure                Interactive config wizard
 #   ./run.sh test                     Run all tests
@@ -74,6 +76,9 @@ case "$TARGET" in
         MAKE_ARGS+=("BOOT_METHOD=uefi" "BOOTLOADER=zbm")
         TARGET="run"
         ;;
+    run-qemu-1to1)          TARGET="run-qemu-1to1" ;;
+    run-qemu-zoom-fit)      TARGET="run-qemu-zoom-fit" ;;
+    run-qemu-sdl)           TARGET="run-qemu-sdl" ;;
     run-aarch64)            TARGET="run" ; MAKE_ARGS+=("ARCH=aarch64") ;;
     run-uefi-aarch64)       TARGET="run" ; MAKE_ARGS+=("ARCH=aarch64" "BOOT_METHOD=uefi") ;;
     configure)              TARGET="configure" ;;
@@ -92,6 +97,7 @@ esac
 [ -n "${DEBUG:-}" ]       && MAKE_ARGS+=("DEBUG_LOG=$DEBUG")
 [ -n "${ENABLE_IDT:-}" ]  && MAKE_ARGS+=("ENABLE_IDT=$ENABLE_IDT")
 [ -n "${QEMU_MEM:-}" ]    && MAKE_ARGS+=("QEMU_MEM=$QEMU_MEM")
+[ -n "${QEMU_DISPLAY_BACKEND:-}" ] && MAKE_ARGS+=("QEMU_DISPLAY_BACKEND=$QEMU_DISPLAY_BACKEND")
 [ -n "${DESKTOP:-}" ]     && MAKE_ARGS+=("DESKTOP=$DESKTOP")
 
 check_make

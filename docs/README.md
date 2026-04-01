@@ -12,11 +12,12 @@ ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** imple
 | [Kernel.md](en/Kernel.md) | Kernel internals: scheduler, memory, interrupts, syscalls, IPC, Object Manager |
 | [Boot.md](en/Boot.md) | Boot path: ZBM / UEFI, kernel init phases (Phase 0–12) |
 | [Servers.md](en/Servers.md) | System services: Process Server, Session Manager, LPC ports |
-| [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/ZirconShell/user32/gdi32), WOW64, POSIX |
+| [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/user32/gdi32), WOW64, POSIX |
 | [BuildSystem.md](en/BuildSystem.md) | Build system: `build.conf`, Makefile, `build.zig`, `run.sh` |
 | [Roadmap.md](en/Roadmap.md) | Roadmap: Phase 0–11 milestones, goals, non-goals, risks |
 | [NT61_ShellIcons.md](en/NT61_ShellIcons.md) | Shell icons vs Win7, Zircon PE DLL, Win32 API notes |
 | [BuiltinApps_NT61_Roadmap.md](en/BuiltinApps_NT61_Roadmap.md) | Built-in apps matrix, status, clean-room reference policy |
+| [COPYRIGHT_AND_SOURCES.md](en/COPYRIGHT_AND_SOURCES.md) | Copyright boundaries and allowed knowledge sources (English) |
 | [IMPLEMENTATION_STATUS_NT61.md](cn/IMPLEMENTATION_STATUS_NT61.md) | Honest MM/HAL, syscall, FS/PE status + verification commands (Chinese; technical terms in English where needed) |
 
 ### Chinese (中文)
@@ -34,6 +35,7 @@ The same documents are available in Chinese under [`cn/`](cn/):
 | [Roadmap.md](cn/Roadmap.md) | 路线图 |
 | [NT61_ShellIcons.md](cn/NT61_ShellIcons.md) | NT 6.1 壳层图标与资源 DLL（中文主文档） |
 | [BuiltinApps_NT61_Roadmap.md](cn/BuiltinApps_NT61_Roadmap.md) | 内置应用路线图（中文主文档） |
+| [COPYRIGHT_AND_SOURCES.md](cn/COPYRIGHT_AND_SOURCES.md) | 版权边界与知识来源白名单（中文） |
 
 ## Repository layout (overview)
 

@@ -10,6 +10,7 @@ const vfs = @import("../fs/vfs.zig");
 const fat32 = @import("../fs/fat32.zig");
 const ntfs = @import("../fs/ntfs.zig");
 const pe_loader = @import("../loader/pe.zig");
+const arch = @import("../arch.zig");
 
 pub const BOOL = u32;
 pub const TRUE: BOOL = 1;
@@ -452,7 +453,6 @@ pub fn GetStdHandle(std_handle: DWORD) HANDLE {
 
 pub fn WriteConsoleA(handle: HANDLE, buffer: []const u8, chars_written: *DWORD) BOOL {
     _ = handle;
-    const arch = @import("../arch.zig");
     arch.consoleWrite(buffer);
     chars_written.* = @intCast(buffer.len);
     return TRUE;
@@ -677,7 +677,7 @@ pub fn ExpandEnvironmentStringsA(src: []const u8, dst: []u8) DWORD {
 // ── Synchronization APIs ──
 
 pub fn Sleep(_: DWORD) void {
-    asm volatile ("pause");
+    arch.spinCpuRelax();
 }
 
 pub fn SleepEx(_: DWORD, _: BOOL) DWORD {

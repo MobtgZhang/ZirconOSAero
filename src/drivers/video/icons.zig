@@ -1,6 +1,11 @@
 //! Desktop icons — Windows 7 Aero（`src/desktop/aero/resources/icons/`）
 
+const std = @import("std");
 const fb = @import("framebuffer.zig");
+
+fn clampIconCoordToI32(v: i64) i32 {
+    return @intCast(std.math.clamp(v, @as(i64, std.math.minInt(i32)), @as(i64, std.math.maxInt(i32))));
+}
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return b | (g << 8) | (r << 16);
@@ -161,8 +166,10 @@ fn drawPixelIcon(
         for (row, 0..) |cidx, dx| {
             if (cidx == 0) continue;
             const color = palette[@intCast(cidx)];
-            const px = screen_x + @as(i32, @intCast(dx)) * s;
-            const py = screen_y + @as(i32, @intCast(dy)) * s;
+            const px64 = @as(i64, screen_x) + @as(i64, @intCast(dx)) * @as(i64, s);
+            const py64 = @as(i64, screen_y) + @as(i64, @intCast(dy)) * @as(i64, s);
+            const px = clampIconCoordToI32(px64);
+            const py = clampIconCoordToI32(py64);
             if (s == 1) {
                 if (px >= 0 and py >= 0) fb.putPixel32(@intCast(px), @intCast(py), color);
             } else {

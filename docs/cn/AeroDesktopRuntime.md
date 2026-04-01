@@ -95,6 +95,15 @@
 - **QEMU 内存**：`make run-loongarch64` 使用 `**QEMU_MEM_LOONGARCH64`**（Makefile 默认 1536M，且须 **>1G** 以满足 EDK2 virt）。根目录 `**build.conf`** 中的 `**QEMU_MEM**`（如 8G）作用于 x86_64 / AArch64 / RISC-V 等目标，**不**自动传给 LoongArch；要增大 LoongArch 客体 RAM 请设 `**QEMU_MEM_LOONGARCH64`**（命令行或 `build.conf` 若已 `-include` 进 Makefile）。
 - **症状对照（是否「进了桌面」）**：QEMU **固件文本控制台**上出现 `**Firmware GOP … < build preferred …`**、`**Kernel draws at preferred size via ramfb+fw_cfg**`（C stub）或 Zig ZBM 的 `**Handoff has no GOP FB; kernel uses ramfb+fw_cfg**` **不代表**启动失败：意为 handoff 未带 GOP，内核按 `**build.conf` 首选** 走 **ramfb**。请以**串口**为准：若出现 `**ramfb:`**、`**Framebuffer Driver: WxH**`、`**Desktop: fb**`、`**user32: Screen synced**`、`**dwm.exe**` / `**first frame presented**`，则桌面路径已起来。固件小窗可能仍停在 UEFI 文案，而 **GTK 主窗口**扫的是 ramfb/virtio 扫描输出，属常见「双表面」现象。若串口有上述行而 **主窗口全黑**，见下文 **4.2.1.2**（宿主机图形栈）。
 
+### 4.2.2 QEMU GTK：`zoom-to-fit`、窗口大小与分辨率
+
+- **默认（1:1 像素）**：`Makefile` 中 `**QEMU_GTK_ZOOM ?= zoom-to-fit=off**`（x86 UEFI/Common，且 AArch64 / RISC-V / LoongArch 的 `**-display gtk,…**` 与之共用）。一个客体像素对应一个宿主像素，**窗口客户区大致随 `build.conf` 的 `RESOLUTION` 与当前扫描输出尺寸变化**（仍受宿主 WM 限制）。高分辨率下窗口可能超出屏幕，可配合宿主最大化或虚拟桌面。
+- **缩放进窗口（旧默认行为）**：`**make run-qemu-zoom-fit**` 或 `**./run.sh run-qemu-zoom-fit**` / `**make QEMU_GTK_ZOOM=zoom-to-fit=on run**`：客体帧缓冲被 **缩放** 以适配当前 QEMU 客户区，故 **窗口物理尺寸 ≠ 客体像素尺寸**，易出现「画面显小/糊」的主观感受。
+- **显式 1:1 别名**：`**make run-qemu-1to1**` 等同于默认 `**zoom-to-fit=off**`（便于脚本与文档引用）。
+- **SDL 后端（x86 实验）**：`**make run-qemu-sdl**` 或 `**./run.sh run-qemu-sdl**` / `**QEMU_DISPLAY_BACKEND=sdl make run**`：使用 `**-display sdl**` 替代 GTK，便于对照宿主窗口缩放与键鼠手感（需 QEMU 编译启用 SDL）。`**make show-config**`（x86_64）会打印当前 `**QEMU_DISPLAY_BACKEND**`。
+- **与 `build.conf` 一致**：改 `**RESOLUTION**` 后务必 `**make sync-resolution**` 再 `**make build**`，并核对串口 `**Config: display=**` / `**FB tag:**` / `**Framebuffer Driver:**` 中的宽高是否与预期一致。QEMU 固件 GOP 可能仍低于首选，此时内核可能改用 ramfb（见 §4.2.1）。
+- **限制**：QEMU GTK **不会**在客体热切换显示模式时自动改变宿主窗口的「外框」逻辑尺寸；要实现完全跟手，需依赖 **1:1** 模式 + 客体实际模式变化，或未来 **VirtIO-GPU** 主路径与宿主缩放策略组合。详见 [NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md)。
+
 #### 正式验收标准（LoongArch / QEMU，团队约定）
 
 1. **「已进桌面」以串口关键字为准**，不以固件 ConOut 小窗是否刷新为准：`ramfb:`（或等价的扫描配置日志）、`**Desktop: fb`**、`**Desktop: first frame presented**` 等。
@@ -148,7 +157,7 @@
 
 #### 4.2.1.3 QEMU GTK 缩放、客体分辨率与高分 CPU 模糊（x86_64 / 通用）
 
-- **`QEMU_GTK_ZOOM`**（`Makefile`，默认 `zoom-to-fit=on`）：GTK 将客体画面缩放到当前 QEMU 窗口客户区，故「窗口看起来小」常与**宿主未最大化**有关，不一定是 GOP 低分辨率。需要 **1:1 像素**时可 `**make QEMU_GTK_ZOOM=zoom-to-fit=off run**` 后最大化窗口；或改用 SDL/VNC（需改 `QEMU_COMMON_*`，LoongArch 节已有示例）。
+- **`QEMU_GTK_ZOOM`**（`Makefile`，默认 `zoom-to-fit=off`）：默认 **1:1**，窗口尺寸与客体像素更一致；若希望 **缩放进固定客户区** 可用 `**make run-qemu-zoom-fit**`。x86 上可改用 **SDL** 对照：`**make run-qemu-sdl**`。其它架构或需 VNC 时仍可按 LoongArch 节示例改 `**QEMU_*`** 变量。
 - **客体 WxH** 仍以根目录 `**build.conf` → `**make sync-resolution**`** 为权威（见 §4.2.1）。
 - **高分辨率卡顿**：CPU 盒式模糊成本随像素数上升；可用 `**make AERO_BLUR_LIGHT=true**`（`zig -Daero_blur_light`）或 `**make run-fb-large**`（`2560×1440` + 轻模糊）；并见 `[src/config/nt61_aero_defaults.zig](../../src/config/nt61_aero_defaults.zig)` 中 `blur_budget_*`。
 - **PR 门禁与计划落地**：[NT61_PR_GATES.md](NT61_PR_GATES.md)、[mdcs/composer2/content1.3.md](../../mdcs/composer2/content1.3.md) 中的 QEMU/显示待办与本节一致。

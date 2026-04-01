@@ -137,20 +137,9 @@ Windows 风格的命令行 Shell。
 | `type` | 显示文件内容 |
 | `copy` / `del` / `mkdir` / `rmdir` | 文件操作 |
 
-### 3.8 PowerShell (powershell.zig)
+### 3.8 托管 Shell（.NET，用户态，规划中）
 
-高级 Shell 环境，实现 PowerShell 风格的命令接口。
-
-支持的 Cmdlet：
-
-| Cmdlet | 说明 |
-|--------|------|
-| `Get-Process` | 获取进程列表 |
-| `Get-ChildItem` | 列出目录内容 (ls/dir) |
-| `Get-Service` | 获取服务列表 |
-| `Get-Content` | 读取文件内容 |
-| `Set-Location` | 切换目录 (cd) |
-| `Write-Output` | 输出文本 |
+内核内曾有的 ZirconShell（ cmdlet 风格）已移除。与 **Microsoft PowerShell** 兼容的脚本宿主计划在 **用户态 .NET** 中实现，不在本仓库内核维护。
 
 ## 4. WOW64 子系统 (wow64.zig)
 

@@ -135,18 +135,9 @@ CMD-style shell.
 | `type` | Cat file |
 | `copy` / `del` / `mkdir` / `rmdir` | File ops |
 
-### 3.8 PowerShell (`powershell.zig`)
+### 3.8 Managed shell (.NET user mode, planned)
 
-PowerShell-style cmdlets.
-
-| Cmdlet | Role |
-|--------|------|
-| Get-Process | Processes |
-| Get-ChildItem | Directory listing |
-| Get-Service | Services |
-| Get-Content | Read file |
-| Set-Location | cd |
-| Write-Output | Print |
+The in-kernel ZirconShell has been removed. A script host compatible with **Microsoft PowerShell** is expected as a **user-mode .NET** program, outside this kernel tree.
 
 ## 4. WOW64 (`wow64.zig`)
 

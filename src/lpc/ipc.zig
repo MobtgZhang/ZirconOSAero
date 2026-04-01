@@ -2,6 +2,8 @@
 //! NT style Microkernel core: all system services communicate via IPC
 //! Supports synchronous request/reply and async message passing
 
+const arch = @import("../arch.zig");
+
 pub const MSG_DATA_SIZE: usize = 64;
 
 pub const MessageType = enum(u8) {
@@ -166,7 +168,7 @@ pub fn requestWaitReply(
         if (receive(sender_pid)) |reply| {
             if (reply.opcode == opcode) return reply;
         }
-        asm volatile ("pause");
+        arch.spinCpuRelax();
     }
     return null;
 }

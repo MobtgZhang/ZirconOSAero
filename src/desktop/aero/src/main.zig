@@ -12,7 +12,7 @@
 //! The kernel (ZirconOS/src) provides only minimal OS interfaces:
 //!   - Minimized Core window (kernel services status)
 //!   - Minimized CMD window (command prompt)
-//!   - Minimized PowerShell window
+//!   - Minimized .NET Shell placeholder window
 
 const std = @import("std");
 const root = @import("root.zig");
@@ -39,7 +39,7 @@ const OsWindow = struct {
 const os_windows = [_]OsWindow{
     .{ .title = "ZirconOS Core", .icon_id = 1, .minimized = true },
     .{ .title = "Command Prompt", .icon_id = 4, .minimized = true },
-    .{ .title = "PowerShell", .icon_id = 4, .minimized = true },
+    .{ .title = ".NET Shell", .icon_id = 4, .minimized = true },
 };
 
 fn p(out: *std.Io.Writer, comptime fmt: []const u8, args: anytype) void {

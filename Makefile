@@ -3,10 +3,10 @@
 #
 # Requires: zig, qemu-system-* (per ARCH), OVMF/EDK2 firmware, xorriso, mtools, dosfstools
 
-.PHONY: all build build-release iso iso-debug iso-release run run-debug \
+.PHONY: all build build-release iso iso-debug iso-release run run-debug run-qemu-1to1 run-qemu-zoom-fit run-qemu-sdl \
 	build-zbm-uefi build-zbm-loongarch-uefi build-zbm-riscv64-uefi build-zbm-loongarch64-stub build-zbm-bios build-zbm-disk build-esp \
 	build-desktop build-desktop-all build-desktop-dll \
-	fetch-themes fetch-firmware fetch-gnu-efi fetch-gnu-efi-riscv64 fetch-loongarch-boot-efi fonts resources \
+	fetch-themes fetch-firmware fetch-gnu-efi fetch-gnu-efi-riscv64 fetch-loongarch-boot-efi fonts resources fetch-assets \
 	run-fb-large run-aarch64 run-riscv64 run-loongarch64 run-loongarch64-autozbm run-loongarch64-serial-debug run-aarch64-debug run-riscv64-debug run-loongarch64-debug \
 	test test-kernel test-config test-boot test-all smoke-qemu-mbr \
 	clean help show-config configure sync-resolution
@@ -41,8 +41,8 @@ MOUSE_DEBUG  ?= false
 DESKTOP_BISECT ?= false
 # 高分 QEMU：减轻盒式模糊默认半径/遍数（zig build -Daero_blur_light=true）
 AERO_BLUR_LIGHT ?= false
-# GTK 显示子选项片段（默认缩放适配窗口；嫌窗口显小可改 `zoom-to-fit=off` 后最大化宿主窗口）
-QEMU_GTK_ZOOM ?= zoom-to-fit=on
+# GTK：默认 1:1 像素，QEMU 客户区随 build.conf RESOLUTION 与客体扫描分辨率对齐（嫌窗口过大可 `make run-qemu-zoom-fit`）
+QEMU_GTK_ZOOM ?= zoom-to-fit=off
 # Cursor 调试会话：内核经串口输出 AGENT_LOG:{...}，make run 2>&1 | bash scripts/agent-ingest-serial.sh
 AGENT_NDJSON ?= false
 # x86_64：枚举 AMD 1002 显示类 PCI、映射 MMIO；无硬件时静默回退 GOP。真机 Intel 可另开 INTEL_IGPU
@@ -169,15 +169,9 @@ ESP_IMG_LOONGARCH64 := $(BUILD_DIR)/esp-loongarch64.img
 ZBM_DISK_MBR     := $(BUILD_DIR)/zirconos-mbr.img
 ZBM_DISK_GPT     := $(BUILD_DIR)/zirconos-gpt.img
 
-THEME_DIR_MAP_classic    := $(ROOT_DIR)/src/desktop/classic
-THEME_DIR_MAP_luna       := $(ROOT_DIR)/src/desktop/luna
-THEME_DIR_MAP_aero       := $(ROOT_DIR)/src/desktop/aero
-THEME_DIR_MAP_modern     := $(ROOT_DIR)/src/desktop/modern
-THEME_DIR_MAP_fluent     := $(ROOT_DIR)/src/desktop/fluent
-THEME_DIR_MAP_sunvalley  := $(ROOT_DIR)/src/desktop/sunvalley
+# 仓库内仅包含 `src/desktop/aero`；其它 DESKTOP 值保留为将来主题目录名（无目录则 build-desktop 跳过）。
 FONTS_DIR                := $(ROOT_DIR)/src/fonts
-
-THEME_DIR := $(THEME_DIR_MAP_$(DESKTOP))
+THEME_DIR                := $(ROOT_DIR)/src/desktop/$(DESKTOP)
 
 # Common QEMU flags
 # PS/2 与 usb-mouse 在客户机内均为相对移动；未捕获输入时，宿主机光标与窗口内指针位置通常不一致。
@@ -192,10 +186,17 @@ THEME_DIR := $(THEME_DIR_MAP_$(DESKTOP))
 # grab-on-hover=on：指针移入窗口即抓取，REL 型 virtio-mouse 在未抓取时 QEMU 往往不发位移；设 QEMU_GTK_EXTRA= 可关闭。
 # virtio-tablet-pci：GTK 未抓取时常走 ABS，驱动已把 ABS 差分转为位移（与 mouse 并存，MAX_INST≥3）。
 QEMU_GTK_EXTRA ?= ,grab-on-hover=on
+# x86：默认 gtk；`make run-qemu-sdl` 或 `QEMU_DISPLAY_BACKEND=sdl` 使用 SDL（窗口缩放与 GTK 不同，便于对照）。
+QEMU_DISPLAY_BACKEND ?= gtk
+ifeq ($(QEMU_DISPLAY_BACKEND),sdl)
+QEMU_X86_VIDEO_FLAGS := -display sdl -vga std
+else
+QEMU_X86_VIDEO_FLAGS := -display gtk,$(QEMU_GTK_ZOOM),show-cursor=on$(QEMU_GTK_EXTRA) -vga std
+endif
 # x86 pc：默认 -vga std（Bochs/Cirrus 类，PCI 上无 10DE / 无 virtio-gpu）。验证 NVIDIA 驱动探测需真机或自行附加 -device 含 10DE:0300；
 # 虚拟 VirtIO 显示为 1af4:1050（virtio-gpu-pci），与本 NVIDIA 路径不同。
 QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
-	-display gtk,$(QEMU_GTK_ZOOM),show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
+	$(QEMU_X86_VIDEO_FLAGS) \
 	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci
 
 # x86_64 UEFI（OVMF）：与仓库根目录 run-iso.sh 一致 — q35、kvm（有 /dev/kvm）否则 tcg、-cpu host/max、smp、双 pflash、ESP 用 virtio-blk。
@@ -219,16 +220,16 @@ endif
 QEMU_COMMON_X86_UEFI := -machine $(QEMU_X86_UEFI_MACHINE),accel=$(QEMU_X86_UEFI_ACCEL) \
 	$(QEMU_X86_UEFI_CPU) -smp $(QEMU_SMP_UEFI) -m $(QEMU_MEM) \
 	-serial stdio -no-reboot -no-shutdown \
-	-display gtk,$(QEMU_GTK_ZOOM),show-cursor=on$(QEMU_GTK_EXTRA) -vga std \
+	$(QEMU_X86_VIDEO_FLAGS) \
 	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci \
 	$(QEMU_X86_UEFI_NETDEV)
 
 # highmem-ecam=off：PCIe ECAM 固定在 0x3f00_0000，与内核 pcie.zig 一致（否则默认 ECAM 可落在 >4GiB）
 QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
-	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on$(QEMU_GTK_EXTRA)
+	-no-reboot -no-shutdown -display gtk,$(QEMU_GTK_ZOOM)$(QEMU_GTK_EXTRA)
 
 QEMU_COMMON_RISCV64 := -M virt -cpu rv64 -m $(QEMU_MEM) -serial stdio \
-	-no-reboot -no-shutdown -display gtk,zoom-to-fit=on$(QEMU_GTK_EXTRA)
+	-no-reboot -no-shutdown -display gtk,$(QEMU_GTK_ZOOM)$(QEMU_GTK_EXTRA)
 
 # AArch64：默认 **仅 ramfb + virtio-mouse/keyboard（不绑 display）**，GTK 扫 ramfb，避免 “Display output is not active”；ZBM 方向键走全局 VirtIO/USB。
 # 设 AARCH64_QEMU_VIRTIO_GPU=1 可附加 virtio-gpu + tablet/keyboard 绑 display（易再现未激活控制台，仅调试固件 GOP）。
@@ -275,7 +276,7 @@ QEMU_RISCV64_EXTRA := \
 # 若 virtio-mouse 与抓取异常，可在 build.conf 设 LOONGARCH64_VIRT_GRAPHICS=off 并阅 docs/cn/AeroDesktopRuntime.md。
 LOONGARCH64_VIRT_GRAPHICS ?= on
 # GTK：show-tabs=on 便于在「固件/ConOut」与 ramfb 等多路 DisplaySurface 间切换（串口已有 first frame 时先看其它标签）。
-QEMU_LOONGARCH64_GTK_OPTS ?= zoom-to-fit=on,show-tabs=on
+QEMU_LOONGARCH64_GTK_OPTS ?= $(QEMU_GTK_ZOOM),show-tabs=on
 QEMU_LOONGARCH64_BASE := -M virt,graphics=$(LOONGARCH64_VIRT_GRAPHICS) -cpu la464 -m $(QEMU_MEM_LOONGARCH64) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,$(QEMU_LOONGARCH64_GTK_OPTS)
 # virtio-blk bootindex：便于固件将磁盘列为启动候选（部分环境仍会因 BdsDxe Boot0001 失败而进 Shell）。
@@ -352,7 +353,8 @@ show-config:
 		echo "║  NVIDIA_HDMI_SYNC = $(NVIDIA_HDMI_SYNC)  (true=sync HDMI stub on NVIDIA probe)"; \
 		echo "║  DESKTOP_IDLE_SPIN = $(DESKTOP_IDLE_SPIN)  (true=no HLT in desktop loop)"; \
 		echo "║  AERO_BLUR_LIGHT = $(AERO_BLUR_LIGHT)  (true=lighter Aero box blur for QEMU)"; \
-		echo "║  QEMU_GTK_ZOOM = $(QEMU_GTK_ZOOM)  (gtk 子选项；off=zoom-to-fit=off)"; \
+		echo "║  QEMU_DISPLAY_BACKEND = $(QEMU_DISPLAY_BACKEND)  (x86: gtk|sdl；SDL: make run-qemu-sdl)"; \
+		echo "║  QEMU_GTK_ZOOM = $(QEMU_GTK_ZOOM)  (默认 1:1；缩放: make run-qemu-zoom-fit)"; \
 	fi
 	@echo "║  FIRMWARE_DIR = $(FIRMWARE_DIR)"
 	@if [ "$(ARCH)" = "loongarch64" ]; then \
@@ -402,6 +404,9 @@ sync-resolution:
 	@mkdir -p $(TMP_DIR)
 	@$(SYNC_RESOLUTION_CMD)
 
+fetch-assets:
+	@bash $(ROOT_DIR)/scripts/fetch-assets.sh
+
 # ══════════════════════════════════════════════════════
 #  help
 # ══════════════════════════════════════════════════════
@@ -430,6 +435,9 @@ help:
 	@echo ""
 	@echo "Run (auto-selects from build.conf):"
 	@echo "  make run                    Build + run per build.conf"
+	@echo "  make run-qemu-1to1          Explicit 1:1 pixels (same as default run; QEMU_GTK_ZOOM=zoom-to-fit=off)"
+	@echo "  make run-qemu-zoom-fit      Scale guest FB into window (QEMU_GTK_ZOOM=zoom-to-fit=on)"
+	@echo "  make run-qemu-sdl           x86: run with -display sdl (experimental; compare window scaling vs GTK)"
 	@echo "  make run-fb-large           RESOLUTION=2560x1440x32 + AERO_BLUR_LIGHT=true（高分 + 轻模糊）"
 	@echo "  make run-debug              Run with GDB server on :1234"
 	@echo "  make run-aarch64            UEFI boot on QEMU AArch64 (EDK2 nightly; 默认 ramfb+REL 键鼠)"
@@ -451,7 +459,8 @@ help:
 	@echo "  make NVIDIA_GPU=false                    x86：关闭 NVIDIA 10DE 显示 PCI 探测（解析链：龙芯→NVIDIA→Intel→AMD）"
 	@echo "  make DESKTOP_IDLE_SPIN=true              桌面循环不 HLT（调试 IRQ/鼠标）"
 	@echo "  make AERO_BLUR_LIGHT=true                内核 Aero 盒式模糊默认半径/遍数下调（zig -Daero_blur_light）"
-	@echo "  make QEMU_GTK_ZOOM=zoom-to-fit=off run   GTK 不按窗口缩放客体画面（常配合宿主最大化）"
+	@echo "  make run-qemu-zoom-fit                     GTK 缩放客体画面以适配窗口（默认 run 为 1:1）"
+	@echo "  make QEMU_GTK_ZOOM=zoom-to-fit=on run      同上：显式缩放模式"
 	@echo "  make run-aarch64 AARCH64_QEMU_VIRTIO_GPU=1 / run-riscv64 RISCV64_QEMU_VIRTIO_GPU=1  附加 virtio-gpu（易 Display not active）"
 	@echo ""
 	@echo "Test:"
@@ -467,6 +476,7 @@ help:
 	@echo "  make fetch-loongarch-boot-efi  LoongArch: BOOTLOONGARCH64.EFI (EDK2 Shell, 可选备用)"
 	@echo ""
 	@echo "Resources:"
+	@echo "  make fetch-assets           Generate missing Aero wallpaper PNG placeholders (see scripts/fetch-assets.sh)"
 	@echo "  make fonts                  Fetch fonts"
 	@echo "  make fetch-themes           Clone all theme repos"
 	@echo "  make resources              List theme resources"
@@ -543,7 +553,7 @@ build-desktop:
 
 build-desktop-all:
 	@echo "[ZirconOSAero] Building all desktop themes (EXE + LIB + DLL)..."
-	@for theme in classic luna aero modern fluent sunvalley; do \
+	@for theme in aero; do \
 		dir="$(ROOT_DIR)/src/desktop/$$theme"; \
 		if [ -d "$$dir" ]; then \
 			echo "[ZirconOSAero]   Building $$theme..."; \
@@ -633,24 +643,27 @@ build-zbm-bios:
 	@echo "[ZirconOSAero] Building ZBM BIOS components..."
 	@mkdir -p $(ZBM_DIR)
 	as --32 -o $(ZBM_DIR)/mbr.o $(ZBM_SRC_DIR)/mbr.s
-	ld -m elf_i386 -T $(ROOT_DIR)/link/mbr.ld -o $(ZBM_DIR)/mbr.elf $(ZBM_DIR)/mbr.o 2>/dev/null || true
-	objcopy -O binary $(ZBM_DIR)/mbr.o $(ZBM_DIR)/mbr.bin
+	ld -m elf_i386 -T $(ROOT_DIR)/link/mbr.ld -o $(ZBM_DIR)/mbr.bin $(ZBM_DIR)/mbr.o
 	truncate -s 512 $(ZBM_DIR)/mbr.bin
 	@echo "[ZirconOSAero] MBR: $(ZBM_DIR)/mbr.bin"
 	as --32 -o $(ZBM_DIR)/vbr.o $(ZBM_SRC_DIR)/vbr.s
-	ld -m elf_i386 -T $(ROOT_DIR)/link/vbr.ld -o $(ZBM_DIR)/vbr.elf $(ZBM_DIR)/vbr.o 2>/dev/null || true
-	objcopy -O binary $(ZBM_DIR)/vbr.o $(ZBM_DIR)/vbr.bin
+	ld -m elf_i386 -T $(ROOT_DIR)/link/vbr.ld -o $(ZBM_DIR)/vbr.bin $(ZBM_DIR)/vbr.o
 	truncate -s 512 $(ZBM_DIR)/vbr.bin
 	@echo "[ZirconOSAero] VBR: $(ZBM_DIR)/vbr.bin"
 	as --32 -o $(ZBM_DIR)/stage2.o $(ZBM_SRC_DIR)/stage2.s
-	ld -m elf_i386 -T $(ROOT_DIR)/link/zbm_bios.ld -o $(ZBM_DIR)/stage2.elf $(ZBM_DIR)/stage2.o 2>/dev/null || true
-	objcopy -O binary $(ZBM_DIR)/stage2.o $(ZBM_DIR)/stage2.bin
-	@echo "[ZirconOSAero] Stage2: $(ZBM_DIR)/stage2.bin"
+	ld -m elf_i386 -T $(ROOT_DIR)/link/zbm_bios.ld -o $(ZBM_DIR)/stage2.elf $(ZBM_DIR)/stage2.o
+	objcopy -O binary $(ZBM_DIR)/stage2.elf $(ZBM_DIR)/stage2.bin
+	@STAGE2_SZ=$$(stat -c%s "$(ZBM_DIR)/stage2.bin"); \
+	if [ "$$STAGE2_SZ" -gt 32768 ]; then \
+		echo "[ZirconOSAero] ERROR: stage2.bin is $$STAGE2_SZ bytes; max 32768 (64 sectors before kernel at seek 2113)" >&2; \
+		exit 1; \
+	fi; \
+	echo "[ZirconOSAero] Stage2: $(ZBM_DIR)/stage2.bin ($$STAGE2_SZ bytes)"
 	cd $(ROOT_DIR) && zig build zbm \
 		-Doptimize=ReleaseSmall \
 		-Darch=x86_64 \
 		--cache-dir $(TMP_DIR)/zig-cache \
-		--prefix $(TMP_DIR)/kernel-prefix 2>/dev/null || true
+		--prefix $(TMP_DIR)/kernel-prefix
 	@echo "[ZirconOSAero] ZBM BIOS components built"
 
 # ══════════════════════════════════════════════════════
@@ -672,6 +685,12 @@ build-zbm-disk: build-zbm-bios build
 	f.seek(446); f.write(entry); f.close()" 2>/dev/null || true
 	dd if=$(ZBM_DIR)/vbr.bin of=$(ZBM_DISK_MBR) bs=512 seek=2048 count=1 conv=notrunc status=none
 	dd if=$(ZBM_DIR)/stage2.bin of=$(ZBM_DISK_MBR) bs=512 seek=2049 conv=notrunc status=none
+	@K_SZ=$$(stat -c%s "$(KERNEL_ELF)"); \
+	MAX_K=$$(( (128*1024*1024/512 - 2113) * 512 )); \
+	if [ "$$K_SZ" -gt "$$MAX_K" ]; then \
+		echo "[ZirconOSAero] ERROR: kernel.elf ($$K_SZ bytes) exceeds MBR disk budget ($$MAX_K bytes from sector 2113 to end of 128MiB image)" >&2; \
+		exit 1; \
+	fi
 	dd if=$(KERNEL_ELF) of=$(ZBM_DISK_MBR) bs=512 seek=2113 conv=notrunc status=none
 	@echo "[ZirconOSAero] MBR disk: $(ZBM_DISK_MBR)"
 	@if command -v sgdisk >/dev/null 2>&1; then \
@@ -767,6 +786,17 @@ endif
 # 2.5K 帧缓冲 + 默认收紧 Aero 模糊（仍可能 CPU 瓶颈；可调 `nt61_aero_defaults`）
 run-fb-large:
 	@$(MAKE) run RESOLUTION=2560x1440x32 AERO_BLUR_LIGHT=true
+
+# GTK: explicit 1:1 (same as default QEMU_GTK_ZOOM).
+run-qemu-1to1:
+	@$(MAKE) run QEMU_GTK_ZOOM=zoom-to-fit=off
+
+# GTK: scale guest framebuffer to fit QEMU window (old default behavior).
+run-qemu-zoom-fit:
+	@$(MAKE) run QEMU_GTK_ZOOM=zoom-to-fit=on
+
+run-qemu-sdl:
+	@$(MAKE) run QEMU_DISPLAY_BACKEND=sdl
 
 run:
 ifeq ($(ARCH),aarch64)
@@ -1038,7 +1068,7 @@ clean:
 	@echo "[ZirconOSAero] Cleaning..."
 	rm -rf $(BUILD_DIR)
 	rm -rf $(ROOT_DIR)/.zig-cache $(ROOT_DIR)/zig-out
-	@for theme in classic luna aero modern fluent sunvalley; do \
+	@for theme in aero; do \
 		dir="$(ROOT_DIR)/src/desktop/$$theme"; \
 		[ -d "$$dir" ] && rm -rf "$$dir/.zig-cache" "$$dir/zig-out" 2>/dev/null; \
 	done || true

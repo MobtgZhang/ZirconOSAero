@@ -4,6 +4,8 @@ zig-out/
 /build/
 mdcs/
 run-iso.sh
+# Local helper; intentionally not versioned (see script header).
+push.sh
 firmware/
 gnu-efi/
 *.o

@@ -2,6 +2,7 @@
 
 | 路径 | 说明 |
 |------|------|
+| `fetch-assets.sh` / `gen_wallpaper_placeholders.py` | 缺失时生成 Aero 壁纸 PNG 占位（与 `build.zig` 中路径一致） |
 | `configure.py` | 交互式编辑根目录 `build.conf` |
 | `build/mkiso-uefi-zbm.sh` | 生成 UEFI 可启动 ISO（`xorriso` + 内嵌 FAT ESP） |
 | `build/fetch-gnu-efi.sh` | 克隆并编译 GNU-EFI（LoongArch），输出到 `gnu-efi/loongarch64-built/` |

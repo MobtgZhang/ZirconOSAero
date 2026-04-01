@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const klog = @import("../rtl/klog.zig");
+const arch = @import("../arch.zig");
 
 pub const ObjectType = enum(u16) {
     process = 0,
@@ -364,7 +365,7 @@ pub fn waitForSingleObject(object_ptr: u64, _: u32) u32 {
             hdr.wait_count += 1;
             return WAIT_OBJECT_0;
         }
-        asm volatile ("pause");
+        arch.spinCpuRelax();
     }
     return WAIT_TIMEOUT;
 }

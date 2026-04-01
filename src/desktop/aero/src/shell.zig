@@ -10,7 +10,7 @@
 //! 3. Shell initializes DWM compositor with default theme
 //! 4. Desktop, taskbar, and start menu components are created
 //! 5. Theme loader registers built-in themes and applies active theme
-//! 6. OS interface windows (Core, CMD, PowerShell) are minimized to taskbar
+//! 6. OS interface windows (Core, CMD, .NET Shell placeholder) are minimized to taskbar
 //! 7. Shell enters the desktop message loop
 
 const theme = @import("theme.zig");
@@ -106,7 +106,7 @@ fn registerOsWindows() void {
     os_window_count = 0;
     addOsWindow("ZirconOS Core", 1);
     addOsWindow("Command Prompt", 4);
-    addOsWindow("PowerShell", 4);
+    addOsWindow(".NET Shell", 4);
 
     for (os_windows[0..os_window_count]) |w| {
         taskbar_mod.addTask(w.title[0..w.title_len], w.icon_id);

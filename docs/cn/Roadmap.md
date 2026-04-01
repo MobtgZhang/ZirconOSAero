@@ -37,7 +37,7 @@
 - csrss 风格子系统服务器
 - user32 / gdi32
 - WOW64
-- 双 Shell (CMD + PowerShell)
+- 内核 CMD；高级 Shell 由规划中的用户态 .NET 宿主承担
 
 ## 2. 里程碑 (Phase 0–11)
 
@@ -115,7 +115,7 @@
 - kernel32（Win32 Base **子集**）
 - 控制台运行时
 - CMD
-- **ZirconShell**（PowerShell **风格** cmdlet 子集；非 Microsoft PowerShell）
+- 托管 Shell：规划为 **.NET** 用户态（不在本仓库内核）
 
 ### Phase 9 — Win32 子系统
 

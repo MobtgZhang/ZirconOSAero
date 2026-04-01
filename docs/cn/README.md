@@ -12,7 +12,7 @@ ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。�
 | [Kernel.md](Kernel.md) | 内核内部实现：调度器、内存管理、中断、系统调用、IPC、对象管理器 |
 | [Boot.md](Boot.md) | 启动流程：仅 ZBM（BIOS/UEFI）、Multiboot2 handoff、各架构矩阵 (Phase 0–12 说明) |
 | [Servers.md](Servers.md) | 系统服务：Process Server、Session Manager、LPC 端口 |
-| [Subsystems.md](Subsystems.md) | 子系统：Win32 (CMD/ZirconShell/user32/gdi32)、WOW64、POSIX |
+| [Subsystems.md](Subsystems.md) | 子系统：Win32 (CMD/user32/gdi32)、WOW64、POSIX |
 | [BuildSystem.md](BuildSystem.md) | 构建系统：build.conf 配置、Makefile、build.zig、run.sh 用法 |
 | [Roadmap.md](Roadmap.md) | 开发路线图：里程碑 Phase 0–11、设计目标与非目标、风险分析 |
 | [PROCESS_NT61.md](PROCESS_NT61.md) | ZirconOSAero（NT 6.1 风格）阶段流程与验证门禁 |
@@ -22,6 +22,9 @@ ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。�
 | [DesktopQA.md](DesktopQA.md) | 桌面与合成验证清单；配合 `scripts/desktop-qa.sh` |
 | [AeroDesktopRuntime.md](AeroDesktopRuntime.md) | Aero 内核桌面数据流、鼠标调试判据、QEMU 输入与快捷键 |
 | [Assets.md](Assets.md) | 资源合规：禁微软素材、开源 / 自有 / AI 生成归档要求 |
+| [COPYRIGHT_AND_SOURCES.md](COPYRIGHT_AND_SOURCES.md) | 版权边界与知识来源白名单（与贡献指南一致） |
+| [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) | 对照 content5.x 的未完成项滚动清单 |
+| [NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md) | 图形栈脚手架与阶段说明 |
 | [NT61_ShellIcons.md](NT61_ShellIcons.md) | NT 6.1 壳层图标对照、`zircon_shell32_res.dll` 与 Win32 兼容说明 |
 | [BuiltinApps_NT61_Roadmap.md](BuiltinApps_NT61_Roadmap.md) | Windows 7 风格内置应用路线图、实现状态与 clean-room 参考方式 |
 | [DpiDesktop.md](DpiDesktop.md) | 高 DPI 与逻辑像素策略（Aero Shell） |
@@ -55,7 +58,7 @@ ZirconOSAero/
 │   ├── drivers/           #   设备驱动 (video, audio, input)
 │   ├── libs/              #   用户态 API (ntdll, kernel32)
 │   ├── servers/           #   系统服务 (Process Server, SMSS)
-│   ├── subsystems/win32/  #   Win32 子系统 (csrss, CMD, PowerShell, user32, gdi32)
+│   ├── subsystems/win32/  #   Win32 子系统 (csrss, CMD, user32, gdi32)
 │   ├── registry/          #   注册表
 │   ├── rtl/               #   运行时库 (klog)
 │   ├── config/            #   配置解析器 + 嵌入式默认 *.conf（system/boot/desktop）

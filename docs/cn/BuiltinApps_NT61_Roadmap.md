@@ -23,7 +23,7 @@
 | 项 | 代码事实 |
 |----|-----------|
 | `BuiltinAppId` | `builtin_apps.zig` 中 `enum(u16)`，含附件/媒体/Shell/安全等全部占位 ID |
-| `ALL_PROGRAMS` | 当前 **13** 项：`notepad, wordpad, paint, calculator, minesweeper, solitaire, spider_solitaire, freecell, hearts, osk, charmap, cmd_shell, powershell_shell`；侧栏高度有限，增删须改本表 |
+| `ALL_PROGRAMS` | 当前 **13** 项：`notepad, wordpad, paint, calculator, minesweeper, solitaire, spider_solitaire, freecell, hearts, osk, charmap, cmd_shell, dotnet_shell_host`；侧栏高度有限，增删须改本表 |
 | 演示路径 | `demo_notepad_vfs_path` = `C:\NOTEPAD.TXT`（记事本/写字板 Open/Save） |
 | 任务管理器前置 | `display.bringTaskManagerToFront()`；**热键** `Ctrl+Shift+Esc` 在 `display.handleDesktopHotkeys` → `arch.consumeTaskMgrHotkey` |
 | `taskmgr_focus` ID | `launch(.taskmgr_focus)` **仅 klog**，开始菜单**无**单独「任务管理器」项；与上栏热键区分 |
@@ -110,7 +110,8 @@
 | 计算机管理 | partial | 点击行启动 Event Viewer / Device Manager 窗 |
 | 资源监视器 / 性能监视器 | stub | 与 KE/PS 采样二期 |
 | 任务计划程序 | stub | 作业存储占位 |
-| 命令提示符 / PowerShell | stub | 全屏会话：`cmd.zig` / `powershell.zig`；桌面窗为提示 |
+| 命令提示符 | stub | `cmd.zig`（内核内置最小 CMD 行） |
+| **PowerShell**：兼容 cmdlet 宿主 | **不适用（本仓库）** | **内核不提供** PowerShell；与 PowerShell 行为对齐的脚本引擎计划在 **独立仓库的用户态 .NET** 中实现；本仓库仅保留 syscall / LPC / Section 等内核支撑（见 Phase F / 契约矩阵）。 |
 
 ## 游戏（Games）
 

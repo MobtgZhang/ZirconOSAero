@@ -93,7 +93,6 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const kernel32 = @import("libs/kernel32.zig");
     const console_mod = @import("subsystems/win32/console.zig");
     const cmd_mod = @import("subsystems/win32/cmd.zig");
-    const ps_mod = @import("subsystems/win32/powershell.zig");
     const subsys = @import("subsystems/win32/subsystem.zig");
     const exec = @import("subsystems/win32/exec.zig");
     const user32_mod = @import("subsystems/win32/user32.zig");
@@ -209,8 +208,6 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
     if (boot_mode == .cmd) {
         klog.info("Boot mode: CMD Shell (direct)", .{});
-    } else if (boot_mode == .powershell) {
-        klog.info("Boot mode: PowerShell (direct)", .{});
     } else if (boot_mode == .desktop) {
         klog.info("Boot mode: Desktop (theme=%s)", .{desktopThemeName(desktop_theme)});
     } else {
@@ -387,7 +384,6 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     kernel32.init();
     console_mod.init();
     cmd_mod.init();
-    ps_mod.init();
 
     // ═══ Phase 9: Win32 Subsystem ═══
     klog.info("--- Phase 9: Win32 Subsystem ---", .{});
@@ -468,14 +464,8 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         cmd_mod.runInteractiveShell();
     }
 
-    if (boot_mode == .powershell) {
-        klog.info("=== Entering PowerShell Mode ===", .{});
-        ps_mod.runInteractiveShell();
-    }
-
     // ═══ Normal Text Mode: Demo + Shell ═══
     cmd_mod.runBootSequence();
-    ps_mod.runBootSequence();
     exec.runDemoApps();
     gdi32_mod.runGdiDemo();
     user32_mod.runGuiDemo();
@@ -590,9 +580,11 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
     const input_hub = @import("drivers/input/input_hub.zig");
     const mouse_debug = @import("drivers/input/mouse_debug.zig");
     const virtio_input_pci = @import("drivers/input/virtio_input_pci.zig");
+    const display_flip_journal = @import("drivers/video/display_flip_journal.zig");
     const scheduler = @import("ke/scheduler.zig");
 
     var prev_buttons: u8 = 0;
+    var idle_streak: u32 = 0;
     var last_draw_cx: i32 = mouse.getX();
     var last_draw_cy: i32 = mouse.getY();
     const desktop_extra_input_polls: u32 = if (builtin.target.cpu.arch == .loongarch64) 32 else 16;
@@ -681,11 +673,16 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
             display.present();
             last_draw_cx = mouse.getX();
             last_draw_cy = mouse.getY();
-        } else if (mouse.hasCursorMoved()) {
-            mouse.clearCursorMoved();
+            idle_streak = 0;
+        } else {
+            idle_streak +|= 1;
+            if (mouse.hasCursorMoved()) {
+                mouse.clearCursorMoved();
+            }
         }
 
-        for (0..desktop_extra_input_polls) |_| input_hub.pollAll();
+        const tail_polls = display_flip_journal.extraInputPollBudget(desktop_extra_input_polls, idle_streak);
+        for (0..tail_polls) |_| input_hub.pollAll();
         arch.waitForInterruptDesktop();
     }
 }
@@ -873,7 +870,6 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     const kernel32 = @import("libs/kernel32.zig");
     const console_mod = @import("subsystems/win32/console.zig");
     const cmd_mod = @import("subsystems/win32/cmd.zig");
-    const ps_mod = @import("subsystems/win32/powershell.zig");
     const subsys = @import("subsystems/win32/subsystem.zig");
     const exec = @import("subsystems/win32/exec.zig");
     const user32_mod = @import("subsystems/win32/user32.zig");
@@ -1348,7 +1344,6 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     kernel32.init();
     console_mod.init();
     cmd_mod.init();
-    ps_mod.init();
 
     klog.info("--- Phase 9: Win32 Subsystem ---", .{});
     subsys.init();
@@ -1404,7 +1399,6 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     }
 
     cmd_mod.runBootSequence();
-    ps_mod.runBootSequence();
     exec.runDemoApps();
     gdi32_mod.runGdiDemo();
     user32_mod.runGuiDemo();

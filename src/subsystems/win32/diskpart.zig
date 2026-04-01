@@ -1221,7 +1221,7 @@ pub fn isInitialized() bool {
     return dp_initialized;
 }
 
-/// Run DiskPart as a sub-shell from CMD or PowerShell.
+/// Run DiskPart as a sub-shell from CMD (or a future user-mode shell).
 /// Uses the given console_id for I/O.
 /// Reads input from arch.readInputChar() in an interactive loop.
 /// Returns when the user types "exit".

@@ -40,13 +40,13 @@
 - **Win32 execution engine** (**subset**): PE loading, DLL binding, process creation, API dispatch for supported paths only
 - **Graphics subsystem** (**partial**): user32 (windows/messages) and gdi32 (drawing/fonts/bitmaps) for Aero/shell scenarios — not full GDI (ROP, full font rasterization, full DC model)
 - **WOW64** (**partial**): PE32 loading, 32→64 syscall thunking, 32-bit PEB/TEB where implemented — full SysWOW64 is [deferred](docs/cn/NT61_DEFERRED_SURFACES.md)
-- **Dual shell**: CMD and **ZirconShell** (PowerShell-style cmdlet subset, not compatible with Microsoft PowerShell)
+- **Text shell**: **CMD** in-kernel；高级脚本宿主计划为 **用户态 .NET**（非本仓库内核实现）
 - **Dual filesystem**: FAT32 (system volume) and NTFS (data volume)
 - **Multi-architecture**: x86_64 (primary), aarch64, loongarch64, riscv64, mips64el
 
 **开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
 
-**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**Deferred surfaces**（full Win32 / full WOW64, etc.）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
+**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**Deferred surfaces**（full Win32 / full WOW64, etc.）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。**版权与知识来源**：[docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) · [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)。
 
 **实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖骨架见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
@@ -59,13 +59,12 @@ ZirconOSAero/
 ├── build.zig              # Zig build
 ├── build.zig.zon          # Zig dependencies
 ├── run.sh                 # Build and run helper
-├── Makefile               # Make entry point
+├── Makefile               # Convenience targets (optional); primary entry is `zig build` (see docs/en/BuildSystem.md)
 ├── assets/                # Logo and screenshots
 ├── scripts/               # Build helpers (see scripts/README.md)
 ├── gnu-efi/               # LoongArch GNU-EFI output (gitignored; make fetch-gnu-efi)
 ├── boot/
-│   ├── uefi/main.zig      # UEFI ZBM (x86_64 / aarch64; LoongArch 见 main_loongarch64.zig)
-│   └── zbm/               # ZBM：BIOS/MBR、BCD、菜单（Windows 7 风格）
+│   └── zbm/               # ZBM：BIOS/MBR、BCD、菜单；UEFI 源在 zbm/uefi/（main.zig / main_riscv64.zig / main_loongarch64.zig）
 ├── link/                  # Per-architecture linker scripts
 │   └── x86_64.ld / aarch64.ld / loongarch64.ld / riscv64.ld / mips64el.ld
 ├── src/                   # Kernel sources
@@ -104,7 +103,6 @@ ZirconOSAero/
 │           ├── gdi32.zig      # GDI API
 │           ├── console.zig    # Console runtime
 │           ├── cmd.zig        # CMD
-│           ├── powershell.zig # PowerShell-style shell
 │           └── wow64.zig      # WOW64 layer
 ├── src/desktop/           # Desktop theme Zig projects; each has resources/
 ├── src/fonts/             # Shared open fonts (make fonts / scripts/fonts/fetch-fonts.sh)
@@ -137,7 +135,7 @@ sudo apt install -y xorriso dosfstools mtools \
     qemu-system-x86 qemu-system-arm ovmf
 ```
 
-Install Zig from [ziglang.org](https://ziglang.org/download/) and add it to `PATH`.
+Install Zig from [ziglang.org](https://ziglang.org/download/) and add it to `PATH`. **要求**：`build.zig.zon` 中 `minimum_zig_version`（当前 **0.15.0+**）；CI 锁定 **0.15.2**。首次构建若缺壁纸 PNG：先执行 `bash scripts/fetch-assets.sh` 或 `make fetch-assets`（生成占位图，可日后替换）。
 
 ## Build and run
 
@@ -208,7 +206,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | gdi32 | Partial | DC/原语/字体/位图子集；分阶段见 `gdi32.zig` 头注释与契约矩阵 |
 | Console | Done | Console runtime |
 | CMD | Done | dir, cd, set, ver, systeminfo, tasklist, … |
-| ZirconShell (PowerShell-style) | Partial | cmdlet 子集；非 Microsoft PowerShell / CLR |
+| .NET Shell（用户态，预留） | Planned | 内核内 ZirconShell 已移除；由未来 .NET 用户态宿主提供 |
 | csrss | Partial | Win32 server, stations, desktops, GUI dispatch |
 | Exec engine | Partial | PE load, DLL bind, lifecycle |
 | WOW64 | Partial | PE32, thunk；32→64 服务号须对齐 `ssdt_nt61.zig`（与旧 `SYS_*` 已分离）— 见 `wow64.zig` |
@@ -226,7 +224,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 - **Phase 5** — IPC and system services (SMSS/LPC)  
 - **Phase 6** — I/O, filesystems (FAT32/NTFS), drivers  
 - **Phase 7** — Loaders (PE32/PE32+/ELF, DLLs, imports, relocs)  
-- **Phase 8** — Native userland (ntdll/kernel32, CMD, PowerShell)  
+- **Phase 8** — Native userland (ntdll/kernel32, CMD)  
 - **Phase 9** — Win32 subsystem (csrss, exec engine, PE/DLL)  
 - **Phase 10** — Graphics (user32, gdi32, message queue, GUI dispatch)  
 - **Phase 11** — WOW64 (PE32, thunking, 32-bit PEB/TEB)  

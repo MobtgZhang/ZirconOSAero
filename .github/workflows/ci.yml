@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Placeholder wallpaper PNGs (build.zig requires paths)
+        run: bash scripts/fetch-assets.sh
+
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
@@ -32,6 +35,9 @@ jobs:
       - name: Unit tests (heap + SSDT + se token)
         run: zig build test
 
+      - name: Desktop Aero freestanding static library (A2 build path)
+        run: zig build desktop-aero-freestanding
+
       - name: Kernel (x86_64, Debug)
         run: zig build kernel -Darch=x86_64
 
@@ -49,9 +55,11 @@ jobs:
           zig build kernel -Darch=aarch64
           zig build kernel -Darch=riscv64
           zig build kernel -Darch=loongarch64
-          zig build zbm-riscv64-uefi
-          zig build zbm-loongarch-uefi
+          # Named ZBM object steps are registered only when -Darch matches (see build.zig).
+          zig build zbm-riscv64-uefi -Darch=riscv64
+          zig build zbm-loongarch-uefi -Darch=loongarch64
 
+      # 可选收紧串口：export CI_SMOKE_MIN_SERIAL=32（见 scripts/smoke-qemu-mbr.sh --min-serial-bytes）
       - name: QEMU serial smoke (ZBM MBR, headless)
         run: bash scripts/ci-qemu-smoke.sh
 

@@ -6,7 +6,6 @@ pub const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0;
 pub const BootMode = enum {
     normal,
     cmd,
-    powershell,
     desktop,
 };
 

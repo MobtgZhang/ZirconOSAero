@@ -37,7 +37,7 @@ On top of a stable kernel:
 - csrss-style subsystem server
 - user32 / gdi32
 - WOW64
-- Dual shell (CMD + PowerShell)
+- CMD in kernel; advanced shell via planned user-mode .NET host
 
 ## 2. Milestones (Phase 0–11)
 
@@ -115,7 +115,7 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 - kernel32 (Win32 base **subset**)
 - Console runtime
 - CMD
-- ZirconShell (PowerShell-**style** cmdlet subset; not Microsoft PowerShell)
+- Managed shell: planned **.NET** user-mode host (not in this repo)
 
 ### Phase 9 — Win32 subsystem
 

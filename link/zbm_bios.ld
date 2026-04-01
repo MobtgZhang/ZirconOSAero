@@ -5,10 +5,14 @@
  *
  * Memory layout:
  *   0x8000 - 0xFFFF : Stage2 code + data (max 32KB)
+ *
+ * Emit ELF so `objcopy -O binary` can strip to flat image (GNU ld defaults
+ * on some hosts otherwise produced a non-ELF blob that objcopy rejected).
  */
 
-OUTPUT_FORMAT(binary)
+OUTPUT_FORMAT(elf32-i386)
 OUTPUT_ARCH(i386)
+ENTRY(_stage2_start)
 
 SECTIONS
 {

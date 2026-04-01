@@ -25,6 +25,7 @@ pub const theme_mod = @import("theme.zig");
 pub const dwm_mod = @import("dwm.zig");
 pub const renderer_aero = @import("renderer_aero.zig");
 const wallpaper_bitmap = @import("wallpaper_bitmap.zig");
+const display_flip_journal = @import("display_flip_journal.zig");
 
 pub const ThemeColors = theme_mod.ThemeColors;
 
@@ -1533,7 +1534,8 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
         fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
     }
     fb.drawHLine(0, tb_y, scr_w, rgb(0xB0, 0xD0, 0xF0));
-    fb.drawHLine(0, tb_y + 1, scr_w, rgb(0x40, 0x5C, 0x78));
+    const tb_y_line2 = clampI32FromI64(@as(i64, tb_y) + 1);
+    fb.drawHLine(0, tb_y_line2, scr_w, rgb(0x40, 0x5C, 0x78));
 
     const peek_w: i32 = aero_tray.TASKBAR_PEEK_STRIP_W;
     const icon_s: u32 = 2;
@@ -1545,65 +1547,81 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
 
     const orb = aeroTaskbarStartOrb(tb_y, tb_h);
     // 阴影 + 球体 + 高光（Aero 玻璃球体感）
-    fb.fillCircle(orb.cx, orb.cy + 1, orb.r + 1, rgb(0x04, 0x12, 0x28));
-    fb.fillCircle(orb.cx, orb.cy, orb.r + 1, rgb(0x10, 0x2C, 0x50));
+    const orb_cy1 = clampI32FromI64(@as(i64, orb.cy) + 1);
+    const orb_r1 = clampI32FromI64(@as(i64, orb.r) + 1);
+    fb.fillCircle(orb.cx, orb_cy1, orb_r1, rgb(0x04, 0x12, 0x28));
+    fb.fillCircle(orb.cx, orb.cy, orb_r1, rgb(0x10, 0x2C, 0x50));
     fb.fillCircle(orb.cx, orb.cy, orb.r, rgb(0x1C, 0x44, 0x78));
     fb.aeroSheenDisk(orb.cx, orb.cy, orb.r - 1, rgb(0xF4, 0xFA, 0xFF));
-    renderZirconLogo(orb.cx - 7, orb.cy - 7);
+    renderZirconLogo(clampI32FromI64(@as(i64, orb.cx) - 7), clampI32FromI64(@as(i64, orb.cy) - 7));
 
     const ql_ids = [_]icons.IconId{ .browser, .terminal, .documents };
     var qx: i32 = orb.slot_w + 6;
-    const ql_y = tb_y + @divTrunc(tb_h - icon_px, 2);
+    const ql_y = clampI32FromI64(@as(i64, tb_y) + @divTrunc(@as(i64, tb_h) - @as(i64, icon_px), 2));
     const ql_pad: i32 = 3;
     for (ql_ids) |iid| {
         const bg_w = icon_px + 2 * ql_pad;
         const bg_h = icon_px + 2 * ql_pad;
-        const bg_x = qx - ql_pad;
-        const bg_y = ql_y - ql_pad;
+        const bg_x = clampI32FromI64(@as(i64, qx) - @as(i64, ql_pad));
+        const bg_y = clampI32FromI64(@as(i64, ql_y) - @as(i64, ql_pad));
+        const bg_ix = clampI32FromI64(@as(i64, bg_x) + 1);
+        const bg_iy = clampI32FromI64(@as(i64, bg_y) + 1);
+        const bg_iw = @max(0, bg_w - 2);
+        const bg_ih_grad = @max(1, bg_h - 3);
         fb.fillRoundedRect(bg_x, bg_y, bg_w, bg_h, 6, rgb(0x16, 0x2A, 0x42));
-        fb.drawGradientV(bg_x + 1, bg_y + 1, bg_w - 2, @max(1, bg_h - 3), rgb(0x42, 0x5E, 0x82), rgb(0x12, 0x22, 0x36));
-        fb.blendTintRect(bg_x + 1, bg_y + 1, bg_w - 2, @divTrunc(bg_h - 2, 2), rgb(0xA8, 0xD0, 0xF5), 45, 170);
+        fb.drawGradientV(bg_ix, bg_iy, bg_iw, bg_ih_grad, rgb(0x42, 0x5E, 0x82), rgb(0x12, 0x22, 0x36));
+        fb.blendTintRect(bg_ix, bg_iy, bg_iw, @max(0, @divTrunc(bg_h - 2, 2)), rgb(0xA8, 0xD0, 0xF5), 45, 170);
         fb.drawRect(bg_x, bg_y, bg_w, bg_h, rgb(0x58, 0x7C, 0xA0));
         icons.drawThemedIcon(iid, qx, ql_y, icon_s, .aero);
-        qx += icon_px + 2 * ql_pad + 6;
+        qx = clampI32FromI64(@as(i64, qx) + @as(i64, icon_px) + 2 * @as(i64, ql_pad) + 6);
     }
-    fb.drawVLine(qx + 2, tb_y + 6, tb_h - 12, rgb(0x58, 0x78, 0x98));
+    const vline_x = clampI32FromI64(@as(i64, qx) + 2);
+    const vline_y = clampI32FromI64(@as(i64, tb_y) + 6);
+    const vline_len = @max(0, clampI32FromI64(@as(i64, tb_h) - 12));
+    fb.drawVLine(vline_x, vline_y, vline_len, rgb(0x58, 0x78, 0x98));
 
     const app_items = [_]struct { id: icons.IconId, active: bool }{
         .{ .id = .computer, .active = true },
         .{ .id = .folder, .active = false },
         .{ .id = .terminal, .active = false },
     };
-    var ax = qx + 8;
-    const ay = tb_y + @divTrunc(tb_h - pill_h, 2);
+    var ax = clampI32FromI64(@as(i64, qx) + 8);
+    const ay = clampI32FromI64(@as(i64, tb_y) + @divTrunc(@as(i64, tb_h) - @as(i64, pill_h), 2));
     const pill_r: i32 = 8;
     for (app_items) |app| {
+        const pill_inner_x = clampI32FromI64(@as(i64, ax) + 2);
+        const pill_inner_y = clampI32FromI64(@as(i64, ay) + 2);
+        const pill_inner_w = @max(0, clampI32FromI64(@as(i64, tile) - 4));
+        const pill_inner_h = @max(0, clampI32FromI64(@as(i64, pill_h) - 4));
         if (app.active) {
             fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x38, 0x5C, 0x88));
-            fb.drawGradientV(ax + 2, ay + 2, tile - 4, pill_h - 4, rgb(0x82, 0xB0, 0xE0), rgb(0x38, 0x5C, 0x88));
-            fb.blendTintRect(ax + 2, ay + 2, tile - 4, @divTrunc(pill_h - 4, 2), rgb(0xE0, 0xF2, 0xFF), 50, 200);
+            fb.drawGradientV(pill_inner_x, pill_inner_y, pill_inner_w, pill_inner_h, rgb(0x82, 0xB0, 0xE0), rgb(0x38, 0x5C, 0x88));
+            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, @max(0, @divTrunc(pill_h - 4, 2)), rgb(0xE0, 0xF2, 0xFF), 50, 200);
             fb.drawRect(ax, ay, tile, pill_h, rgb(0xA0, 0xCC, 0xF0));
         } else {
             fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x1A, 0x2E, 0x46));
-            fb.drawGradientV(ax + 2, ay + 2, tile - 4, pill_h - 4, rgb(0x3A, 0x54, 0x72), rgb(0x12, 0x20, 0x34));
-            fb.blendTintRect(ax + 2, ay + 2, tile - 4, @divTrunc(pill_h - 4, 2), rgb(0x88, 0xB0, 0xD8), 38, 160);
+            fb.drawGradientV(pill_inner_x, pill_inner_y, pill_inner_w, pill_inner_h, rgb(0x3A, 0x54, 0x72), rgb(0x12, 0x20, 0x34));
+            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, @max(0, @divTrunc(pill_h - 4, 2)), rgb(0x88, 0xB0, 0xD8), 38, 160);
             fb.drawRect(ax, ay, tile, pill_h, rgb(0x46, 0x64, 0x84));
         }
-        const ix = ax + @divTrunc(tile - app_icon_px, 2);
-        const iy = ay + @divTrunc(pill_h - app_icon_px, 2);
+        const ix = clampI32FromI64(@as(i64, ax) + @divTrunc(@as(i64, tile) - @as(i64, app_icon_px), 2));
+        const iy = clampI32FromI64(@as(i64, ay) + @divTrunc(@as(i64, pill_h) - @as(i64, app_icon_px), 2));
         icons.drawThemedIcon(app.id, ix, iy, icon_s_apps, .aero);
-        ax += tile + 5;
+        ax = clampI32FromI64(@as(i64, ax) + @as(i64, tile) + 5);
     }
 
     if (taskmgr_shell_state == .minimized) {
-        const chip_x = ax + 6;
+        const chip_x = clampI32FromI64(@as(i64, ax) + 6);
         const chip_w: i32 = 78;
         const chip_y = ay;
         const chip_h = pill_h;
-        if (chip_x + chip_w < scr_w - peek_w - 80) {
+        const chip_right = @as(i64, chip_x) + @as(i64, chip_w);
+        const chip_limit = @as(i64, scr_w) - @as(i64, peek_w) - 80;
+        if (chip_right < chip_limit) {
             fb.fillRoundedRect(chip_x, chip_y, chip_w, chip_h, pill_r, rgb(0x30, 0x50, 0x78));
             fb.drawRect(chip_x, chip_y, chip_w, chip_h, rgb(0xA0, 0xCC, 0xF0));
-            fb.drawTextTransparentUi(chip_x + 6, chip_y + @divTrunc(pill_h - 14, 2), "TaskMgr", rgb(0xE8, 0xF0, 0xFF));
+            const chip_ty = clampI32FromI64(@as(i64, chip_y) + @divTrunc(@as(i64, pill_h) - 14, 2));
+            fb.drawTextTransparentUi(clampI32FromI64(@as(i64, chip_x) + 6), chip_ty, "TaskMgr", rgb(0xE8, 0xF0, 0xFF));
             taskmgr_tray_chip_rect = .{ .x = chip_x, .y = chip_y, .w = chip_w, .h = chip_h };
         }
     }
@@ -1623,13 +1641,16 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     const line_date = "2026/3/21";
     const line_h_clk: i32 = 14;
     fb.drawTextTransparentUi(tray.clk_x, tray.clk_y, line_time, t.clock_text);
-    fb.drawTextTransparentUi(tray.clk_x, tray.clk_y + line_h_clk + 1, line_date, rgb(0xE0, 0xEC, 0xF8));
+    const date_y = clampI32FromI64(@as(i64, tray.clk_y) + @as(i64, line_h_clk) + 1);
+    fb.drawTextTransparentUi(tray.clk_x, date_y, line_date, rgb(0xE0, 0xEC, 0xF8));
 
     renderAeroTrayFlyout(scr_w, scr_h);
 
-    fb.drawGradientV(scr_w - peek_w, tb_y, peek_w, tb_h, rgb(0x68, 0x88, 0xA8), rgb(0x30, 0x48, 0x64));
-    fb.drawVLine(scr_w - peek_w, tb_y, tb_h, rgb(0x90, 0xB0, 0xD0));
-    fb.drawVLine(scr_w - 1, tb_y, tb_h, rgb(0x20, 0x30, 0x44));
+    const peek_x = clampI32FromI64(@as(i64, scr_w) - @as(i64, peek_w));
+    fb.drawGradientV(peek_x, tb_y, peek_w, tb_h, rgb(0x68, 0x88, 0xA8), rgb(0x30, 0x48, 0x64));
+    fb.drawVLine(peek_x, tb_y, tb_h, rgb(0x90, 0xB0, 0xD0));
+    const right_rail_x = clampI32FromI64(@as(i64, scr_w) - 1);
+    fb.drawVLine(right_rail_x, tb_y, tb_h, rgb(0x20, 0x30, 0x44));
 }
 
 pub fn initAeroDwm() void {
@@ -1877,13 +1898,19 @@ pub fn renderZirconLogo(x: i32, y: i32) void {
     const dark = rgb(0x0A, 0x3A, 0x6A);
     const white = rgb(0xFF, 0xFF, 0xFF);
     fb.fillRect(x, y, 14, 14, blue);
-    fb.fillRect(x + 1, y + 1, 12, 12, dark);
-    fb.drawHLine(x + 3, y + 3, 8, white);
+    fb.fillRect(clampI32FromI64(@as(i64, x) + 1), clampI32FromI64(@as(i64, y) + 1), 12, 12, dark);
+    fb.drawHLine(clampI32FromI64(@as(i64, x) + 3), clampI32FromI64(@as(i64, y) + 3), 8, white);
     var i: i32 = 0;
     while (i < 8) : (i += 1) {
-        fb.putPixel32(@intCast(x + 10 - i), @intCast(y + 4 + i), white);
+        const pxi = @as(i64, x) + 10 - @as(i64, i);
+        const pyi = @as(i64, y) + 4 + @as(i64, i);
+        const pxc = clampI32FromI64(pxi);
+        const pyc = clampI32FromI64(pyi);
+        if (pxc >= 0 and pyc >= 0) {
+            fb.putPixel32(@intCast(pxc), @intCast(pyc), white);
+        }
     }
-    fb.drawHLine(x + 3, y + 11, 8, white);
+    fb.drawHLine(clampI32FromI64(@as(i64, x) + 3), clampI32FromI64(@as(i64, y) + 11), 8, white);
 }
 
 fn renderSystemTray(scr_w: i32, tb_y: i32, t: *const ThemeColors) void {
@@ -3299,6 +3326,7 @@ pub fn present() void {
     }
     desktop_ctx.present_count += 1;
     desktop_ctx.frame_count += 1;
+    display_flip_journal.notePresentFlip();
 }
 
 pub fn presentFull() void {
@@ -3307,6 +3335,7 @@ pub fn presentFull() void {
     notifyHardwareCursorIfAvailable();
     desktop_ctx.present_count += 1;
     desktop_ctx.frame_count += 1;
+    display_flip_journal.notePresentFlip();
 }
 
 pub fn setCursorPosition(x: i32, y: i32) void {

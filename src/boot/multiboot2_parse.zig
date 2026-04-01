@@ -88,7 +88,6 @@ pub const DesktopTheme = enum {
 pub const BootMode = enum {
     normal,
     cmd,
-    powershell,
     desktop,
 };
 
@@ -250,7 +249,6 @@ fn strEql(a: []const u8, b: []const u8) bool {
 fn parseCmdlineBootMode(cmdline: []const u8) BootMode {
     if (parseCmdlineValue(cmdline, "shell")) |val| {
         if (strEql(val, "cmd")) return .cmd;
-        if (strEql(val, "powershell")) return .powershell;
     }
     if (parseCmdlineValue(cmdline, "desktop")) |val| {
         if (strEql(val, "none")) return .normal;

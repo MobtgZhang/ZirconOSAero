@@ -776,7 +776,11 @@ pub fn aeroSheenDisk(cx: i32, cy: i32, radius: i32, sheen_rgb: u32) void {
     while (py64 <= cy64 + r64) : (py64 += 1) {
         const dy64 = py64 - cy64;
         const from_top: i32 = clampDrawCoordI64(py64 - top);
-        const base_a: u32 = @intCast(@min(95, @max(0, @divTrunc(from_top * 95, span))));
+        // `from_top * 95` 在 i32 上 Debug 可能溢出（clamp 后仍可达 INT_MAX）；用 i64 归一化。
+        const span64 = @as(i64, span);
+        const base_num = @as(i64, from_top) * 95;
+        const base_div = @divTrunc(base_num, span64);
+        const base_a: u32 = @intCast(@min(@as(i64, 95), @max(@as(i64, 0), base_div)));
         if (base_a == 0) continue;
 
         var px64 = cx64 - r64;
@@ -793,7 +797,8 @@ pub fn aeroSheenDisk(cx: i32, cy: i32, radius: i32, sheen_rgb: u32) void {
             const py_i = clampDrawCoordI64(py64);
             const cx_i = clampDrawCoordI64(cx64);
             const cy_i = clampDrawCoordI64(cy64);
-            if (px_i <= cx_i and py_i <= cy_i + @divTrunc(radius, 4)) {
+            const cy_hi = @as(i64, cy_i) + @divTrunc(@as(i64, radius), 4);
+            if (px_i <= cx_i and @as(i64, py_i) <= cy_hi) {
                 a +|= 42;
             }
             if (a > 155) a = 155;

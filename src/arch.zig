@@ -61,6 +61,20 @@ pub fn disableInterrupts() void {
     impl.disableInterrupts();
 }
 
+/// 自旋等待时的 CPU 退让提示（x86 `pause`、AArch64 `yield`、LoongArch `dbar 0` 等）。
+/// 通用内核路径禁止直接使用 x86 助记符，否则 LoongArch/RISC-V 等交叉编译会失败。
+pub fn spinCpuRelax() void {
+    switch (builtin.target.cpu.arch) {
+        .x86_64 => asm volatile ("pause" ::: .{ .memory = true }),
+        .aarch64 => asm volatile ("yield" ::: .{ .memory = true }),
+        .loongarch64 => asm volatile ("dbar 0" ::: .{ .memory = true }),
+        // LLVM 目标未必启用 Zihintpause；空指令 + memory 栅栏足够作退让占位。
+        .riscv64 => asm volatile ("" ::: .{ .memory = true }),
+        .mips64el => asm volatile ("" ::: .{ .memory = true }),
+        else => @compileError("spinCpuRelax: unsupported architecture"),
+    }
+}
+
 pub fn initSerial() void {
     if (@hasDecl(impl, "initSerial")) {
         impl.initSerial();

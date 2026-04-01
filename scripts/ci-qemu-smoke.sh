@@ -12,6 +12,10 @@ export DESKTOP="${CI_SMOKE_DESKTOP:-none}"
 export OPTIMIZE="${CI_SMOKE_OPTIMIZE:-Debug}"
 export DEBUG_LOG="${CI_SMOKE_DEBUG_LOG:-true}"
 
-echo "[ci-qemu-smoke] DESKTOP=$DESKTOP OPTIMIZE=$OPTIMIZE DEBUG_LOG=$DEBUG_LOG"
+echo "[ci-qemu-smoke] DESKTOP=$DESKTOP OPTIMIZE=$OPTIMIZE DEBUG_LOG=$DEBUG_LOG CI_SMOKE_MIN_SERIAL=${CI_SMOKE_MIN_SERIAL:-}"
 make build-zbm-disk ARCH=x86_64 DESKTOP="$DESKTOP" OPTIMIZE="$OPTIMIZE" DEBUG_LOG="$DEBUG_LOG"
-exec bash "$ROOT/scripts/smoke-qemu-mbr.sh" --assert
+SMOKE_EXTRA=()
+if [[ -n "${CI_SMOKE_MIN_SERIAL:-}" ]]; then
+  SMOKE_EXTRA+=(--min-serial-bytes="${CI_SMOKE_MIN_SERIAL}")
+fi
+exec bash "$ROOT/scripts/smoke-qemu-mbr.sh" --assert "${SMOKE_EXTRA[@]}"

@@ -23,7 +23,7 @@ The current desktop is **kernel framebuffer + Aero renderer** (see [AeroDesktopR
 | Item | Source of truth |
 |------|-----------------|
 | `BuiltinAppId` | `enum(u16)` in `builtin_apps.zig` |
-| `ALL_PROGRAMS` | **13** entries: `notepad, wordpad, paint, calculator, minesweeper, solitaire, spider_solitaire, freecell, hearts, osk, charmap, cmd_shell, powershell_shell` |
+| `ALL_PROGRAMS` | **13** entries: `notepad, wordpad, paint, calculator, minesweeper, solitaire, spider_solitaire, freecell, hearts, osk, charmap, cmd_shell, dotnet_shell_host` |
 | Demo path | `demo_notepad_vfs_path` = `C:\NOTEPAD.TXT` |
 | Task Manager front | `display.bringTaskManagerToFront()`; hotkey **Ctrl+Shift+Esc** via `handleDesktopHotkeys` → `consumeTaskMgrHotkey` |
 | `taskmgr_focus` | `launch(.taskmgr_focus)` logs only; **no** Start Menu row — do not confuse with the hotkey |
@@ -110,7 +110,8 @@ Track these against [`shell_strings.zig`](../../src/drivers/video/shell_strings.
 | Computer Management | partial | Rows launch Event Viewer / Device Manager windows |
 | Resource / Performance Monitor | stub | Sampling phase 2 |
 | Task Scheduler | stub | Job store TBD |
-| CMD / PowerShell | stub | Full UI in `cmd.zig` / `powershell.zig`; desktop window is a hint |
+| Command Prompt | stub | Minimal in-kernel CMD line in `cmd.zig` |
+| **PowerShell**-style cmdlet host | **Out of scope (this repo)** | **No in-kernel PowerShell**; a .NET **user-mode** host is planned **outside** this tree; this kernel keeps syscall / LPC / Section support only (see Phase F / contract matrix). |
 
 ## Games
 

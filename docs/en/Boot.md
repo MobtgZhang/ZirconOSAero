@@ -123,7 +123,7 @@ Parsed via `src/boot/multiboot2_parse.zig` and arch `boot.zig` (e.g. x86_64). **
 | Tag | Use |
 |-----|-----|
 | Memory map | Physical layout → frame allocator |
-| Command line | Boot mode (cmd/powershell/desktop), theme |
+| Command line | Boot mode (cmd/desktop), theme |
 | Framebuffer | Address, resolution, depth (when present) |
 | Boot loader name | Identification string |
 

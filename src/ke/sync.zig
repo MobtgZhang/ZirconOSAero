@@ -6,6 +6,7 @@
 
 const ob = @import("../ob/object.zig");
 const scheduler = @import("scheduler.zig");
+const arch = @import("../arch.zig");
 
 pub const Event = struct {
     header: ob.ObjectHeader = .{ .obj_type = .event },
@@ -34,7 +35,7 @@ pub const Event = struct {
 
     pub fn wait(self: *Event) void {
         while (!self.signaled) {
-            asm volatile ("pause");
+            arch.spinCpuRelax();
         }
         if (self.auto_reset) {
             self.signaled = false;
@@ -132,12 +133,12 @@ pub const SpinLock = struct {
     locked: bool = false,
 
     pub fn acquire(self: *SpinLock) void {
-        asm volatile ("cli");
+        arch.disableInterrupts();
         self.locked = true;
     }
 
     pub fn release(self: *SpinLock) void {
         self.locked = false;
-        asm volatile ("sti");
+        arch.enableInterrupts();
     }
 };

@@ -31,6 +31,9 @@
 | PCI 类码 / VirtIO → 驱动绑定占位 | 同上 → pci_driver_bind_host | [src/drivers/bus/pci_driver_bind.zig](../../src/drivers/bus/pci_driver_bind.zig) |
 | VFS `FileAccessMode` 数值 | 同上 → fs_vfs_constants_host | [tests/fs_vfs_constants_host.zig](../../tests/fs_vfs_constants_host.zig)（与 [src/fs/vfs.zig](../../src/fs/vfs.zig) 同步） |
 | 调度器策略公式（主机） | 同上 → scheduler_policy_host | [tests/scheduler_policy_host.zig](../../tests/scheduler_policy_host.zig) |
+| Phase F 调度差额（文档化占位） | 同上 → nt61_phase_f_scheduler_gap | [tests/nt61_phase_f_scheduler_gap.zig](../../tests/nt61_phase_f_scheduler_gap.zig) |
+| GpuDevice / ramfb 占位 | 同上 → gpu_device_host | [src/drivers/video/gpu_device.zig](../../src/drivers/video/gpu_device.zig) |
+| Win32k 窗口骨架 | 同上 → win32k_host | [src/subsystems/win32k/mod.zig](../../src/subsystems/win32k/mod.zig) |
 | 合规短语扫描 | `bash scripts/verify-compliance.sh` | [scripts/verify-compliance.sh](../../scripts/verify-compliance.sh)；CI |
 
 ## CI / 烟测（QEMU 或构建产物）
@@ -39,6 +42,7 @@
 |--------|------|------|
 | 构建与 ELF | `.github/workflows/ci.yml`；本地 `zig build install` | ReleaseSafe 与横幅校验见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) |
 | ZBM / 无头启动 | `bash scripts/ci-qemu-smoke.sh` | MBR 盘、串口可选断言 |
+| 分辨率与串口日志 | 改 `build.conf` 的 `RESOLUTION` → `make sync-resolution` → `make build` → QEMU/串口 | 核对 `Config: display=`、`FB tag`、`Framebuffer Driver` 宽高与 `RESOLUTION` 一致（见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §4.2.2） |
 | 节区 / 映射（用户态 API） | 运行依赖 `ntdll` 内 `NtCreateSection` / `NtMapViewOfSection` 的用例（随子系统扩展） | 内核实现见 [src/mm/section.zig](../../src/mm/section.zig)；x64 syscall 见 [src/arch/x86_64/syscall.zig](../../src/arch/x86_64/syscall.zig) |
 
 ## 维护约定

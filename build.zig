@@ -70,8 +70,18 @@ fn tryReadPreferredFbFromBuildConf(b: *std.Build) ?PreferredFbDims {
     return parseResolutionFromBuildConfText(raw);
 }
 
+fn ensureWallpaperPngAssetsPresent(b: *std.Build) void {
+    for (wallpaper_png_inputs) |rel| {
+        b.build_root.handle.access(rel, .{}) catch {
+            std.log.err("Missing wallpaper PNG: {s}\n  Add the file or generate placeholders: bash scripts/fetch-assets.sh\n", .{rel});
+            std.process.exit(1);
+        };
+    }
+}
+
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
+    ensureWallpaperPngAssetsPresent(b);
 
     // AArch64 / RISC-V64：内核与 ZBM 由 zig 构建；QEMU 下完整 UEFI 链路为 Makefile（`make run-aarch64` / `make run-riscv64`，含固件与 esp-*.img）。
     const arch_opt = b.option(
@@ -604,6 +614,61 @@ pub fn build(b: *std.Build) void {
     });
     const run_sched_policy_tests = b.addRunArtifact(sched_policy_tests);
 
+    const nt61_phase_f_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61_phase_f_scheduler_gap.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const nt61_phase_f_tests = b.addTest(.{
+        .root_module = nt61_phase_f_mod,
+        .name = "nt61_phase_f_scheduler_gap",
+    });
+    const run_nt61_phase_f_tests = b.addRunArtifact(nt61_phase_f_tests);
+
+    const gpu_device_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/video/gpu_device.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const gpu_device_tests = b.addTest(.{
+        .root_module = gpu_device_host_mod,
+        .name = "gpu_device_host",
+    });
+    const run_gpu_device_tests = b.addRunArtifact(gpu_device_tests);
+
+    const virtio_gpu_spec_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/video/virtio_gpu_spec.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const virtio_gpu_spec_tests = b.addTest(.{
+        .root_module = virtio_gpu_spec_host_mod,
+        .name = "virtio_gpu_spec_host",
+    });
+    const run_virtio_gpu_spec_tests = b.addRunArtifact(virtio_gpu_spec_tests);
+
+    const display_flip_journal_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/video/display_flip_journal.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const display_flip_journal_tests = b.addTest(.{
+        .root_module = display_flip_journal_host_mod,
+        .name = "display_flip_journal_host",
+    });
+    const run_display_flip_journal_tests = b.addRunArtifact(display_flip_journal_tests);
+
+    const win32k_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/subsystems/win32k/mod.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const win32k_tests = b.addTest(.{
+        .root_module = win32k_host_mod,
+        .name = "win32k_host",
+    });
+    const run_win32k_tests = b.addRunArtifact(win32k_tests);
+
     const wow64_ssdt_x86_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig"),
         .target = b.graph.host,
@@ -630,7 +695,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_x64_x86_namespace_tests = b.addRunArtifact(ssdt_x64_x86_namespace_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, scheduler_policy_host, wow64_ssdt_x86)");
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, win32k_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -650,6 +715,11 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_pci_bind_tests.step);
     test_step.dependOn(&run_fs_vfs_constants_tests.step);
     test_step.dependOn(&run_sched_policy_tests.step);
+    test_step.dependOn(&run_nt61_phase_f_tests.step);
+    test_step.dependOn(&run_gpu_device_tests.step);
+    test_step.dependOn(&run_virtio_gpu_spec_tests.step);
+    test_step.dependOn(&run_display_flip_journal_tests.step);
+    test_step.dependOn(&run_win32k_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
     test_step.dependOn(&run_ssdt_x64_x86_namespace_tests.step);
 
@@ -819,6 +889,37 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             }
         }
     }
+
+    // Aero theme as x86_64-freestanding static library (no host libc); for future kernel link.
+    const fs_target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .freestanding,
+        .abi = .none,
+    });
+    const nt61_fs = b.createModule(.{
+        .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
+        .target = fs_target,
+        .optimize = optimize,
+    });
+    const aero = desktop_themes[0];
+    const root_fs_path = b.fmt("{s}/src/root.zig", .{aero.dir});
+    const lib_fs_rm = b.createModule(.{
+        .root_source_file = b.path(root_fs_path),
+        .target = fs_target,
+        .optimize = optimize,
+    });
+    lib_fs_rm.addImport("nt61_aero_defaults", nt61_fs);
+    const lib_fs = b.addLibrary(.{
+        .name = "ZirconOSAero-aero-freestanding",
+        .linkage = .static,
+        .root_module = lib_fs_rm,
+    });
+    const install_fs = b.addInstallArtifact(lib_fs, .{});
+    const fs_step = b.step(
+        "desktop-aero-freestanding",
+        "Build Aero theme as x86_64-freestanding static library (kernel linkage path)",
+    );
+    fs_step.dependOn(&install_fs.step);
 }
 
 fn buildZbm(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin.OptimizeMode, debug_mode: bool) void {
@@ -978,7 +1079,7 @@ fn buildRiscv64ZbmEfiObject(
     zbm_opts.addOption(u32, "zbm_preferred_fb_width", zbm_fb_w);
     zbm_opts.addOption(u32, "zbm_preferred_fb_height", zbm_fb_h);
     const zbm_mod = b.createModule(.{
-        .root_source_file = b.path("boot/zbm/uefi/main.zig"),
+        .root_source_file = b.path("boot/zbm/uefi/main_riscv64.zig"),
         .target = rv_target,
         .optimize = optimize,
         .link_libc = false,

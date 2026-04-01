@@ -85,7 +85,7 @@ fn addDefaultItems() void {
     addLeft("Internet Explorer", 6);
     addLeft("Zircon Media Player", 11);
     addLeft("Terminal", 4);
-    addLeft("PowerShell", 4);
+    addLeft(".NET Shell", 4);
     addLeft("Notepad", 9);
     addLeft("Calculator", 8);
     addLeft("Paint", 10);

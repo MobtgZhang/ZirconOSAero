@@ -174,6 +174,14 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 **user32**：优先保证 `GetMessage` / `PeekMessage`、`CreateWindowEx` 等与壳路径一致的入口；模态环与 NC 命中等为部分语义，须在 PR 中注明已知差距。
 
+### 5.2 Shell / 脚本宿主（与 Microsoft PowerShell 的边界）
+
+| 能力（文档概念） | 状态 | 说明 |
+|------------------|------|------|
+| **PowerShell** / cmdlet 脚本宿主 | **不适用（内核）** | 内核侧 **不实现** PowerShell 引擎；历史上 in-kernel ZirconShell 已移除。 |
+| 用户态 **.NET** 脚本宿主（未来） | **Planned（仓库外）** | 与 PowerShell 公开 **行为与 cmdlet 模型** 对齐的宿主应在 **独立用户态程序 / 仓库** 实现；本仓库仅提供 Native / LPC / 对象等内核能力。 |
+| 命令提示符（`cmd.exe` 语义子集） | Partial | `src/subsystems/win32/cmd.zig` 等；与上项正交。 |
+
 ## 6. 配置语义：`nt_product_arch` 与宿主 CPU
 
 - **`system.nt_product_arch`**（嵌入 `system.conf`）：NT 6.1 **兼容层所宣称的产品处理器族**（如始终报告 `x86_64` 以匹配 WOW64/子集行为），**不等于** QEMU/固件实际 CPU。

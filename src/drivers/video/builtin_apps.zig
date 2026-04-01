@@ -195,7 +195,8 @@ pub const BuiltinAppId = enum(u16) {
     perfmon = 29,
     taskschd = 30,
     cmd_shell = 31,
-    powershell_shell = 32,
+    /// Reserved: future user-mode .NET-hosted shell (not implemented in kernel).
+    dotnet_shell_host = 32,
     minesweeper = 33,
     solitaire = 34,
     spider_solitaire = 35,
@@ -228,10 +229,10 @@ pub const BuiltinAppId = enum(u16) {
 
 /// 侧栏高度有限；条目数变更时请同步 `docs/*/BuiltinApps_NT61_Roadmap.md`「与代码对齐」。
 pub const ALL_PROGRAMS: []const BuiltinAppId = &.{
-    .notepad,          .wordpad,   .paint,            .calculator,
-    .minesweeper,      .solitaire, .spider_solitaire, .freecell,
-    .hearts,           .osk,       .charmap,          .cmd_shell,
-    .powershell_shell,
+    .notepad,           .wordpad,   .paint,            .calculator,
+    .minesweeper,       .solitaire, .spider_solitaire, .freecell,
+    .hearts,            .osk,       .charmap,          .cmd_shell,
+    .dotnet_shell_host,
 };
 
 pub fn allProgramsCount() usize {
@@ -277,7 +278,7 @@ pub fn titleOf(id: BuiltinAppId) []const u8 {
         .perfmon => "Performance Monitor",
         .taskschd => "Task Scheduler",
         .cmd_shell => "Command Prompt",
-        .powershell_shell => "ZirconShell (cmdlet subset)",
+        .dotnet_shell_host => ".NET Shell (reserved)",
         .minesweeper => "Minesweeper",
         .solitaire => "Solitaire",
         .spider_solitaire => "Spider Solitaire",
@@ -314,7 +315,7 @@ fn iconOf(id: BuiltinAppId) ?icons.IconId {
         .paint, .shell_pictures => .pictures,
         .notepad, .wordpad => .text_editor,
         .calculator => .calculator,
-        .cmd_shell, .powershell_shell, .shell_run => .terminal,
+        .cmd_shell, .dotnet_shell_host, .shell_run => .terminal,
         .ie8 => .browser,
         .wmp, .shell_music => .music,
         .control_panel, .shell_default_programs, .defender, .firewall, .windows_update, .uac_info => .settings,
@@ -1517,7 +1518,7 @@ fn drawStubLines(id: BuiltinAppId, x0: i32, y0: i32, body_w: i32, t: *const them
         .perfmon => "Performance Monitor: counters TBD (same model as Resmon).",
         .taskschd => "Task Scheduler: job store / triggers not implemented.",
         .cmd_shell => "CMD: full UI in Win32 cmd.zig; this window is a desktop hint only.",
-        .powershell_shell => "PowerShell: full UI in powershell.zig; desktop hint only.",
+        .dotnet_shell_host => ".NET shell: reserved; run from user mode when available.",
         .chess_titans, .mahjong_titans, .purble_place => "Game: 3D/assets later (planned).",
         .games_internet => "Internet games: planned after network stack.",
         .shell_documents, .shell_pictures, .shell_music, .shell_videos, .shell_downloads => "Use Explorer — Libraries pane.",

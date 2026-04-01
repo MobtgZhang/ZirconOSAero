@@ -56,6 +56,10 @@ pub const video = struct {
     pub const startmenu = @import("video/startmenu.zig");
     pub const dwm_compositor = @import("video/dwm_compositor.zig");
     pub const material = @import("video/material.zig");
+    pub const gpu_device = @import("video/gpu_device.zig");
+    pub const virtio_gpu_spec = @import("video/virtio_gpu_spec.zig");
+    pub const virtio_gpu_pci = @import("video/virtio_gpu_pci.zig");
+    pub const display_flip_journal = @import("video/display_flip_journal.zig");
 };
 
 pub const audio = struct {
@@ -83,6 +87,7 @@ pub fn init() void {
 
     if (bus.pcie.supports_pci_config) {
         bus.pcie.init();
+        video.virtio_gpu_pci.probe();
     }
 
     const bopts_init = @import("build_options");

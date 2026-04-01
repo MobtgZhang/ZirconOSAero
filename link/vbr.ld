@@ -23,10 +23,7 @@ SECTIONS
         *(.rodata .rodata.*)
     }
 
-    . = 0x7C00 + 510;
-    .sig : {
-        SHORT(0xAA55)
-    }
+    /* 0xAA55 at sector tail comes from vbr.s (`.org 510` + `.word BOOT_SIG`). */
 
     /DISCARD/ : {
         *(.eh_frame*)

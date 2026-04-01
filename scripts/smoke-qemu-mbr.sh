@@ -2,14 +2,19 @@
 # 无头快速拉起 MBR 磁盘镜像，串口写入临时文件（便于确认固件/内核是否吐串口）。
 # 用法:
 #   bash scripts/smoke-qemu-mbr.sh           # 仅跑 QEMU + 打印串口摘要
-#   bash scripts/smoke-qemu-mbr.sh --assert  # CI：要求串口含内核横幅与 Ready 行
+#   bash scripts/smoke-qemu-mbr.sh --assert  # CI：ELF/串口校验与 klog「ZirconOSAero kernel ready」横幅一致
+#   bash scripts/smoke-qemu-mbr.sh --assert --min-serial-bytes=32  # 强制串口至少 N 字节（E2E 收紧；TCG 慢机可加大 timeout）
 # 说明: 须先 make build-zbm-disk；klog.info 需 DEBUG_LOG=true（见 scripts/ci-qemu-smoke.sh）。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 ASSERT=0
+MIN_SERIAL_BYTES=0
 for a in "$@"; do
   if [[ "$a" == "--assert" ]]; then ASSERT=1; fi
+  case "$a" in
+    --min-serial-bytes=*) MIN_SERIAL_BYTES="${a#*=}" ;;
+  esac
 done
 if [[ ! -f "$ROOT/build/zirconos-mbr.img" ]]; then
   echo "[smoke] missing build/zirconos-mbr.img — run: make build-zbm-disk" >&2
@@ -44,8 +49,13 @@ if [[ -f "$LOG" ]]; then
       echo "[smoke] FAIL: kernel ELF missing embedded 'ZirconOSAero' (rodata)" >&2
       exit 1
     fi
-    if ! grep -aqs "Kernel Ready" "$KELF"; then
-      echo "[smoke] FAIL: kernel ELF missing embedded 'Kernel Ready'" >&2
+    # Must match klog banner in src/main.zig (e.g. "=== ZirconOSAero kernel ready (NT 6.1) ===").
+    if ! grep -aqs "ZirconOSAero kernel ready" "$KELF"; then
+      echo "[smoke] FAIL: kernel ELF missing embedded 'ZirconOSAero kernel ready' (klog banner)" >&2
+      exit 1
+    fi
+    if [[ "$MIN_SERIAL_BYTES" -gt 0 && "$SZ" -lt "$MIN_SERIAL_BYTES" ]]; then
+      echo "[smoke] FAIL: serial log $SZ bytes < --min-serial-bytes=$MIN_SERIAL_BYTES (increase timeout in script or relax CI threshold)" >&2
       exit 1
     fi
     if [[ "$SZ" -ge 128 ]]; then
@@ -53,8 +63,8 @@ if [[ -f "$LOG" ]]; then
         echo "[smoke] FAIL: serial had data but no kernel banner" >&2
         exit 1
       fi
-      if ! grep -aqs "Kernel Ready" "$LOG"; then
-        echo "[smoke] FAIL: serial had data but no 'Kernel Ready'" >&2
+      if ! grep -aqs "ZirconOSAero kernel ready" "$LOG"; then
+        echo "[smoke] FAIL: serial had data but no 'ZirconOSAero kernel ready' banner" >&2
         exit 1
       fi
       echo "[smoke] PASS: ELF + serial markers OK ($SZ bytes)"

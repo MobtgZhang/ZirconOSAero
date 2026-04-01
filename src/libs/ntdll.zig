@@ -646,16 +646,31 @@ pub fn NtFreeVirtualMemory(
 }
 
 pub fn NtQueryVirtualMemory(
-    _: HANDLE,
-    _: u64,
+    process_handle: HANDLE,
+    base_address: u64,
     memory_information_class: u32,
-    _: ?*anyopaque,
-    _: u32,
+    memory_information: ?*anyopaque,
+    memory_information_length: u32,
     return_length: ?*u32,
 ) NTSTATUS {
     if (return_length) |rl| rl.* = 0;
+    _ = process_handle;
+    _ = base_address;
+    _ = memory_information;
+    _ = memory_information_length;
     if (memory_information_class == 0) return STATUS_NOT_IMPLEMENTED;
     return STATUS_INVALID_INFO_CLASS;
+}
+
+/// 桩：syscall 表对齐 Win7 SP1 x64；完整打开语义见进程管理路线图。
+pub fn NtOpenProcess(
+    process_handle: *HANDLE,
+    _: u32,
+    _: ?*OBJECT_ATTRIBUTES,
+    _: ?*const anyopaque,
+) NTSTATUS {
+    process_handle.* = INVALID_HANDLE_VALUE;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 pub fn NtProtectVirtualMemory(_: HANDLE, _: *u64, _: *u64, _: u32, _: ?*u32) NTSTATUS {

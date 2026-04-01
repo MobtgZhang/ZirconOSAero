@@ -1,5 +1,7 @@
 //! LPC Port Implementation
 //! NT-style port-based IPC: CreatePort, ConnectPort, RequestWaitReply
+//!
+//! 里程碑：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K6.4（与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 同步）。
 
 const ipc = @import("ipc.zig");
 const ob = @import("../ob/object.zig");
@@ -15,6 +17,7 @@ pub const PortState = enum {
 };
 
 /// NT LPC：连接端口（`connection_listener`：服务端监听）与通信端口（`message`：已连接会话）分离雏形。
+/// 枚举底层值须与 [tests/lpc_portkind_host.zig](../../tests/lpc_portkind_host.zig) 及 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 同步。
 pub const PortKind = enum(u8) {
     message = 0,
     connection_listener = 1,

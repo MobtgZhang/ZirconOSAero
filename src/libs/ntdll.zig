@@ -80,6 +80,8 @@ pub const SystemPerformanceInformation: u32 = 2;
 pub const SystemTimeOfDayInformation: u32 = 3;
 pub const SystemProcessInformation: u32 = 5;
 pub const SystemModuleInformation: u32 = 11;
+/// 池标签统计（WDK 概念）；本兼容层未实现池遍历。
+pub const SystemPoolTagInformation: u32 = 22;
 /// `RTL_OSVERSIONINFOEXW` / `VER_PLATFORM_*` — values aligned with public SDK headers (clean-room).
 pub const SystemVersionInformation: u32 = 57;
 
@@ -735,6 +737,10 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             return STATUS_NOT_IMPLEMENTED;
         },
         SystemModuleInformation => {
+            return_length.* = 0;
+            return STATUS_NOT_IMPLEMENTED;
+        },
+        SystemPoolTagInformation => {
             return_length.* = 0;
             return STATUS_NOT_IMPLEMENTED;
         },

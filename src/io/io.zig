@@ -3,8 +3,10 @@
 //! IRP-style I/O request routing through device stacks
 //!
 //! Phase 3 roadmap (LPC, registry, Nt* alignment): [docs/cn/ExecutivePhase3_Milestones.md](../../docs/cn/ExecutivePhase3_Milestones.md).
+//! 内核 I/O 分阶段待办（设备栈、PnP/Power）：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K4。
 //! VFS file operations: [`vfs.dispatchFileObjectIr`](../fs/vfs.zig) builds a minimal `Irp` for read/write/close from `ntdll`.
 
+const std = @import("std");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
 
@@ -29,7 +31,16 @@ pub const IrpMajorFunction = enum(u8) {
     flush = 6,
     query_info = 7,
     set_info = 8,
+    /// PnP：设备枚举、启动、移除等（WDK `IRP_MJ_PNP` 概念；分发与 PDO/FDO 栈为路线图）。
+    pnp = 9,
+    /// 电源：Dx/Ix 状态转换（WDK `IRP_MJ_POWER` 概念；当前占位供驱动注册表对齐）。
+    power = 10,
 };
+
+comptime {
+    std.debug.assert(@intFromEnum(IrpMajorFunction.pnp) == 9);
+    std.debug.assert(@intFromEnum(IrpMajorFunction.power) == 10);
+}
 
 pub const Irp = struct {
     major_function: IrpMajorFunction = .create,
@@ -189,6 +200,34 @@ pub fn dispatchIrp(device_idx: u32, irp: *Irp) IoStatus {
         }
     }
 
+    return .not_implemented;
+}
+
+/// 自栈顶（FDO）沿 `attached_device` 链向下找到最底层 PDO 索引。
+pub fn resolveStackBottom(top_idx: u32) u32 {
+    var idx = top_idx;
+    var guard: usize = 0;
+    while (guard < MAX_DEVICES) : (guard += 1) {
+        if (idx >= device_count) return top_idx;
+        const next = devices[idx].attached_device;
+        if (next == 0) return idx;
+        idx = next;
+    }
+    return top_idx;
+}
+
+/// 将 IRP 先派发到 `top_idx`；若返回 `not_implemented` 则沿栈向下尝试下一设备（K4.2 最小下传模型）。
+pub fn dispatchIrpThroughStack(top_idx: u32, irp: *Irp) IoStatus {
+    var idx = top_idx;
+    var guard: usize = 0;
+    while (guard < MAX_DEVICES) : (guard += 1) {
+        if (idx >= device_count) return .invalid_device;
+        const st = dispatchIrp(idx, irp);
+        if (st != .not_implemented) return st;
+        const next = devices[idx].attached_device;
+        if (next == 0) return st;
+        idx = next;
+    }
     return .not_implemented;
 }
 

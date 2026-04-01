@@ -36,14 +36,23 @@ pub const NtConnectPort = 0x8F;
 pub const NtCreatePort = 0x9D;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64（早期内核调试输出；本内核可作串口跟踪）。
 pub const NtDisplayString = 0xB8;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64（节对象；本内核 `section.zig` + `ntdll`）。
+pub const NtCreateSection = 0x47;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtMapViewOfSection = 0x48;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtUnmapViewOfSection = 0x2A;
 
 const std = @import("std");
 
 test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtAllocateVirtualMemory == 0x18);
     try std.testing.expect(NtTerminateProcess == 0x29);
+    try std.testing.expect(NtUnmapViewOfSection == 0x2A);
     try std.testing.expect(NtCreatePort == 0x9D);
     try std.testing.expect(NtConnectPort == 0x8F);
     try std.testing.expect(NtDisplayString == 0xB8);
     try std.testing.expect(NtRequestWaitReplyPort == 0x1F);
+    try std.testing.expect(NtCreateSection == 0x47);
+    try std.testing.expect(NtMapViewOfSection == 0x48);
 }

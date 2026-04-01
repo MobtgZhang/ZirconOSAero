@@ -153,7 +153,13 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
         ssdt.NtQuerySystemInformation => blk: {
             const len: u32 = @truncate(p3);
             const buf_ptr = p2;
-            if (buf_ptr == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (buf_ptr == 0 or p4 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            const proc_q = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            var asp_q = proc_q.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (len > 0 and !probe.probeUserMemory(&asp_q, buf_ptr, len, true))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (!probe.probeUserMemory(&asp_q, p4, @sizeOf(u32), true))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
             const rl: *u32 = @ptrFromInt(p4);
             const buf: [*]u8 = @ptrFromInt(buf_ptr);
             const st = ntdll.NtQuerySystemInformation(@truncate(p1), buf[0..len], rl);
@@ -205,11 +211,80 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
         ssdt.NtConnectPort => dispatchNtConnectPort(frame),
         ssdt.NtRequestWaitReplyPort => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
         ssdt.NtDisplayString => dispatchNtDisplayString(frame),
+        ssdt.NtCreateSection => dispatchNtCreateSection(frame),
+        ssdt.NtMapViewOfSection => dispatchNtMapViewOfSection(frame),
+        ssdt.NtUnmapViewOfSection => blk: {
+            const st = ntdll.NtUnmapViewOfSection(p1, p2);
+            break :blk ntResult(st);
+        },
         else => blk: {
             klog.warn("Unknown NT syscall idx 0x%x", .{idx});
             break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
         },
     };
+}
+
+fn dispatchNtCreateSection(frame: *InterruptFrame) i64 {
+    const out_handle = frame.r10;
+    const max_sz_ptr = frame.r9;
+    if (out_handle == 0 or max_sz_ptr == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    const proc_s = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    var asp_s = proc_s.address_space orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    if (!probe.probeUserMemory(&asp_s, out_handle, @sizeOf(ntdll.HANDLE), true))
+        return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    if (!probe.probeUserMemory(&asp_s, max_sz_ptr, @sizeOf(u64), false))
+        return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const page_prot = userStackArg(frame, 0) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const alloc_attr = userStackArg(frame, 1) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const file_handle = userStackArg(frame, 2) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    _ = frame.r8; // ObjectAttributes — ntdll 当前忽略；命名节见 MM 路线图
+    var local: ntdll.HANDLE = 0;
+    const st = ntdll.NtCreateSection(
+        &local,
+        @truncate(frame.rdx),
+        null,
+        @ptrFromInt(max_sz_ptr),
+        @truncate(page_prot),
+        @truncate(alloc_attr),
+        @truncate(file_handle),
+    );
+    if (st != ntdll.STATUS_SUCCESS) return ntResult(st);
+    @as(*volatile ntdll.HANDLE, @ptrFromInt(out_handle)).* = local;
+    return 0;
+}
+
+fn dispatchNtMapViewOfSection(frame: *InterruptFrame) i64 {
+    const base_user = frame.r8;
+    const view_sz_ptr = userStackArg(frame, 2) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    if (base_user == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    const proc_m = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    var asp_m = proc_m.address_space orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    if (!probe.probeUserMemory(&asp_m, base_user, @sizeOf(u64), true))
+        return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    if (!probe.probeUserMemory(&asp_m, view_sz_ptr, @sizeOf(u64), true))
+        return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const sec_off_stack = userStackArg(frame, 1) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    if (sec_off_stack != 0) {
+        if (!probe.probeUserMemory(&asp_m, sec_off_stack, @sizeOf(u64), true))
+            return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    }
+    const commit_sz = userStackArg(frame, 0) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const inherit_disp = userStackArg(frame, 3) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const alloc_type = userStackArg(frame, 4) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const win_prot = userStackArg(frame, 5) orelse return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const st = ntdll.NtMapViewOfSection(
+        @truncate(frame.r10),
+        frame.rdx,
+        @ptrFromInt(base_user),
+        frame.r9,
+        commit_sz,
+        if (sec_off_stack == 0) null else @ptrFromInt(sec_off_stack),
+        @ptrFromInt(view_sz_ptr),
+        @truncate(inherit_disp),
+        @truncate(alloc_type),
+        @truncate(win_prot),
+    );
+    return ntResult(st);
 }
 
 fn dispatchNtCreatePort(frame: *InterruptFrame) i64 {

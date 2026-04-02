@@ -1001,7 +1001,7 @@ pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
 fn userVirtRangeMapped(va: u64, len: u64) bool {
     if (len == 0) return false;
     const proc = process.getCurrentProcess() orelse return false;
-    var space = proc.address_space orelse return false;
+    const space = proc.address_space orelse return false;
     const page: u64 = 4096;
     var a = va;
     const end = va +% len;
@@ -1057,6 +1057,13 @@ pub fn ntUserPostMessageSyscall(hwnd: u64, msg: u32, wparam: u64, lparam_bits: u
 /// `NtUserSendMessage`：寄存器约定同 `NtUserPostMessage`（当前实现等价异步 `PostMessage`）。
 pub fn ntUserSendMessageSyscall(hwnd: u64, msg: u32, wparam: u64, lparam_bits: u64) ntdll.NTSTATUS {
     return ntUserPostMessageSyscall(hwnd, msg, wparam, lparam_bits);
+}
+
+/// `NtUserDispatchMessage`：`R10`=用户 `MSG*`（syscall 层已 probe）；WndProc 分派与 win32k 真源见路线图 W 波次。
+pub fn ntUserDispatchMessageSyscall(msg_va: u64) ntdll.NTSTATUS {
+    if (msg_va == 0) return ntdll.STATUS_INVALID_PARAMETER;
+    // 桩：后续从 `MSG*` 取 `hwnd` 并分派 `WndProc`（win32k 会话）。
+    return ntdll.STATUS_SUCCESS;
 }
 
 /// `NtUserSetWindowPos`：R10=`HWND`，RDX=`hWndInsertAfter`，R8=`X`，R9=`Y`；栈 +0=`cx`，+8=`cy`，+16=`uFlags`。

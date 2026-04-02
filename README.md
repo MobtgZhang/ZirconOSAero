@@ -29,7 +29,7 @@
 
 [![CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml/badge.svg)](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
 
-**CI 与本地复现**：`zig build test`（堆、池、buddy、SSDT、对象句柄表、安全 DAC 等主机测试）；`zig build install -Doptimize=ReleaseSafe -Darch=x86_64`；无头烟测 `bash scripts/ci-qemu-smoke.sh`（构建 ZBM MBR 盘、校验内核 ELF 内嵌横幅，并可选串口增强断言）。**最小可验证测试索引**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。详见 [.github/workflows/ci.yml](.github/workflows/ci.yml) 与 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)（Zig **0.15.2**、Release 校验和说明）。
+**CI 与本地复现**：`zig build test`（堆、池、buddy、SSDT、对象句柄表、安全 DAC、**dwm_messages_nt61_host** / **dwm_nt61_integration_host** / **registry_zosh1_host** 等主机测试）；`zig build install -Doptimize=ReleaseSafe -Darch=x86_64`；无头烟测 `bash scripts/ci-qemu-smoke.sh`（构建 ZBM MBR 盘、校验内核 ELF 内嵌横幅，并可选串口增强断言）。**最小可验证测试索引**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。详见 [.github/workflows/ci.yml](.github/workflows/ci.yml) 与 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)（Zig **0.15.2**、Release 校验和说明）。
 
 ## Design
 
@@ -46,7 +46,7 @@
 
 **开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
 
-**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**Deferred surfaces**（full Win32 / full WOW64, etc.）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。**版权与知识来源**：[docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) · [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)。
+**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done；§4.1 backlog 与 VirtIO PoC、`NtOpenKey` 内存树、DWM 通知等同步）。**DWM 消息与监听模型**：[docs/cn/DWM_NOTIFY_MODEL_NT61.md](docs/cn/DWM_NOTIFY_MODEL_NT61.md)。**Deferred surfaces**（full Win32 / full WOW64, etc.）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。**版权与知识来源**：[docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) · [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)。
 
 **实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖骨架见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
@@ -211,7 +211,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 | Exec engine | Partial | PE load, DLL bind, lifecycle |
 | WOW64 | Partial | PE32, thunk；32→64 服务号须对齐 `ssdt_nt61.zig`（与旧 `SYS_*` 已分离）— 见 `wow64.zig` |
 | Registry runtime | Partial | 内存树 + `Mouse`/`Desktop`/`HKLM\...\Windows\DWM`/`Memory Management` 等键；RegF/hive 持久化 Planned |
-| Aero / DWM (kernel shell) | Partial | 脏矩形/分层路径与 `compositor_config_epoch` 握手 trace；CPU 合成与 Win7 WDDM 差异见 [DesktopManagerSpec.md](docs/cn/DesktopManagerSpec.md) |
+| Aero / DWM (kernel shell) | Partial | 脏区/Flip3D(Alt+Tab) 近似/任务栏缩略采样/标志映射 `aero_flag_mapping`；CPU 为主，VirtIO-GPU 卸载见契约矩阵 §4.1；[DesktopManagerSpec.md](docs/cn/DesktopManagerSpec.md) |
 | 多架构 Win32 栈 | Partial | **x86_64** 为主验证路径；riscv64/LoongArch/MIPS 引导与桌面见各 `arch` 文档与 CI 说明 |
 
 ## Milestones

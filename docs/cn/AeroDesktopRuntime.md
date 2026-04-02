@@ -4,7 +4,7 @@
 
 ## 1. 数据流（内核）
 
-1. `**src/main.zig`**：桌面就绪后循环调用 `input_hub.pollAll()`、`mouse.popEvent()`、`display.handleMouseMove` / `handleClick`；按 `**display.renderDesktopFrameEx(scene_dirty, caption_chrome_only, drag_repaint, startmenu_repaint)**` 与 `present()`。拖窗位移走 `**needs_drag_repaint**`（`renderDragFrame`）；开始菜单 **仅悬停行变化** 时走 `**needs_startmenu_repaint**`（Harmony 壁纸预设下 `renderer_aero.redrawStartMenuRegionOnly`，避免整屏重绘）。`**handleMouseMove` 默认不再将悬停/拖窗升为 `needs_full_scene**`（与 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) backlog 对齐）；整场景主要由 UI 脏、插值、显式全屏刷新路径驱动。
+1. `**src/main.zig`**：桌面就绪后循环调用 `input_hub.pollAll()`、`mouse.popEvent()`、`display.handleMouseMove` / `handleClick`；按 `**display.renderDesktopFrameEx(scene_dirty, caption_chrome_only, drag_repaint, startmenu_repaint, shell_geometry_repaint)**` 与 `present()`。拖窗位移走 `**needs_drag_repaint**`（`renderDragFrame`，客户区仍绘完整内容；标题栏拖动态为 TintOnly）；开始菜单 **仅悬停行变化** 时走 `**needs_startmenu_repaint**`（Harmony 壁纸预设下 `renderer_aero.redrawStartMenuRegionOnly`，避免整屏重绘）。**左键释放在标题栏拖放结束**时 `**handleMouseRelease**` 置 `**needs_post_drag_composite**`，与 `**needs_shell_frame_repaint**` 一并传入第五参：走 `**renderFrameEx**` 恢复全窗玻璃，**不**置 `**scene_dirty**`（避免 `cursor_plane.invalidate` 级整屏 save-under）。边框缩放结束仍走 `**needs_full_scene**` / `scene_dirty`。`**handleMouseMove` 默认不再将悬停/拖窗升为 `needs_full_scene**`（与 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) backlog 对齐）；整场景主要由 UI 脏、插值、显式全屏刷新路径驱动。
 2. `**src/drivers/input/input_hub.zig**`：`virtio_input_pci.poll()`；在 **x86_64** 上仅当 **未** attach VirtIO-Input PCI 时调用 `mouse.poll()`（PS/2）。**IRQ12** 在 `arch/x86_64/mod.zig` 的 `handleMouseIrq` 中同样跳过，避免与 QEMU 默认 virtio-mouse/tablet 双源叠加位移。
 3. `**src/drivers/input/virtio_input_pci.zig**`：解析 Linux `input_event`，在 `syncDeliver` 中调用 `mouse.deliverMouseEvent`。
 4. `**src/drivers/video/display.zig**`：从 `mouse.getX/Y` 同步平滑坐标；场景合成走 `**renderer_aero.renderFrameEx(false)**`，指针由 **软件光标层**（save-under）叠加。
@@ -212,8 +212,8 @@
 - `**pops_last**`：当前桌面 tick 内 `mouse.popEvent` 次数；**高**表示队列里离散事件多，**低**且坐标仍跳变则多为合成/present 路径。
 - 与 `**virtio inst` `used.idx`**、`syncDeliver total` 对照，可区分「环不前进 / deliver 少」与「事件多但 scene 全重绘」。
 - `**render_full` / `render_drag` / `render_cap` / `render_fast**`（`desktop tick` 日志尾部累计计数）：分别为整场景、**拖窗合成**（`drag_layer`）、`renderer_aero.redrawCaptionBandsOnly`（标题栏三键热态）、纯光标 `moveOnly`。在标题栏上来回横扫时 `**render_cap` 应明显多于 `render_full`**；拖窗时 `**render_drag**` 递增而 `**render_full` 不应每帧暴涨**。
-- 主循环 `**scene_dirty`** 由 `MouseMovePaintHint.needs_full_scene`（**不含**单纯拖窗位移）、UI 脏标记与插值驱动；**拖窗**使用 `needs_drag_repaint`；**标题栏悬停**使用 `needs_caption_chrome_only`。**开始菜单打开**且指针在菜单项间移动时仍为整场景（见 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) D4 backlog）。
-- `**caption_chrome_only` 与软件光标**：该路径在重绘标题栏带 **之前** 调用 `cursor_plane.restoreSaveUnderIfPlaced()` 恢复上一帧指针下的像素，再 `redrawCaptionBandsOnly()` → `composeAfterScene()`，并在末尾 `markMotionDirty(prev, new)` 把指针旧/新位置并入脏矩形，避免局部 `present` 漏擦轨迹。概念上与「离屏合成后再叠加指针」一致（公开说明见 [Desktop Window Manager](https://learn.microsoft.com/en-us/windows/win32/dwm/dwm-overview)）。
+- 主循环 `**scene_dirty`** 由 `MouseMovePaintHint.needs_full_scene`、**`handleMouseRelease` 的 `needs_full_scene`（边框缩放结束）**、UI 脏标记与插值驱动；**不含**单纯拖窗位移与**仅**标题栏拖放松手（后者用 `needs_post_drag_composite`）。**拖窗**使用 `needs_drag_repaint`；**标题栏悬停**使用 `needs_caption_chrome_only`。**开始菜单打开**且指针在菜单项间移动时仍为整场景（见 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) D4 backlog）。
+- `**caption_chrome_only` 与软件光标**：该路径在重绘标题栏带 **之前** 调用 `cursor_plane.restoreSaveUnderIfPlaced()` 恢复上一帧指针下的像素，再 `redrawCaptionBandsOnly()`（标题栏热态为 **`renderGlassTintOnly`**，避免全宽 `boxBlur`）→ `composeAfterScene()`，并在末尾 `markMotionDirty(prev, new)` 把指针旧/新位置并入脏矩形，避免局部 `present` 漏擦轨迹。概念上与「离屏合成后再叠加指针」一致（公开说明见 [Desktop Window Manager](https://learn.microsoft.com/en-us/windows/win32/dwm/dwm-overview)）。
 - **手工冒烟（x86_64 / LoongArch）**：标题栏三键横扫、地址栏↔标题栏斜移、打开开始菜单上下移动 — 对照上述三类计数与主观流畅度。
 
 ### 7.2 脚本与姊妹文档

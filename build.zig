@@ -105,6 +105,16 @@ pub fn build(b: *std.Build) void {
         "desktop_bisect",
         "Serial klog.debug before/after renderDesktopFrameEx and present (panic isolation; default off)",
     ) orelse false;
+    const dwm_blur_stats_opt = b.option(
+        bool,
+        "dwm_blur_stats",
+        "Per-frame klog.debug: box blur calls, budget denials, renderGlassTintOnly calls (default off)",
+    ) orelse false;
+    const ps2_mouse_with_virtio_opt = b.option(
+        bool,
+        "ps2_mouse_with_virtio",
+        "x86_64: handle IRQ12 PS/2 mouse even when VirtIO-Input is active (default false; QEMU 双源叠加风险；真机单 PS/2 时可开)",
+    ) orelse false;
     const enable_idt_opt = b.option(bool, "enable_idt", "Enable IDT, timer and syscall (x86_64 only)") orelse true;
     const aero_skip_ico_build = b.option(bool, "aero-skip-ico-build", "For aero-shell-icons-dll: skip SVG→ICO script (reuse existing ico/)") orelse false;
     const aero_windres_exe = b.option([]const u8, "aero-windres", "windres executable for zircon_shell32_res.rc") orelse "x86_64-w64-mingw32-windres";
@@ -275,6 +285,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "mouse_debug", mouse_debug_opt);
     build_opts.addOption(bool, "agent_ndjson", agent_ndjson_opt);
     build_opts.addOption(bool, "desktop_bisect", desktop_bisect_opt);
+    build_opts.addOption(bool, "dwm_blur_stats", dwm_blur_stats_opt);
     build_opts.addOption(bool, "enable_idt", enable_idt_opt);
     build_opts.addOption(bool, "amd_igpu", amd_igpu_opt);
     build_opts.addOption(bool, "amd_igpu_defer_probe", amd_igpu_defer_probe_opt);
@@ -291,6 +302,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "loongson_kms_experimental", loongson_kms_experimental_opt);
     build_opts.addOption(bool, "desktop_idle_spin", desktop_idle_spin_opt);
     build_opts.addOption(bool, "aero_blur_light", aero_blur_light_opt);
+    build_opts.addOption(bool, "ps2_mouse_with_virtio", ps2_mouse_with_virtio_opt);
     build_opts.addOption(bool, "usb_xhci", usb_xhci_opt);
     build_opts.addOption(bool, "usb_ehci", usb_ehci_opt);
     build_opts.addOption([]const u8, "default_desktop", desktop_default);
@@ -727,6 +739,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_win32k_tests = b.addRunArtifact(win32k_tests);
 
+    const msg_pm_semantics_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/subsystems/win32/msg_pm_semantics.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const msg_pm_semantics_tests = b.addTest(.{
+        .root_module = msg_pm_semantics_host_mod,
+        .name = "msg_pm_semantics_host",
+    });
+    const run_msg_pm_semantics_tests = b.addRunArtifact(msg_pm_semantics_tests);
+
     const dwm_surface_spec_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_surface_spec.zig"),
         .target = b.graph.host,
@@ -738,6 +761,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_dwm_surface_spec_tests = b.addRunArtifact(dwm_surface_spec_tests);
 
+    const aero_flag_mapping_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/aero_flag_mapping.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const aero_flag_mapping_tests = b.addTest(.{
+        .root_module = aero_flag_mapping_host_mod,
+        .name = "aero_flag_mapping_host",
+    });
+    const run_aero_flag_mapping_tests = b.addRunArtifact(aero_flag_mapping_tests);
+
     const nt61_aero_defaults_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
         .target = b.graph.host,
@@ -748,6 +782,91 @@ pub fn build(b: *std.Build) void {
         .name = "nt61_aero_defaults_host",
     });
     const run_nt61_aero_defaults_tests = b.addRunArtifact(nt61_aero_defaults_tests);
+
+    const nt61_dual_track_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/nt61_dual_track_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "nt61_aero_defaults", .module = nt61_aero_defaults_host_mod },
+            .{ .name = "aero_flag_mapping", .module = aero_flag_mapping_host_mod },
+        },
+    });
+    const nt61_dual_track_tests = b.addTest(.{
+        .root_module = nt61_dual_track_host_mod,
+        .name = "nt61_dual_track_host",
+    });
+    const run_nt61_dual_track_tests = b.addRunArtifact(nt61_dual_track_tests);
+
+    const color_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/color_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const color_nt61_tests = b.addTest(.{
+        .root_module = color_nt61_host_mod,
+        .name = "color_nt61_host",
+    });
+    const run_color_nt61_tests = b.addRunArtifact(color_nt61_tests);
+
+    const dwm_config_registry_sync_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/dwm_config_registry_sync.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const dwm_config_registry_sync_tests = b.addTest(.{
+        .root_module = dwm_config_registry_sync_host_mod,
+        .name = "dwm_config_registry_sync_host",
+    });
+    const run_dwm_config_registry_sync_tests = b.addRunArtifact(dwm_config_registry_sync_tests);
+
+    const dwm_blur_budget_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/dwm_blur_budget.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const dwm_blur_budget_tests = b.addTest(.{
+        .root_module = dwm_blur_budget_host_mod,
+        .name = "dwm_blur_budget_host",
+    });
+    const run_dwm_blur_budget_tests = b.addRunArtifact(dwm_blur_budget_tests);
+
+    const dwm_messages_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/dwm_messages_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const dwm_messages_nt61_tests = b.addTest(.{
+        .root_module = dwm_messages_nt61_host_mod,
+        .name = "dwm_messages_nt61_host",
+    });
+    const run_dwm_messages_nt61_tests = b.addRunArtifact(dwm_messages_nt61_tests);
+
+    const dwm_nt61_integration_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/dwm_nt61_integration_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "dwm_config_registry_sync", .module = dwm_config_registry_sync_host_mod },
+            .{ .name = "dwm_blur_budget", .module = dwm_blur_budget_host_mod },
+        },
+    });
+    const dwm_nt61_integration_tests = b.addTest(.{
+        .root_module = dwm_nt61_integration_host_mod,
+        .name = "dwm_nt61_integration_host",
+    });
+    const run_dwm_nt61_integration_tests = b.addRunArtifact(dwm_nt61_integration_tests);
+
+    const registry_zosh1_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/registry_zosh1_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const registry_zosh1_tests = b.addTest(.{
+        .root_module = registry_zosh1_host_mod,
+        .name = "registry_zosh1_host",
+    });
+    const run_registry_zosh1_tests = b.addRunArtifact(registry_zosh1_tests);
 
     const wow64_ssdt_x86_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig"),
@@ -775,7 +894,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_x64_x86_namespace_tests = b.addRunArtifact(ssdt_x64_x86_namespace_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, dwm_surface_spec_host, nt61_aero_defaults_host, wow64_ssdt_x86)");
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_messages_nt61_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -804,8 +923,17 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_display_flip_journal_tests.step);
     test_step.dependOn(&run_nt61_abi_layout_tests.step);
     test_step.dependOn(&run_win32k_tests.step);
+    test_step.dependOn(&run_msg_pm_semantics_tests.step);
     test_step.dependOn(&run_dwm_surface_spec_tests.step);
+    test_step.dependOn(&run_aero_flag_mapping_tests.step);
     test_step.dependOn(&run_nt61_aero_defaults_tests.step);
+    test_step.dependOn(&run_nt61_dual_track_tests.step);
+    test_step.dependOn(&run_color_nt61_tests.step);
+    test_step.dependOn(&run_dwm_config_registry_sync_tests.step);
+    test_step.dependOn(&run_dwm_blur_budget_tests.step);
+    test_step.dependOn(&run_dwm_messages_nt61_tests.step);
+    test_step.dependOn(&run_dwm_nt61_integration_tests.step);
+    test_step.dependOn(&run_registry_zosh1_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
     test_step.dependOn(&run_ssdt_x64_x86_namespace_tests.step);
 
@@ -839,6 +967,11 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
         .target = target,
         .optimize = optimize,
     });
+    const aero_flag_mapping_desktop_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/aero_flag_mapping.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const desktop_all_step = b.step("desktop-all", "Build all desktop themes (EXE + DLL)");
     const dll_all_step = b.step("desktop-dll-all", "Build all desktop theme DLLs");
@@ -853,6 +986,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .target = target,
         });
         theme_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
+        theme_mod.addImport("aero_flag_mapping", aero_flag_mapping_desktop_mod);
 
         // EXE
         const exe = b.addExecutable(.{
@@ -866,6 +1000,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
         exe.root_module.addImport(entry.import_name, theme_mod);
         // main.zig 使用 @import("root.zig")，与库模块分离；theme 等在 exe 模块内解析 nt61_aero_defaults
         exe.root_module.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
+        exe.root_module.addImport("aero_flag_mapping", aero_flag_mapping_desktop_mod);
         const install_exe = b.addInstallArtifact(exe, .{});
 
         // Static library (.lib)
@@ -875,6 +1010,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .optimize = optimize,
         });
         lib_rm.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
+        lib_rm.addImport("aero_flag_mapping", aero_flag_mapping_desktop_mod);
         const lib = b.addLibrary(.{
             .name = exe_name,
             .linkage = .static,
@@ -889,6 +1025,7 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
             .optimize = optimize,
         });
         dll_rm.addImport("nt61_aero_defaults", nt61_aero_defaults_desktop_mod);
+        dll_rm.addImport("aero_flag_mapping", aero_flag_mapping_desktop_mod);
         const dll = b.addLibrary(.{
             .name = exe_name,
             .linkage = .dynamic,

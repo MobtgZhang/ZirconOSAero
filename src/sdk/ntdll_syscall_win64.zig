@@ -14,10 +14,18 @@
 /// 与 `ssdt_nt61.zig` 同步的 SSDT 索引子集（本文件可单独 `zig build-obj` 而无需整棵模块树）。
 pub const Ssdt = struct {
     pub const NtClose: u32 = 0x0C;
+    pub const NtOpenKey: u32 = 0x0F;
+    pub const NtQueryValueKey: u32 = 0x14;
+    pub const NtCreateKey: u32 = 0x1A;
+    pub const NtSetValueKey: u32 = 0x5D;
     pub const NtYieldExecution: u32 = 0x43;
     pub const NtAllocateVirtualMemory: u32 = 0x18;
     pub const NtFreeVirtualMemory: u32 = 0x1B;
+    pub const NtDelayExecution: u32 = 0x31;
+    pub const NtCreateThread: u32 = 0x4B;
+    pub const NtProtectVirtualMemory: u32 = 0x4D;
     pub const NtQuerySystemInformation: u32 = 0x25;
+    pub const NtDuplicateObject: u32 = 0x44;
 };
 
 /// 原始 NT x64 syscall；`num` 为 SSDT 索引；返回值按 NTSTATUS 符号扩展。
@@ -63,7 +71,17 @@ pub fn ntYieldExecutionUser() i64 {
 }
 
 comptime {
+    _ = Ssdt.NtClose;
+    _ = Ssdt.NtOpenKey;
+    _ = Ssdt.NtQueryValueKey;
+    _ = Ssdt.NtCreateKey;
+    _ = Ssdt.NtSetValueKey;
+    _ = Ssdt.NtYieldExecution;
     _ = Ssdt.NtAllocateVirtualMemory;
     _ = Ssdt.NtFreeVirtualMemory;
+    _ = Ssdt.NtDelayExecution;
+    _ = Ssdt.NtCreateThread;
+    _ = Ssdt.NtProtectVirtualMemory;
     _ = Ssdt.NtQuerySystemInformation;
+    _ = Ssdt.NtDuplicateObject;
 }

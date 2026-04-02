@@ -4,6 +4,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vm = @import("../mm/vm.zig");
+
+comptime {
+    // `AddressSpace` 含大 VAD 表；须明显小于常见内核栈（如 64KiB）以免 `createProcess` 栈帧过深。
+    std.debug.assert(@sizeOf(vm.AddressSpace) < 48 * 1024);
+}
 const kuser_shared = @import("../mm/kuser_shared.zig");
 const FrameAllocator = @import("../mm/frame.zig").FrameAllocator;
 const klog = @import("../rtl/klog.zig");
@@ -25,7 +30,8 @@ pub const Process = struct {
     pid: u32 = 0,
     parent_pid: u32 = 0,
     state: ProcessState = .creating,
-    address_space: ?vm.AddressSpace = null,
+    /// 指向 `g_proc_address_spaces` 中槽位；勿在栈上内联整块 `AddressSpace`（易耗尽 64KiB 内核栈）。
+    address_space: ?*vm.AddressSpace = null,
     handle_table: ob.HandleTable = .{},
     security_token: token.Token = .{},
     thread_count: usize = 0,
@@ -75,6 +81,10 @@ pub const Thread = struct {
 };
 
 var processes: [MAX_PROCESSES]Process = undefined;
+/// 每进程地址空间驻留 BSS 槽位，`createProcess` 仅取指针，避免栈上构造 `AddressSpace`。
+var g_proc_address_spaces: [MAX_PROCESSES]vm.AddressSpace = undefined;
+var g_proc_address_space_busy: [MAX_PROCESSES]bool = [_]bool{false} ** MAX_PROCESSES;
+
 var process_count: usize = 0;
 var next_pid: u32 = 1;
 var next_tid: u32 = 1;
@@ -98,11 +108,31 @@ pub fn getDesktopUiThreadId() u32 {
     return desktop_ui_tid;
 }
 
+fn allocProcessAddressSpaceSlot() ?*vm.AddressSpace {
+    for (&g_proc_address_spaces, 0..) |*slot, i| {
+        if (!g_proc_address_space_busy[i]) {
+            g_proc_address_space_busy[i] = true;
+            return slot;
+        }
+    }
+    return null;
+}
+
+fn freeProcessAddressSpaceSlot(slot: *vm.AddressSpace) void {
+    for (&g_proc_address_spaces, 0..) |*s, i| {
+        if (@intFromPtr(s) == @intFromPtr(slot)) {
+            g_proc_address_space_busy[i] = false;
+            return;
+        }
+    }
+}
+
 pub fn init() void {
     process_count = 0;
     next_pid = 1;
     next_tid = 1;
     current_pid = 0;
+    @memset(&g_proc_address_space_busy, false);
     for (&processes) |*p| {
         p.* = Process.init(0);
     }
@@ -111,6 +141,7 @@ pub fn init() void {
 
 pub fn allocPid() ?u32 {
     if (next_pid == 0) return null;
+    if (next_pid == std.math.maxInt(u32)) return null;
     const pid = next_pid;
     next_pid += 1;
     return pid;
@@ -124,27 +155,43 @@ pub fn allocTid() ?u32 {
 }
 
 pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
+    const panic_ctx = @import("../rtl/panic_context.zig");
     if (process_count >= MAX_PROCESSES) return null;
     const pid = allocPid() orelse return null;
 
-    var space = vm.createAddressSpace(frame_alloc) orelse return null;
+    panic_ctx.setPhase(0x0005_0010);
+    const space_ptr = allocProcessAddressSpaceSlot() orelse return null;
+    if (!vm.initAddressSpaceInPlace(space_ptr, frame_alloc)) {
+        freeProcessAddressSpaceSlot(space_ptr);
+        return null;
+    }
+    panic_ctx.setPhase(0x0005_0011);
     if (builtin.cpu.arch == .x86_64) {
-        if (!kuser_shared.installInProcessAddressSpace(&space)) {
-            vm.releaseProcessAddressSpace(&space);
+        panic_ctx.setPhase(0x0005_0012);
+        if (!kuser_shared.installInProcessAddressSpace(space_ptr)) {
+            vm.releaseProcessAddressSpace(space_ptr);
+            freeProcessAddressSpaceSlot(space_ptr);
+            panic_ctx.setPhase(0);
             return null;
         }
     }
+    panic_ctx.setPhase(0x0005_0013);
 
     var p = &processes[process_count];
     p.* = Process.init(pid);
-    p.address_space = space;
+    p.address_space = space_ptr;
     p.state = .active;
+    panic_ctx.setPhase(0x0005_0015);
     p.security_token = token.createSystemToken();
+    panic_ctx.setPhase(0x0005_0016);
     p.handle_table = ob.HandleTable.init(pid);
+    panic_ctx.setPhase(0x0005_0017);
     process_count += 1;
 
+    panic_ctx.setPhase(0x0005_0014);
     ob.createObject(.process, @intFromPtr(&p.header));
-
+    // 勿在此处 setPhase(0)：`createSystemProcess` 尚有 memcpy/klog；清零会掩盖后续 panic 的 phase。
+    panic_ctx.setPhase(0x0005_0018);
     return p;
 }
 
@@ -161,9 +208,10 @@ pub fn createSystemProcess(frame_alloc: *FrameAllocator, name: []const u8) ?*Pro
 
 pub fn terminateProcess(pid: u32, exit_code: u32) bool {
     const p = findProcess(pid) orelse return false;
-    if (p.address_space) |as| {
-        var space = as;
-        vm.releaseProcessAddressSpace(&space);
+    if (p.address_space) |asp| {
+        // `releaseProcessAddressSpace` 清空 VAD / 用户半区页表；调度器须在切换出该 CR3 后调用（见 K2.1）。
+        vm.releaseProcessAddressSpace(asp);
+        freeProcessAddressSpaceSlot(asp);
         p.address_space = null;
     }
     p.handle_table.closeAllOpenHandles();

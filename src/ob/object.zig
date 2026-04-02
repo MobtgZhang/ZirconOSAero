@@ -238,7 +238,8 @@ pub fn getTypeInfo(obj_type: ObjectType) ?*TypeInfo {
 
 pub fn createObject(obj_type: ObjectType, ptr: u64) void {
     if (getTypeInfo(obj_type)) |ti| {
-        ti.total_objects += 1;
+        // 统计计数；饱和加避免 Debug 下 u32 溢出触发 integer overflow panic。
+        ti.total_objects = ti.total_objects +| 1;
     }
     const hdr = @as(*ObjectHeader, @ptrFromInt(ptr));
     hdr.obj_type = obj_type;

@@ -727,6 +727,28 @@ pub fn build(b: *std.Build) void {
     });
     const run_win32k_tests = b.addRunArtifact(win32k_tests);
 
+    const dwm_surface_spec_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/dwm_surface_spec.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const dwm_surface_spec_tests = b.addTest(.{
+        .root_module = dwm_surface_spec_host_mod,
+        .name = "dwm_surface_spec_host",
+    });
+    const run_dwm_surface_spec_tests = b.addRunArtifact(dwm_surface_spec_tests);
+
+    const nt61_aero_defaults_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const nt61_aero_defaults_tests = b.addTest(.{
+        .root_module = nt61_aero_defaults_host_mod,
+        .name = "nt61_aero_defaults_host",
+    });
+    const run_nt61_aero_defaults_tests = b.addRunArtifact(nt61_aero_defaults_tests);
+
     const wow64_ssdt_x86_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig"),
         .target = b.graph.host,
@@ -753,7 +775,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_x64_x86_namespace_tests = b.addRunArtifact(ssdt_x64_x86_namespace_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, wow64_ssdt_x86)");
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, dwm_surface_spec_host, nt61_aero_defaults_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -782,6 +804,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_display_flip_journal_tests.step);
     test_step.dependOn(&run_nt61_abi_layout_tests.step);
     test_step.dependOn(&run_win32k_tests.step);
+    test_step.dependOn(&run_dwm_surface_spec_tests.step);
+    test_step.dependOn(&run_nt61_aero_defaults_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
     test_step.dependOn(&run_ssdt_x64_x86_namespace_tests.step);
 

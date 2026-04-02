@@ -8,6 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# DESKTOP=aero 时内核走完整壳层/DWM 路径；CI 默认 none 以缩短构建。收紧时可设 CI_SMOKE_DESKTOP=aero
+# 并加大 `scripts/smoke-qemu-mbr.sh` timeout，串口应出现 Framebuffer / DWM 初始化类 klog（依 DEBUG_LOG）。
 export DESKTOP="${CI_SMOKE_DESKTOP:-none}"
 export OPTIMIZE="${CI_SMOKE_OPTIMIZE:-Debug}"
 export DEBUG_LOG="${CI_SMOKE_DEBUG_LOG:-true}"

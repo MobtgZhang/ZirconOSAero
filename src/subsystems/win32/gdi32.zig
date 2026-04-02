@@ -16,6 +16,7 @@
 const klog = @import("../../rtl/klog.zig");
 const kernel32 = @import("../../libs/kernel32.zig");
 const user32 = @import("user32.zig");
+const gdi_rop_contract = @import("gdi_rop_contract.zig");
 
 pub const BOOL = kernel32.BOOL;
 pub const TRUE = kernel32.TRUE;
@@ -607,7 +608,10 @@ pub fn BitBlt(
         kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
         return FALSE;
     }
-    _ = rop;
+    if (!gdi_rop_contract.isImplementedBitBltRop(rop)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
     total_draw_calls += 1;
     return TRUE;
 }
@@ -629,7 +633,10 @@ pub fn StretchBlt(
         kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
         return FALSE;
     }
-    _ = rop;
+    if (!gdi_rop_contract.isImplementedStretchBltRop(rop)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
     total_draw_calls += 1;
     return TRUE;
 }
@@ -639,7 +646,10 @@ pub fn PatBlt(hdc: HDC, _: i32, _: i32, _: i32, _: i32, rop: DWORD) BOOL {
         kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
         return FALSE;
     }
-    _ = rop;
+    if (!gdi_rop_contract.isImplementedPatBltRop(rop)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
     total_draw_calls += 1;
     return TRUE;
 }
@@ -691,6 +701,25 @@ pub fn SetWindowOrgEx(hdc: HDC, x: i32, y: i32, old: ?*user32.POINT) BOOL {
     dc.window_org_x = x;
     dc.window_org_y = y;
     return TRUE;
+}
+
+// ── Window DC forward (user32 owns HWND↔compositor dirty) ──
+
+/// Ref: Learn — `GetDC`；转发至 `user32`，以便 GDI 入口与设备上下文取得路径一致。
+pub fn GetDC(hwnd: user32.HWND) HDC {
+    return user32.GetDC(hwnd);
+}
+
+pub fn ReleaseDC(hwnd: user32.HWND, hdc: HDC) i32 {
+    return user32.ReleaseDC(hwnd, hdc);
+}
+
+pub fn BeginPaint(hwnd: user32.HWND, ps: *user32.PAINTSTRUCT) HDC {
+    return user32.BeginPaint(hwnd, ps);
+}
+
+pub fn EndPaint(hwnd: user32.HWND, ps: *const user32.PAINTSTRUCT) BOOL {
+    return user32.EndPaint(hwnd, ps);
 }
 
 // ── Helpers ──
@@ -849,7 +878,7 @@ pub fn init() void {
     createStockObject(.font, SYSTEM_FIXED_FONT, 0);
 
     klog.info("gdi32: Win32 GDI API initialized", .{});
-    klog.info("gdi32: DC APIs: CreateCompatibleDC, SelectObject, DeleteDC", .{});
+    klog.info("gdi32: DC APIs: CreateCompatibleDC, SelectObject, DeleteDC, GetDC→user32", .{});
     klog.info("gdi32: Drawing: Rectangle, Ellipse, LineTo, FillRect, BitBlt", .{});
     klog.info("gdi32: Text: TextOutA, DrawTextA, GetTextExtentPoint32A", .{});
     klog.info("gdi32: Objects: CreatePen, CreateSolidBrush, CreateFont (%u stock objects)", .{gdi_obj_count});

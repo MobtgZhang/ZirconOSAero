@@ -150,7 +150,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `WM_DWMCOMPOSITIONCHANGED` | 部分 / 规则 Verified | `user32.zig`（`broadcastDwmCompositionChanged`） | 仅随 `dwm.setCompositionEnabled`；毛玻璃走 `setGlass` + `WM_DWMNCRENDERINGCHANGED` |
 | `WM_DWMCOLORIZATIONCOLORCHANGED` | 部分 / 规则 Verified | `user32.zig`（`broadcastDwmColorizationChanged`） | `setColorizationTint`；**及** `dwm.syncPolicyFromRegistry` 在 **已有 HWND** 且染色 dword 相对变化时（`dwm_config_registry_sync`） |
 | `WM_DWMNCRENDERINGCHANGED` | 部分 / 规则 Verified | `user32.zig`（`broadcastDwmNcRenderingChanged`） | `setGlass`；**及** `syncPolicyFromRegistry` 在 **已有 HWND** 且不透明度 / 任务栏染色 / Peek 相对变化时 |
-| 缩略图 / `WM_DWMSENDICONICTHUMBNAIL` | 部分 | 每表面 `dwm_compositor` 缓冲 + `user32.broadcastDwmIconicThumbnailRequested`；任务栏悬停仍采样帧缓冲 | 节流：`thumb_refresh_min_ticks`（`initAeroDwm` 按 tick_hz 换算 ≈120ms） |
+| 缩略图 / `WM_DWMSENDICONICTHUMBNAIL` | 部分 / 规则 Verified | 每表面 `dwm_compositor` 缓冲 + `user32.broadcastDwmIconicThumbnailRequested`（`max_w/max_h` 钳位 `0xFFFF`）；`enqueueIconicThumbnailRequest` 拒无效 `surface_id`；零宽/零高表面不刷新缩略 | 节流：`thumb_refresh_min_ticks`（`initAeroDwm` 按 tick_hz 换算 ≈120ms）；主机 **dwm_nt61_integration_host** |
 | GPU / WDDM 离屏纹理合成 | 未 | — | 长期项；当前为 CPU 帧缓冲路径（与 Win7 Aero 性能模型不同） |
 
 ### 4.1 DWM / 桌面壳层 backlog（与实现 PR 同步）
@@ -158,16 +158,20 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | 条目 | 状态 | 说明 |
 |------|------|------|
 | 内核 `KernelCompositorSurfaceFlags` ↔ 用户态 `SurfaceFlags` 语义映射 | **Verified**（主机 **aero_flag_mapping_host**） | [aero_flag_mapping.zig](../../src/config/aero_flag_mapping.zig)；桌面 `compositor.zig` `comptime` 布局锁 |
-| 颜色 COLORREF ↔ 内核 `theme.rgb` | **Partial / 规则 Verified** | [color_nt61.zig](../../src/config/color_nt61.zig)：`KernelBgr888Low24` / `ColorrefLow24` 语义别名；`comptime` 往返；跨界须经本模块；`dwm.syncPolicyFromRegistry` 经转换后若 HWND 已存在则补发 `WM_DWMCOLORIZATIONCOLORCHANGED`（见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md)） |
+| 颜色 COLORREF ↔ 内核 `theme.rgb` | **Partial / 规则 Verified** | [color_nt61.zig](../../src/config/color_nt61.zig)：`KernelBgr888Low24` / `ColorrefLow24` 语义别名；`comptime` 往返；**BGR 低 24 与 COLORREF 同 RGB 三元组下数值必不等**（主机 **color_nt61_host**）；跨界须经本模块；`dwm.syncPolicyFromRegistry` 经转换后若 HWND 已存在则补发 `WM_DWMCOLORIZATIONCOLORCHANGED`（见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md)） |
 | 装饰性铬色 `rgb(...)`（非 DWM 染色契约） | **允许（矩阵登记例外）** | `dwm.zig` 标题栏/任务栏铬线、`startmenu.zig` 内层面板 tint、`display.renderHarmonyStyleWallpaper` 壁纸渐变等；**权威 DWM 玻璃染色 dword** 仍以 `nt61_aero_defaults` + `color_nt61` + `setColorizationTint` / 注册表为准 |
-| HWND ↔ `RedirectedSurface` / csrss `register_window` | **Partial / 子集 Verified** | **Verified 子集（可主机/串口锚点）**：(1) `CreateWindowEx` ↔ `ensureCompositorSurface`；(2) `DestroyWindow` ↔ `detachCompositorSurface`；(3) LPC `register_window` ↔ `onCsrssRegisterGuiWindow`（补面 + 刷新几何）；(4) `SetWindowPos` 的 `HWND_TOP` / `HWND_TOPMOST` / `HWND_BOTTOM` / **`HWND_NOTOPMOST`（与 TOP 等价）** / **另一有效 HWND 之后** → `syncCompositorZOrderForUserWindows`；(5) `hWndInsertAfter==0` 且未置 `SWP_NOZORDER` 时不改 Z 序数组顺序（位置/尺寸仍更新）。**非 Verified**：跨进程 HWND、完整 topmost 层、CSRSS 独立建窗。见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.4–§3.5；主机 **`dwm_nt61_integration_host`** |
+| 用户态 `flip3d_preview_enabled` ↔ 内核 Flip3D | **Partial（语义对照）** | Aero [`compositor.zig`](../../src/desktop/aero/src/compositor.zig) 与内核 `nt61_aero_defaults.KernelCompositor.flip3d_enabled`、`display.flip3d_overlay_active` 均为 **CPU 预览**，非 WDDM Flip3D；Shell 开关不自动映射内核位（避免跨边界臆测） |
+| HWND ↔ `RedirectedSurface` / csrss `register_window` | **Partial / 子集 Verified** | **Verified 子集（可主机/串口锚点）**：(1) `CreateWindowEx` ↔ `ensureCompositorSurface`；(2) `DestroyWindow` ↔ `detachCompositorSurface`；(3) LPC `register_window` ↔ `onCsrssRegisterGuiWindow`（补面 + 刷新几何）；**Shell 内联** `display.zig` 对 Explorer/任务管理器 `createSurface` 为壳层占位，**不**经 `user32` HWND 表；(4) `SetWindowPos`：`HWND_TOPMOST` / `HWND_NOTOPMOST` 维护 `Window.is_topmost` 并与 **`syncCompositorZOrderForUserWindows` 两趟序**（普通层后顶层）一致；`HWND_TOP` / `HWND_BOTTOM` 仅在 **同 band** 内调整；**另一有效 HWND 之后**：若 band 不同则先将 `hwnd` 的 `is_topmost` 与 `insert_after` 对齐再插入（`placeHwndAboveInsertAfter`；主机 **`dwm_zorder_nt61_host`** 跨 band 模型）；(5) `hWndInsertAfter==0` 且未置 `SWP_NOZORDER` 时不改 Z 序数组顺序（位置/尺寸仍更新）。LPC `get_message`：**线程 id 不得为 0**（`csr_lpc_policy.resolveGetMessageClientTid`）；GUI LPC 经 **`seAccessActiveDesktopForWin32k`**（当前占位 `createUserToken`）与活动桌面一致。**非 Verified**：跨进程 HWND、CSRSS 独立建窗。见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.4–§3.5；主机 **`dwm_nt61_integration_host`**、**`dwm_zorder_nt61_host`**、**`csr_lpc_policy_host`**、**`nt61_dual_track_host`** |
+| 方案 A：Present 脏区 / 帧节拍 API | **Partial** | `display.submitCompositorPresentHints`、`getPresentTelemetry`、`getDesktopComposeTelemetry`；[DesktopManagerSpec.md](DesktopManagerSpec.md) §1.1 |
+| 多监视器 / DPI（单 GOP 扩展点） | **Partial** | `framebuffer.MonitorLayoutNt61`、`getVirtualDesktopBounds`、`physicalToLogicalPx`；`display.getDesktopMonitorLayout*`；主机 **multimon_dpi_nt61_host** |
+| Aero Peek 竖条命中（Shell） | **Partial** | `taskbar.isClickOnShowDesktopPeek` / `setAeroPeekActive`；主机 **taskbar_peek_hit_nt61_host** |
 | CPU 盒式模糊预算（`w×h×passes`） | **Verified（公式）/ Partial（帧级观测）** | [dwm_blur_budget.zig](../../src/config/dwm_blur_budget.zig) 与 `dwm.tryConsumeBlurBudget` 同源；**`zig build test` → dwm_blur_budget_host**；`-Ddwm_blur_stats=true` 每帧 `klog.debug` 统计（见 [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)） |
 | `WM_DWM*` 广播 + 线程监听 `register_dwm_listener` | **Partial（当前拓扑下问题二已闭合到「有 HWND 才泵注册表差异」）** | `user32.registerDwmNotificationListener` + `broadcastDwm*`；[DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) 决策表；**`dwm_messages_nt61_host`** / **`dwm_nt61_integration_host`** / **`dwm_config_registry_sync_host`** |
-| Flip3D（Alt+Tab）CPU 近似 | **Partial** | `flip3d_needs_scene_refresh` + `collectShellWindowSurfaceIds` 多卡片；与 `arch.consumeFlip3dHotkey` 同键；[DesktopManagerSpec.md](DesktopManagerSpec.md) §8 |
+| Flip3D（Alt+Tab）CPU 近似 | **Partial / 规则 Verified** | `flip3d_needs_scene_refresh` + `collectShellWindowSurfaceIds`：**缓冲** `flip3d_shell_sid_buffer_cap=6`、**最多绘制** `flip3d_shell_thumb_paint_max=4`（`dwm_nt61_api_contract.zig`，截断取前 N 张）；过滤：`visible`、`owner_pid!=0`、`w/h≥16`、`z_order<30000`。热键 **`consumeFlip3dHotkey`** 仅在 `display` 主循环单点消费（与 `keyboard.zig` 配对）；[DesktopManagerSpec.md](DesktopManagerSpec.md) §8；主机 **dwm_zorder_nt61_host**、**win32k_api_semantics_host** |
 | 开始菜单悬停局部重绘 | **Partial** | `redrawStartMenuRegionOnly` + 飞出/所有程序/搜索行级脏区；搜索开启时 **50ms hover 节流**（`startmenu.zig`）；`-Ddesktop_bisect` + `mouse_debug` 看 `startmenu_partial` |
 | VirtIO-GPU 2D 合成卸载 | **Partial（PoC 硬顶 ≤32×32）** | 与 [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)「第七阶段」一致：`trySubmitFramebufferDirtyRect`、scratch `TRANSFER_*`、`display.present` 在 **flipDirty** 且脏外包 ≤32×32 时 **尝试** GPU 路径（失败静默回退 CPU）；**大块 Aero 模糊仍 CPU + `blur_budget_*`** |
 | x86_64 PS/2 与 VirtIO 双源 | **Partial** | [arch/x86_64/mod.zig](../../src/arch/x86_64/mod.zig) `handleMouseIrq`：VirtIO-Input 活跃且未 `-Dps2_mouse_with_virtio` 时 **跳过 IRQ12**；无 VirtIO 真机可编 `-Dps2_mouse_with_virtio=true` 或仅用 PS/2 |
-| USB HID 鼠标 | **Planned（M1 可 `-Dusb_xhci` 桩）** | **M1**：`usb.zig` 枚举 + 管道桩；**M2**：HID boot → `mouse.zig`；**M3**：`input_hub` 优先级与 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) §4 对齐。可执行索引：[MVT_NT61.md](MVT_NT61.md) CI 表 |
+| USB HID 鼠标 | **Partial（M1–M3 文档化）** | **M1**：`-Dusb_xhci=true` 枚举 + xHCI 桩，串口 **`USB: xhci_mvt`**；**M2**：`hid_boot_report.zig` Boot 报告 → `hid.zig` 注入；**M3**：`input_hub.pollAll` 顺序（USB → VirtIO → PS/2）见 `input_hub.zig` 与 PointerPolicy §4。主机 **hid_boot_report_host** |
 | 注册表 `Mouse` / `DWM` → 壳层 | **Partial / 通知规则 Verified** | 同上键名；`syncPolicyFromRegistry` 应用后按 `dwm_config_registry_sync` 差异在 **已有窗口** 时补 `WM_DWM*`（无 HWND 启动豁免）；桌面 **`mouse.syncFromRegistry` + `dwm.syncPolicyFromRegistry`** |
 | RegF / 原生 hive 全链；注册表 Native 子集 | **Partial** | **内存树 + ZOSH1**：[`hive.zig`](../../src/registry/hive.zig) 可选 `C:\System32\Config\ZirconUser.zosh`；**RegF** 文件仅识别 `regf` 魔数（不解析 NK/VK）；**已实现**：`NtCreateKey`/`NtSetValueKey`/`NtEnumerate*`；`KeyValueFullInformation`；导出快照 `saveBootstrapSnapshot`；主机 **`registry_zosh1_host`** |
 
@@ -180,14 +184,14 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `CreateWindowEx` | [CreateWindowExA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-createwindowexa) | 成功 `HWND`，失败 `NULL` 与 `SetLastError` | **Implemented**（子集样式/类） | `user32.zig` |
 | `DestroyWindow` | [DestroyWindow function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-destroywindow) | 销毁顺序、`INVALID_HANDLE` | **Implemented**（+ `detachCompositorSurface`） | `user32.zig` |
 | `GetDC` / `ReleaseDC` | [GetDC](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getdc) / [ReleaseDC](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-releasedc) | 配对；`GetDC(NULL)` 屏幕 DC | **Partial**（`HDC==HWND`；`GetDC(0)` 成功返回 `0`） | `user32.zig` |
-| `GetMessage` | [GetMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getmessage) | 空队列阻塞 | **Partial**（`STATUS_PENDING` / 协作式；见 syscall 注释） | `user32.zig`、`syscall.zig` |
-| `PeekMessage` | [PeekMessageA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-peekmessagea) | `PM_REMOVE` / `PM_NOYIELD`；无消息返回 FALSE | **Partial**（`PM_*` 见 `msg_pm_semantics.zig`；Nt 路径 `STATUS_PENDING`） | `user32.zig`、`msg_pm_semantics.zig` |
-| `PostMessage` | [PostMessageA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-postmessagea) | 失败 `FALSE` 与 `SetLastError` | **Partial** | `user32.zig` |
-| `DispatchMessage` | [DispatchMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-dispatchmessage) | 分派到 `WndProc` | **Stub** | `user32.zig` |
-| `BeginPaint` / `EndPaint` | [BeginPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-beginpaint) / [EndPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-endpaint) | `PAINTSTRUCT` | **Partial** | `user32.zig` |
-| `BitBlt` | [BitBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-bitblt) | 成功非零；无效 DC | **Partial**（ROP/格式子集） | `gdi32.zig` |
-| `PatBlt` | [PatBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-patblt) | 同上 | **Partial** | `gdi32.zig` |
-| `StretchBlt` | [StretchBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-stretchblt) | 同上 | **Partial** | `gdi32.zig` |
+| `GetMessage` | [GetMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getmessage) | 空队列阻塞；过滤范围 | **Partial**（`STATUS_PENDING` / 协作式；`min>max`（非 0,0）→ `ERROR_INVALID_PARAMETER`；见 syscall 注释） | `user32.zig`、`syscall.zig` |
+| `PeekMessage` | [PeekMessageA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-peekmessagea) | `PM_REMOVE` / `PM_NOYIELD`；无消息返回 FALSE | **Partial**（`PM_*` 见 `msg_pm_semantics.zig`；Nt 路径 `STATUS_PENDING`；畸形 min/max 同上） | `user32.zig`、`msg_pm_semantics.zig` |
+| `PostMessage` | [PostMessageA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-postmessagea) | 失败 `FALSE` 与 `SetLastError` | **Partial**（无效 HWND → `ERROR_INVALID_HANDLE`；队列满 → `ERROR_NOT_ENOUGH_MEMORY`；`NtUserPostMessage` 映 `STATUS_INVALID_PARAMETER` / `STATUS_NO_MEMORY`） | `user32.zig` |
+| `DispatchMessage` | [DispatchMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-dispatchmessage) | 分派到 `WndProc` | **Partial**（无每类 WndProc 表时 → **`DefWindowProcA`**；`NtUserDispatchMessageSyscall` 读用户 `MSG*` 后同路径） | `user32.zig` |
+| `BeginPaint` / `EndPaint` | [BeginPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-beginpaint) / [EndPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-endpaint) | `PAINTSTRUCT` | **Partial**（`BeginPaint` / **`InvalidateRect`** 在有 compositor 表面时 `dwm_comp.markSurfaceDirty`） | `user32.zig` |
+| `BitBlt` | [BitBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-bitblt) | 成功非零；无效 DC | **Partial**（**仅 `SRCCOPY`**；其它 ROP → `FALSE` + `ERROR_INVALID_PARAMETER`；见 `gdi_rop_contract.zig`） | `gdi32.zig` |
+| `PatBlt` | [PatBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-patblt) | 同上 | **Partial**（`PATCOPY`/`BLACKNESS`/`WHITENESS`/`PATINVERT` 子集） | `gdi32.zig` |
+| `StretchBlt` | [StretchBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-stretchblt) | 同上 | **Partial**（**仅 `SRCCOPY`**；其余 ROP 同上） | `gdi32.zig` |
 | `Rectangle` | [Rectangle function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-rectangle) | 成功非零 | **Partial** | `gdi32.zig` |
 | `TextOut` | [TextOut function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-textouta) | 成功非零 | **Partial** | `gdi32.zig` |
 | `CreateCompatibleDC` / `SelectObject` | [CreateCompatibleDC](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-createcompatibledc) / [SelectObject](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-selectobject) | 池/句柄错误 | **Partial** | `gdi32.zig` |
@@ -201,7 +205,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 | 领域 | 非目标 / 长期项 | 分阶段说明 |
 |------|-----------------|------------|
-| GDI BitBlt | 完整 ROP3、拉伸、颜色格式矩阵、与打印机 DC 的完整交互 | 当前为矩形/文本/位图子集；复杂 ROP 为 Planned |
+| GDI BitBlt | 完整 ROP3、拉伸、颜色格式矩阵、与打印机 DC 的完整交互 | **已实现子集**：`BitBlt`/`StretchBlt` 仅 `SRCCOPY`；未支持 ROP 显式失败（主机 **gdi_rop_contract_host**）；完整 ROP 仍为 Planned |
 | 字体 | ClearType/Uniscribe 级排版、完整 GDI 字体链接与回退 | 当前位图字体路径；FreeType 等为路线图项（见 API 矩阵 gdi32 行） |
 | DC / 对象 | 完整 GDI 句柄表、跨进程 DC、元文件、路径 API | 以 `CreateCompatibleDC` / `SelectObject` 子集为主 |
 | user32 消息 | 完整输入法、挂钩链、DDE、剪贴板全语义 | 消息泵与 DWM 广播等为 **Partial**；随契约矩阵增行 |
@@ -215,6 +219,13 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | **PowerShell** / cmdlet 脚本宿主 | **不适用（内核）** | 内核侧 **不实现** PowerShell 引擎；历史上 in-kernel ZirconShell 已移除。 |
 | 用户态 **.NET** 脚本宿主（未来） | **Planned（仓库外）** | 与 PowerShell 公开 **行为与 cmdlet 模型** 对齐的宿主应在 **独立用户态程序 / 仓库** 实现；本仓库仅提供 Native / LPC / 对象等内核能力。 |
 | 命令提示符（`cmd.exe` 语义子集） | Partial | `src/subsystems/win32/cmd.zig` 等；与上项正交。 |
+
+### 5.3 主机回归（win32k 语义锚点）
+
+| 主题 | `zig build test` 步 | 说明 |
+|------|---------------------|------|
+| PM_* / LPC 偏移 / GDI ROP 子集 / Flip3D 数值 cap | **win32k_api_semantics_host** | [tests/nt61/win32k_api_semantics_host.zig](../../tests/nt61/win32k_api_semantics_host.zig) |
+| GDI ROP 清单 | **gdi_rop_contract_host** | [gdi_rop_contract.zig](../../src/subsystems/win32/gdi_rop_contract.zig) |
 
 ## 6. 配置语义：`nt_product_arch` 与宿主 CPU
 
@@ -230,7 +241,6 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 - [MVT_NT61.md](MVT_NT61.md) — 最小可验证测试索引（主机测试 + CI）  
 - [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) — `WM_DWM*` 与监听线程等价叙事  
 - [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) — 不阻塞内核主里程碑的延后能力（WDDM / 完整 Win32 / WOW64 / AML 等）  
-- [mdcs/composer2/content1.1.md](../../mdcs/composer2/content1.1.md) — 与 NT 6.1 目标之差距综述（与契约矩阵交叉引用）  
 - [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) — LPC 与 csrss 握手 ABI（clean-room）  
 - [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) — `NtAllocateVirtualMemory` / `MEM_*` 与帧缓冲映射对照  
 - [PROCESS_NT61.md](PROCESS_NT61.md) — 阶段与门禁  

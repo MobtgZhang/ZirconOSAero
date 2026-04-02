@@ -35,6 +35,7 @@ const Token = struct {
 };
 
 const PRIV_DEBUG: u64 = 1 << 0;
+const PRIV_TCB: u64 = 1 << 1;
 
 fn checkAccess(token: *const Token, required_access: u32, object_access: u32) bool {
     if (token.owner.eql(SYSTEM_SID)) return true;
@@ -75,4 +76,23 @@ test "seAccessCheckMask grants must cover desired" {
     const user = Token{ .owner = USER_SID, .is_elevated = false, .privileges = 0 };
     try std.testing.expect(seAccessCheckMask(&user, GENERIC_READ, GENERIC_READ | GENERIC_WRITE));
     try std.testing.expect(!seAccessCheckMask(&user, GENERIC_READ | GENERIC_WRITE, GENERIC_READ));
+}
+
+/// 与 `src/se/token.zig` `seAccessActiveDesktopForWin32k` 同构（主机镜像，供 GUI LPC 门闸文档锚点）。
+fn seAccessActiveDesktopForWin32kMirror(tok: *const Token, process_desktop_idx: u32, active_desktop_idx: u32) bool {
+    if (process_desktop_idx == active_desktop_idx) return true;
+    if (tok.owner.eql(SYSTEM_SID)) return true;
+    if (tok.is_elevated and checkPrivilege(tok, PRIV_TCB)) return true;
+    return false;
+}
+
+test "seAccessActiveDesktopForWin32k mirror denies wrong desktop for plain user" {
+    const user = Token{ .owner = USER_SID, .is_elevated = false, .privileges = 0 };
+    try std.testing.expect(!seAccessActiveDesktopForWin32kMirror(&user, 1, 0));
+    try std.testing.expect(seAccessActiveDesktopForWin32kMirror(&user, 0, 0));
+}
+
+test "seAccessActiveDesktopForWin32k mirror allows TCB elevated cross-desktop" {
+    var user = Token{ .owner = USER_SID, .is_elevated = true, .privileges = PRIV_TCB };
+    try std.testing.expect(seAccessActiveDesktopForWin32kMirror(&user, 5, 0));
 }

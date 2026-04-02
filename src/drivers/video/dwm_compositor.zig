@@ -5,6 +5,7 @@ const std = @import("std");
 const klog = @import("../../rtl/klog.zig");
 const nt61_aero = @import("nt61_aero_defaults");
 const dwm_surface_spec = @import("../../config/dwm_surface_spec.zig");
+const dwm_nt61_abi = @import("../../config/dwm_nt61_api_contract.zig");
 const fb = @import("framebuffer.zig");
 const material = @import("material.zig");
 
@@ -61,7 +62,7 @@ pub const AeroConfig = struct {
     snap_shell_enabled: bool = nt61_aero.KernelCompositor.snap_shell_enabled,
 };
 
-const MAX_SURFACES: usize = 128;
+const MAX_SURFACES: usize = 256;
 
 /// 每表面缩略图（任务栏 / Flip3D 共用降采样源）。Win7 级预览常见更大外包；此处 **20×15** 为 NT61 契约下的 CPU 成本 **语义子集**（2×2 盒滤 + 节流，见契约矩阵 §4.1）。
 pub const surface_thumb_w: u32 = 20;
@@ -283,6 +284,8 @@ pub fn getSurfaceThumbPixels(id: u16) ?[]const u32 {
 
 fn refreshSurfaceThumbFromFramebuffer(id: u16, now_tick: u64) void {
     if (id >= surface_count or !surfaces[id].visible) return;
+    const s0 = surfaces[id];
+    if (s0.width == 0 or s0.height == 0) return;
     const prev = surface_thumb_last_tick[id];
     if (prev != 0 and now_tick -% prev < thumb_refresh_min_ticks) return;
     surface_thumb_last_tick[id] = now_tick;
@@ -326,7 +329,10 @@ fn refreshSurfaceThumbFromFramebuffer(id: u16, now_tick: u64) void {
     }
 }
 
-/// 供 Flip3D / 调试：收集「像用户窗」的表面（略过壁纸/光标占位等）。
+pub const flip3d_shell_sid_buffer_cap = dwm_nt61_abi.flip3d_shell_sid_buffer_cap;
+pub const flip3d_shell_thumb_paint_max = dwm_nt61_abi.flip3d_shell_thumb_paint_max;
+
+/// 供 Flip3D / 调试：收集「像用户窗」的表面（略过壁纸/光标占位等）。写入不超过 `buf.len`；返回值 ≤ `buf.len`。
 pub fn collectShellWindowSurfaceIds(buf: []u16) usize {
     var n: usize = 0;
     var i: u16 = 0;
@@ -343,6 +349,7 @@ pub fn collectShellWindowSurfaceIds(buf: []u16) usize {
 
 /// `WM_DWMSENDICONICTHUMBNAIL` / 任务栏缩略图请求计数（与 `display` 壳层采样帧缓冲配合；语义见 MS Learn DWM 消息）。
 pub fn enqueueIconicThumbnailRequest(surface_id: u16) void {
+    if (!compositor_initialized or surface_id >= surface_count) return;
     iconic_thumbnail_serial +%= 1;
     const sched = @import("../../ke/scheduler.zig");
     refreshSurfaceThumbFromFramebuffer(surface_id, sched.getTicks());

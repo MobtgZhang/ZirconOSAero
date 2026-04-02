@@ -1,8 +1,10 @@
 # ZirconOSAero：NT 6.1 内核实现详细待办清单（Clean-room）
 
-本页为内核模式实现的**分阶段跟踪清单**，与 [mdcs/composer2/content1.2.md](../../mdcs/composer2/content1.2.md) 及 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 交叉引用。实现须遵守 clean-room：**仅** Microsoft Learn、WDK 公开文档与硬件规范；禁止 Windows/ReactOS/Wine 源码。
+本页为内核模式实现的**分阶段跟踪清单**，与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 交叉引用。实现须遵守 clean-room：**仅** Microsoft Learn、WDK 公开文档与硬件规范；禁止 Windows/ReactOS/Wine 源码。
 
 **与「实施计划 Phase A–K」对齐**：里程碑式扩展（闸门、Mm、调度等待、I/O 闭环、Ob、Ps、LPC、Se、SSDT 模块化、HAL/存储占位、完整 API backlog）见 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) 与契约矩阵 §3.1；代码落地仍以本页 **K0–K8** 编号为主便于 PR 引用。
+
+**与桌面 / LPC / 显示栈收敛对齐**：在 **不缩小 K1–K8 范围** 的前提下，LPC、`user32`、显示栈的收敛与契约常量见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4.1、`src/config/dwm_nt61_api_contract.zig`、MVT 中 **dwm_zorder_nt61_host** / **csr_lpc_policy_host**；全栈 Aero 用户态仍属 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
 
 ## 范围
 
@@ -98,6 +100,22 @@
 1. K1 + K0 打底。  
 2. K2.1–K2.3 与 K3.1–K3.3 可并行；K2.4–K2.6 建议在 K1.4/K2.1 稳定后加强。  
 3. K4 → K5 → K6–K7；K8 长期并行。
+
+## Phase 2–3 并行（GUI 稳定 / 验证闸门）
+
+下列项与桌面栈、MVT、CI 交叉引用；**不替代** K1–K8 全量，但阶段 2/3 应持续勾选。
+
+| 跟踪项 | 状态 | 参考 |
+|--------|------|------|
+| 方案 A Present 契约与脏区 API | 已落地初版 | [DesktopManagerSpec.md](DesktopManagerSpec.md) §1.1、`display.submitCompositorPresentHints` |
+| LPC 单一真源 + 策略常量 | 已强化 | `subsystem.zig`、`csr_lpc_policy.zig`、`nt61_dual_track_host` |
+| 跨 band `SetWindowPos` | 已落地 | `user32.placeHwndAboveInsertAfter`、`dwm_zorder_nt61_host` |
+| 多监视器 / DPI 数据模型 | 已落地初版（单 GOP） | `framebuffer.MonitorLayoutNt61`、`multimon_dpi_nt61_host` |
+| 合成 full vs partial 计数 | 已落地 | `display.getDesktopComposeTelemetry` |
+| K6.3 活动桌面访问 | 已落地子集 | `seAccessActiveDesktopForWin32k`、`subsystem` LPC GUI |
+| aarch64 + desktop-full CI | 已加 | `.github/workflows/ci.yml` |
+| 性能基线脚本 | 已加 | `scripts/qemu_desktop_perf_baseline.sh` |
+| K1–K8 纵深 | **并行长线** | 上表 Phase K1–K8 |
 
 ## 维护
 

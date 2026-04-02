@@ -444,7 +444,10 @@ fn populateDefaults() void {
     _ = setValueDword(mouse_key, "MouseSensitivity", 10);
     _ = setValueDword(mouse_key, "MouseThreshold1", 6);
     _ = setValueDword(mouse_key, "MouseThreshold2", 10);
-    _ = setValueSz(mouse_key, "DoubleClickSpeed", "500");
+    // `mouse.syncFromRegistry`：`queryValueDword`（与面板常见 DWORD 语义一致）。
+    _ = setValueDword(mouse_key, "DoubleClickSpeed", 500);
+    _ = setValueDword(mouse_key, "DoubleClickWidth", 4);
+    _ = setValueDword(mouse_key, "DoubleClickHeight", 4);
 
     const sound_key = createKey(.hkcu, cp_key, "Sound") orelse return;
     _ = setValueSz(sound_key, "Beep", "yes");

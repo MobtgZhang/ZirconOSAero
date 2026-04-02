@@ -30,6 +30,16 @@ var buttons: [MAX_TASK_BUTTONS]TaskButton = [_]TaskButton{.{}} ** MAX_TASK_BUTTO
 var button_count: usize = 0;
 var cfg: TaskbarConfig = .{};
 var initialized_flag: bool = false;
+/// Shell / 合成器可查询：用户按住 Show Desktop 条时的 Aero Peek 预览态（阶段 2 Shell 占位）。
+var aero_peek_active: bool = false;
+
+pub fn setAeroPeekActive(active: bool) void {
+    aero_peek_active = active;
+}
+
+pub fn isAeroPeekActive() bool {
+    return aero_peek_active;
+}
 
 pub fn init(config: TaskbarConfig) void {
     cfg = config;
@@ -92,6 +102,12 @@ pub fn getGlassTint() u32 {
 
 pub fn getGlassOpacity() u8 {
     return theme.taskbar_glass_opacity;
+}
+
+/// 命中 Show Desktop / Peek 竖条（含右缘 inclusive 边界）。
+pub fn isClickOnShowDesktopPeek(x: i32, y: i32, screen_w: i32, screen_h: i32) bool {
+    const r = getShowDesktopButtonRect(screen_w, screen_h);
+    return x >= r.x and x < r.x + r.w and y >= r.y and y < r.y + r.h;
 }
 
 /// Far-right vertical strip used for Show Desktop / Aero Peek hit testing.

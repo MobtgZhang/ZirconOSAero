@@ -56,6 +56,13 @@ comptime {
     if (kernelDwmTintFromColorrefLow24(c) != k) @compileError("color_nt61: kernel<->COLORREF round-trip broken");
 }
 
+test "kernel BGR low24 is not bitwise equal to COLORREF low24 for same RGB tuple" {
+    const k = bgrPacked24FromRgbBytes(0x10, 0x20, 0x30);
+    const cref_style = @as(u32, 0x10) | (@as(u32, 0x20) << 8) | (@as(u32, 0x30) << 16);
+    try std.testing.expect(k != cref_style);
+    try std.testing.expectEqual(kernelDwmTintFromColorrefLow24(cref_style), k);
+}
+
 test "COLORREF byte order matches Aero theme.rgb (MS Learn R in low byte)" {
     // Same layout as `src/desktop/aero/src/theme.zig` `rgb()`.
     const cref: u32 = 0x00CC8844; // r=0x44 g=0x88 b=0xCC in COLORREF low 24

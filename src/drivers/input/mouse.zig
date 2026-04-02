@@ -70,6 +70,11 @@ pub const MouseState = struct {
     interpolation_idx: u8 = 0,
     smoothing_enabled: bool = false,
     cursor_moved: bool = false,
+    /// `HKCU\Control Panel\Mouse` — `DoubleClickSpeed`（毫秒量级，注册表常见 200–900）。
+    double_click_time_ms: u32 = 500,
+    /// 双击矩形宽/高（像素），与 `DoubleClickWidth` / `DoubleClickHeight` 对齐。
+    double_click_width: u32 = 4,
+    double_click_height: u32 = 4,
 };
 
 const EVENT_QUEUE_SIZE: usize = 64;
@@ -746,6 +751,7 @@ pub fn registerWithIo() void {
 }
 
 /// 从 `HKCU\Control Panel\Mouse` 同步灵敏度/加速（`registry.init()` 之后可再次调用，例如用户态改键后）。
+/// Ref: https://learn.microsoft.com/windows/win32/inputdev/mouse-input（用户输入概念）；注册表值名为常见 OEM/Shell 约定，非抄表。
 pub fn syncFromRegistry() void {
     const reg = @import("../../registry/registry.zig");
     if (reg.hkcu_control_panel_mouse_key) |k| {
@@ -755,6 +761,15 @@ pub fn syncFromRegistry() void {
         if (reg.queryValueDword(k, "MouseThreshold1")) |v| {
             const th: i32 = @intCast(@min(v, 64));
             setAcceleration(mouse_state.acceleration_enabled, th);
+        }
+        if (reg.queryValueDword(k, "DoubleClickSpeed")) |v| {
+            if (v >= 100 and v <= 1000) mouse_state.double_click_time_ms = v;
+        }
+        if (reg.queryValueDword(k, "DoubleClickWidth")) |w| {
+            if (w >= 1 and w <= 64) mouse_state.double_click_width = w;
+        }
+        if (reg.queryValueDword(k, "DoubleClickHeight")) |h| {
+            if (h >= 1 and h <= 64) mouse_state.double_click_height = h;
         }
     }
 }

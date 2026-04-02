@@ -23,7 +23,7 @@ ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。�
 | [AeroDesktopRuntime.md](AeroDesktopRuntime.md) | Aero 内核桌面数据流、鼠标调试判据、QEMU 输入与快捷键 |
 | [Assets.md](Assets.md) | 资源合规：禁微软素材、开源 / 自有 / AI 生成归档要求 |
 | [COPYRIGHT_AND_SOURCES.md](COPYRIGHT_AND_SOURCES.md) | 版权边界与知识来源白名单（与贡献指南一致） |
-| [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) | 对照 content5.x 的未完成项滚动清单 |
+| [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) | 未完成项滚动清单（对照实现状态、流程与图形脚手架） |
 | [NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md) | 图形栈脚手架与阶段说明 |
 | [NT61_ShellIcons.md](NT61_ShellIcons.md) | NT 6.1 壳层图标对照、`zircon_shell32_res.dll` 与 Win32 兼容说明 |
 | [BuiltinApps_NT61_Roadmap.md](BuiltinApps_NT61_Roadmap.md) | Windows 7 风格内置应用路线图、实现状态与 clean-room 参考方式 |

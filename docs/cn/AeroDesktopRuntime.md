@@ -60,11 +60,11 @@
 1. **坐标是否在变**：`MOUSE_DEBUG=true` 时状态条含 `ptr x,y`；或 `AGENT_NDJSON` H4 心跳里的坐标字段。
 2. **若坐标不变**：仍是输入/轮询/IRQ 路径（§3 前半）。
 3. **若坐标变但画面不动**：查 `**Framebuffer Driver: … double_buf=ON|OFF`**；超大分辨率下应出现 `**heap back buffer**` 日志（连续物理页后备）。再对照 **拖拽窗口** 与静止桌面：拖拽路径曾依赖局部 `flipDirty`，现已并入指针脏矩形。
-4. **概念对照**（非实现依赖）：离屏合成与「指针与主画面分离」见仓库内 `mdcs/ideas.md`；本内核实现为 **自研软件光标层 + 双缓冲/按需后备**，不绑定任何第三方 OS 显示 API。
+4. **概念对照**（非实现依赖）：离屏合成与「指针与主画面分离」见 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) 与本节 §9；本内核实现为 **自研软件光标层 + 双缓冲/按需后备**，不绑定任何第三方 OS 显示 API。
 
 ### 3.2 x86_64 UEFI：指针不动时的对齐清单（相对 LoongArch）
 
-在 LoongArch `virt` + `virtio-mouse-pci` 已能移动指针、而 x86 UEFI+QEMU 不动时，按序核对（与 `mdcs/ideas.md` 中「硬件游标 vs 软件回退」预期一致：当前产品路径为 **软件游标**，不动多半是 **事件未进 `mouse.deliverMouseEvent`**）：
+在 LoongArch `virt` + `virtio-mouse-pci` 已能移动指针、而 x86 UEFI+QEMU 不动时，按序核对（与 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) / 本节 §9.1 一致：当前产品路径为 **软件游标**，不动多半是 **事件未进 `mouse.deliverMouseEvent`**）：
 
 
 | 项                   | 说明                                                                                                                                                                 |
@@ -174,7 +174,7 @@
 - **`QEMU_GTK_ZOOM`**（`Makefile`，默认 `zoom-to-fit=off`）：默认 **1:1**，窗口尺寸与客体像素更一致；若希望 **缩放进固定客户区** 可用 `**make run-qemu-zoom-fit**`。x86 上可改用 **SDL** 对照：`**make run-qemu-sdl**`。其它架构或需 VNC 时仍可按 LoongArch 节示例改 `**QEMU_*`** 变量。
 - **客体 WxH** 仍以根目录 `**build.conf` → `**make sync-resolution**`** 为权威（见 §4.2.1）。
 - **高分辨率卡顿**：CPU 盒式模糊成本随像素数上升；可用 `**make AERO_BLUR_LIGHT=true**`（`zig -Daero_blur_light`）或 `**make run-fb-large**`（`2560×1440` + 轻模糊）；并见 `[src/config/nt61_aero_defaults.zig](../../src/config/nt61_aero_defaults.zig)` 中 `blur_budget_*`。
-- **PR 门禁与计划落地**：[NT61_PR_GATES.md](NT61_PR_GATES.md)、[mdcs/composer2/content1.3.md](../../mdcs/composer2/content1.3.md) 中的 QEMU/显示待办与本节一致。
+- **PR 门禁与计划落地**：[NT61_PR_GATES.md](NT61_PR_GATES.md)、[NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) Phase K0 与本节 QEMU/显示路径一致。
 - **Virtio-GPU**：非 WDDM 加速台阶；x86 默认 `-vga std`，实验矩阵见 [DriverMilestones_NT61.md](DriverMilestones_NT61.md)、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)。
 
 ### 4.2.2 AArch64 桌面与 VirtIO-GPU：预期说明
@@ -270,15 +270,15 @@
 - **Present**：双缓冲且 `present_full_flip=true`（默认）时 `present()` 整幅提交；否则 `flipDirty()`。单缓冲下 `flipDirty` 仅清脏标记。
 - **软件光标层**：实现集中在 `**src/drivers/video/cursor_plane.zig`**（save-under）；`display.renderDesktopFrameEx` 在场景合成之后调用。仅指针移动且壳层无脏时走快速路径；形态变化会回退整场景路径。`display.hardware_cursor` 仅为预留钩子（`notifyHardwareCursorIfAvailable`），仅接公开硬件文档路径，非 WDDM 专有 API。
 - **诊断行**：进入桌面后串口有 `**DesktopPointerDiag:`**（`double_buf` / `triple_buf` / `virtio_input` / `ps2_hw` / `present_full_flip` 等），与 §3.1「坐标变 vs 画面不变」对照使用。
-- **轻量多缓冲语义**：指针下的像素快照等价于 ideas.md 中「与主帧分离的叠加」的**软件实现**，非 WDDM/DXGI 的 Flip 链。
+- **轻量多缓冲语义**：指针下的像素快照等价于「与主帧分离的叠加」的**软件实现**，非 WDDM/DXGI 的 Flip 链。
 
-### 9.1 与 `mdcs/ideas.md`（硬件游标）的边界
+### 9.1 硬件游标与软件回退（边界）
 
-`ideas.md` 描述 Windows 7 / WDDM 下 **显卡硬件 Cursor Sprite** 在扫描输出阶段叠加、与 DWM 合成解耦。本仓库内核路径为 **GOP/ramfb + 自绘合成**，无 `DxgkDdiSetPointerShape` 类接口；当前 `**display.notifyHardwareCursorIfAvailable`** 与配置项 `**display.hardware_cursor**` 仅为占位，便于将来接到真实显示迷你端口或固件提供的指针平面时再接硬件 sprite。**预期**：在 QEMU/无专用驱动时，指针始终走 **软件光标层**，延迟与桌面帧率一致；勿与 VirtIO-Input 事件路径混淆。
+公开文档中，Windows 7 / WDDM 下 **显卡硬件 Cursor Sprite** 可在扫描输出阶段叠加、与 DWM 合成解耦。本仓库内核路径为 **GOP/ramfb + 自绘合成**，无 `DxgkDdiSetPointerShape` 类接口；当前 `**display.notifyHardwareCursorIfAvailable`** 与配置项 `**display.hardware_cursor**` 仅为占位，便于将来接到真实显示迷你端口或固件提供的指针平面时再接硬件 sprite。**预期**：在 QEMU/无专用驱动时，指针始终走 **软件光标层**，延迟与桌面帧率一致；勿与 VirtIO-Input 事件路径混淆。
 
-### 9.2 任务栏与 `ideas.md`（扫描输出前叠加）
+### 9.2 任务栏与扫描输出前叠加（概念对照）
 
-Win7 参考模型中，任务栏与指针一样属于「提交到扫描输出前」的壳层元素。本内核中 **整幅由 `renderer_aero` 合成进帧缓冲**，任务栏由 `**display.renderDesktopAeroTaskbar`** 单一路径绘制（毛玻璃走 `dwm.renderGlassEffect` 的 `.taskbar` 分支，无 WDDM 提交队列）。这与 `ideas.md` 第二节「硬件叠加层」仅为**概念对照**：当前无独立扫描硬件层，一切为 CPU 绘制 + `present()`/`flip()`。
+Win7 参考模型中，任务栏与指针一样属于「提交到扫描输出前」的壳层元素。本内核中 **整幅由 `renderer_aero` 合成进帧缓冲**，任务栏由 `**display.renderDesktopAeroTaskbar`** 单一路径绘制（毛玻璃走 `dwm.renderGlassEffect` 的 `.taskbar` 分支，无 WDDM 提交队列）。这与「独立硬件叠加层」仅为**概念对照**：当前无独立扫描硬件层，一切为 CPU 绘制 + `present()`/`flip()`。
 
 ## 10. 最小复现建议（串口）
 

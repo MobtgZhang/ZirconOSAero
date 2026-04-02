@@ -13,6 +13,12 @@
 | 完整 TCP / 生产级网络栈 | IPv4/UDP 等为路线图原型；见 [HAL_USB_NET_ROADMAP.md](HAL_USB_NET_ROADMAP.md)。 |
 | ACPI AML 解释器 | 无 AML 时依赖静态表与 QEMU 路径；引入 AML 须单独里程碑与审计。 |
 
+## 跨进程 HWND 与共享表面（非当前目标）
+
+本仓库 **不** 将「进程 A 的线程直接操作进程 B 的 `HWND` 队列」或「内核 `RedirectedSurface` 跨进程共享 VM」作为 NT 6.1 子集验收项；与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4.1「跨进程 HWND」行一致。
+
+**未来草图（clean-room，无内部 NT 结构臆测）**：可通过 (1) 显式 **IOCTL** 或 **LPC 大消息** 携带「目标会话 + surface id + 能力令牌」；(2) 对象管理器侧 **句柄复制** 与桌面门闸扩展；(3) 节区视图映射用户位图到 **单一所有者进程** 的合成路径。落地前须 bump [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) 版本并增主机载荷布局测试。
+
 ## 维护
 
 调整延后边界时，同步更新本文件、[NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、根 [README.md](../../README.md) / [README_cn.md](../../README_cn.md) 的 Design 表述，以及 [docs/en/Subsystems.md](../en/Subsystems.md)、[docs/cn/Subsystems.md](Subsystems.md) 中的子系统状态列。

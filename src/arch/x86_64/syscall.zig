@@ -414,7 +414,7 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
         },
         ssdt.NtReadFile => syscall_nt_extras.dispatchNtReadFile(frame),
         ssdt.NtWriteFile => syscall_nt_extras.dispatchNtWriteFile(frame),
-        // Win32 `GetMessage`/`PeekMessage` 的阻塞与 BOOL 返回值见 `user32.ntUserGetMessageSyscall` / `ntUserPeekMessageSyscall` 文档注释；勿与真 NT 用户态语义混用。
+        // Win32 `GetMessage`/`PeekMessage`：阻塞与 BOOL 见 `user32` 注释；`min>max`（且非 0,0）→ `STATUS_INVALID_PARAMETER`（与 Learn 过滤范围畸形一致）。
         ssdt.NtUserGetMessage => ntResult(user32.ntUserGetMessageSyscall(p1, p2, @truncate(p3), @truncate(p4))),
         ssdt.NtUserPeekMessage => blk: {
             const a5 = syscall_abi.userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
@@ -433,7 +433,7 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
         ssdt.NtUserDispatchMessage => blk: {
             const proc_ud = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_HANDLE);
             const asp_ud = proc_ud.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
-            if (p1 != 0 and !probe.probeUserMemory(asp_ud, p1, 48, false))
+            if (p1 != 0 and !probe.probeUserMemory(asp_ud, p1, @sizeOf(user32.MSG), false))
                 break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
             break :blk ntResult(user32.ntUserDispatchMessageSyscall(p1));
         },

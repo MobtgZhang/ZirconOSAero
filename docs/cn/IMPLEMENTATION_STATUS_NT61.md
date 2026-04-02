@@ -1,6 +1,6 @@
 # NT 6.1 内核与用户态：实现状态与验证入口
 
-本页配合路线图 [content4.4 / content4.5](../../mdcs/claude/content4.5.md) 的「诚实状态」要求，汇总 **内存与 HAL**、**进程与 syscall**、**文件系统与 PE/Win32** 的**当前焦点**与**如何验证**。细则仍以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、[NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 为准。
+本页在 **诚实状态**（与契约矩阵、内核待办一致的叙事）下，汇总 **内存与 HAL**、**进程与 syscall**、**文件系统与 PE/Win32** 的**当前焦点**与**如何验证**。细则仍以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、[NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 为准。
 
 ## 如何跑自动化验证
 
@@ -44,7 +44,7 @@ GitHub Actions：`.github/workflows/ci.yml`（多架构 `zig build kernel`、ZBM
 | PE32+ | 头、导入、重定位、PEB/TEB **子集** | `src/loader/` |
 | kernel32 / user32 | 子集；Aero 与 DWM 为部分实现 | 契约矩阵、DesktopManagerSpec |
 
-**原则**（与 content4.5 一致）：**先夯实 FAT32 + 静态 PE**，再扩展 NTFS 只读/子集；**WOW64 / 完整 Aero** 为长期目标，见 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
+**原则**：**先夯实 FAT32 + 静态 PE**，再扩展 NTFS 只读/子集；**WOW64 / 完整 Aero** 为长期目标，见 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
 
 ## mips64el
 

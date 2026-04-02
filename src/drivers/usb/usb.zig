@@ -112,6 +112,7 @@ pub fn init() void {
         if (xhci_running > 0) {
             createHcDevices();
             klog.info("USB: xHCI active (PCI hosts=%u)", .{xhci_count});
+            klog.info("USB: xhci_mvt enumerate_ok hosts=%u", .{xhci_count});
         } else if (xhci_count > 0) {
             klog.warn("USB: xHCI PCI found but init failed", .{});
         }

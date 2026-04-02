@@ -67,6 +67,7 @@ pub fn initKeyboard() void {
 /// PS/2 鼠标经 **IRQ12**（8042/i8042prt 类路径）投递。QEMU 若同时启用 **virtio-input** 鼠标，默认 **只消费 VirtIO**，
 /// 避免双源指针打架：`handleMouseIrq` 在 `virtio_input_pci.isActive()` 且 **未** 设置 `-Dps2_mouse_with_virtio=true` 时直接 return。
 /// **无 VirtIO 的真机或旧机器**：不要挂 virtio-input；或显式 `zig build … -Dps2_mouse_with_virtio=true` 在双源并存下仍处理 IRQ12。
+/// 观测：`-Dmouse_debug=true` 串口对比 IRQ 路径与 [MVT_NT61.md](../../docs/cn/MVT_NT61.md) / [PointerPolicy_NT61.md](../../docs/cn/PointerPolicy_NT61.md) §4.1。
 pub fn initMouse() void {
     const mouse = @import("../../drivers/input/mouse.zig");
     mouse.initHardware();

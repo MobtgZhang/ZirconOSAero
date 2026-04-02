@@ -2,7 +2,7 @@
 
 **ZirconOSAero** 以 **NT 6.1（Windows 7）** ABI/体验为目标，独立 clean-room 实现；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI）。**不复制 Windows/ReactOS 源码**。
 
-**独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
+**独立项目声明**：非 Microsoft 产品；「Windows」「Windows 7」等为商标说明。第三方与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
 <p align="center">
   <img src="assets/ZirconOS_logo.svg" alt="ZirconOSAero" width="480" />
@@ -10,28 +10,28 @@
 
 ## 截图
 
-<p align="center">
-  <img src="assets/screenshot-zbm.png" alt="ZBM 引导管理器" width="70%" />
-</p>
-<p align="center"><em>ZirconOSAero Boot Manager (ZBM) — Windows 7 风格文本菜单</em></p>
-
-<p align="center">
-  <img src="assets/screenshot-aero.png" alt="ZirconOSAero Aero 桌面" width="70%" />
-</p>
-<p align="center"><em>Shell — Windows 7 Aero（NT 6.1）唯一内置桌面</em></p>
-
-<p align="center">
-  <img src="assets/screenshot-cmd.png" alt="CMD 命令提示符" width="70%" />
-</p>
-<p align="center"><em>CMD shell</em></p>
+<table width="100%">
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <img src="assets/screenshot-zbm.png" alt="ZBM 引导管理器" width="95%" /><br />
+      <sub>ZBM — Windows 7 风格文本菜单</sub>
+    </td>
+    <td align="center" width="34%" valign="top">
+      <img src="assets/screenshot-aero.png" alt="ZirconOSAero Aero 桌面" width="95%" /><br />
+      <sub>Shell — Windows 7 Aero（NT 6.1）</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <img src="assets/screenshot-cmd.png" alt="CMD 命令提示符" width="95%" /><br />
+      <sub>CMD shell</sub>
+    </td>
+  </tr>
+</table>
 
 **English**: [README.md](README.md)
 
 [![CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml/badge.svg)](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
 
-**CI 与本地复现**：`zig build test`（堆、池、buddy、SSDT、对象句柄表、安全 DAC 等）；`zig build install -Doptimize=ReleaseSafe -Darch=x86_64`；无头烟测 `bash scripts/ci-qemu-smoke.sh`。**MVT 索引**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。详见 [.github/workflows/ci.yml](.github/workflows/ci.yml) 与 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)。
-
-**推荐编译器版本**：与 CI 一致，当前为 **Zig 0.15.2**（见 `zig version` 与 workflow）。
+**CI / 本地**：`zig build test`；`bash scripts/ci-qemu-smoke.sh`；Zig **0.15.2**（见 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)、[.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试索引：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
 
 ## 设计理念
 
@@ -46,13 +46,11 @@
 - **双文件系统**：FAT32（系统卷）与 NTFS（数据卷）
 - **多架构**：x86_64（主路径）、aarch64、loongarch64、riscv64、mips64el
 
-**开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
+**流程与契约（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md) · [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 同源；**Partial / Stub** 即非 Done）· [docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md) · [docs/cn/DWM_NOTIFY_MODEL_NT61.md](docs/cn/DWM_NOTIFY_MODEL_NT61.md) · [docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md) · [docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) / [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)
 
-**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done）。**明确延后的大能力**（完整 Win32 / 完整 WOW64 等）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。**版权与知识来源**：[docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) · [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)。
+状态标签：`Stub` · `Partial` · `Done` · `Verified`。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
-**实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
-
-设计文档：[`docs/README.md`](docs/README.md) · [`docs/cn/README.md`](docs/cn/README.md) · [`docs/cn/Architecture.md`](docs/cn/Architecture.md) · [`docs/cn/Kernel.md`](docs/cn/Kernel.md) · [`docs/cn/Boot.md`](docs/cn/Boot.md) · [`docs/cn/Servers.md`](docs/cn/Servers.md) · [`docs/cn/Subsystems.md`](docs/cn/Subsystems.md) · [`docs/cn/BuildSystem.md`](docs/cn/BuildSystem.md) · [`docs/cn/Roadmap.md`](docs/cn/Roadmap.md)
+更多：[`docs/README.md`](docs/README.md) · [`docs/cn/README.md`](docs/cn/README.md) · [`docs/cn/Architecture.md`](docs/cn/Architecture.md) · [`docs/cn/Kernel.md`](docs/cn/Kernel.md) · [`docs/cn/Boot.md`](docs/cn/Boot.md) · [`docs/cn/BuildSystem.md`](docs/cn/BuildSystem.md) · [`docs/cn/Roadmap.md`](docs/cn/Roadmap.md)
 
 ## 项目结构
 
@@ -165,11 +163,9 @@ make help
 zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 ```
 
-## 完成度说明（与 [README.md](README.md) 英文版一致）
+## 完成度说明（与 [README.md](README.md) 一致）
 
-矩阵中 **Done** 仅表示 QEMU/CI 烟测主路径可演示且与契约矩阵一致，**不表示**与商业 Windows 7 内核等价。须以契约矩阵、[MVT_NT61.md](docs/cn/MVT_NT61.md) 与 `zig build test` 为准。
-
-**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 交叉编译内核与 ZBM 相关目标，x86_64 另构建 UEFI ISO 烟测；引导说明见 [Boot.md](docs/cn/Boot.md)。
+Clean-room；矩阵 **Done** = 烟测主路径可演示且与 [契约矩阵](docs/cn/NT61_CONTRACT_MATRIX.md) 一致，**不等于**商业 Windows 7。以矩阵、[MVT_NT61.md](docs/cn/MVT_NT61.md) 与 `zig build test` 为准。多架构 CI 与引导见 [Boot.md](docs/cn/Boot.md)。
 
 ## Phase 0–11 功能矩阵（继承上游能力）
 

@@ -481,3 +481,6 @@ pub fn getStartMenuUserDisplayName() []const u8 {
 pub fn getStartMenuAccountSubtitle() []const u8 {
     return desktop_config.getOr("startmenu", "account_subtitle", "Standard user");
 }
+
+/// NT 6.1 DWM / 桌面通知：公开消息号、属性枚举与 `DWM_BLURBEHIND` 等布局（与 `user32`、主机单测共用）。
+pub const dwm_nt61_contract = @import("dwm_nt61_api_contract.zig");

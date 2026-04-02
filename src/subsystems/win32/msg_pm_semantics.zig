@@ -69,6 +69,18 @@ test "min max filter: single message" {
     try std.testing.expect(!messageMatchesMinMaxFilter(0x031D, 0x031E, 0x031E));
 }
 
+/// `min==0 && max==0` 为 Learn 常见「不过滤」；否则要求 `min <= max`（畸形范围由调用方拒绝）。
+pub fn minMaxRangeWellFormed(min: u32, max: u32) bool {
+    if (min == 0 and max == 0) return true;
+    return min <= max;
+}
+
+test "min max well-formed" {
+    try std.testing.expect(minMaxRangeWellFormed(0, 0));
+    try std.testing.expect(minMaxRangeWellFormed(1, 10));
+    try std.testing.expect(!minMaxRangeWellFormed(10, 1));
+}
+
 // ── GetMessage / PeekMessage 与 Learn 的差距表（问题四 / 矩阵 §5）────────────────
 // | 主题 | Learn 期望（摘要） | 本仓库 `user32` 当前行为 |
 // |------|-------------------|---------------------------|

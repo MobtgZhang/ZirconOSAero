@@ -105,6 +105,11 @@ pub fn build(b: *std.Build) void {
         "desktop_bisect",
         "Serial klog.debug before/after renderDesktopFrameEx and present (panic isolation; default off)",
     ) orelse false;
+    const desktop_full_opt = b.option(
+        bool,
+        "desktop-full",
+        "Optional extended desktop/DWM paths (user32 hook; default off; bisect heavy shell changes)",
+    ) orelse false;
     const dwm_blur_stats_opt = b.option(
         bool,
         "dwm_blur_stats",
@@ -285,6 +290,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "mouse_debug", mouse_debug_opt);
     build_opts.addOption(bool, "agent_ndjson", agent_ndjson_opt);
     build_opts.addOption(bool, "desktop_bisect", desktop_bisect_opt);
+    build_opts.addOption(bool, "desktop_full", desktop_full_opt);
     build_opts.addOption(bool, "dwm_blur_stats", dwm_blur_stats_opt);
     build_opts.addOption(bool, "enable_idt", enable_idt_opt);
     build_opts.addOption(bool, "amd_igpu", amd_igpu_opt);
@@ -750,6 +756,28 @@ pub fn build(b: *std.Build) void {
     });
     const run_msg_pm_semantics_tests = b.addRunArtifact(msg_pm_semantics_tests);
 
+    const gdi_rop_contract_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/subsystems/win32/gdi_rop_contract.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const gdi_rop_contract_tests = b.addTest(.{
+        .root_module = gdi_rop_contract_host_mod,
+        .name = "gdi_rop_contract_host",
+    });
+    const run_gdi_rop_contract_tests = b.addRunArtifact(gdi_rop_contract_tests);
+
+    const hid_boot_report_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/usb/hid_boot_report.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const hid_boot_report_tests = b.addTest(.{
+        .root_module = hid_boot_report_host_mod,
+        .name = "hid_boot_report_host",
+    });
+    const run_hid_boot_report_tests = b.addRunArtifact(hid_boot_report_tests);
+
     const dwm_surface_spec_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_surface_spec.zig"),
         .target = b.graph.host,
@@ -783,6 +811,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_nt61_aero_defaults_tests = b.addRunArtifact(nt61_aero_defaults_tests);
 
+    const csr_lpc_policy_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/subsystems/win32/csr_lpc_policy.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const csr_lpc_policy_tests = b.addTest(.{
+        .root_module = csr_lpc_policy_host_mod,
+        .name = "csr_lpc_policy_host",
+    });
+    const run_csr_lpc_policy_tests = b.addRunArtifact(csr_lpc_policy_tests);
+
     const nt61_dual_track_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/nt61_dual_track_host.zig"),
         .target = b.graph.host,
@@ -790,6 +829,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "nt61_aero_defaults", .module = nt61_aero_defaults_host_mod },
             .{ .name = "aero_flag_mapping", .module = aero_flag_mapping_host_mod },
+            .{ .name = "csr_lpc_policy", .module = csr_lpc_policy_host_mod },
         },
     });
     const nt61_dual_track_tests = b.addTest(.{
@@ -831,16 +871,91 @@ pub fn build(b: *std.Build) void {
     });
     const run_dwm_blur_budget_tests = b.addRunArtifact(dwm_blur_budget_tests);
 
+    const dwm_nt61_api_contract_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/dwm_nt61_api_contract.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const dwm_nt61_api_contract_tests = b.addTest(.{
+        .root_module = dwm_nt61_api_contract_host_mod,
+        .name = "dwm_nt61_api_contract_host",
+    });
+    const run_dwm_nt61_api_contract_tests = b.addRunArtifact(dwm_nt61_api_contract_tests);
+
+    const win32k_api_semantics_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/win32k_api_semantics_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "msg_pm_semantics", .module = msg_pm_semantics_host_mod },
+            .{ .name = "csr_lpc_policy", .module = csr_lpc_policy_host_mod },
+            .{ .name = "gdi_rop_contract", .module = gdi_rop_contract_host_mod },
+            .{ .name = "dwm_nt61_api_contract", .module = dwm_nt61_api_contract_host_mod },
+        },
+    });
+    const win32k_api_semantics_tests = b.addTest(.{
+        .root_module = win32k_api_semantics_host_mod,
+        .name = "win32k_api_semantics_host",
+    });
+    const run_win32k_api_semantics_tests = b.addRunArtifact(win32k_api_semantics_tests);
+
     const dwm_messages_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/dwm_messages_nt61.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "dwm_nt61_api_contract", .module = dwm_nt61_api_contract_host_mod },
+        },
     });
     const dwm_messages_nt61_tests = b.addTest(.{
         .root_module = dwm_messages_nt61_host_mod,
         .name = "dwm_messages_nt61_host",
     });
     const run_dwm_messages_nt61_tests = b.addRunArtifact(dwm_messages_nt61_tests);
+
+    const dwm_zorder_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/dwm_zorder_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const dwm_zorder_nt61_tests = b.addTest(.{
+        .root_module = dwm_zorder_nt61_host_mod,
+        .name = "dwm_zorder_nt61_host",
+    });
+    const run_dwm_zorder_nt61_tests = b.addRunArtifact(dwm_zorder_nt61_tests);
+
+    const multimon_dpi_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/multimon_dpi_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const multimon_dpi_nt61_tests = b.addTest(.{
+        .root_module = multimon_dpi_nt61_host_mod,
+        .name = "multimon_dpi_nt61_host",
+    });
+    const run_multimon_dpi_nt61_tests = b.addRunArtifact(multimon_dpi_nt61_tests);
+
+    const taskbar_peek_hit_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/taskbar_peek_hit_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const taskbar_peek_hit_nt61_tests = b.addTest(.{
+        .root_module = taskbar_peek_hit_nt61_host_mod,
+        .name = "taskbar_peek_hit_nt61_host",
+    });
+    const run_taskbar_peek_hit_nt61_tests = b.addRunArtifact(taskbar_peek_hit_nt61_tests);
+
+    const kernel_stub_audit_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/kernel_stub_audit_anchor_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const kernel_stub_audit_tests = b.addTest(.{
+        .root_module = kernel_stub_audit_host_mod,
+        .name = "kernel_stub_audit_anchor_host",
+    });
+    const run_kernel_stub_audit_tests = b.addRunArtifact(kernel_stub_audit_tests);
 
     const dwm_nt61_integration_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/dwm_nt61_integration_host.zig"),
@@ -894,7 +1009,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_x64_x86_namespace_tests = b.addRunArtifact(ssdt_x64_x86_namespace_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_messages_nt61_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -924,6 +1039,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_nt61_abi_layout_tests.step);
     test_step.dependOn(&run_win32k_tests.step);
     test_step.dependOn(&run_msg_pm_semantics_tests.step);
+    test_step.dependOn(&run_gdi_rop_contract_tests.step);
+    test_step.dependOn(&run_hid_boot_report_tests.step);
     test_step.dependOn(&run_dwm_surface_spec_tests.step);
     test_step.dependOn(&run_aero_flag_mapping_tests.step);
     test_step.dependOn(&run_nt61_aero_defaults_tests.step);
@@ -931,7 +1048,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_color_nt61_tests.step);
     test_step.dependOn(&run_dwm_config_registry_sync_tests.step);
     test_step.dependOn(&run_dwm_blur_budget_tests.step);
+    test_step.dependOn(&run_dwm_nt61_api_contract_tests.step);
+    test_step.dependOn(&run_win32k_api_semantics_tests.step);
+    test_step.dependOn(&run_csr_lpc_policy_tests.step);
     test_step.dependOn(&run_dwm_messages_nt61_tests.step);
+    test_step.dependOn(&run_dwm_zorder_nt61_tests.step);
+    test_step.dependOn(&run_multimon_dpi_nt61_tests.step);
+    test_step.dependOn(&run_taskbar_peek_hit_nt61_tests.step);
+    test_step.dependOn(&run_kernel_stub_audit_tests.step);
     test_step.dependOn(&run_dwm_nt61_integration_tests.step);
     test_step.dependOn(&run_registry_zosh1_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);

@@ -6,7 +6,7 @@
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
-// Concept (pointer vs main frame decoupling): mdcs/ideas.md; public behavior refs:
+// Concept (pointer vs main frame decoupling): docs/cn/AeroDesktopRuntime.md §9, docs/cn/PointerPolicy_NT61.md; public behavior refs:
 // https://learn.microsoft.com/en-us/windows/win32/dwm/dwm-overview
 // https://learn.microsoft.com/en-us/windows-hardware/drivers/display/dxgkddisetpointerposition
 

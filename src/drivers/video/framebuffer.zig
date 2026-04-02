@@ -84,6 +84,82 @@ pub const Rect = struct {
     }
 };
 
+/// 虚拟桌面上的监视器布局（NT 6.1 多监视器 / DPI 概念的简化内核模型；单 GOP 时仅一项）。
+/// 脏矩形与命中测试使用 **物理像素**，与 `Rect` 同一坐标系；`effective_dpi_*` 供 Shell 逻辑坐标换算。
+/// Ref: https://learn.microsoft.com/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows
+pub const MonitorLayoutNt61 = struct {
+    id: u32 = 0,
+    origin_x: i32 = 0,
+    origin_y: i32 = 0,
+    width_px: u32 = 0,
+    height_px: u32 = 0,
+    /// 有效 DPI，默认 96（100%）。用于 `physicalToLogicalPx`。
+    effective_dpi_x: u16 = 96,
+    effective_dpi_y: u16 = 96,
+};
+
+const MAX_MONITORS_NT61: usize = 4;
+var monitor_layouts: [MAX_MONITORS_NT61]MonitorLayoutNt61 = [_]MonitorLayoutNt61{.{}} ** MAX_MONITORS_NT61;
+var monitor_layout_count: u32 = 0;
+
+fn syncMonitorLayoutsFromPrimary() void {
+    monitor_layout_count = 0;
+    if (!config_ready or fb_config.width == 0 or fb_config.height == 0) return;
+    monitor_layouts[0] = .{
+        .id = 0,
+        .origin_x = 0,
+        .origin_y = 0,
+        .width_px = fb_config.width,
+        .height_px = fb_config.height,
+        .effective_dpi_x = 96,
+        .effective_dpi_y = 96,
+    };
+    monitor_layout_count = 1;
+}
+
+pub fn getMonitorLayoutCount() u32 {
+    return monitor_layout_count;
+}
+
+pub fn getMonitorLayout(index: u32) ?MonitorLayoutNt61 {
+    if (index >= monitor_layout_count) return null;
+    return monitor_layouts[index];
+}
+
+/// 物理像素坐标 → 逻辑像素（96 DPI 基准）。`dpi` 为 0 时按 96 处理。
+pub fn physicalToLogicalPx(dpi: u16, physical_px: i32) i32 {
+    const d: i64 = if (dpi == 0) 96 else @intCast(dpi);
+    return @intCast(@divTrunc(@as(i64, physical_px) * 96, @max(1, d)));
+}
+
+/// `virtual` 外包：当前等于主监视器矩形；多监视器扩展时合并各 `MonitorLayoutNt61`。
+pub fn getVirtualDesktopBounds() Rect {
+    if (monitor_layout_count == 0) return .{};
+    var r = Rect{
+        .x = monitor_layouts[0].origin_x,
+        .y = monitor_layouts[0].origin_y,
+        .w = @as(i32, @intCast(monitor_layouts[0].width_px)),
+        .h = @as(i32, @intCast(monitor_layouts[0].height_px)),
+    };
+    var i: u32 = 1;
+    while (i < monitor_layout_count) : (i += 1) {
+        const m = monitor_layouts[i];
+        const mx2 = @as(i64, m.origin_x) + @as(i64, @intCast(m.width_px));
+        const my2 = @as(i64, m.origin_y) + @as(i64, @intCast(m.height_px));
+        const rx2 = @as(i64, r.x) + @as(i64, r.w);
+        const ry2 = @as(i64, r.y) + @as(i64, r.h);
+        const nx0 = @min(@as(i64, r.x), @as(i64, m.origin_x));
+        const ny0 = @min(@as(i64, r.y), @as(i64, m.origin_y));
+        const nx1 = @max(rx2, mx2);
+        const ny1 = @max(ry2, my2);
+        r.x = @intCast(nx0);
+        r.y = @intCast(ny0);
+        r.w = @intCast(nx1 - nx0);
+        r.h = @intCast(ny1 - ny0);
+    }
+    return r;
+}
+
 /// `origin + delta` 与 `limit` 比较后再截断为 u32，避免 `x0 + w` 在 u32 上先溢出（Debug 下 panic）。
 fn addU32Clamped(origin: u32, delta: u32, limit: u32) u32 {
     const s = @as(u64, origin) + @as(u64, delta);
@@ -104,10 +180,38 @@ const MAX_DIRTY_RECTS: usize = 32;
 var dirty_rects: [MAX_DIRTY_RECTS]Rect = [_]Rect{.{}} ** MAX_DIRTY_RECTS;
 var dirty_count: usize = 0;
 
+fn dirtyRectUnion2(a: Rect, b: Rect) Rect {
+    const ax1 = a.x + a.w;
+    const ay1 = a.y + a.h;
+    const bx1 = b.x + b.w;
+    const by1 = b.y + b.h;
+    const x0 = @min(a.x, b.x);
+    const y0 = @min(a.y, b.y);
+    const x1 = @max(ax1, bx1);
+    const y1 = @max(ay1, by1);
+    return .{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
+}
+
+/// 并入脏矩形列表：与已有矩形**相交**则合并为一项，减轻 `dirty_count` 顶满后被迫整屏回退（CPU 合成路径）。
 pub fn addDirtyRect(r: Rect) void {
+    if (r.w <= 0 or r.h <= 0) return;
+    var nr = r;
+    var i: usize = 0;
+    while (i < dirty_count) {
+        if (dirty_rects[i].intersects(nr)) {
+            nr = dirtyRectUnion2(dirty_rects[i], nr);
+            dirty_rects[i] = dirty_rects[dirty_count - 1];
+            dirty_count -= 1;
+            i = 0;
+            continue;
+        }
+        i += 1;
+    }
     if (dirty_count < MAX_DIRTY_RECTS) {
-        dirty_rects[dirty_count] = r;
+        dirty_rects[dirty_count] = nr;
         dirty_count += 1;
+    } else {
+        markFullScreenDirty();
     }
 }
 
@@ -170,9 +274,9 @@ var total_draw_calls: u64 = 0;
 var total_flips: u64 = 0;
 
 // ── Double / triple off-screen buffering ──
-// 双缓冲：单离屏槽 + GOP。三缓冲（乒乓）：两离屏槽 + GOP；present 后切换 draw_slot（概念见 mdcs/ideas.md，自研非 DXGI）。
+// 双缓冲：单离屏槽 + GOP。三缓冲（乒乓）：两离屏槽 + GOP；present 后切换 draw_slot（概念见 docs/cn/AeroDesktopRuntime.md §9，自研非 DXGI）。
 // 单缓冲（double_buffer_active=false）：getDrawBuffer() 即 GOP；flipDirty() 仅清 dirty 计数、不做 memcpy（屏前直绘 + 软件光标 save-under 同面）。
-// 路线图：与用户态 DWM 共享合成缓冲时，优先改为 `NtCreateSection` + 跨进程 `NtMapViewOfSection`（见 mdcs/claude/content6.2.md 阶段 D3）。
+// 路线图：与用户态 DWM 共享合成缓冲时，优先改为 `NtCreateSection` + 跨进程 `NtMapViewOfSection`（见 docs/cn/MM_Section_Roadmap.md、docs/cn/DesktopManagerSpec.md）。
 const BACK_BUF_MAX: usize = 10 * 1024 * 1024; // 10 MB – covers up to 1920×1080@32bpp
 var back_buf: [BACK_BUF_MAX]u8 align(1) = undefined;
 var double_buffer_active: bool = false;
@@ -1532,6 +1636,7 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
     };
 
     config_ready = (addr != 0 and width > 0 and height > 0 and bpp > 0);
+    syncMonitorLayoutsFromPrimary();
 
     seedDrawBufferFromVisibleIfConfigured();
 

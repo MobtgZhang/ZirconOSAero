@@ -53,6 +53,7 @@ jobs:
       - name: Kernel + ZBM objects (aarch64, riscv64, loongarch64)
         run: |
           zig build kernel -Darch=aarch64
+          zig build kernel -Darch=aarch64 -Ddesktop-full=true
           zig build kernel -Darch=riscv64
           zig build kernel -Darch=loongarch64
           # Named ZBM object steps are registered only when -Darch matches (see build.zig).

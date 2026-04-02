@@ -7,8 +7,8 @@
 | API | `CreateWindowEx` | Window 函数 | `src/subsystems/win32/user32.zig` | 契约：失败 `NULL` + `SetLastError` |
 | API | `DestroyWindow` | 同上 | 同上 | `ERROR_INVALID_HANDLE` |
 | API | `SetWindowPos` / `MoveWindow` | 同上 | 同上 | 与 `dwm_compositor` 脏区联动 |
-| API | `GetMessage` / `PeekMessage` | 消息泵 | 同上 | 线程过滤 + `PM_*` |
-| 内核 | `NtUserDispatchMessage`（折叠 SSDT `0x5E`） | 消息泵 | `syscall.zig` + `user32.zig` `ntUserDispatchMessageSyscall` | W 波次桩 → 完整 WndProc |
+| API | `GetMessage` / `PeekMessage` | 消息泵 | 同上 | 线程过滤 + `PM_*`；畸形 min/max → `ERROR_INVALID_PARAMETER`；**msg_pm_semantics_host** |
+| 内核 | `NtUserDispatchMessage`（折叠 SSDT `0x5E`） | 消息泵 | `syscall.zig` + `user32.zig` `ntUserDispatchMessageSyscall` | 与 `DispatchMessageA` 同路径（无 WndProc 表 → `DefWindowProcA`）；**win32k_api_semantics_host** |
 | API | `BeginPaint` / `EndPaint` | WM_PAINT | 同上 | `PAINTSTRUCT` |
 | 消息 | `WM_DWMCOMPOSITIONCHANGED` 等 | DWM 消息 | `user32.zig` `broadcastDwm*` | 矩阵 §4 |
 | 消息 | `WM_NCHITTEST` / `WM_NCLBUTTONDOWN` | 非客户区 | `user32.zig` `DefWindowProcA` | [PointerPolicy_NT61.md](PointerPolicy_NT61.md) |

@@ -76,6 +76,8 @@ pub const ERROR_FILE_NOT_FOUND: DWORD = 2;
 pub const ERROR_PATH_NOT_FOUND: DWORD = 3;
 pub const ERROR_ACCESS_DENIED: DWORD = 5;
 pub const ERROR_INVALID_HANDLE: DWORD = 6;
+/// Ref: Win32 `ERROR_INVALID_PARAMETER` — 用于 GDI 未实现 ROP 等「参数合法但组合不支持」路径（矩阵 §5）。
+pub const ERROR_INVALID_PARAMETER: DWORD = 87;
 pub const ERROR_NOT_ENOUGH_MEMORY: DWORD = 8;
 /// Ref: 公开 Win32 系统错误码 — `ERROR_CANNOT_FIND_WND_CLASS`（未注册窗口类）。
 pub const ERROR_CANNOT_FIND_WND_CLASS: DWORD = 1407;

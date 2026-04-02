@@ -18,7 +18,7 @@
 
 - **状态变更源**：`src/drivers/video/dwm.zig` 的 `setCompositionEnabled`、`setColorizationTint`、`setGlass`、`syncPolicyFromRegistry` 等。
 - **广播路径**：`src/subsystems/win32/user32.zig` 中 `broadcastDwmCompositionChanged` / `broadcastDwmColorizationChanged` / `broadcastDwmNcRenderingChanged` / `broadcastDwmIconicThumbnailRequested`：向 **每个有效 HWND 的消息队列** `postMessage`，并 **额外** 向已登记线程 `PostThreadMessage`（`registerDwmNotificationListener` + `dwm_listener_tids[]`，上限 8）。
-- **与 content7.1「csrss 维护监听列表 + LPC 投递」的差异**：本阶段 **无** 独立 csrss 进程内维护列表；等价语义为「登记线程 tid + 内核侧线程投递表」。若将来引入真 LPC/csrss，可将 `registerDwmNotificationListener` 的登记迁移到 csrss，而 ** HWND 队列广播** 仍可与现路径并存（双投）或收敛为单一真源（见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.1）。
+- **与典型「csrss 维护监听列表 + LPC 投递」拓扑的差异**：本阶段 **无** 独立 csrss 进程内维护列表；等价语义为「登记线程 tid + 内核侧线程投递表」。若将来引入真 LPC/csrss，可将 `registerDwmNotificationListener` 的登记迁移到 csrss，而 ** HWND 队列广播** 仍可与现路径并存（双投）或收敛为单一真源（见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.1）。
 
 ## WM\_DWM\* 与 `dwm.zig` 触发对应关系
 
@@ -35,7 +35,7 @@
 
 主机单测：`tests/nt61/dwm_messages_nt61.zig`、`tests/nt61/dwm_nt61_integration_host.zig`（常量、`lParam` 打包与监听队列叙事烟测）；**`dwm_config_registry_sync_host`**（注册表同步 → 广播提示位）；**`nt61_dual_track_host`**（默认值与标志映射回归）。
 
-## 3. 与「理想 csrss + LPC」拓扑的差异（对照 content7.1）
+## 3. 与「理想 csrss + LPC」拓扑的差异（对照典型 NT 风格模型）
 
 | 理想项（路线图叙述） | 本仓库当前 |
 |----------------------|------------|

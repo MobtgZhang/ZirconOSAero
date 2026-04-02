@@ -1,6 +1,6 @@
 # NT 6.1 内核 PR 门禁清单（K0，Clean-room）
 
-与 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) **Phase K0**、[mdcs/composer2/content1.3.md](../../mdcs/composer2/content1.3.md) 及计划「NT61 内核与显示待办」一致。合并内核相关 PR 前自查；**不替代**人工代码审查。
+与 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) **Phase K0**、[AeroDesktopRuntime.md](AeroDesktopRuntime.md)（QEMU/显示路径）及「NT61 内核与显示待办」一致。合并内核相关 PR 前自查；**不替代**人工代码审查。
 
 ## K0.1 契约矩阵
 
@@ -26,7 +26,7 @@
 - [ ] 若 README、[docs/en/Subsystems.md](../en/Subsystems.md)、[docs/cn/Subsystems.md](Subsystems.md) 或营销性「功能列表」中**扩大** Win32、WOW64、ntdll、csrss、user32、gdi32 的完成度表述，须**同一 PR** 更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与（如适用）[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)，并在 [MVT_NT61.md](MVT_NT61.md) 或 `tests/` 增加可复现验证，或明确保持 `Stub`/`Partial`。
 - [ ] 实现与文档引用仅限 **Microsoft Learn、WDK、硬件规范、公开发表的 ABI 对照**；行为细节不足时以实验 + 文档迭代，不依赖非白名单逆向代码库。
 
-**分阶段路线图**：仓库内分析见 [mdcs/claude/content5.3.md](../../mdcs/claude/content5.3.md)（Win32/ntdll 差距清单）；内核里程碑仍以 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K0–K8 与 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) 为准。
+**分阶段路线图**：Win32/ntdll 差距与 API 覆盖见 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md)、[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)；内核里程碑仍以 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K0–K8 为准。
 
 ## 相关索引
 | 文档 | 用途 |

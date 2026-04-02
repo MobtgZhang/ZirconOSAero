@@ -12,6 +12,8 @@ const console_mod = @import("console.zig");
 const pe_loader = @import("../../loader/pe.zig");
 const user32 = @import("user32.zig");
 const gdi32 = @import("gdi32.zig");
+const csr_lpc_policy = @import("csr_lpc_policy.zig");
+const token = @import("../../se/token.zig");
 
 pub const CSRSS_VERSION: []const u8 = "ZirconOSAero CSRSS v1.0";
 
@@ -137,8 +139,25 @@ var csrss_port_id: u32 = 0;
 var csrss_initialized: bool = false;
 var api_call_count: u64 = 0;
 
+/// K6.3：`seAccessActiveDesktopForWin32k` 的占位主令牌（每进程独立令牌接入后以进程表为准）。
+var lpc_gui_client_stub_token: token.Token = undefined;
+var lpc_gui_client_stub_ready: bool = false;
+
+fn ensureLpcGuiPolicyToken() void {
+    if (!lpc_gui_client_stub_ready) {
+        lpc_gui_client_stub_token = token.createUserToken(0);
+        lpc_gui_client_stub_ready = true;
+    }
+}
+
+fn lpcGuiAllowedOnActiveDesktop(wp: *const Win32Process) bool {
+    ensureLpcGuiPolicyToken();
+    return token.seAccessActiveDesktopForWin32k(&lpc_gui_client_stub_token, wp.desktop_id, @intCast(active_desktop_idx));
+}
+
 // ── Subsystem Management ──
 
+/// 未来：在此挂接 **每进程** `Token`（替换 `lpc_gui_client_stub_token` 占位）时，须在矩阵 §4.1 / §9.2 登记并与 `seAccessActiveDesktopForWin32k` 一致。
 pub fn registerProcess(pid: u32, subsystem: SubsystemType, image_name: []const u8, parent_pid: u32) ?*Win32Process {
     if (win32_process_count >= MAX_WIN32_PROCESSES) return null;
 
@@ -244,10 +263,13 @@ pub fn setProcessDesktop(pid: u32, desktop_index: u32) bool {
 }
 
 // ── API Dispatch ──
+//
+// **单一真源（DesktopManagerSpec §3.3）**：GUI 相关 LPC（register/destroy/post/get_message）仅做活动桌面校验后
+// **委托** `user32`；消息队列与 HWND 表以 `user32` 为准，本模块不维护平行队列。
 
 /// LPC `register_window`：前 8 字节小端 `HWND`（`u64`）。
 /// `post_message`：偏移 0 `HWND`，8 `msg:u32`，12 填充，16 `wparam:u64`，24 `lparam:i64`（小端）。
-/// `get_message`：0–8 `HWND`，8–12 min，12–16 max，16–20 `PM_*`；20–24 线程 id（`0` 则用 `pid`）；应答见 `user32.csrFillOneMessageForLpc`。
+/// `get_message`：0–8 `HWND`，8–12 min，12–16 max，16–20 `PM_*`；20–24 **非零**线程 id（与 `CreateWindowEx` 登记一致）；`0` 返回失败（不再用 `pid` 代替，见 `csr_lpc_policy`）。
 /// **步骤总表（问题五）**：与 [DesktopManagerSpec.md](../../docs/cn/DesktopManagerSpec.md) §3.4 同步；LPC **不**替代 `CreateWindowEx` 建 HWND。
 pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DATA_SIZE]u8) i32 {
     api_call_count += 1;
@@ -295,6 +317,8 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
         // DesktopManagerSpec：LPC `register_window` 在用户态创建 HWND 之后调用；`user32.onCsrssRegisterGuiWindow`
         // 为该 HWND 补绑 `dwm_compositor` 重定向表面（与 `CreateWindowEx` 内联分配互为双保险）。
         .register_window => {
+            const wp = findWin32Process(pid) orelse return -1;
+            if (!lpcGuiAllowedOnActiveDesktop(wp)) return -1;
             var hwnd: u64 = 0;
             if (data_opt) |d| {
                 hwnd = std.mem.readInt(u64, d[0..8], .little);
@@ -302,6 +326,8 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             return if (registerGuiWindow(pid, hwnd)) 0 else -1;
         },
         .destroy_window => {
+            const wp = findWin32Process(pid) orelse return -1;
+            if (!lpcGuiAllowedOnActiveDesktop(wp)) return -1;
             var hwnd: u64 = 0;
             if (data_opt) |d| {
                 hwnd = std.mem.readInt(u64, d[0..8], .little);
@@ -317,13 +343,15 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             if (data_opt) |d| {
                 if (d.len >= 4) tid = std.mem.readInt(u32, d[0..4], .little);
             }
-            if (tid == 0) tid = pid;
+            tid = csr_lpc_policy.resolveDwmListenerTid(tid, pid);
             user32.registerDwmNotificationListener(tid);
             return 0;
         },
         .post_message => {
+            const wp = findWin32Process(pid) orelse return -1;
+            if (!lpcGuiAllowedOnActiveDesktop(wp)) return -1;
             if (data_opt) |d| {
-                if (d.len >= 32) {
+                if (csr_lpc_policy.validatePostMessagePayloadLen(d.len)) {
                     const hwnd = std.mem.readInt(u64, d[0..8], .little);
                     const msg = std.mem.readInt(u32, d[8..12], .little);
                     const wparam = std.mem.readInt(u64, d[16..24], .little);
@@ -335,13 +363,15 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             return -1;
         },
         .get_message => {
+            const wp = findWin32Process(pid) orelse return -1;
+            if (!lpcGuiAllowedOnActiveDesktop(wp)) return -1;
             const d = data_opt orelse return -1;
             const hwnd = std.mem.readInt(u64, d[0..8], .little);
             const min_v = std.mem.readInt(u32, d[8..12], .little);
             const max_v = std.mem.readInt(u32, d[12..16], .little);
             const remove = std.mem.readInt(u32, d[16..20], .little);
             const tid_in = std.mem.readInt(u32, d[20..24], .little);
-            const client_tid: u32 = if (tid_in != 0) tid_in else pid;
+            const client_tid = csr_lpc_policy.resolveGetMessageClientTid(tid_in) orelse return -1;
             return user32.csrFillOneMessageForLpc(client_tid, hwnd, min_v, max_v, remove);
         },
         else => return -1,
@@ -479,4 +509,6 @@ pub fn init() void {
     klog.info("csrss: GUI message dispatch ready", .{});
 
     port.setCsrRequestHandler(lpcCsrInlineHandler);
+
+    ensureLpcGuiPolicyToken();
 }

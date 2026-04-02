@@ -2,7 +2,7 @@
 
 **ZirconOSAero** 是以 **NT 6.1（Windows 7）** ABI/体验为目标的独立 clean-room 内核与用户态栈；Aero 桌面、**仅 ZBM 引导**（BIOS/MBR 与 UEFI）。**本仓库实现与文档均为独立演进，不复制 Windows/ReactOS 源码**。
 
-**独立项目声明**：本仓库并非 Microsoft 或 Windows 的产品，未获其赞助或背书。「Windows」「Windows 7」等商标归 Microsoft Corporation 及其关联公司所有，本文档中的表述仅用于描述外观兼容或技术类比。实现为原创或与开源许可明确的第三方组件（见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
+**独立项目声明**：非 Microsoft 产品；「Windows」「Windows 7」等为商标说明，仅用于兼容目标描述。第三方与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
 <p align="center">
   <img src="assets/ZirconOS_logo.svg" alt="ZirconOSAero" width="480" />
@@ -10,26 +10,28 @@
 
 ## Screenshots
 
-<p align="center">
-  <img src="assets/screenshot-zbm.png" alt="ZBM boot manager (Windows 7 style)" width="70%" />
-</p>
-<p align="center"><em>ZirconOSAero Boot Manager (ZBM) — Windows 7–style text menu</em></p>
-
-<p align="center">
-  <img src="assets/screenshot-aero.png" alt="ZirconOSAero Aero desktop" width="70%" />
-</p>
-<p align="center"><em>Shell — Windows 7 Aero（NT 6.1）唯一内置桌面</em></p>
-
-<p align="center">
-  <img src="assets/screenshot-cmd.png" alt="CMD shell" width="70%" />
-</p>
-<p align="center"><em>CMD shell</em></p>
+<table width="100%">
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <img src="assets/screenshot-zbm.png" alt="ZBM boot manager (Windows 7 style)" width="95%" /><br />
+      <sub>ZBM — Windows 7–style text menu</sub>
+    </td>
+    <td align="center" width="34%" valign="top">
+      <img src="assets/screenshot-aero.png" alt="ZirconOSAero Aero desktop" width="95%" /><br />
+      <sub>Shell — Windows 7 Aero (NT 6.1)</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <img src="assets/screenshot-cmd.png" alt="CMD shell" width="95%" /><br />
+      <sub>CMD shell</sub>
+    </td>
+  </tr>
+</table>
 
 **中文说明**：[README_cn.md](README_cn.md)
 
 [![CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml/badge.svg)](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
 
-**CI 与本地复现**：`zig build test`（堆、池、buddy、SSDT、对象句柄表、安全 DAC、**dwm_messages_nt61_host** / **dwm_nt61_integration_host** / **registry_zosh1_host** 等主机测试）；`zig build install -Doptimize=ReleaseSafe -Darch=x86_64`；无头烟测 `bash scripts/ci-qemu-smoke.sh`（构建 ZBM MBR 盘、校验内核 ELF 内嵌横幅，并可选串口增强断言）。**最小可验证测试索引**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。详见 [.github/workflows/ci.yml](.github/workflows/ci.yml) 与 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)（Zig **0.15.2**、Release 校验和说明）。
+**CI / 本地**：`zig build test`；`bash scripts/ci-qemu-smoke.sh`；Zig **0.15.2**（见 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)、[.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试索引：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
 
 ## Design
 
@@ -44,13 +46,11 @@
 - **Dual filesystem**: FAT32 (system volume) and NTFS (data volume)
 - **Multi-architecture**: x86_64 (primary), aarch64, loongarch64, riscv64, mips64el
 
-**开发流程（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md)
+**流程与契约（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md) · [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列同源；**Partial / Stub** 即非 Done）· [docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md) · [docs/cn/DWM_NOTIFY_MODEL_NT61.md](docs/cn/DWM_NOTIFY_MODEL_NT61.md) · [docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md) · [docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) / [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)
 
-**契约与完成度（必读）**：[docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列交叉引用；**Partial / Stub** 表示非 Done；§4.1 backlog 与 VirtIO PoC、`NtOpenKey` 内存树、DWM 通知等同步）。**DWM 消息与监听模型**：[docs/cn/DWM_NOTIFY_MODEL_NT61.md](docs/cn/DWM_NOTIFY_MODEL_NT61.md)。**Deferred surfaces**（full Win32 / full WOW64, etc.）：[docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md)。**MVT**：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。**版权与知识来源**：[docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) · [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)。
+状态标签：`Stub` · `Partial` · `Done` · `Verified`。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
-**实现状态标签**：`Stub`（骨架）· `Partial`（部分语义）· `Done`（与公开文档一致）· `Verified`（含自动化回归）。API 覆盖骨架见 [docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
-
-Documentation: [`docs/README.md`](docs/README.md) · [`docs/en/Architecture.md`](docs/en/Architecture.md) · [`docs/en/Kernel.md`](docs/en/Kernel.md) · [`docs/cn/TIER2_ARCHITECTURES.md`](docs/cn/TIER2_ARCHITECTURES.md) · [`docs/en/Boot.md`](docs/en/Boot.md) · [`docs/en/Servers.md`](docs/en/Servers.md) · [`docs/en/Subsystems.md`](docs/en/Subsystems.md) · [`docs/en/BuildSystem.md`](docs/en/BuildSystem.md) · [`docs/en/Roadmap.md`](docs/en/Roadmap.md)
+More: [`docs/README.md`](docs/README.md) · [`docs/en/Architecture.md`](docs/en/Architecture.md) · [`docs/en/Kernel.md`](docs/en/Kernel.md) · [`docs/en/Boot.md`](docs/en/Boot.md) · [`docs/en/BuildSystem.md`](docs/en/BuildSystem.md) · [`docs/en/Roadmap.md`](docs/en/Roadmap.md)
 
 ## Repository layout
 
@@ -165,11 +165,7 @@ zig build -Darch=x86_64 -Ddebug=true -Denable_idt=true
 
 ## Completion disclaimer（完成度说明）
 
-本仓库是面向 **NT 6.1 公开 ABI/文档** 的 **clean-room** 实验性实现：实现与文档均为独立撰写，**不**使用、不翻译、不对照复制 Windows 内核源码或 ReactOS/Wine 等第三方实现代码；行为以 [Microsoft Learn](https://learn.microsoft.com/)、WDK 公开说明及 CPU/固件规范为准。
-
-特性矩阵中的 **Done** 仅表示：在 **QEMU/CI 烟测** 路径上该模块有 **可运行的主路径演示**，并与 [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md) 中的契约描述一致。**Done 不表示**与商业版 Windows 7 内核在完整性、边界行为、性能或安全属性上已等价。许多组件仍为 **Partial / Stub**（子集实现或占位）；历史上若出现「全盘 Done」类表述，应视为过时——**以契约矩阵 + 自动化测试 + 源码注释为准**。完整 NT 6.1 级内核是多年工程；本项目的现实定位是 **可验证的研究与渐进兼容**，而非「已复刻完成」的产品声明。
-
-**CI**：`/.github/workflows/ci.yml` 对 **x86_64 / aarch64 / riscv64 / loongarch64** 做内核与 ZBM 相关交叉编译，x86_64 另生成 UEFI ISO 烟测产物；详见 [docs/en/Boot.md](docs/en/Boot.md)。
+Clean-room，行为以 [Microsoft Learn](https://learn.microsoft.com/)、WDK 与硬件规范为准；**不**复制 Windows/ReactOS/Wine 源码。矩阵中 **Done** = QEMU/CI 主路径可演示且与 [契约矩阵](docs/cn/NT61_CONTRACT_MATRIX.md) 一致，**不等于**与商业 Windows 7 等价；以矩阵 + `zig build test` + 源码为准。多架构 CI 与引导见 [docs/en/Boot.md](docs/en/Boot.md)。
 
 ## Phase 0–11 feature matrix（继承上游能力）
 

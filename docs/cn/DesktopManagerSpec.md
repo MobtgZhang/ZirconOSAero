@@ -18,6 +18,22 @@
 
 向 **方案 A**（用户态唯一合成进程、内核仅 blit）演进时：保留本规格中的对象与 API 表，将实现从内核 `renderer_aero` 迁出即可。
 
+### 1.1 方案 A 迁移检查表（阶段 2 工程闸门）
+
+下列项用于将 **方案 B → 方案 A** 的职责迁移拆成可验收步骤；行为仍以公开文档（DWM / Desktop Window Manager 概念）为参考，实现保持 clean-room。
+
+| 检查项 | 方案 B（当前）责任所在 | 方案 A 目标责任 | 内核保留（最小集） |
+|--------|------------------------|-----------------|-------------------|
+| 壁纸 / 任务栏 / 开始菜单像素 | `renderer_aero.zig`、`display.zig` 壳层绘制 | 用户态 compositor + 共享/映射表面 | GOP **blit**、可选硬件光标通知 |
+| 每窗玻璃 / 模糊 / 阴影 | `dwm.zig`、`material.zig`、`dwm_compositor.compose` | 用户态或独立合成服务写入离屏缓冲 | 仅 **提交脏区 + present** 契约；不保留盒式模糊热路径（可配置关闭） |
+| Z-order / 脏矩形权威 | `user32` + `dwm_compositor` 表面元数据 | 用户态 `aero/compositor.zig` 为单一真源 | 内核校验 HWND/表面绑定与安全策略后 **转发** |
+| 缩略图 / Flip3D 采样 | `dwm_compositor` 帧缓冲读回 | 用户态持有缩略缓冲或经 IOCTL 提交位图 | 节流与 **帧序号** 对齐（见下） |
+| VSync / 帧节拍 | `display.present`、`isDesktopVsyncPolicyEnabled` | 用户态泵或内核 **诚实** 等待 HAL | `waitForVerticalBlank` 类钩子占位（WDK 行为级，无专有栈） |
+
+**Present 契约（内核 API 草图，已实现入口）**：`display.submitCompositorPresentHints(?framebuffer.Rect)` 在调用 `present()` **之前**登记与本帧相关的脏矩形（并入 `framebuffer.addDirtyRect` 合并策略）；`present()` 末尾 `dwm_compositor.notifyFramePresented()` 递增合成器帧序号并驱动缩略刷新节流。查询节拍：`display.getFrameCount()`（桌面 present 计数）、`dwm_compositor.getFrameNumber()`（合成器序号）。未来用户态唯一合成时，应在 IOCTL/LPC 载荷中携带等价脏区与序号，**不**臆测未公开的 Win32k 内部结构。
+
+**验收**：每迁出一类绘制，同步更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4.1 与主机测试（如 `dwm_nt61_integration_host`）；`-Ddesktop-full` 下行为与默认路径一致。
+
 ## 2. 对象与进程映射
 
 | NT / Win32 概念 | ZirconOSAero 实现位置 | 说明 |
@@ -47,15 +63,15 @@
 
 ### 3.2 DWM 通知：`WM_DWM*` 与监听线程
 
-与 content7.1 中「csrss 列表 + LPC」的差异及本仓库等价实现、各消息与 `dwm.zig` 触发关系，见专门短文 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md)。
+与 **典型 NT 风格**「csrss 维护监听列表 + LPC 投递」拓扑的差异、本仓库等价实现，以及各消息与 `dwm.zig` 触发关系，见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md)。
 
 ### 3.3 LPC / csrss 与「单一真源」差距清单（工程核对）
 
 | 主题 | 当前状态 | 备注 |
 |------|----------|------|
 | 窗口创建/销毁 → 合成树 | **主路径闭合**：`user32.CreateWindowEx`/`DestroyWindow` ↔ `dwm_compositor`（`detachCompositorSurface` 单点释放，与 `ensureCompositorSurface` 对偶）；**LPC**：`register_window` / `destroy_window` → `onCsrssRegisterGuiWindow` / `DestroyWindow` | csrss 仅对已存在于 `user32` 表的 HWND 补 `ensureCompositorSurface`；**不能**替代「无 CreateWindow 则无主表面」的语义 |
-| Z-order | **子集**：`SetWindowPos` + `syncCompositorZOrderForUserWindows`；`HWND_TOP` / `HWND_BOTTOM` / `HWND_TOPMOST` / **`HWND_NOTOPMOST`（与 TOP 等价，无独立 topmost 层）** / **指定 HWND 之后** | 见矩阵 §4.1；扩展见 `user32.SetWindowPos` |
-| DWM 监听列表 | **内核线程表**（`registerDwmNotificationListener`），非 csrss 进程内列表 | 与 content7.1 理想拓扑差异见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) §3 |
+| Z-order | **子集**：`SetWindowPos` + `syncCompositorZOrderForUserWindows`（**两趟**：先非 `is_topmost` 表面再顶层）；`HWND_TOPMOST` / `HWND_NOTOPMOST` 维护 `Window.is_topmost`；`HWND_TOP` / `HWND_BOTTOM` 仅在 **同 band** 内调整；**指定 HWND 之后**：跨 band 时将 `hwnd` 的 `is_topmost` 与 `insert_after` 对齐后再插入（`user32.placeHwndAboveInsertAfter`） | 见矩阵 §4.1 |
+| DWM 监听列表 | **内核线程表**（`registerDwmNotificationListener`），非 csrss 进程内列表 | 与上述典型拓扑差异见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) §3 |
 | 注册表 → Shell | **ZOSH1 可选文件** + 启动后 `mouse.syncFromRegistry` / `dwm.syncPolicyFromRegistry` | [hive.zig](../../src/registry/hive.zig)、[registry.zig](../../src/registry/registry.zig) |
 | 消息队列 tid | **必须一致**：`GetMessage`/`PostMessage` 与 `csrFillOneMessageForLpc` 使用同一 `thread_id` | LPC 测试若 tid 错配则「有 HWND 无消息」假阴性 |
 
@@ -68,7 +84,9 @@
 | `register_window` | `registerGuiWindow` → **`onCsrssRegisterGuiWindow`**（对已存在 `HWND`：`ensureCompositorSurface` + `notifyCompositorWindowGeometry` + `syncCompositorZOrderForUserWindows` + `syncWin32kFromUser32`） | `CreateWindowEx`、`PostMessage`（除非另行调用） |
 | `destroy_window` | **`DestroyWindow`**（内含 `detachCompositorSurface`）→ `unregisterGuiWindow`（计数） | 无单独 `NtUserDestroyWindow` syscall 包装在本表 |
 | `post_message` | **`PostMessageA`** | 不创建窗口、不分配表面 |
-| `get_message` | **`csrFillOneMessageForLpc`**（内部 `peekMessageAForThread`） | 与 `NtUserGetMessage` 共享队列模型但 **非** 同一 syscall 路径 |
+| `get_message` | **`csrFillOneMessageForLpc`**（内部 `peekMessageAForThread`）；负载 **20–24 须为非零线程 id**（`csr_lpc_policy.resolveGetMessageClientTid`，禁止 `0` 回退 `pid`） | 与 `NtUserGetMessage` 共享队列模型但 **非** 同一 syscall 路径 |
+
+固定偏移与 `csr_lpc_policy.zig` / **`win32k_api_semantics_host`** 一致；`min>max`（且非 `0,0`）在 user32 路径拒绝（`ERROR_INVALID_PARAMETER` / syscall `STATUS_INVALID_PARAMETER`）。
 
 ### 3.5 `CreateWindowEx` / `register_window` 与合成表面不变量（问题五）
 
@@ -88,7 +106,7 @@
 
 **编译期防漂移**：[`aero_flag_mapping.zig`](../../src/config/aero_flag_mapping.zig) 内含 `KernelCompositorSurfaceFlags` 字段序与 `kernelToUserland` 语义 `comptime` 断言；用户态 [`compositor.zig`](../../src/desktop/aero/src/compositor.zig) 在文件末尾对 `SurfaceFlags` 调用 `assertUserlandSurfaceFlagsLayout`。
 
-**颜色跨界（canonical）**：**内核合成主路径**以 [`color_nt61.zig`](../../src/config/color_nt61.zig) 的 **`KernelBgr888Low24`** 为唯一打包语义（与 `drivers/video/theme.zig` 的 `rgb` 一致）；**用户态 / 注册表 / WM 载荷**以 **`ColorrefLow24`** 进出，**必须**经该模块命名转换函数。**不**将「全路径统一 ARGB u32」作为当前里程碑；与 content2.4 收口一致。
+**颜色跨界（canonical）**：**内核合成主路径**以 [`color_nt61.zig`](../../src/config/color_nt61.zig) 的 **`KernelBgr888Low24`** 为唯一打包语义（与 `drivers/video/theme.zig` 的 `rgb` 一致）；**用户态 / 注册表 / WM 载荷**以 **`ColorrefLow24`** 进出，**必须**经该模块命名转换函数。**不**将「全路径统一 ARGB u32」作为当前里程碑；上述 `KernelBgr888Low24` / `ColorrefLow24` 为当前唯一收口。
 
 **验收（防双轨）**：在 `nt61_aero_defaults.zig` 中仅修改 `KernelDwm.glass_tint_color`（或任一已由 `UserShellDwm` 镜像的字段）而**不**同步更新 `UserShellDwm` 对应别名时，应 **编译失败**（`comptime` 断言）；并 bump `compositor_config_epoch`。
 

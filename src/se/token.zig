@@ -6,6 +6,7 @@
 //! 里程碑（clean-room，仅 WDK/MS Learn 行为描述）：**令牌模拟（impersonation）**、完整 **SACL/ACL** 编辑器与对象审计策略为长期项；当前为演示路径子集。跟踪：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K6.3。
 // **P4-B2**：线程级 `Impersonate*` / 还原令牌的 IRQL 与亲和约束为文档化简化；生产语义见 WDK `SeImpersonateClientEx` 类说明。
 
+const std = @import("std");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
 
@@ -113,7 +114,35 @@ pub fn seAccessCheckMask(tok: *const Token, desired: ob.ACCESS_MASK, object_gran
     return (object_grants & desired) == desired;
 }
 
+/// K6.3 子集：进程绑定桌面与**活动桌面**不一致时拒绝对话级 GUI（与 csrss `handleApiCall` 门闸一致）。
+/// 系统 SID 或 **已提升且含 TCB** 的令牌可跨桌面（服务路径占位；完整 DACL 见路线图）。
+/// Ref: https://learn.microsoft.com/windows/win32/winstation/window-stations-and-desktops
+pub fn seAccessActiveDesktopForWin32k(tok: *const Token, process_desktop_idx: u32, active_desktop_idx: u32) bool {
+    if (process_desktop_idx == active_desktop_idx) return true;
+    if (tok.owner.eql(SYSTEM_SID)) return true;
+    if (tok.is_elevated and tok.hasPrivilege(PRIV_TCB)) return true;
+    return false;
+}
+
 pub fn init() void {
     next_token_id = 1;
     klog.info("Security: Reference Monitor initialized", .{});
+}
+
+test "seAccessActiveDesktopForWin32k denies inactive desktop for plain user" {
+    var tok = createUserToken(0);
+    try std.testing.expect(seAccessActiveDesktopForWin32k(&tok, 1, 0) == false);
+    try std.testing.expect(seAccessActiveDesktopForWin32k(&tok, 0, 0));
+}
+
+test "seAccessActiveDesktopForWin32k allows system sid cross-desktop" {
+    const tok = createSystemToken();
+    try std.testing.expect(seAccessActiveDesktopForWin32k(&tok, 9, 0));
+}
+
+test "seAccessActiveDesktopForWin32k allows elevated TCB cross-desktop" {
+    var tok = createUserToken(0);
+    tok.is_elevated = true;
+    tok.privileges = PRIV_TCB;
+    try std.testing.expect(seAccessActiveDesktopForWin32k(&tok, 3, 0));
 }

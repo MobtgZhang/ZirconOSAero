@@ -1,6 +1,6 @@
-# content5.1 / 5.2 与当前仓库：未完成项清单（滚动）
+# 未完成项滚动清单（对照实现状态与图形脚手架）
 
-本文对照 [mdcs/claude/content5.1.md](../../mdcs/claude/content5.1.md)（构建/诚实性）与 [mdcs/claude/content5.2.md](../../mdcs/claude/content5.2.md)（桌面六阶段），列出**尚未按规范完整实现**的能力。已实现部分见 [NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md)、契约矩阵与 `zig build test`。
+本文对照 [IMPLEMENTATION_STATUS_NT61.md](IMPLEMENTATION_STATUS_NT61.md)、[PROCESS_NT61.md](PROCESS_NT61.md)、[NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md) 与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)，列出**尚未按规范完整实现**的能力。已实现部分见契约矩阵与 `zig build test`。
 
 **版权**：仅 MSDN/WDK/硬件与 VirtIO 等公开规范；禁止 Windows/ReactOS/Wine 源码。
 

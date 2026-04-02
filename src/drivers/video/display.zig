@@ -142,6 +142,10 @@ var driver_initialized: bool = false;
 var use_framebuffer: bool = false;
 var use_hdmi: bool = false;
 
+/// `renderDesktopFrameEx` 整场景路径计数 vs 增量/光标快路径（阶段 2 合成效率回归；与 `mouse_debug` 分类一致）。
+var desktop_compose_full_scene_frames: u64 = 0;
+var desktop_compose_partial_frames: u64 = 0;
+
 // ── Layout Constants ──
 
 /// 与 `theme.getTaskbarHeight()`（40）一致；遗留 `renderTaskbar` 路径仅内部使用。
@@ -861,6 +865,10 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     }
     panic_ctx.setPhase(0x0002_0060);
     syncDwmCompositorShellMetadata(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
+    switch (path_kind) {
+        .full => desktop_compose_full_scene_frames +%= 1,
+        else => desktop_compose_partial_frames +%= 1,
+    }
     if (md_enabled) {
         mouse_debug.noteDesktopRenderPath(path_kind);
     }
@@ -927,6 +935,7 @@ pub fn hideStartMenu() void {
 pub fn handleDesktopHotkeys() bool {
     const arch = @import("../../arch.zig");
     const nt61_aero = @import("nt61_aero_defaults");
+    // 单消费：`consumeFlip3dHotkey` 仅在键盘 IRQ 路径置位；此处为壳层唯一读取点（与矩阵 §4.1 Flip3D 一致）。
     if (nt61_aero.KernelCompositor.flip3d_enabled and arch.consumeFlip3dHotkey()) {
         flip3d_overlay_active = !flip3d_overlay_active;
         flip3d_needs_scene_refresh = flip3d_overlay_active;
@@ -3069,10 +3078,10 @@ fn renderFlip3dOverlay(scr_w: i32, scr_h: i32) void {
         flip3dPaintSurfaceThumb(cx + 48, cy + 56, 2, taskmgr_dwm_surface_id);
     }
     // `collectShellWindowSurfaceIds`：多表面缩略条（与 user32 窗体表面并存；降级为 0 张时仅保留上方面孔卡片）。
-    var shell_sids: [6]u16 = undefined;
+    var shell_sids: [dwm_comp.flip3d_shell_sid_buffer_cap]u16 = undefined;
     const n_shell = dwm_comp.collectShellWindowSurfaceIds(&shell_sids);
     var si: usize = 0;
-    const max_preview = @min(@as(usize, 4), n_shell);
+    const max_preview = @min(dwm_comp.flip3d_shell_thumb_paint_max, n_shell);
     while (si < max_preview) : (si += 1) {
         flip3dPaintSurfaceThumb(cx - 70 + @as(i32, @intCast(si * 52)), cy + 118, 2, shell_sids[si]);
     }
@@ -3444,7 +3453,7 @@ pub fn renderCursor(x: i32, y: i32) void {
     }
 }
 
-// ── Software cursor：实现位于 `cursor_plane.zig`（与主帧合成的概念分离，见 mdcs/ideas.md） ──
+// ── Software cursor：实现位于 `cursor_plane.zig`（与主帧合成的概念分离，见 docs/cn/AeroDesktopRuntime.md §9、docs/cn/PointerPolicy_NT61.md） ──
 
 /// 拖拽等局部 `flipDirty` 路径：并入旧/新指针矩形，避免漏拷贝光标区（与 dwm_compositor 表面脏标记互补）。
 pub fn markCursorMotionDirtyRegions() void {
@@ -3521,6 +3530,42 @@ pub fn renderLoginScreen(width: u32, height: u32, top_color: u32, bottom_color: 
 }
 
 // ── Present / VSync ──
+//
+// **诚实边界**：`desktop_ctx.vsync_enabled` 与 `config.isVsyncEnabled()` 仅表达策略位；当前帧节奏由调度器 tick /
+// 壳层泵循环决定，**非** WDDM 垂直空白硬件等待。未来若在真实显示 miniport 上实现 `DxgkDdiPresent` 类路径，
+// 应在此调用 HAL 级 `waitForVerticalBlank`（WDK 行为级描述），与下列辅助函数对接。
+// Ref: https://learn.microsoft.com/windows-hardware/drivers/display/vsync-propagation-in-windows-vista-and-later
+
+/// 方案 A 演进：在 `present()` 之前登记本帧脏区，并入 `framebuffer` 脏矩形列表（相交合并策略见 `addDirtyRect`）。
+/// 用户态/Win32k 未来经 IOCTL 或 LPC 载荷提交等价矩形时，应调用此入口或共享同一合并路径，避免双轨脏区。
+/// 帧序号：`present()` 后 `getFrameCount()` 递增；`dwm_compositor.notifyFramePresented()` 在 `present()` 内推进 `getFrameNumber()`。
+/// Ref: docs/cn/DesktopManagerSpec.md §1.1
+pub fn submitCompositorPresentHints(dirty_opt: ?fb.Rect) void {
+    if (!use_framebuffer or !fb.isInitialized()) return;
+    if (dirty_opt) |r| {
+        if (r.w > 0 and r.h > 0) fb.addDirtyRect(r);
+    }
+}
+
+/// 只读：桌面 present 计数与 DWM 合成器帧序号（`present()` 末尾两者均会更新，调用顺序见 `submitCompositorPresentHints` 文档）。
+pub fn getPresentTelemetry() struct { desktop_frames: u64, compositor_frames: u64 } {
+    return .{
+        .desktop_frames = desktop_ctx.frame_count,
+        .compositor_frames = dwm_comp.getFrameNumber(),
+    };
+}
+
+pub fn getDesktopComposeTelemetry() struct { full_scene_frames: u64, partial_frames: u64 } {
+    return .{
+        .full_scene_frames = desktop_compose_full_scene_frames,
+        .partial_frames = desktop_compose_partial_frames,
+    };
+}
+
+/// 合成是否**请求**软件 VSync 语义（与 `present()` 内实际等待分离，便于 bisect）。
+pub fn isDesktopVsyncPolicyEnabled() bool {
+    return desktop_ctx.vsync_enabled and config.isVsyncEnabled();
+}
 
 pub fn present() void {
     if (!use_framebuffer) return;
@@ -3693,6 +3738,28 @@ pub fn getFrameCount() u64 {
 
 pub fn getPresentCount() u64 {
     return desktop_ctx.present_count;
+}
+
+/// 多监视器 / 虚拟桌面外包（与 `framebuffer.MonitorLayoutNt61` 同步；单 GOP 时为单监视器）。
+pub fn getDesktopMonitorLayoutCount() u32 {
+    return fb.getMonitorLayoutCount();
+}
+
+pub fn getDesktopMonitorLayout(index: u32) ?fb.MonitorLayoutNt61 {
+    return fb.getMonitorLayout(index);
+}
+
+pub fn getVirtualDesktopBoundsRect() fb.Rect {
+    return fb.getVirtualDesktopBounds();
+}
+
+/// 主监视器 DPI 下物理像素 → 逻辑像素（无监视器信息时按 96 DPI）。
+pub fn physicalToLogicalDesktopPx(physical_px: i32, physical_py: i32) struct { lx: i32, ly: i32 } {
+    const m = fb.getMonitorLayout(0) orelse return .{ .lx = physical_px, .ly = physical_py };
+    return .{
+        .lx = fb.physicalToLogicalPx(m.effective_dpi_x, physical_px),
+        .ly = fb.physicalToLogicalPx(m.effective_dpi_y, physical_py),
+    };
 }
 
 /// Aero：在首次 `present()` 之前跳过盒式模糊，首屏尽快可见（DesktopManagerSpec 合成节拍）。

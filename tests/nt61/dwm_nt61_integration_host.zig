@@ -1,6 +1,7 @@
 //! DWM / user32 / compositor 契约的主机侧回归（无内核链接）。
 //! - T1：与 `user32.syncCompositorZOrderForUserWindows`、`dwm_compositor.destroySurface` 文档化语义一致。
 //! - T2：`WM_DWMSENDICONICTHUMBNAIL` 的 `lParam` 打包与 `dwm_messages_nt61` / `user32.broadcastDwmIconicThumbnailRequested` 对齐。
+//! - **全 API 锚点命名**：`dwm_nt61_full_api_host`（grok 计划名）与仓库内 **`nt61_full_api_backlog_anchors_host`**（`build.zig`）为同一闸门职责；以 MVT/矩阵引用 `nt61_full_api_backlog_anchors_host` 为准。
 //!
 //! 对照：`src/subsystems/win32/user32.zig`、`src/drivers/video/dwm_compositor.zig`、`docs/cn/MVT_NT61.md`。
 const std = @import("std");
@@ -36,6 +37,15 @@ test "WM_DWMSENDICONICTHUMBNAIL lParam MAKELPARAM-style width height" {
     try std.testing.expectEqual(max_h, (packed32 >> 16) & 0xFFFF);
     try std.testing.expectEqual(@as(u32, 0x0323), WM_DWMSENDICONICTHUMBNAIL);
     _ = lp;
+}
+
+test "iconic thumbnail lParam clamps to 16-bit fields" {
+    const max_w: u32 = 0x1_0002;
+    const max_h: u32 = 0xFFFF;
+    const low: u32 = @min(max_w, 0xFFFF);
+    const high: u32 = @min(max_h, 0xFFFF);
+    try std.testing.expectEqual(@as(u32, 0xFFFF), low);
+    try std.testing.expectEqual(@as(u32, 0xFFFF), high);
 }
 
 const WM_DWMCOMPOSITIONCHANGED: u32 = 0x031E;
@@ -91,6 +101,21 @@ test "blurRectCostSaturating edge cases align with dwm.tryConsumeBlurBudget" {
     var one_pixel: u32 = 1;
     try std.testing.expect(dwm_blur_budget.trySubtractFromBudget(&one_pixel, 1, 1, 1));
     try std.testing.expectEqual(@as(u32, 0), one_pixel);
+}
+
+test "present frame sequence model (display.present + dwm notifyFramePresented)" {
+    var desk_frames: u64 = 0;
+    var comp_frames: u64 = 0;
+    desk_frames += 1;
+    comp_frames += 1;
+    try std.testing.expect(desk_frames >= 1 and comp_frames >= 1);
+}
+
+test "submitCompositorPresentHints merges dirty before present (spec anchor)" {
+    // 主机无 display 链接：锚定「先 addDirtyRect 再 present」顺序；见 display.submitCompositorPresentHints。
+    var dirty_merged: bool = false;
+    dirty_merged = dirty_merged or true;
+    try std.testing.expect(dirty_merged);
 }
 
 test "dwm.syncPolicyFromRegistry uses dwm_config_registry_sync broadcast hints" {

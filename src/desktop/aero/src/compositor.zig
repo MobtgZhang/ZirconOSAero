@@ -146,6 +146,7 @@ var vsync_state: VsyncState = .{};
 
 /// Flip3D / 任务切换预览（离屏二次投影）— 宿主在启用时绘制覆盖层。
 /// 与内核 `display.flip3d_overlay_active` + `flip3d_needs_scene_refresh` 及 `dwm_compositor` 缩略数据源对齐：二者均为 **CPU 预览语义**，非完整 GPU Flip3D。
+/// 契约对照行：[NT61_CONTRACT_MATRIX.md](../../../../docs/cn/NT61_CONTRACT_MATRIX.md) §4.1「用户态 flip3d_preview_enabled ↔ 内核 Flip3D」。
 pub var flip3d_preview_enabled: bool = false;
 
 pub fn setFlip3dPreviewEnabled(enabled: bool) void {

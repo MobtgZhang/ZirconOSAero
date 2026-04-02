@@ -1,6 +1,8 @@
 //! IPC (Inter-Process Communication) - LPC style message passing
 //! NT style Microkernel core: all system services communicate via IPC
 //! Supports synchronous request/reply and async message passing
+//!
+//! Phase P4-C2：`NtRequestWaitReplyPort` 大消息/超时与 `syscall_nt_extras` 对齐为路线图；本模块保留进程内队列占位。
 
 const arch = @import("../arch.zig");
 

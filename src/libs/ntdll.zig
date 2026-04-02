@@ -15,6 +15,8 @@ const io = @import("../io/io.zig");
 const registry = @import("../registry/registry.zig");
 const token = @import("../se/token.zig");
 const section_mm = @import("../mm/section.zig");
+const probe = @import("../mm/probe.zig");
+const scheduler = @import("../ke/scheduler.zig");
 
 pub const NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
@@ -86,7 +88,61 @@ pub const SystemPoolTagInformation: u32 = 22;
 pub const SystemVersionInformation: u32 = 57;
 
 pub const ProcessBasicInformation: u32 = 0;
+/// Ref: learn.microsoft.com — `PROCESSINFOCLASS` / `ProcessSessionInformation`.
+pub const ProcessSessionInformation: u32 = 24;
 pub const ThreadBasicInformation: u32 = 0;
+
+/// `THREAD_BASIC_INFORMATION` x64 布局（公开头文件描述；clean-room 字段顺序）。
+const THREAD_BASIC_INFORMATION = extern struct {
+    exit_status: NTSTATUS,
+    _pad0: u32,
+    teb_base_address: u64,
+    client_id_unique_process: u64,
+    client_id_unique_thread: u64,
+    affinity_mask: u64,
+    priority: i32,
+    base_priority: i32,
+};
+comptime {
+    std.debug.assert(@sizeOf(THREAD_BASIC_INFORMATION) == 48);
+}
+
+/// 内核静态事件对象池（`NtCreateEvent` / `NtWaitForSingleObject`）；非分页、无堆分配。
+const MAX_KERNEL_EVENTS: usize = 32;
+var g_event_objs: [MAX_KERNEL_EVENTS]ob.ObjectHeader = undefined;
+var g_event_used: [MAX_KERNEL_EVENTS]bool = [_]bool{false} ** MAX_KERNEL_EVENTS;
+
+fn allocEventObject(initial_state: bool) ?u64 {
+    var i: usize = 0;
+    while (i < MAX_KERNEL_EVENTS) : (i += 1) {
+        if (!g_event_used[i]) {
+            g_event_used[i] = true;
+            g_event_objs[i] = .{
+                .obj_type = .event,
+                .ref_count = 0,
+                .handle_count = 0,
+                .signal_state = initial_state,
+            };
+            return @intFromPtr(&g_event_objs[i]);
+        }
+    }
+    return null;
+}
+
+fn recycleEventObject(object_ptr: u64) void {
+    if (object_ptr == 0) return;
+    var i: usize = 0;
+    while (i < MAX_KERNEL_EVENTS) : (i += 1) {
+        if (g_event_used[i] and @intFromPtr(&g_event_objs[i]) == object_ptr) {
+            const hdr = &g_event_objs[i];
+            if (hdr.ref_count == 0 and hdr.handle_count == 0) {
+                hdr.* = .{};
+                g_event_used[i] = false;
+            }
+            return;
+        }
+    }
+}
 
 pub const KeyValuePartialInformation: u32 = 2;
 
@@ -183,6 +239,14 @@ pub fn NtQueryInformationProcess(
             out.inherited_from_unique_process_id = proc.parent_pid;
             return STATUS_SUCCESS;
         },
+        ProcessSessionInformation => {
+            if (return_length) |rl| rl.* = 4;
+            if (process_information_length < 4) return STATUS_INFO_LENGTH_MISMATCH;
+            const buf = process_information orelse return STATUS_INVALID_PARAMETER;
+            const sess: *align(1) u32 = @ptrCast(buf);
+            sess.* = proc.security_token.session_id;
+            return STATUS_SUCCESS;
+        },
         else => {
             if (return_length) |rl| rl.* = 0;
             return STATUS_INVALID_INFO_CLASS;
@@ -208,15 +272,30 @@ pub fn NtTerminateThread(_: HANDLE, _: NTSTATUS) NTSTATUS {
 }
 
 pub fn NtQueryInformationThread(
-    _: HANDLE,
+    thread_handle: HANDLE,
     thread_information_class: u32,
-    _: ?*anyopaque,
-    _: u32,
+    thread_information: ?*anyopaque,
+    thread_information_length: u32,
     return_length: ?*u32,
 ) NTSTATUS {
-    if (return_length) |rl| rl.* = 0;
-    if (thread_information_class == ThreadBasicInformation) return STATUS_NOT_IMPLEMENTED;
-    return STATUS_INVALID_INFO_CLASS;
+    if (thread_information_class != ThreadBasicInformation) {
+        if (return_length) |rl| rl.* = 0;
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    const need: u32 = @intCast(@sizeOf(THREAD_BASIC_INFORMATION));
+    if (return_length) |rl| rl.* = need;
+    if (thread_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+    const buf = thread_information orelse return STATUS_INVALID_PARAMETER;
+    const out: *THREAD_BASIC_INFORMATION = @ptrCast(@alignCast(buf));
+    out.exit_status = STATUS_SUCCESS;
+    out._pad0 = 0;
+    out.teb_base_address = 0;
+    out.client_id_unique_process = process.getCurrentPid();
+    out.client_id_unique_thread = thread_handle;
+    out.affinity_mask = 1;
+    out.priority = 0;
+    out.base_priority = 0;
+    return STATUS_SUCCESS;
 }
 
 // ── File APIs ──
@@ -384,12 +463,15 @@ pub fn NtClose(handle: HANDLE) NTSTATUS {
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const h: ob.Handle = @truncate(handle);
     const ent = proc.handle_table.lookupMut(h) orelse return STATUS_INVALID_HANDLE;
-    if (ent.obj_type == .file) {
-        const f: *vfs.FileObject = @ptrFromInt(ent.object_ptr);
+    const obj_type = ent.obj_type;
+    const optr = ent.object_ptr;
+    if (obj_type == .file) {
+        const f: *vfs.FileObject = @ptrFromInt(optr);
         var irp = io.Irp{ .major_function = .close };
         _ = vfs.dispatchFileObjectIrp(f, &irp);
     }
     if (!proc.handle_table.closeHandle(h)) return STATUS_INVALID_HANDLE;
+    if (obj_type == .event) recycleEventObject(optr);
     return STATUS_SUCCESS;
 }
 
@@ -416,16 +498,58 @@ pub fn NtDeleteFile(_: ?*OBJECT_ATTRIBUTES) NTSTATUS {
 
 // ── Object APIs ──
 
-pub fn NtCreateEvent(event_handle: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES, _: u32, _: bool) NTSTATUS {
-    _ = event_handle;
+pub const NOTIFICATION_EVENT: u32 = 0;
+pub const SYNCHRONIZATION_EVENT: u32 = 1;
+pub const DUPLICATE_SAME_ACCESS: u32 = 0x00000002;
+
+pub fn NtCreateEvent(
+    event_handle: *HANDLE,
+    _: u32,
+    _: ?*OBJECT_ATTRIBUTES,
+    event_type: u32,
+    initial_state: bool,
+) NTSTATUS {
+    _ = event_type; // 当前仅实现手动复位语义；自动复位在 `NtWaitForSingleObject` 成功返回时可扩展清零。
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const ptr = allocEventObject(initial_state) orelse return STATUS_NO_MEMORY;
+    const h = proc.handle_table.allocHandle(ptr, ob.GENERIC_ALL | ob.SYNCHRONIZE, .event) orelse {
+        forceFreeEventSlot(ptr);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
+    event_handle.* = h;
     return STATUS_SUCCESS;
 }
 
-pub fn NtSetEvent(_: HANDLE, _: ?*u32) NTSTATUS {
+fn forceFreeEventSlot(object_ptr: u64) void {
+    var i: usize = 0;
+    while (i < MAX_KERNEL_EVENTS) : (i += 1) {
+        if (g_event_used[i] and @intFromPtr(&g_event_objs[i]) == object_ptr) {
+            g_event_objs[i] = .{};
+            g_event_used[i] = false;
+            return;
+        }
+    }
+}
+
+pub fn NtSetEvent(ev: HANDLE, prev: ?*u32) NTSTATUS {
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(ev);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .event) return STATUS_INVALID_PARAMETER;
+    const hdr = @as(*ob.ObjectHeader, @ptrFromInt(ent.object_ptr));
+    if (prev) |p| p.* = if (hdr.signal_state) 1 else 0;
+    hdr.signal_state = true;
     return STATUS_SUCCESS;
 }
 
-pub fn NtResetEvent(_: HANDLE, _: ?*u32) NTSTATUS {
+pub fn NtResetEvent(ev: HANDLE, prev: ?*u32) NTSTATUS {
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(ev);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .event) return STATUS_INVALID_PARAMETER;
+    const hdr = @as(*ob.ObjectHeader, @ptrFromInt(ent.object_ptr));
+    if (prev) |p| p.* = if (hdr.signal_state) 1 else 0;
+    hdr.signal_state = false;
     return STATUS_SUCCESS;
 }
 
@@ -445,8 +569,52 @@ pub fn NtReleaseSemaphore(_: HANDLE, _: i32, _: ?*i32) NTSTATUS {
     return STATUS_SUCCESS;
 }
 
-pub fn NtWaitForSingleObject(_: HANDLE, _: bool, _: ?*const i64) NTSTATUS {
-    return STATUS_WAIT_0;
+/// 将 `timeout` 100ns 单位粗算为调度 tick 增量（简化：非精确 wall-clock，与 `scheduler.getTicks` 对齐）。
+fn timeout100nsToExtraTicks(v_100ns: u64) u64 {
+    // 约每 1ms ≈ 10_000 × 100ns；每 tick 视作 ~1ms 量级（取决于 HPET/定时器配置）。
+    const per_tick = 10_000 * 1000;
+    return @max(1, v_100ns / per_tick);
+}
+
+pub fn NtWaitForSingleObject(handle: HANDLE, alertable: bool, timeout: ?*const i64) NTSTATUS {
+    _ = alertable;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    var asp = proc.address_space orelse return STATUS_INVALID_HANDLE;
+
+    var timeout_val: ?i64 = null;
+    if (timeout) |tp| {
+        const tva = @intFromPtr(tp);
+        if (!probe.probeUserMemory(&asp, tva, @sizeOf(i64), false)) return STATUS_ACCESS_VIOLATION;
+        timeout_val = @as(*const volatile i64, @ptrFromInt(tva)).*;
+    }
+
+    const h: ob.Handle = @truncate(handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+
+    switch (ent.obj_type) {
+        .event, .mutex, .semaphore => {
+            const hdr = @as(*ob.ObjectHeader, @ptrFromInt(ent.object_ptr));
+            const now0 = scheduler.getTicks();
+            const deadline: ?u64 = blk: {
+                const tv = timeout_val orelse break :blk null; // NULL 指针：无限等待
+                if (tv == 0) break :blk now0; // 轮询：立即到期
+                if (tv < 0) {
+                    const rel = @as(u64, @intCast(-tv));
+                    break :blk now0 + timeout100nsToExtraTicks(rel);
+                }
+                // 正数：绝对到期时间（NT `LARGE_INTEGER`）；本阶段未接单调时钟绝对域，按无限等待处理。
+                break :blk null;
+            };
+            while (true) {
+                if (hdr.signal_state) return STATUS_WAIT_0;
+                if (deadline) |d| {
+                    if (scheduler.getTicks() >= d) return STATUS_TIMEOUT;
+                }
+                scheduler.yield();
+            }
+        },
+        else => return STATUS_WAIT_0,
+    }
 }
 
 pub fn NtWaitForMultipleObjects(_: u32, _: []const HANDLE, _: u32, _: bool, _: ?*const i64) NTSTATUS {
@@ -553,10 +721,45 @@ fn processHandleToPid(h: HANDLE) ?u32 {
     return @intCast(h & 0xFFFFFFFF);
 }
 
+/// Ref: learn.microsoft.com `NtDuplicateObject` — 同进程句柄表复制；跨进程为路线图项。
+pub fn NtDuplicateObject(
+    source_process_handle: HANDLE,
+    source_handle: HANDLE,
+    target_process_handle: HANDLE,
+    target_handle: *HANDLE,
+    desired_access: u32,
+    handle_attributes: u32,
+    options: u32,
+) NTSTATUS {
+    _ = handle_attributes;
+    const src_pid = processHandleToPid(source_process_handle) orelse return STATUS_INVALID_HANDLE;
+    const dst_pid = processHandleToPid(target_process_handle) orelse return STATUS_INVALID_HANDLE;
+    if (src_pid != dst_pid) return STATUS_NOT_IMPLEMENTED;
+
+    const proc = process.findProcess(src_pid) orelse return STATUS_INVALID_HANDLE;
+    const sh: ob.Handle = @truncate(source_handle);
+    const ent = proc.handle_table.lookupHandle(sh) orelse return STATUS_INVALID_HANDLE;
+
+    var grant: ob.ACCESS_MASK = desired_access;
+    if ((options & DUPLICATE_SAME_ACCESS) != 0 or grant == 0)
+        grant = ent.granted_access;
+
+    const nh = proc.handle_table.duplicateHandle(sh, grant) orelse return STATUS_INSUFFICIENT_RESOURCES;
+    target_handle.* = nh;
+    return STATUS_SUCCESS;
+}
+
 pub const MEM_COMMIT: u32 = 0x1000;
 pub const MEM_RESERVE: u32 = 0x2000;
 pub const MEM_RELEASE: u32 = 0x8000;
+pub const PAGE_NOACCESS: u32 = 0x01;
+pub const PAGE_READONLY: u32 = 0x02;
 pub const PAGE_READWRITE: u32 = 0x04;
+pub const PAGE_WRITECOPY: u32 = 0x08;
+pub const PAGE_EXECUTE: u32 = 0x10;
+pub const PAGE_EXECUTE_READ: u32 = 0x20;
+pub const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+pub const PAGE_EXECUTE_WRITECOPY: u32 = 0x80;
 
 var user_alloc_va_salt: u32 = 0x9E37_79B9;
 
@@ -673,7 +876,38 @@ pub fn NtOpenProcess(
     return STATUS_NOT_IMPLEMENTED;
 }
 
-pub fn NtProtectVirtualMemory(_: HANDLE, _: *u64, _: *u64, _: u32, _: ?*u32) NTSTATUS {
+/// Ref: https://learn.microsoft.com/windows/win32/api/winternl/nf-winl-ntprotectvirtualmemory
+pub fn NtProtectVirtualMemory(
+    process_handle: HANDLE,
+    base_address: *u64,
+    region_size: *u64,
+    new_protect: u32,
+    old_protect: ?*u32,
+) NTSTATUS {
+    if (old_protect) |op| op.* = PAGE_READWRITE;
+    const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
+    var space = proc.address_space orelse return STATUS_NO_MEMORY;
+    const base = base_address.*;
+    const sz = region_size.*;
+    if (sz == 0) return STATUS_INVALID_PARAMETER;
+    if (!space.protectVirtualRange(base, sz, new_protect)) return STATUS_INVALID_PARAMETER;
+    proc.address_space = space;
+    return STATUS_SUCCESS;
+}
+
+/// `DelayInterval` 负值为相对 100ns；本内核用 `yield` 近似短延迟（HPET 精确睡眠为路线图）。
+/// Ref: https://learn.microsoft.com/windows/win32/api/winternl/nf-winl-ntdelayexecution
+pub fn NtDelayExecution(alertable: u8, delay_interval: i64) NTSTATUS {
+    _ = alertable;
+    if (delay_interval >= 0) return STATUS_SUCCESS;
+    const ns100: u64 = @intCast((@as(i128, 0) - @as(i128, delay_interval)));
+    var yields: u32 = @truncate(ns100 / 10_000);
+    if (yields > 256) yields = 256;
+    var i: u32 = 0;
+    while (i < yields) : (i += 1) {
+        scheduler.yield();
+    }
     return STATUS_SUCCESS;
 }
 
@@ -955,6 +1189,38 @@ pub fn RtlGetCurrentPeb() u64 {
     return 0;
 }
 
+// ── 加载器 / 线程启动桩（`LdrInitializeThunk` → 用户进程；与 NT 6.1 文档链对齐，行为简化）──
+// Ref: https://learn.microsoft.com/windows/win32/api/libloaderapi/
+
+pub fn LdrInitializeThunk() void {
+    if (klog.DEBUG_MODE) {
+        klog.debug("LdrInitializeThunk: stub", .{});
+    }
+}
+
+pub fn LdrLoadDll(
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) NTSTATUS {
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+pub fn LdrGetProcedureAddress(
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) NTSTATUS {
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+/// 用户线程入口包装（真实系统经 SEH 调线程过程；此处为 Zig 内核内联桩）。
+pub fn RtlUserThreadStart(_: u64, _: u64) noreturn {
+    while (true) {}
+}
+
 // ── Debug APIs ──
 
 pub fn DbgPrint(message: []const u8) NTSTATUS {
@@ -988,4 +1254,5 @@ pub fn init() void {
     klog.info("ntdll: Registry APIs: NtOpenKey (NT path), NtQueryValueKey (partial), NtCreateKey (not impl)", .{});
     klog.info("ntdll: RTL: RtlGetVersion, RtlNtStatusToDosError / RtlNtStatusToWin32Error, memory utils", .{});
     klog.info("ntdll: Debug: DbgPrint, DbgBreakPoint", .{});
+    klog.info("ntdll: Loader stubs: LdrInitializeThunk, LdrLoadDll, RtlUserThreadStart", .{});
 }

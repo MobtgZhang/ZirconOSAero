@@ -1,7 +1,10 @@
 //! LPC Port Implementation
 //! NT-style port-based IPC: CreatePort, ConnectPort, RequestWaitReply
 //!
+//! Ref: https://learn.microsoft.com/windows-hardware/drivers/kernel/local-procedure-calls-lpc-
+//!
 //! 里程碑：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K6.4（与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 同步）。
+//! **P4-C4**：SMP 下端口队列与 `ipc` 消息环的细粒度锁为长期项；当前假定引导早期单线程初始化路径。
 
 const ipc = @import("ipc.zig");
 const ob = @import("../ob/object.zig");

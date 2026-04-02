@@ -3,6 +3,7 @@
 //! module management, thread sync, virtual memory, environment, and DLL loading.
 
 const ntdll = @import("ntdll.zig");
+const kernelbase = @import("kernelbase.zig");
 const klog = @import("../rtl/klog.zig");
 const process = @import("../ps/process.zig");
 const ob = @import("../ob/object.zig");
@@ -190,7 +191,7 @@ pub fn CreateFileA(
     if (f) |_| {
         return @intCast(vfs.getFileCount() - 1);
     }
-    last_error = ERROR_FILE_NOT_FOUND;
+    SetLastError(ERROR_FILE_NOT_FOUND);
     return INVALID_HANDLE_VALUE;
 }
 
@@ -224,7 +225,7 @@ pub fn GetFileSizeEx(_: HANDLE, _: *u64) BOOL {
 pub fn DeleteFileA(filename: []const u8) BOOL {
     const status = vfs.stat(filename, &tmp_dir_entry);
     if (status != .success) {
-        last_error = ERROR_FILE_NOT_FOUND;
+        SetLastError(ERROR_FILE_NOT_FOUND);
         return FALSE;
     }
     return TRUE;
@@ -234,7 +235,7 @@ pub fn GetFileAttributesA(filename: []const u8) DWORD {
     var entry: vfs.DirEntry = .{};
     const status = vfs.stat(filename, &entry);
     if (status != .success) {
-        last_error = ERROR_FILE_NOT_FOUND;
+        SetLastError(ERROR_FILE_NOT_FOUND);
         return 0xFFFFFFFF;
     }
     var attrs: DWORD = 0;
@@ -305,7 +306,7 @@ pub fn FindFirstFileA(pattern: []const u8, find_data: *WIN32_FIND_DATAA) HANDLE 
         if (!find_handles[handle_idx].is_active) break;
     }
     if (handle_idx >= MAX_FIND_HANDLES) {
-        last_error = ERROR_NOT_ENOUGH_MEMORY;
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return INVALID_HANDLE_VALUE;
     }
 
@@ -323,7 +324,7 @@ pub fn FindFirstFileA(pattern: []const u8, find_data: *WIN32_FIND_DATAA) HANDLE 
     }
 
     state.is_active = false;
-    last_error = ERROR_FILE_NOT_FOUND;
+    SetLastError(ERROR_FILE_NOT_FOUND);
     return INVALID_HANDLE_VALUE;
 }
 
@@ -338,7 +339,7 @@ pub fn FindNextFileA(handle: HANDLE, find_data: *WIN32_FIND_DATAA) BOOL {
         return TRUE;
     }
 
-    last_error = ERROR_NO_MORE_FILES;
+    SetLastError(ERROR_NO_MORE_FILES);
     return FALSE;
 }
 
@@ -553,7 +554,7 @@ pub fn LoadLibraryA(lib_name: []const u8) HMODULE {
         img.ref_count += 1;
         return img.image_base;
     }
-    last_error = ERROR_MOD_NOT_FOUND;
+    SetLastError(ERROR_MOD_NOT_FOUND);
     return 0;
 }
 
@@ -572,7 +573,7 @@ pub fn GetModuleHandleA(module_name: ?[]const u8) HMODULE {
         if (pe_loader.getLoadedImage(name)) |img| {
             return img.image_base;
         }
-        last_error = ERROR_MOD_NOT_FOUND;
+        SetLastError(ERROR_MOD_NOT_FOUND);
         return 0;
     }
     return 0x140000000;
@@ -595,7 +596,7 @@ pub fn GetProcAddress(module: HMODULE, proc_name: []const u8) u64 {
     if (pe_loader.getImageByBase(module)) |img| {
         if (img.findExport(proc_name)) |addr| return addr;
     }
-    last_error = ERROR_PROC_NOT_FOUND;
+    SetLastError(ERROR_PROC_NOT_FOUND);
     return 0;
 }
 
@@ -822,17 +823,10 @@ pub fn GetUserNameA(buffer: []u8, size: *DWORD) BOOL {
     return TRUE;
 }
 
-// ── Error handling ──
+// ── Error handling（转发 KernelBase；NT 6.1 文档分层）──
 
-var last_error: DWORD = 0;
-
-pub fn GetLastError() DWORD {
-    return last_error;
-}
-
-pub fn SetLastError(error_code: DWORD) void {
-    last_error = error_code;
-}
+pub const GetLastError = kernelbase.GetLastError;
+pub const SetLastError = kernelbase.SetLastError;
 
 // ── String utility ──
 
@@ -863,7 +857,7 @@ fn strEqlI(a: []const u8, b: []const u8) bool {
 }
 
 pub fn init() void {
-    last_error = 0;
+    kernelbase.init();
     klog.info("kernel32: Win32 Base API subset initialized", .{});
     klog.info("kernel32: Process APIs: CreateProcessA, ExitProcess, TerminateProcess, WaitForSingleObject", .{});
     klog.info("kernel32: File APIs: CreateFileA, ReadFile, WriteFile, DeleteFileA, FindFirstFileA, FindNextFileA", .{});

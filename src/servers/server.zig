@@ -19,8 +19,11 @@ var frame_alloc: ?*FrameAllocator = null;
 var server_initialized: bool = false;
 
 pub fn init(alloc: *FrameAllocator) void {
+    const panic_ctx = @import("../rtl/panic_context.zig");
+    panic_ctx.setPhase(0x0005_0001);
     frame_alloc = alloc;
     process.init();
+    panic_ctx.setPhase(0x0005_0002);
 
     const p = process.createSystemProcess(alloc, "System");
     if (p) |proc| {
@@ -32,6 +35,7 @@ pub fn init(alloc: *FrameAllocator) void {
     }
 
     server_initialized = true;
+    panic_ctx.setPhase(0);
 }
 
 pub fn handleMessage() void {

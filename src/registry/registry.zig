@@ -10,6 +10,7 @@
 //! Layout inspired by the NT registry; **no code copied** from ReactOS or Windows (see THIRD_PARTY.md).
 //!
 //! **持久化**：当前为内存内树；磁盘 **RegF / hive** 加载与回写为独立里程碑（与 `HKCU\Control Panel\Mouse` 等运行时默认值并存）。
+//! **K8 / syscall**：`NtOpenKey` 等内核 SSDT 接线见 [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K8；当前以 `ntdll` 内存树路径为主。
 
 const std = @import("std");
 const klog = @import("../rtl/klog.zig");

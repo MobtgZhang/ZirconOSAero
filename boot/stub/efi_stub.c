@@ -22,10 +22,15 @@
 #define SCAN_DOWN 0x02
 #define SCAN_UP_EXT 0x48    /* PC keyboard set 1 extended */
 #define SCAN_DOWN_EXT 0x50
-#define SCAN_ENTER 0x0D
+#define SCAN_F8 0x12
 #define SCAN_ESC 0x17
 #define UNICODE_UP 0x2191   /* ↑ */
 #define UNICODE_DOWN 0x2193 /* ↓ */
+
+#define EFI_ABORTED ((1ULL << 63) | 21ULL)
+
+typedef EFI_STATUS (*EFI_BS_EXIT)(EFI_HANDLE, EFI_STATUS, UINTN, VOID *);
+typedef EFI_STATUS (*EFI_WAIT_FOR_EVENT)(UINTN, VOID **, UINTN *);
 
 /* 首选分辨率：make build 时由 sync_resolution_config.py 写入 build/tmp/zircon_pref_fb.h（-I 该目录） */
 #include "zircon_pref_fb.h"
@@ -61,6 +66,11 @@ static UINTN entry_count = 0;
 static UINTN selected = 0;
 static UINT32 countdown = DEFAULT_TIMEOUT;
 static BOOLEAN timer_active = 1;
+/* 0 = OS entries, 1 = Tools (Win7-style TAB) */
+static int menu_focus = 0;
+static UINTN tool_selected = 0;
+static const CHAR16 *const tool_desc[1] = { L"ZirconOS Memory Diagnostic" };
+#define TOOL_COUNT 1
 
 static void *memset(void *s, int c, UINTN n) {
 	UINT8 *p = (UINT8 *)s;
@@ -180,76 +190,9 @@ static void init_entries(void) {
 	entry_count = 6;
 }
 
-static void display_menu(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
-	UINTN i;
-	if (!con) return;
-	con->Reset(con, 0);
-	con->SetAttribute(con, ATTR_NORMAL);
-
-	print(con, L"\r\n");
-	print(con, L"                    ZirconOSAero Boot Manager (ZBM)                         \r\n");
-	print(con, L"                         Version ");
-	print(con, ZBM_VERSION);
-	print(con, L"                                             \r\n");
-	print(con, L"\r\n");
-	print(con, L"    Choose an operating system to start:\r\n");
-	con->SetAttribute(con, ATTR_DIM);
-	print(con, L"    (Use the arrow keys to highlight your choice, then press ENTER.)\r\n");
-	print(con, L"\r\n");
-
-	for (i = 0; i < entry_count; i++) {
-		if (i == selected) {
-			con->SetAttribute(con, ATTR_HIGHLIGHT);
-			print(con, L"  > ");
-		} else {
-			con->SetAttribute(con, ATTR_NORMAL);
-			print(con, L"    ");
-		}
-		print(con, (CHAR16 *)entries[i].desc);
-		print(con, L"\r\n");
-	}
-
-	con->SetAttribute(con, ATTR_NORMAL);
-	print(con, L"\r\n");
-	con->SetAttribute(con, ATTR_BORDER);
-	print(con, L"    ------------------------------------------------------------------------\r\n\r\n");
-
-	if (timer_active && countdown > 0) {
-		con->SetAttribute(con, ATTR_NORMAL);
-		print(con, L"    Seconds until the highlighted choice will be started automatically: ");
-		print_dec(con, countdown);
-		print(con, L"\r\n");
-	}
-
-	con->SetAttribute(con, ATTR_DIM);
-	print(con, L"\r\n");
-	if (selected == 0) print(con, L"    Start ZirconOSAero normally.");
-	else if (selected == 1) print(con, L"    Start with debug logging and serial output enabled.");
-	else if (selected == 2) print(con, L"    Start with minimal drivers and services.");
-	else if (selected == 3) print(con, L"    Start in safe mode with network support.");
-	else if (selected == 4) print(con, L"    Start the Recovery Console for system repair.");
-	else if (selected == 5) print(con, L"    Launch the command-line shell.");
-	print(con, L"\r\n");
-
-	con->SetAttribute(con, ATTR_NORMAL);
-	print(con, L"\r\n");
-	print(con, L"  ENTER=Choose  |  ESC=Advanced Options  |  F1=Help                          \r\n");
-	con->SetAttribute(con, ATTR_DIM);
-	print(con, L"\r\n");
-	print(con, L"    Architecture: loongarch64  |  Boot: UEFI\r\n");
-
-	con->EnableCursor(con, 0);
-}
-
-#define MENU_ENTRY_ROW(i) (7U + (i))
-#define MENU_LAST_ROW (MENU_ENTRY_ROW(entry_count - 1))
-#define ROW_BELOW_MENU (MENU_LAST_ROW + 1U)
-#define BOOT_TIMER_ROW (11U + entry_count)
-#define BOOT_DESC_ROW ((timer_active && countdown > 0) ? (BOOT_TIMER_ROW + 2U) : (BOOT_TIMER_ROW + 1U))
-
 #define CON_COLS 80
+#define LINE_MAX 78
 
-/* 79 空格缓冲区，单次 OutputString 清除整行，减少调用次数提速 */
 static const CHAR16 spaces_79[80] = {
 	L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ',
 	L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ',
@@ -258,56 +201,195 @@ static const CHAR16 spaces_79[80] = {
 	L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ', 0
 };
 
-/* 清除单行：79 空格不换行，避免 80 列换行到下一行造成重复显示 */
 static void clear_line(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, UINTN row, UINTN n) {
 	(void)n;
+	if (!con) return;
 	con->SetCursorPosition(con, 0, row);
 	con->OutputString(con, (CHAR16 *)spaces_79);
 	con->SetCursorPosition(con, 0, row);
 }
 
-/* 输出一行（前缀+描述+补足78列），避免第79列换行导致重复；单次 OutputString 提速 */
-#define LINE_MAX 78
 static void print_line_padded(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, const CHAR16 *prefix, const CHAR16 *desc) {
 	CHAR16 buf[80];
 	UINTN i = 0;
-	while (prefix[i]) { buf[i] = prefix[i]; i++; }
-	while (*desc && i < LINE_MAX) { buf[i++] = *desc++; }
+	if (!con) return;
+	while (prefix[i]) {
+		buf[i] = prefix[i];
+		i++;
+	}
+	while (*desc && i < LINE_MAX) buf[i++] = *desc++;
 	while (i < LINE_MAX) buf[i++] = L' ';
 	buf[i] = 0;
 	con->OutputString(con, buf);
 }
 
-/* 全量重绘所有菜单项+描述行；跳过菜单行清除（直接覆盖78列），仅清除空行与描述行提速 */
-static void update_selection_only(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, UINTN old_sel, UINTN new_sel) {
+#define ROW_ENTRY_FIRST 5U
+#define MENU_ENTRY_ROW(i) (ROW_ENTRY_FIRST + (UINTN)(i))
+#define ROW_F8_LINE (6U + entry_count)
+#define BOOT_TIMER_ROW (8U + entry_count)
+#define ROW_TOOLS_LABEL (10U + entry_count)
+#define ROW_TOOLS_FIRST (11U + entry_count)
+#define ROW_FOOTER 24U
+
+static void draw_grey_bar_title(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
+	UINTN col;
+	if (!con) return;
+	con->SetCursorPosition(con, 0, 0);
+	con->SetAttribute(con, ATTR_HIGHLIGHT);
+	con->OutputString(con, (CHAR16 *)spaces_79);
+	col = (80U - 25U) / 2U; /* "ZirconOSAero Boot Manager" */
+	con->SetCursorPosition(con, col, 0);
+	print(con, L"ZirconOSAero Boot Manager");
+	con->SetAttribute(con, ATTR_NORMAL);
+}
+
+static void draw_footer_bar_win7(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
+	if (!con) return;
+	con->SetCursorPosition(con, 0, ROW_FOOTER);
+	con->SetAttribute(con, ATTR_HIGHLIGHT);
+	con->OutputString(con, (CHAR16 *)spaces_79);
+	con->SetCursorPosition(con, 2, ROW_FOOTER);
+	print(con, L"ENTER=Choose");
+	con->SetCursorPosition(con, (80U - 8U) / 2U, ROW_FOOTER);
+	print(con, L"TAB=Menu");
+	con->SetCursorPosition(con, 80U - 11U - 1U, ROW_FOOTER);
+	print(con, L"ESC=Cancel");
+	con->SetAttribute(con, ATTR_NORMAL);
+}
+
+/* 78 列高亮行，描述左对齐，右侧 `>` */
+static void print_os_line_highlighted(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, const CHAR16 *desc) {
+	CHAR16 buf[80];
+	UINTN i = 0;
+	UINTN left = 4;
+	if (!con) return;
+	while (i < left) buf[i++] = L' ';
+	while (*desc && i < LINE_MAX - 2) buf[i++] = *desc++;
+	while (i < LINE_MAX - 1) buf[i++] = L' ';
+	buf[LINE_MAX - 1] = L'>';
+	buf[LINE_MAX] = 0;
+	con->SetAttribute(con, ATTR_HIGHLIGHT);
+	con->OutputString(con, buf);
+	con->SetAttribute(con, ATTR_NORMAL);
+}
+
+static void redraw_os_rows(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
 	UINTN i, row;
 	if (!con) return;
-	if (old_sel == new_sel) return;
-	clear_line(con, ROW_BELOW_MENU, CON_COLS);
-	clear_line(con, BOOT_DESC_ROW, CON_COLS);
-	/* 直接覆盖重绘全部菜单项（78列全覆盖，无需预清除） */
 	for (i = 0; i < entry_count; i++) {
 		row = MENU_ENTRY_ROW(i);
+		clear_line(con, row, CON_COLS);
 		con->SetCursorPosition(con, 0, row);
-		if (i == new_sel) {
-			con->SetAttribute(con, ATTR_HIGHLIGHT);
-			print_line_padded(con, L"  > ", entries[i].desc);
+		if (menu_focus == 0 && i == selected)
+			print_os_line_highlighted(con, (CHAR16 *)entries[i].desc);
+		else {
 			con->SetAttribute(con, ATTR_NORMAL);
-		} else {
-			con->SetAttribute(con, ATTR_NORMAL);
-			print_line_padded(con, L"    ", entries[i].desc);
+			print_line_padded(con, L"    ", (CHAR16 *)entries[i].desc);
 		}
 	}
-	/* 更新描述行 */
-	row = BOOT_DESC_ROW;
-	con->SetCursorPosition(con, 0, row);
+}
+
+static void redraw_tool_rows(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
+	UINTN t, row;
+	if (!con) return;
+	for (t = 0; t < TOOL_COUNT; t++) {
+		row = ROW_TOOLS_FIRST + t;
+		clear_line(con, row, CON_COLS);
+		con->SetCursorPosition(con, 0, row);
+		if (menu_focus == 1 && t == tool_selected)
+			print_os_line_highlighted(con, tool_desc[t]);
+		else {
+			con->SetAttribute(con, ATTR_NORMAL);
+			print_line_padded(con, L"    ", (CHAR16 *)tool_desc[t]);
+		}
+	}
+}
+
+static void display_menu(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con) {
+	UINTN r;
+	UINTN gap;
+	if (!con) return;
+	con->Reset(con, 0);
+	con->SetAttribute(con, ATTR_NORMAL);
+
+	draw_grey_bar_title(con);
+	clear_line(con, 1, CON_COLS);
+
+	con->SetCursorPosition(con, 0, 2);
+	con->SetAttribute(con, ATTR_NORMAL);
+	print(con, L"    Choose an operating system to start, or press TAB to select a tool:\r\n");
+	con->SetCursorPosition(con, 0, 3);
 	con->SetAttribute(con, ATTR_DIM);
-	if (new_sel == 0) print(con, L"    Start ZirconOSAero normally.");
-	else if (new_sel == 1) print(con, L"    Start with debug logging and serial output enabled.");
-	else if (new_sel == 2) print(con, L"    Start with minimal drivers and services.");
-	else if (new_sel == 3) print(con, L"    Start in safe mode with network support.");
-	else if (new_sel == 4) print(con, L"    Start the Recovery Console for system repair.");
-	else if (new_sel == 5) print(con, L"    Launch the command-line shell.");
+	print(con, L"    (Use the arrow keys to highlight your choice, then press ENTER.)\r\n");
+	clear_line(con, 4, CON_COLS);
+
+	redraw_os_rows(con);
+
+	gap = 5U + entry_count;
+	clear_line(con, gap, CON_COLS);
+
+	con->SetCursorPosition(con, 0, ROW_F8_LINE);
+	con->SetAttribute(con, ATTR_NORMAL);
+	print(con, L"    To specify an advanced option for this choice, press F8.\r\n");
+	clear_line(con, ROW_F8_LINE + 1U, CON_COLS);
+
+	if (timer_active && countdown > 0) {
+		con->SetCursorPosition(con, 0, BOOT_TIMER_ROW);
+		con->SetAttribute(con, ATTR_NORMAL);
+		print(con, L"    Seconds until the highlighted choice will be started automatically: ");
+		print_dec(con, countdown);
+		print(con, L"\r\n");
+	} else {
+		clear_line(con, BOOT_TIMER_ROW, CON_COLS);
+	}
+
+	clear_line(con, BOOT_TIMER_ROW + 1U, CON_COLS);
+
+	con->SetCursorPosition(con, 0, ROW_TOOLS_LABEL);
+	con->SetAttribute(con, ATTR_NORMAL);
+	print(con, L"    Tools:\r\n");
+	redraw_tool_rows(con);
+
+	for (r = ROW_TOOLS_FIRST + TOOL_COUNT; r < ROW_FOOTER; r++)
+		clear_line(con, r, CON_COLS);
+
+	draw_footer_bar_win7(con);
+	con->EnableCursor(con, 0);
+}
+
+static void show_tool_placeholder(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, EFI_BOOT_SERVICES *bs,
+				    EFI_SIMPLE_TEXT_INPUT_PROTOCOL *con_in) {
+	if (!con) return;
+	con->Reset(con, 0);
+	con->SetAttribute(con, ATTR_NORMAL);
+	print(con, L"\r\n    ZirconOS Boot Manager\r\n\r\n");
+	print(con, L"    The selected tool is not available in this C stub build.\r\n\r\n");
+	print(con, L"    Press any key to return...\r\n");
+	if (con_in && bs) {
+		UINTN index = 0;
+		((EFI_WAIT_FOR_EVENT)bs->WaitForEvent)(1, (VOID **)&con_in->WaitForKey, &index);
+	}
+}
+
+static void show_f8_placeholder(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, EFI_BOOT_SERVICES *bs,
+				EFI_SIMPLE_TEXT_INPUT_PROTOCOL *con_in) {
+	if (!con) return;
+	con->Reset(con, 0);
+	con->SetAttribute(con, ATTR_NORMAL);
+	print(con, L"\r\n    Advanced boot options (C stub)\r\n\r\n");
+	print(con, L"    Full BCD / firmware details are available in the Zig ZBM (BOOTLOONGARCH64 from zig build).\r\n\r\n");
+	print(con, L"    Press any key to return to the boot menu...\r\n");
+	if (con_in && bs) {
+		UINTN index = 0;
+		((EFI_WAIT_FOR_EVENT)bs->WaitForEvent)(1, (VOID **)&con_in->WaitForKey, &index);
+	}
+}
+
+static void update_selection_only(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con, UINTN old_sel, UINTN new_sel) {
+	(void)old_sel;
+	(void)new_sel;
+	if (!con) return;
+	redraw_os_rows(con);
 }
 
 /* 计时器数字起始列（"    Seconds until the highlighted choice will be started automatically: " = 72 字符） */
@@ -436,49 +518,87 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 
 	if (con) con->ClearScreen(con);
 
-	/* Boot Manager menu loop */
+	/* Boot Manager menu loop (Win7-style: TAB / F8 / ESC) */
 	{
 		UINTN last_selected = (UINTN)-1;
+		UINTN last_tool = (UINTN)-1;
+		int last_focus = -1;
 		UINTN poll_count = 0;
+		BOOLEAN need_full = 1;
 
 		while (1) {
-			if (last_selected != selected) {
-				if (last_selected == (UINTN)-1) {
-					display_menu(con);
-				} else {
-					update_selection_only(con, last_selected, selected);
-				}
+			if (need_full || last_focus != menu_focus) {
+				display_menu(con);
+				need_full = 0;
+				last_focus = menu_focus;
 				last_selected = selected;
+				last_tool = tool_selected;
+			} else if (menu_focus == 0 && last_selected != selected) {
+				update_selection_only(con, last_selected, selected);
+				last_selected = selected;
+			} else if (menu_focus == 1 && last_tool != tool_selected) {
+				redraw_tool_rows(con);
+				last_tool = tool_selected;
 			}
 
 			if (con_in) {
 				EFI_INPUT_KEY key;
 				EFI_STATUS kst = con_in->ReadKeyStroke(con_in, &key);
 				if (kst == EFI_SUCCESS) {
-					/* Key pressed */
 					timer_active = 0;
-					/* Up: EFI 0x01, extended 0x48, Unicode ↑, or k/w */
+
+					if (key.UnicodeChar == u'\t') {
+						menu_focus = (menu_focus == 0) ? 1 : 0;
+						continue;
+					}
+					if (key.ScanCode == SCAN_ESC) {
+						((EFI_BS_EXIT)bs->Exit)(image_handle, (EFI_STATUS)EFI_ABORTED, 0, (VOID *)0);
+						for (;;) {}
+					}
+					if (key.ScanCode == SCAN_F8) {
+						show_f8_placeholder(con, bs, con_in);
+						need_full = 1;
+						continue;
+					}
+
+					if (menu_focus == 1) {
+						if ((key.ScanCode == SCAN_UP || key.ScanCode == SCAN_UP_EXT ||
+						     key.UnicodeChar == UNICODE_UP || key.UnicodeChar == u'k' || key.UnicodeChar == u'w') &&
+						    tool_selected > 0)
+							tool_selected--;
+						else if ((key.ScanCode == SCAN_DOWN || key.ScanCode == SCAN_DOWN_EXT ||
+						          key.UnicodeChar == UNICODE_DOWN || key.UnicodeChar == u'j' || key.UnicodeChar == u's') &&
+						         tool_selected + 1 < TOOL_COUNT)
+							tool_selected++;
+						else if (key.UnicodeChar == u'\r' || key.UnicodeChar == u'\n') {
+							show_tool_placeholder(con, bs, con_in);
+							need_full = 1;
+						}
+						continue;
+					}
+
 					if ((key.ScanCode == SCAN_UP || key.ScanCode == SCAN_UP_EXT ||
 					     key.UnicodeChar == UNICODE_UP || key.UnicodeChar == u'k' || key.UnicodeChar == u'w') &&
 					    selected > 0)
 						selected--;
-					/* Down: EFI 0x02, extended 0x50, Unicode ↓, or j/s */
 					else if ((key.ScanCode == SCAN_DOWN || key.ScanCode == SCAN_DOWN_EXT ||
 					          key.UnicodeChar == UNICODE_DOWN || key.UnicodeChar == u'j' || key.UnicodeChar == u's') &&
 					         selected + 1 < entry_count)
 						selected++;
-					else if (key.ScanCode == SCAN_ENTER || key.UnicodeChar == u'\r' || key.UnicodeChar == u'\n')
+					else if (key.UnicodeChar == u'\r' || key.UnicodeChar == u'\n')
 						break;
 					else if (key.UnicodeChar >= u'1' && key.UnicodeChar <= u'6') {
 						UINTN idx = (UINTN)(key.UnicodeChar - u'1');
-						if (idx < entry_count) { selected = idx; break; }
+						if (idx < entry_count) {
+							selected = idx;
+							break;
+						}
 					}
 					continue;
 				}
 			}
 
 			if (timer_active) {
-				/* Poll every 5ms，按键响应更快 */
 				bs->Stall(5000);
 				poll_count++;
 				if (poll_count >= 200) {
@@ -490,9 +610,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 					}
 				}
 			} else if (con_in) {
-				/* Block until key pressed when no countdown */
 				UINTN index = 0;
-				typedef EFI_STATUS (*EFI_WAIT_FOR_EVENT)(UINTN, VOID **, UINTN *);
 				((EFI_WAIT_FOR_EVENT)bs->WaitForEvent)(1, (VOID **)&con_in->WaitForKey, &index);
 			} else {
 				bs->Stall(100000);

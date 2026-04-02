@@ -3,6 +3,7 @@
 
 const klog = @import("../../rtl/klog.zig");
 const nt61_aero = @import("nt61_aero_defaults");
+const dwm_surface_spec = @import("../../config/dwm_surface_spec.zig");
 const fb = @import("framebuffer.zig");
 const material = @import("material.zig");
 
@@ -39,16 +40,7 @@ pub const RedirectedSurface = struct {
     flags: SurfaceFlags = .{},
 };
 
-pub const SurfaceFlags = struct {
-    topmost: bool = false,
-    layered: bool = false,
-    popup: bool = false,
-    child: bool = false,
-    has_caption: bool = true,
-    dwm_blur_behind: bool = false,
-    dwm_ncrendering: bool = true,
-    snap_target: bool = false,
-};
+pub const SurfaceFlags = dwm_surface_spec.KernelCompositorSurfaceFlags;
 
 pub const AeroConfig = struct {
     glass_enabled: bool = nt61_aero.KernelDwm.glass_enabled,
@@ -64,6 +56,8 @@ pub const AeroConfig = struct {
     peek_enabled: bool = nt61_aero.KernelCompositor.peek_enabled,
     flip3d_enabled: bool = nt61_aero.KernelCompositor.flip3d_enabled,
     animation_speed: u16 = nt61_aero.KernelCompositor.animation_speed,
+    /// Shell 贴靠 / Aero Snap 策略（与 `SurfaceFlags.snap_target` 配合；行为见 DesktopManagerSpec）。
+    snap_shell_enabled: bool = nt61_aero.KernelCompositor.snap_shell_enabled,
 };
 
 const MAX_SURFACES: usize = 128;
@@ -234,6 +228,9 @@ pub fn notifyFramePresented() void {
 pub fn isInitialized() bool {
     return compositor_initialized;
 }
+
+/// 占位：`WM_DWMSENDICONICTHUMBNAIL` / 任务栏缩略图协议（NT 6.1 DWM）；依赖离屏表面与 Shell 队列后实现。
+pub fn enqueueIconicThumbnailRequest(_: u16) void {}
 
 pub fn getAeroConfig() *const AeroConfig {
     return &aero_cfg;

@@ -134,7 +134,10 @@ pub fn drawThemedIcon(id: IconId, screen_x: i32, screen_y: i32, scale: u32, _: T
 }
 
 pub fn getIconTotalSize(scale: u32) i32 {
-    return @intCast(ICON_PX_SIZE * (if (scale < 1) 1 else scale));
+    const s: u64 = if (scale < 1) 1 else @as(u64, scale);
+    const prod = @as(u64, ICON_PX_SIZE) * s;
+    const capped = @min(prod, @as(u64, @intCast(std.math.maxInt(i32))));
+    return @intCast(capped);
 }
 
 // ═══════════════════════════════════════════════════════════

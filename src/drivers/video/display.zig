@@ -724,8 +724,9 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     // 否则光标停留在 syncCursorFromMouse 的初值（VirtIO 事件无法驱动绘制）。
     const mouse = @import("../../drivers/input/mouse.zig");
 
+    const interp_limit: u32 = if (isWindowDragging() or ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) 2 else 8;
     var interp_steps: u32 = 0;
-    while (mouse.isInterpolating() and interp_steps < 8) : (interp_steps += 1) {
+    while (mouse.isInterpolating() and interp_steps < interp_limit) : (interp_steps += 1) {
         mouse.interpolateStep();
     }
 
@@ -1516,20 +1517,18 @@ fn renderAeroBackground(w: i32, h: i32, t: *const ThemeColors) void {
 
 /// Aero 任务栏唯一绘制入口（`renderer_aero` 全帧与壳层共用，避免两套像素分叉）。
 pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, tb_h: i32) void {
+    const panic_ctx = @import("../../rtl/panic_context.zig");
     const tb_y = clampI32FromI64(@as(i64, scr_h) - @as(i64, tb_h));
     taskmgr_tray_chip_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
     const drag_fast = isDragging();
-    const shell_open = ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible;
 
+    panic_ctx.setPhase(0x0002_0090);
     if (drag_fast) {
         fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
     } else if (dwm_initialized and dwm_config.glass_enabled) {
-        // 壳层菜单/飞出打开时任务栏全宽 boxBlur 极易与场景模糊叠成秒级帧；仅用 tint+高光保留 Aero 条带感。
-        if (shell_open) {
-            renderGlassTintOnly(0, tb_y, scr_w, tb_h, rgb(0x34, 0x52, 0x72), .taskbar);
-        } else {
-            renderGlassEffect(0, tb_y, scr_w, tb_h, rgb(0x34, 0x52, 0x72), .taskbar);
-        }
+        // 任务栏全宽 × 多遍 boxBlur 在宽屏（如 1600px）下 CPU 昂贵，且盒式模糊内层在部分边界组合下易触发 Debug 整数异常。
+        // 条带视觉以 tint + 高光 + chrome 为主；全场景磨砂感仍可由壁纸/标题栏等路径承担。
+        renderGlassTintOnly(0, tb_y, scr_w, tb_h, rgb(0x34, 0x52, 0x72), .taskbar);
     } else {
         fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
     }
@@ -1545,6 +1544,7 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     const tile: i32 = 34;
     const pill_h: i32 = tile;
 
+    panic_ctx.setPhase(0x0002_0091);
     const orb = aeroTaskbarStartOrb(tb_y, tb_h);
     // 阴影 + 球体 + 高光（Aero 玻璃球体感）
     const orb_cy1 = clampI32FromI64(@as(i64, orb.cy) + 1);
@@ -1552,25 +1552,28 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     fb.fillCircle(orb.cx, orb_cy1, orb_r1, rgb(0x04, 0x12, 0x28));
     fb.fillCircle(orb.cx, orb.cy, orb_r1, rgb(0x10, 0x2C, 0x50));
     fb.fillCircle(orb.cx, orb.cy, orb.r, rgb(0x1C, 0x44, 0x78));
-    fb.aeroSheenDisk(orb.cx, orb.cy, orb.r - 1, rgb(0xF4, 0xFA, 0xFF));
+    const orb_sheen_r = @max(0, orb.r - 1);
+    fb.aeroSheenDisk(orb.cx, orb.cy, orb_sheen_r, rgb(0xF4, 0xFA, 0xFF));
     renderZirconLogo(clampI32FromI64(@as(i64, orb.cx) - 7), clampI32FromI64(@as(i64, orb.cy) - 7));
 
+    panic_ctx.setPhase(0x0002_0092);
     const ql_ids = [_]icons.IconId{ .browser, .terminal, .documents };
-    var qx: i32 = orb.slot_w + 6;
+    var qx: i32 = clampI32FromI64(@as(i64, orb.slot_w) + 6);
     const ql_y = clampI32FromI64(@as(i64, tb_y) + @divTrunc(@as(i64, tb_h) - @as(i64, icon_px), 2));
     const ql_pad: i32 = 3;
     for (ql_ids) |iid| {
-        const bg_w = icon_px + 2 * ql_pad;
-        const bg_h = icon_px + 2 * ql_pad;
+        const bg_w = clampI32FromI64(@as(i64, icon_px) + 2 * @as(i64, ql_pad));
+        const bg_h = clampI32FromI64(@as(i64, icon_px) + 2 * @as(i64, ql_pad));
         const bg_x = clampI32FromI64(@as(i64, qx) - @as(i64, ql_pad));
         const bg_y = clampI32FromI64(@as(i64, ql_y) - @as(i64, ql_pad));
         const bg_ix = clampI32FromI64(@as(i64, bg_x) + 1);
         const bg_iy = clampI32FromI64(@as(i64, bg_y) + 1);
-        const bg_iw = @max(0, bg_w - 2);
-        const bg_ih_grad = @max(1, bg_h - 3);
+        const bg_iw = @max(0, clampI32FromI64(@as(i64, bg_w) - 2));
+        const bg_ih_grad = @max(1, clampI32FromI64(@as(i64, bg_h) - 3));
         fb.fillRoundedRect(bg_x, bg_y, bg_w, bg_h, 6, rgb(0x16, 0x2A, 0x42));
         fb.drawGradientV(bg_ix, bg_iy, bg_iw, bg_ih_grad, rgb(0x42, 0x5E, 0x82), rgb(0x12, 0x22, 0x36));
-        fb.blendTintRect(bg_ix, bg_iy, bg_iw, @max(0, @divTrunc(bg_h - 2, 2)), rgb(0xA8, 0xD0, 0xF5), 45, 170);
+        const tint_h_ql: i32 = @max(0, @as(i32, @intCast(@divTrunc(@as(i64, bg_h) - 2, 2))));
+        fb.blendTintRect(bg_ix, bg_iy, bg_iw, tint_h_ql, rgb(0xA8, 0xD0, 0xF5), 45, 170);
         fb.drawRect(bg_x, bg_y, bg_w, bg_h, rgb(0x58, 0x7C, 0xA0));
         icons.drawThemedIcon(iid, qx, ql_y, icon_s, .aero);
         qx = clampI32FromI64(@as(i64, qx) + @as(i64, icon_px) + 2 * @as(i64, ql_pad) + 6);
@@ -1580,6 +1583,7 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     const vline_len = @max(0, clampI32FromI64(@as(i64, tb_h) - 12));
     fb.drawVLine(vline_x, vline_y, vline_len, rgb(0x58, 0x78, 0x98));
 
+    panic_ctx.setPhase(0x0002_0093);
     const app_items = [_]struct { id: icons.IconId, active: bool }{
         .{ .id = .computer, .active = true },
         .{ .id = .folder, .active = false },
@@ -1596,12 +1600,14 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
         if (app.active) {
             fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x38, 0x5C, 0x88));
             fb.drawGradientV(pill_inner_x, pill_inner_y, pill_inner_w, pill_inner_h, rgb(0x82, 0xB0, 0xE0), rgb(0x38, 0x5C, 0x88));
-            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, @max(0, @divTrunc(pill_h - 4, 2)), rgb(0xE0, 0xF2, 0xFF), 50, 200);
+            const tint_h_act: i32 = @max(0, @as(i32, @intCast(@divTrunc(@as(i64, pill_h) - 4, 2))));
+            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, tint_h_act, rgb(0xE0, 0xF2, 0xFF), 50, 200);
             fb.drawRect(ax, ay, tile, pill_h, rgb(0xA0, 0xCC, 0xF0));
         } else {
             fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x1A, 0x2E, 0x46));
             fb.drawGradientV(pill_inner_x, pill_inner_y, pill_inner_w, pill_inner_h, rgb(0x3A, 0x54, 0x72), rgb(0x12, 0x20, 0x34));
-            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, @max(0, @divTrunc(pill_h - 4, 2)), rgb(0x88, 0xB0, 0xD8), 38, 160);
+            const tint_h_inact: i32 = @max(0, @as(i32, @intCast(@divTrunc(@as(i64, pill_h) - 4, 2))));
+            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, tint_h_inact, rgb(0x88, 0xB0, 0xD8), 38, 160);
             fb.drawRect(ax, ay, tile, pill_h, rgb(0x46, 0x64, 0x84));
         }
         const ix = clampI32FromI64(@as(i64, ax) + @divTrunc(@as(i64, tile) - @as(i64, app_icon_px), 2));
@@ -1626,6 +1632,7 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
         }
     }
 
+    panic_ctx.setPhase(0x0002_0094);
     const tray = aero_tray.layout(scr_w, scr_h, tb_h);
     if (tray.shelf_w > 4 and tray.shelf_h > 4) {
         fb.fillRoundedRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, 6, rgb(0x18, 0x28, 0x3C));
@@ -1644,8 +1651,10 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     const date_y = clampI32FromI64(@as(i64, tray.clk_y) + @as(i64, line_h_clk) + 1);
     fb.drawTextTransparentUi(tray.clk_x, date_y, line_date, rgb(0xE0, 0xEC, 0xF8));
 
+    panic_ctx.setPhase(0x0002_0095);
     renderAeroTrayFlyout(scr_w, scr_h);
 
+    panic_ctx.setPhase(0x0002_0096);
     const peek_x = clampI32FromI64(@as(i64, scr_w) - @as(i64, peek_w));
     fb.drawGradientV(peek_x, tb_y, peek_w, tb_h, rgb(0x68, 0x88, 0xA8), rgb(0x30, 0x48, 0x64));
     fb.drawVLine(peek_x, tb_y, tb_h, rgb(0x90, 0xB0, 0xD0));
@@ -3065,7 +3074,8 @@ pub fn showContextMenu(x: i32, y: i32) void {
 
 pub fn hideContextMenu() void {
     ctx_menu_visible = false;
-    shell_blur_cooldown_frames = 3;
+    // 略长于 3 帧：关闭右键/壳层后多几帧跳过任务栏盒式模糊，减轻 Refresh 等与全帧叠加之 CPU 尖峰。
+    shell_blur_cooldown_frames = 6;
     cursor_plane.invalidate();
 }
 

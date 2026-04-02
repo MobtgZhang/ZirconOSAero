@@ -296,6 +296,8 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     }
 
     if (paint_taskbar) {
+        const panic_ctx = @import("../../rtl/panic_context.zig");
+        panic_ctx.setPhase(0x0002_00A0);
         renderTaskbar(w, h, t, tb_h);
         const tb_y = display.clampI32FromI64(@as(i64, h) - @as(i64, tb_h));
         fb.markDirtyRegion(0, tb_y, w, tb_h);

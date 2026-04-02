@@ -40,6 +40,18 @@ fn clampI32FromI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
+fn shelf_height_nonnegative(tb_h: i32) i32 {
+    const d = @as(i64, tb_h) - 4;
+    if (d <= 0) return 0;
+    return clampI32FromI64(d);
+}
+
+fn shelf_width_nonnegative(tray_right_inner: i32, shelf_x: i32) i32 {
+    const w = @as(i64, tray_right_inner) - @as(i64, shelf_x);
+    if (w <= 0) return 0;
+    return clampI32FromI64(w);
+}
+
 /// 轴对齐命中：`px ∈ [rx, rx+rw)`、`py ∈ [ry, ry+rh)`，边界用 i64 避免 Debug 下 i32 加法溢出。
 fn pointInTrayRect(px: i32, py: i32, rx: i32, ry: i32, rw: i32, rh: i32) bool {
     const pxi = @as(i64, px);
@@ -61,7 +73,7 @@ pub fn layout(scr_w: i32, scr_h: i32, tb_h: i32) TrayLayout {
     const icon_s: u32 = 2;
     const icon_px: i32 = icons.getIconTotalSize(icon_s);
     const gap: i32 = 6;
-    const icon_step: i32 = icon_px + gap;
+    const icon_step: i32 = clampI32FromI64(@as(i64, icon_px) + @as(i64, gap));
     const step64 = @as(i64, icon_step);
     const ipx64 = @as(i64, icon_px);
 
@@ -87,14 +99,14 @@ pub fn layout(scr_w: i32, scr_h: i32, tb_h: i32) TrayLayout {
     const clk_right = clampI32FromI64(@as(i64, tray_icons_x) - 10);
     const clk_x = clampI32FromI64(@as(i64, clk_right) - @as(i64, clock_block_w));
     const line_h: i32 = 14;
-    const text_blk_h = line_h * 2 + 1;
+    const text_blk_h: i32 = clampI32FromI64(@as(i64, line_h) * 2 + 1);
     const clk_y = clampI32FromI64(@as(i64, tb_y) + @divTrunc(@as(i64, tb_h) - @as(i64, text_blk_h), 2));
 
     const tray_right_inner = clampI32FromI64(sw - peek64 - 2);
     const shelf_x = @max(4, clk_x - 8);
-    const shelf_y = tb_y + 2;
-    const shelf_h = tb_h - 4;
-    const shelf_w = clampI32FromI64(@as(i64, tray_right_inner) - @as(i64, shelf_x));
+    const shelf_y = clampI32FromI64(@as(i64, tb_y) + 2);
+    const shelf_h: i32 = shelf_height_nonnegative(tb_h);
+    const shelf_w: i32 = shelf_width_nonnegative(tray_right_inner, shelf_x);
 
     return .{
         .tb_y = tb_y,

@@ -216,7 +216,7 @@ fn renderGlassEffectInternal(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: 
 
     const spec = @as(u32, config.specular_intensity);
     if (spec > 0) {
-        const shine_h = @max(2, @divTrunc(h, 3));
+        const shine_h: i32 = if (h <= 0) 0 else @max(2, @as(i32, @intCast(@divTrunc(@as(i64, h), 3))));
         if (shine_h > 1) {
             fb.addSpecularBand(x, y, w, shine_h, spec);
             // Win7 标题栏/面板顶缘高光；任务栏用更柔和的顶线，避免纯白条过曝。

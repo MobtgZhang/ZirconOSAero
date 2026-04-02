@@ -31,14 +31,22 @@ var sw_cursor_saved_kind: aero_cursor_shape.CursorKind = .arrow;
 
 fn softwareCursorExtent(cx: i32, cy: i32) fb.Rect {
     const margin: i32 = 8;
-    if (!fb.isInitialized()) return .{ .x = 0, .y = 0, .w = 40, .h = 44 };
+    const cw: i32 = 40;
+    const ch: i32 = 44;
+    if (!fb.isInitialized()) return .{ .x = 0, .y = 0, .w = cw, .h = ch };
     const w_i32: i32 = @intCast(fb.getWidth());
     const h_i32: i32 = @intCast(fb.getHeight());
     const max_x = if (w_i32 > 0) w_i32 - 1 else 0;
     const max_y = if (h_i32 > 0) h_i32 - 1 else 0;
     const cxx = std.math.clamp(cx, 0, max_x);
     const cyy = std.math.clamp(cy, 0, max_y);
-    return .{ .x = cxx - margin, .y = cyy - margin, .w = 40, .h = 44 };
+    var rx: i32 = cxx - margin;
+    var ry: i32 = cyy - margin;
+    if (rx < 0) rx = 0;
+    if (ry < 0) ry = 0;
+    if (rx + cw > w_i32) rx = @max(0, w_i32 - cw);
+    if (ry + ch > h_i32) ry = @max(0, h_i32 - ch);
+    return .{ .x = rx, .y = ry, .w = cw, .h = ch };
 }
 
 fn markDirtyUnionFromPoints(ax: i32, ay: i32, bx: i32, by: i32) void {

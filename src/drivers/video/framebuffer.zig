@@ -450,10 +450,15 @@ pub fn interpolateColor(c1: u32, c2: u32, t: u32, total: u32) u32 {
 fn blendChannel(a: u32, b: u32, t: u32, total: u32) u32 {
     if (b >= a) {
         const da: u64 = b - a;
-        return @truncate(a + @as(u32, @intCast(da * @as(u64, t) / @as(u64, total))));
+        const delta: u64 = da * @as(u64, t) / @as(u64, total);
+        const sum = @as(u64, a) + delta;
+        return @as(u32, @intCast(@min(sum, @as(u64, 255))));
     } else {
         const da: u64 = a - b;
-        return @truncate(a - @as(u32, @intCast(da * @as(u64, t) / @as(u64, total))));
+        const delta: u64 = da * @as(u64, t) / @as(u64, total);
+        const sub: u64 = @min(delta, @as(u64, 255));
+        const v = @as(i64, @intCast(@min(a, 255))) - @as(i64, @intCast(sub));
+        return @as(u32, @intCast(@min(255, @max(0, v))));
     }
 }
 
@@ -945,9 +950,9 @@ pub fn blendTintRect(x: i32, y: i32, w: i32, h: i32, tint: u32, alpha: u8, satur
     const t_b: u32 = tint & 0xFF;
     const t_g: u32 = (tint >> 8) & 0xFF;
     const t_r: u32 = (tint >> 16) & 0xFF;
-    const a: u32 = @as(u32, alpha);
+    const a: u32 = @min(@as(u32, alpha), 255);
     const inv_a: u32 = 255 - a;
-    const sat: u32 = @as(u32, saturation);
+    const sat: u32 = @min(@as(u32, saturation), 255);
 
     const bytes_pp = @as(u32, fb_config.bpp) / 8;
     const ptr = getDrawBuffer();
@@ -972,13 +977,13 @@ pub fn blendTintRect(x: i32, y: i32, w: i32, h: i32, tint: u32, alpha: u8, satur
 
             const lum: u32 = @truncate((@as(u64, r) * 77 + @as(u64, g) * 150 + @as(u64, b) * 29) >> 8);
             const inv_sat: u32 = 255 - sat;
-            r = @truncate((@as(u64, r) * sat + @as(u64, lum) * inv_sat) / 255);
-            g = @truncate((@as(u64, g) * sat + @as(u64, lum) * inv_sat) / 255);
-            b = @truncate((@as(u64, b) * sat + @as(u64, lum) * inv_sat) / 255);
+            r = @min(255, @as(u32, @truncate((@as(u64, r) * sat + @as(u64, lum) * inv_sat) / 255)));
+            g = @min(255, @as(u32, @truncate((@as(u64, g) * sat + @as(u64, lum) * inv_sat) / 255)));
+            b = @min(255, @as(u32, @truncate((@as(u64, b) * sat + @as(u64, lum) * inv_sat) / 255)));
 
-            const out_r: u32 = @truncate((@as(u64, t_r) * a + @as(u64, r) * inv_a) / 255);
-            const out_g: u32 = @truncate((@as(u64, t_g) * a + @as(u64, g) * inv_a) / 255);
-            const out_b: u32 = @truncate((@as(u64, t_b) * a + @as(u64, b) * inv_a) / 255);
+            const out_r: u32 = @min(255, @as(u32, @truncate((@as(u64, t_r) * a + @as(u64, r) * inv_a) / 255)));
+            const out_g: u32 = @min(255, @as(u32, @truncate((@as(u64, t_g) * a + @as(u64, g) * inv_a) / 255)));
+            const out_b: u32 = @min(255, @as(u32, @truncate((@as(u64, t_b) * a + @as(u64, b) * inv_a) / 255)));
 
             if (fb_config.pixel_bgr) {
                 ptr[off] = @truncate(out_b);

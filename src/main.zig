@@ -617,7 +617,9 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
                     if (display.handleClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
                 }
                 if (cur_buttons & 0x01 == 0 and prev_buttons & 0x01 != 0) {
-                    if (display.handleMouseRelease()) needs_ui_paint = true;
+                    const rel = display.handleMouseRelease();
+                    if (rel.needs_full_scene) needs_ui_paint = true;
+                    move_paint = display.MouseMovePaintHint.merge(move_paint, .{ .needs_post_drag_composite = rel.needs_post_drag_composite });
                 }
                 if (cur_buttons & 0x02 != 0 and prev_buttons & 0x02 == 0) {
                     if (display.handleRightClick(mouse.getX(), mouse.getY())) needs_ui_paint = true;
@@ -642,7 +644,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
         const interpolating = mouse.isInterpolating();
         const startmenu_repaint = move_paint.needs_startmenu_repaint;
         const drag_repaint = move_paint.needs_drag_repaint;
-        const shell_geometry_repaint = move_paint.needs_shell_frame_repaint;
+        const shell_geometry_repaint = move_paint.needs_shell_frame_repaint or move_paint.needs_post_drag_composite;
         const caption_chrome_only = move_paint.needs_caption_chrome_only;
         const cursor_dirty = pixel_moved or mouse.hasCursorMoved() or move_paint.cursor_shape_changed;
 

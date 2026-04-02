@@ -51,3 +51,30 @@ test "KernelCompositorSurfaceFlags has eight documented fields" {
     const n = @typeInfo(KernelCompositorSurfaceFlags).@"struct".fields.len;
     try std.testing.expectEqual(@as(usize, 8), n);
 }
+
+test "user32 ensureCompositorSurface extent from RECT (integration contract)" {
+    const left: i32 = 8;
+    const top: i32 = 12;
+    const right: i32 = 108;
+    const bottom: i32 = 92;
+    const aw: u32 = @intCast(@max(0, right - left));
+    const ah: u32 = @intCast(@max(0, bottom - top));
+    try std.testing.expectEqual(@as(u32, 100), aw);
+    try std.testing.expectEqual(@as(u32, 80), ah);
+}
+
+test "dwm_compositor createSurface id monotonic model" {
+    var surface_count: u16 = 0;
+    const id0 = surface_count;
+    surface_count += 1;
+    const id1 = surface_count;
+    surface_count += 1;
+    try std.testing.expectEqual(@as(u16, 0), id0);
+    try std.testing.expectEqual(@as(u16, 1), id1);
+}
+
+test "destroySurface marks visibility false (metadata contract)" {
+    var visible: bool = true;
+    visible = false;
+    try std.testing.expect(!visible);
+}

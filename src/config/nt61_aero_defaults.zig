@@ -7,10 +7,12 @@
 //! `glass_tint_color` 此处为内核侧 **u32 字面值**（与 `dwm.zig` / `theme.rgb` 一致）；勿直接复制到 Aero 库主题常量而不换算。
 
 /// 合成参数表版本：内核 `display` 与用户态 `desktop/aero` 变更默认时应 bump，便于检测双轨漂移（DesktopManagerSpec）。
-pub const compositor_config_epoch: u32 = 2;
+pub const compositor_config_epoch: u32 = 4;
 
 /// 内核 `dwm.zig` / `display.initAeroDwm` / `renderer_aero.initDwm` 使用的玻璃与行为开关
 pub const KernelDwm = struct {
+    /// 桌面合成器「开启」（与 Aero 玻璃材质 `glass_enabled` 分离；`WM_DWMCOMPOSITIONCHANGED` 仅随此项变化）。
+    pub const composition_enabled = true;
     pub const glass_enabled = true;
     pub const glass_opacity: u8 = 210;
     pub const glass_blur_radius: u8 = 7;
@@ -74,9 +76,20 @@ pub const UserShellDwm = struct {
 
 const std = @import("std");
 comptime {
+    // UserShellDwm ↔ KernelDwm / KernelCompositor：凡应对齐的字段全部编译期锁（改一侧须同步另一侧并 bump compositor_config_epoch）。
+    std.debug.assert(UserShellDwm.glass_enabled == KernelDwm.glass_enabled);
+    std.debug.assert(UserShellDwm.glass_opacity == KernelDwm.glass_opacity);
     std.debug.assert(UserShellDwm.blur_radius == KernelDwm.glass_blur_radius);
     std.debug.assert(UserShellDwm.blur_passes == KernelDwm.glass_blur_passes);
-    std.debug.assert(UserShellDwm.glass_opacity == KernelDwm.glass_opacity);
+    std.debug.assert(UserShellDwm.glass_saturation == KernelDwm.glass_saturation);
+    std.debug.assert(UserShellDwm.glass_tint_color == KernelDwm.glass_tint_color);
+    std.debug.assert(UserShellDwm.glass_tint_opacity == KernelDwm.glass_tint_opacity);
+    std.debug.assert(UserShellDwm.animation_enabled == KernelDwm.animation_enabled);
+    std.debug.assert(UserShellDwm.peek_enabled == KernelDwm.peek_enabled);
+    std.debug.assert(UserShellDwm.shadow_enabled == KernelDwm.shadow_enabled);
+    std.debug.assert(UserShellDwm.vsync == KernelDwm.vsync_compositor);
+    std.debug.assert(UserShellDwm.shadow_size == KernelCompositor.shadow_offset);
+    std.debug.assert(UserShellDwm.shadow_layers == KernelCompositor.shadow_layers);
 }
 
 test "KernelDwm CPU blur budget constants are usable" {

@@ -19,6 +19,31 @@ pub fn phase() NetStackPhase {
     return .arp_udp;
 }
 
+/// RFC 826 ARP 以太网帧内操作码（线上 big-endian）。
+pub const ARP_OP_REQUEST: u16 = 1;
+pub const ARP_OP_REPLY: u16 = 2;
+
+/// ARP 固定首部 8 字节（不含硬件/协议地址可变尾部）；多字字段为 **已从线上解码** 的主机值。
+pub const ArpHeaderFixed = struct {
+    hardware_type: u16,
+    protocol_type: u16,
+    hardware_len: u8,
+    protocol_len: u8,
+    operation: u16,
+};
+
+/// 解析 ARP 前 8 字节；以太网 IPv4 常见 `hw=1 eth, proto=0x0800, hw_len=6, proto_len=4`。
+pub fn parseArpHeaderFixed(bytes: []const u8) ?ArpHeaderFixed {
+    if (bytes.len < 8) return null;
+    return .{
+        .hardware_type = std.mem.readInt(u16, bytes[0..2], .big),
+        .protocol_type = std.mem.readInt(u16, bytes[2..4], .big),
+        .hardware_len = bytes[4],
+        .protocol_len = bytes[5],
+        .operation = std.mem.readInt(u16, bytes[6..8], .big),
+    };
+}
+
 pub fn ipv4Unspecified() Ipv4Addr {
     return 0;
 }
@@ -71,6 +96,19 @@ test "parseIpv4Header rejects IHL greater than 5 (options not implemented)" {
     var wire: [20]u8 = [_]u8{0} ** 20;
     wire[0] = 0x46; // version 4, IHL 6 — 解析器仅接受 IHL=5
     try std.testing.expect(parseIpv4Header(&wire) == null);
+}
+
+test "parseArpHeaderFixed decodes Ethernet/IPv4 style preamble" {
+    var b: [8]u8 = undefined;
+    std.mem.writeInt(u16, b[0..2], 1, .big);
+    std.mem.writeInt(u16, b[2..4], 0x0800, .big);
+    b[4] = 6;
+    b[5] = 4;
+    std.mem.writeInt(u16, b[6..8], ARP_OP_REQUEST, .big);
+    const a = parseArpHeaderFixed(&b) orelse return error.ParseFailed;
+    try std.testing.expectEqual(@as(u16, 1), a.hardware_type);
+    try std.testing.expectEqual(@as(u16, 0x0800), a.protocol_type);
+    try std.testing.expectEqual(ARP_OP_REQUEST, a.operation);
 }
 
 test "parseIpv4Header decodes RFC791 fixed header (big-endian fields)" {

@@ -37,6 +37,7 @@ pub const timer = if (is_x86) struct {
 
 pub const storage = if (is_x86) struct {
     pub const ata = @import("storage/ata.zig");
+    pub const virtio_blk_pci = @import("storage/virtio_blk_pci.zig");
 } else struct {};
 
 pub const video = struct {

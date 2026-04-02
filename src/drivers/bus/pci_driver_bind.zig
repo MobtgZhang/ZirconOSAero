@@ -21,8 +21,10 @@ pub const BoundDriver = enum(u8) {
     virtio_gpu = 3,
     /// VirtIO 网络（1af4:1000）
     virtio_net = 4,
+    /// VirtIO block（1af4:1042；MMIO/队列接线见 `storage/virtio_blk_pci.zig`）
+    virtio_blk = 5,
     /// 显示类 0x03：由 vendor 再分派至 AMD/Intel/NVIDIA 探测链（非本表唯一键）
-    display_class = 5,
+    display_class = 6,
 };
 
 /// 标准 PCI 类（基类，偏移 0x0B 高 8 位于 header type0）。
@@ -52,12 +54,14 @@ pub fn lookupByClassProgIf(class_code: u8, subclass: u8, prog_if: u8) BoundDrive
 pub const VirtioVendor: u16 = 0x1AF4;
 pub const VirtioGpuDevice: u16 = 0x1050;
 pub const VirtioNetDevice: u16 = 0x1000;
+pub const VirtioBlkDevice: u16 = 0x1042;
 
 /// 在类码绑定之后按厂商/设备细化（VirtIO 优先于泛型类匹配）。
 pub fn refineByVendorDevice(vendor_id: u16, device_id: u16, class_fallback: BoundDriver) BoundDriver {
     if (vendor_id == VirtioVendor) {
         if (device_id == VirtioGpuDevice) return .virtio_gpu;
         if (device_id == VirtioNetDevice) return .virtio_net;
+        if (device_id == VirtioBlkDevice) return .virtio_blk;
     }
     return class_fallback;
 }
@@ -86,6 +90,11 @@ test "pci bind config word virtio net" {
     const cw: u32 = 0x0200_0000;
     const d = lookupFromConfigClassWord(VirtioVendor, VirtioNetDevice, cw);
     try std.testing.expect(d == .virtio_net);
+}
+
+test "pci bind virtio block by vendor device" {
+    const d = refineByVendorDevice(VirtioVendor, VirtioBlkDevice, .none);
+    try std.testing.expect(d == .virtio_blk);
 }
 
 test "pci bind config dword xhci matches pcie layout" {

@@ -145,6 +145,18 @@ fn vmaOverlaps(a0: u64, a1: u64, b0: u64, b1: u64) bool {
     return !(a1 <= b0 or b1 <= a0);
 }
 
+/// Win32 `PAGE_*` → x86_64 叶 PTE 标志（用户页）。未覆盖的组合返回 `null`。
+fn ntProtectToPteFlags(prot: u32) ?u64 {
+    const base = paging.Present | paging.User | paging.Accessed;
+    return switch (prot) {
+        0x02 => base | paging.NoExecute,
+        0x04, 0x08, 0x80 => base | paging.Write | paging.NoExecute,
+        0x10, 0x20 => base,
+        0x40 => base | paging.Write,
+        else => null,
+    };
+}
+
 /// 通用 VMA 槽位（与 `MEM_RESERVE` 记录互补；供 `NtAllocateVirtualMemory` 等逐步接线）。
 pub const max_vma: usize = 48;
 
@@ -378,6 +390,28 @@ pub const AddressSpace = struct {
             return null;
         }
         return phys;
+    }
+
+    /// `NtProtectVirtualMemory` 路径：按 Win32 `PAGE_*` 更新已映射叶项。未映射页返回 `false`。
+    /// Ref: https://learn.microsoft.com/windows/win32/memory/memory-protection-constants
+    pub fn protectVirtualRange(self: *AddressSpace, base: u64, size_bytes: u64, new_protect: u32) bool {
+        if (size_bytes == 0) return false;
+        if (!@hasDecl(paging, "protectLeafPage")) return false;
+        const pte_flags = ntProtectToPteFlags(new_protect) orelse return false;
+        const ps: u64 = @intCast(paging.page_size);
+        var va = base & ~(ps - 1);
+        const end = base + size_bytes;
+        while (va < end) {
+            if (!paging.protectLeafPage(
+                self.pml4_phys,
+                va,
+                pte_flags,
+                allocFrameCb,
+                @ptrCast(self.allocator),
+            )) return false;
+            va += ps;
+        }
+        return true;
     }
 
     pub fn unmapPage(self: *AddressSpace, virt: u64) ?u64 {

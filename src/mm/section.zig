@@ -9,6 +9,7 @@
 // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-ntcreatesection
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K1.6
 
+const std = @import("std");
 const ob = @import("../ob/object.zig");
 const process = @import("../ps/process.zig");
 const vm = @import("vm.zig");
@@ -165,4 +166,13 @@ pub fn unmapViewInProcess(proc: *process.Process, base: u64) i32 {
     }
     proc.address_space = space;
     return STATUS_SUCCESS;
+}
+
+test "SectionObject is backed by object header type section" {
+    const s: SectionObject = .{};
+    try std.testing.expect(s.header.obj_type == ob.ObjectType.section);
+}
+
+test "MAX_SECTIONS is bounded for static pool" {
+    try std.testing.expect(MAX_SECTIONS > 0 and MAX_SECTIONS <= 256);
 }

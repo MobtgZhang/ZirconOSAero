@@ -35,6 +35,10 @@ pub const NtQueryValueKey = 0x14;
 pub const NtCreateKey = 0x1A;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64（与 `NtQueryValueKey` 不同索引）。
 pub const NtSetValueKey = 0x5D;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtEnumerateKey = 0x32;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtEnumerateValueKey = 0x13;
 pub const NtWriteFile = 0x08;
 pub const NtReadFile = 0x07;
 /// Win32k 在真实 Windows 上为独立服务表；本内核将用户消息 syscall 折叠进同一分发器。
@@ -90,6 +94,8 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtQueryValueKey == 0x14);
     try std.testing.expect(NtCreateKey == 0x1A);
     try std.testing.expect(NtSetValueKey == 0x5D);
+    try std.testing.expect(NtEnumerateKey == 0x32);
+    try std.testing.expect(NtEnumerateValueKey == 0x13);
     try std.testing.expect(NtUnmapViewOfSection == 0x2A);
     try std.testing.expect(NtCreatePort == 0x9D);
     try std.testing.expect(NtConnectPort == 0x8F);

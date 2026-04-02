@@ -310,26 +310,111 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
         ssdt.NtCreateKey => blk: {
             const proc_ck = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_HANDLE);
             const asp_ck = proc_ck.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
-            if (p1 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (p1 == 0 or p3 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
             if (!probe.probeUserMemory(asp_ck, p1, @sizeOf(ntdll.HANDLE), true)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
-            const st = ntdll.NtCreateKey(
-                @ptrFromInt(p1),
-                @truncate(p2),
-                null,
-                0,
-                null,
-                0,
-                null,
-            );
-            break :blk ntResult(st);
+            if (!probe.probeUserMemory(asp_ck, p3, 64, false)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            var pathbuf: [512]u8 = undefined;
+            const raw = readRegPathFromObjectAttributes(p3, &pathbuf) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
+            const path_norm = ob.normalizeNtObjectPath(raw);
+            const cr = registry.createKeyFromNtPath(path_norm) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
+            const disp_va = syscall_abi.userStackArg(frame, 16) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (disp_va != 0) {
+                if (!probe.probeUserMemory(asp_ck, disp_va, 4, true)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+                @as(*volatile u32, @ptrFromInt(disp_va)).* = if (cr.created) ntdll.REG_CREATED_NEW_KEY else ntdll.REG_OPENED_EXISTING_KEY;
+            }
+            const hdr_ck = registry.keyHeaderPtr(cr.idx) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
+            const mask_ck = ob.GENERIC_READ | ob.GENERIC_WRITE;
+            const h_ck = proc_ck.handle_table.allocHandle(@intFromPtr(hdr_ck), mask_ck, .key) orelse break :blk ntResult(ntdll.STATUS_INSUFFICIENT_RESOURCES);
+            @as(*volatile ntdll.HANDLE, @ptrFromInt(p1)).* = h_ck;
+            break :blk 0;
         },
         ssdt.NtSetValueKey => blk: {
-            const empty: []const u8 = &.{};
-            const st = ntdll.NtSetValueKey(p1, empty, 0, 0, empty);
-            break :blk ntResult(st);
+            const proc_sv = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_HANDLE);
+            const asp_sv = proc_sv.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (p2 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (!probe.probeUserUnicodeString(asp_sv, p2, false)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const data_va = syscall_abi.userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const data_sz_u = syscall_abi.userStackArg(frame, 8) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const data_sz: u32 = @truncate(data_sz_u);
+            if (data_sz > 256) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (data_sz > 0 and data_va == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (data_sz > 0 and !probe.probeUserMemory(asp_sv, data_va, data_sz, false))
+                break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const us_sv = @as(*const volatile extern struct {
+                Length: u16,
+                MaximumLength: u16,
+                Buffer: u64,
+            }, @ptrFromInt(p2));
+            var namebuf: [128]u8 = undefined;
+            var nj: usize = 0;
+            const wchar_count = @as(usize, @intCast(us_sv.Length)) / 2;
+            var wi: usize = 0;
+            while (wi < wchar_count and nj < namebuf.len) : (wi += 1) {
+                const ch = @as(*const volatile u16, @ptrFromInt(us_sv.Buffer + wi * 2)).*;
+                namebuf[nj] = if (ch < 128) @truncate(ch) else '?';
+                nj += 1;
+            }
+            var us_local: ntdll.UNICODE_STRING = .{};
+            const cpy = @min(nj, us_local.buffer.len);
+            @memcpy(us_local.buffer[0..cpy], namebuf[0..cpy]);
+            us_local.length = @intCast(cpy);
+            var databuf: [256]u8 = undefined;
+            const dslice: []const u8 = if (data_sz == 0) &[_]u8{} else ds: {
+                @memcpy(databuf[0..data_sz], (@as([*]const u8, @ptrFromInt(data_va)))[0..data_sz]);
+                break :ds databuf[0..data_sz];
+            };
+            const st_sv = ntdll.NtSetValueKey(
+                p1,
+                &us_local,
+                @truncate(p3),
+                @truncate(p4),
+                dslice,
+            );
+            break :blk ntResult(st_sv);
+        },
+        ssdt.NtEnumerateKey => blk: {
+            const proc_ek = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_HANDLE);
+            const asp_ek = proc_ek.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            const len_ek = syscall_abi.userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const result_len_va = syscall_abi.userStackArg(frame, 8) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const len32: u32 = @truncate(len_ek);
+            if (p4 == 0 or result_len_va == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (!probe.probeUserMemory(asp_ek, result_len_va, @sizeOf(u32), true)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (len32 > 0 and !probe.probeUserMemory(asp_ek, p4, len32, true)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const rl_ek: *u32 = @ptrFromInt(result_len_va);
+            const st_ek = ntdll.NtEnumerateKey(
+                p1,
+                @truncate(p2),
+                @truncate(p3),
+                @ptrFromInt(p4),
+                len32,
+                rl_ek,
+            );
+            break :blk ntResult(st_ek);
+        },
+        ssdt.NtEnumerateValueKey => blk: {
+            const proc_ev = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_HANDLE);
+            const asp_ev = proc_ev.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            const len_ev = syscall_abi.userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const result_len_ev_va = syscall_abi.userStackArg(frame, 8) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const len_ev32: u32 = @truncate(len_ev);
+            if (p4 == 0 or result_len_ev_va == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
+            if (!probe.probeUserMemory(asp_ev, result_len_ev_va, @sizeOf(u32), true)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            if (len_ev32 > 0 and !probe.probeUserMemory(asp_ev, p4, len_ev32, true)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const rl_ev: *u32 = @ptrFromInt(result_len_ev_va);
+            const st_ev = ntdll.NtEnumerateValueKey(
+                p1,
+                @truncate(p2),
+                @truncate(p3),
+                @ptrFromInt(p4),
+                len_ev32,
+                rl_ev,
+            );
+            break :blk ntResult(st_ev);
         },
         ssdt.NtReadFile => syscall_nt_extras.dispatchNtReadFile(frame),
         ssdt.NtWriteFile => syscall_nt_extras.dispatchNtWriteFile(frame),
+        // Win32 `GetMessage`/`PeekMessage` 的阻塞与 BOOL 返回值见 `user32.ntUserGetMessageSyscall` / `ntUserPeekMessageSyscall` 文档注释；勿与真 NT 用户态语义混用。
         ssdt.NtUserGetMessage => ntResult(user32.ntUserGetMessageSyscall(p1, p2, @truncate(p3), @truncate(p4))),
         ssdt.NtUserPeekMessage => blk: {
             const a5 = syscall_abi.userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);

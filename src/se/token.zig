@@ -4,6 +4,7 @@
 //! 访问检查失败时，调用方可经 `se/audit.zig` 的 `logAccessDenied` / `logObjectOpenDenied` 写入审计（与 `NTSTATUS` 返回值配合）。
 //!
 //! 里程碑（clean-room，仅 WDK/MS Learn 行为描述）：**令牌模拟（impersonation）**、完整 **SACL/ACL** 编辑器与对象审计策略为长期项；当前为演示路径子集。跟踪：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K6.3。
+// **P4-B2**：线程级 `Impersonate*` / 还原令牌的 IRQL 与亲和约束为文档化简化；生产语义见 WDK `SeImpersonateClientEx` 类说明。
 
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
@@ -102,6 +103,14 @@ pub fn checkHandleAccess(table: *const ob.HandleTable, handle: ob.Handle, requir
 pub fn canOpenFileForAccess(tok: *const Token, desired_access: ob.ACCESS_MASK) bool {
     const object_grants: u32 = ob.GENERIC_READ | ob.GENERIC_WRITE | ob.GENERIC_EXECUTE | ob.SYNCHRONIZE;
     return checkAccess(tok, desired_access, object_grants);
+}
+
+/// 最小 SeAccessCheck 等价路径：`desired` 须由 `object_grants` 掩码完全覆盖（与 WDK 访问掩码语义同构的简化）。
+/// Ref: https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck （行为级；无 Windows 源码）。
+pub fn seAccessCheckMask(tok: *const Token, desired: ob.ACCESS_MASK, object_grants: ob.ACCESS_MASK) bool {
+    if (tok.owner.eql(SYSTEM_SID)) return true;
+    if (tok.is_elevated) return true;
+    return (object_grants & desired) == desired;
 }
 
 pub fn init() void {

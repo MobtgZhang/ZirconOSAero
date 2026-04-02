@@ -15,6 +15,7 @@ const process = @import("../ps/process.zig");
 const vm = @import("vm.zig");
 const arch = @import("../arch.zig");
 const paging = arch.impl.paging;
+const vfs = @import("../fs/vfs.zig");
 
 // 与 `ntdll` 中 NTSTATUS 数值一致，避免模块环依赖。
 const STATUS_SUCCESS: i32 = 0;
@@ -25,12 +26,20 @@ const STATUS_INSUFFICIENT_RESOURCES: i32 = -1073741823;
 
 pub const MAX_SECTIONS: usize = 32;
 
-/// 内核静态池中的节对象（匿名内存节）。
+/// 内核静态池中的节对象（匿名或文件后备只读映射）。
 pub const SectionObject = struct {
     header: ob.ObjectHeader = .{ .obj_type = .section },
     maximum_size: u64 = 0,
     page_protection: u32 = 0,
     file_backed: bool = false,
+    /// `vfs.FileObject` 内核指针；仅 `file_backed` 时有效。
+    backing_file: ?*vfs.FileObject = null,
+    /// 打开的映射视图数（最后一视图卸载后仍可保留节句柄；供将来共享/COW 回收）。
+    active_view_count: u32 = 0,
+    /// `SEC_IMAGE` 等：完整 PE 映射为路线图；仅作标志供加载器探测。
+    is_image_section: bool = false,
+    /// 写时拷贝：尚未实现；为真时 `mapViewIntoProcess` 应拒绝或走 COW 路径。
+    cow_requested: bool = false,
 };
 
 var g_sections: [MAX_SECTIONS]SectionObject = undefined;
@@ -56,6 +65,32 @@ pub fn createAnonymousSection(max_size: u64, page_protection: u32) ?*SectionObje
                 .maximum_size = aligned,
                 .page_protection = page_protection,
                 .file_backed = false,
+            };
+            return s;
+        }
+    }
+    return null;
+}
+
+/// 只读文件后备节（`NtCreateSection` + 文件句柄）；`max_size` 0 表示取 `file.file_size`。
+pub fn createFileBackedSection(max_size: u64, page_protection: u32, file: *vfs.FileObject) ?*SectionObject {
+    var i: usize = 0;
+    while (i < MAX_SECTIONS) : (i += 1) {
+        if (!g_section_used[i]) {
+            g_section_used[i] = true;
+            const s = &g_sections[i];
+            const from_file = if (max_size == 0) file.file_size else @min(max_size, file.file_size);
+            const aligned = pageAlignUp(from_file);
+            const cow = (page_protection & 0x88) != 0; // WRITECOPY / EXECUTE_WRITECOPY
+            s.* = .{
+                .header = .{ .obj_type = .section, .ref_count = 1, .handle_count = 0 },
+                .maximum_size = aligned,
+                .page_protection = page_protection,
+                .file_backed = true,
+                .backing_file = file,
+                .active_view_count = 0,
+                .is_image_section = false,
+                .cow_requested = cow,
             };
             return s;
         }
@@ -104,7 +139,43 @@ fn pickUserBase(space: *vm.AddressSpace, num_pages: u32) ?u64 {
     return null;
 }
 
-/// `NtMapViewOfSection` 简化语义：在目标进程提交 `view_size` 字节（页对齐）的匿名页。
+/// `NtMapViewOfSection`：匿名页 **或** 只读文件后备（映射时读入内容）；COW/可写文件图为路线图。
+fn copyFileIntoMappedPages(
+    space: *vm.AddressSpace,
+    base: u64,
+    num_pages: u32,
+    file: *vfs.FileObject,
+    start_file_off: u64,
+) i32 {
+    const ps: u64 = @intCast(paging.page_size);
+    var buf: [4096]u8 = undefined;
+    if (ps > buf.len) return STATUS_INVALID_PARAMETER;
+    var file_pos = start_file_off;
+    var p: u32 = 0;
+    while (p < num_pages) : (p += 1) {
+        const va = base + @as(u64, p) * ps;
+        const phys = space.getPhysical(va) orelse return STATUS_NO_MEMORY;
+        var written: u64 = 0;
+        while (written < ps) {
+            const to_read: usize = @intCast(@min(ps - written, @as(u64, buf.len)));
+            file.position = file_pos;
+            const rr = vfs.read(file, buf[0..to_read]);
+            if (rr.status != .success) return STATUS_INVALID_PARAMETER;
+            const got = rr.bytes_read;
+            const dst_k: [*]u8 = @ptrFromInt(phys + written);
+            if (got > 0) {
+                @memcpy(dst_k[0..got], buf[0..got]);
+                file_pos += got;
+            }
+            if (got < to_read) {
+                @memset(dst_k[got..to_read], 0);
+            }
+            written += to_read;
+        }
+    }
+    return STATUS_SUCCESS;
+}
+
 pub fn mapViewIntoProcess(
     proc: *process.Process,
     sec: *SectionObject,
@@ -112,7 +183,7 @@ pub fn mapViewIntoProcess(
     section_offset: u64,
     view_size: *u64,
 ) i32 {
-    if (sec.file_backed) return STATUS_NOT_IMPLEMENTED;
+    if (sec.cow_requested) return STATUS_NOT_IMPLEMENTED;
     if (section_offset >= sec.maximum_size) return STATUS_INVALID_PARAMETER;
     const ps: u64 = @intCast(paging.page_size);
     const vs: u64 = if (view_size.* == 0)
@@ -121,13 +192,14 @@ pub fn mapViewIntoProcess(
         pageAlignUp(view_size.*);
     if (section_offset + vs > sec.maximum_size) return STATUS_INVALID_PARAMETER;
 
-    var space = proc.address_space orelse return STATUS_NO_MEMORY;
+    const space = proc.address_space orelse return STATUS_NO_MEMORY;
     const num_pages: u32 = @intCast(vs / ps);
     const flags = mapFlagsFromPageProtect(sec.page_protection);
+    if (sec.file_backed and flags.writable) return STATUS_NOT_IMPLEMENTED;
 
     var base = base_address.*;
     if (base == 0) {
-        base = pickUserBase(&space, num_pages) orelse return STATUS_NO_MEMORY;
+        base = pickUserBase(space, num_pages) orelse return STATUS_NO_MEMORY;
     } else {
         if (base & (ps - 1) != 0) return STATUS_INVALID_PARAMETER;
     }
@@ -150,21 +222,47 @@ pub fn mapViewIntoProcess(
         }
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    proc.address_space = space;
+    if (sec.file_backed) {
+        const fo = sec.backing_file orelse {
+            var j: u32 = 0;
+            while (j < num_pages) : (j += 1) {
+                _ = space.unmapAndFree(base + @as(u64, j) * ps);
+            }
+            _ = space.takeSectionView(base);
+            return STATUS_INVALID_PARAMETER;
+        };
+        const cp = copyFileIntoMappedPages(space, base, num_pages, fo, section_offset);
+        if (cp != STATUS_SUCCESS) {
+            var j: u32 = 0;
+            while (j < num_pages) : (j += 1) {
+                _ = space.unmapAndFree(base + @as(u64, j) * ps);
+            }
+            _ = space.takeSectionView(base);
+            return cp;
+        }
+    }
+    sec.active_view_count +%= 1;
+    vm.recordCommittedVadRange(space, base, num_pages, sec.page_protection);
     base_address.* = base;
     view_size.* = vs;
     return STATUS_SUCCESS;
 }
 
 pub fn unmapViewInProcess(proc: *process.Process, base: u64) i32 {
-    var space = proc.address_space orelse return STATUS_INVALID_PARAMETER;
-    const pages = space.takeSectionView(base) orelse return STATUS_INVALID_PARAMETER;
-    const ps: u64 = @intCast(paging.page_size);
-    var i: u32 = 0;
-    while (i < pages) : (i += 1) {
-        _ = space.unmapAndFree(base + @as(u64, i) * ps);
+    const space = proc.address_space orelse return STATUS_INVALID_PARAMETER;
+    var sec_opt: ?*SectionObject = null;
+    var vi: u8 = 0;
+    while (vi < space.section_view_count) : (vi += 1) {
+        if (space.section_view_base[vi] == base) {
+            sec_opt = @ptrFromInt(space.section_view_obj[vi]);
+            break;
+        }
     }
-    proc.address_space = space;
+    const pages = space.takeSectionView(base) orelse return STATUS_INVALID_PARAMETER;
+    if (sec_opt) |sec| {
+        if (sec.active_view_count > 0) sec.active_view_count -= 1;
+    }
+    vm.unmapRange(space, base, pages);
     return STATUS_SUCCESS;
 }
 

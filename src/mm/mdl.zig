@@ -17,11 +17,13 @@ const std = @import("std");
 pub const MdlFlags = packed struct(u8) {
     /// 页框已解析进 `pfns`（不等价于「已锁入工作集」）。
     pages_populated: bool = false,
-    _pad: u7 = 0,
+    /// 由 `vm.mdlLockPagesInFrameAllocator` 置位。
+    pages_locked: bool = false,
+    _pad: u6 = 0,
 };
 
 /// 单块 MDL 内联 PFN 上限（避免早期内核堆分配；大缓冲将来用池化扩展）。
-pub const max_mdl_pfns: usize = 16;
+pub const max_mdl_pfns: usize = 64;
 
 /// 描述一段虚拟范围及其解析出的物理页帧号（子集实现）。
 pub const Mdl = struct {
@@ -66,6 +68,7 @@ pub const Mdl = struct {
         if (self.pfn_count == 0) return 0;
         return 1;
     }
+
 };
 
 test "Mdl PFN identity mapping two pages" {
@@ -79,7 +82,7 @@ test "Mdl PFN identity mapping two pages" {
 }
 
 test "Mdl layout stable for host regression" {
-    try std.testing.expect(@sizeOf(Mdl) <= 256);
+    try std.testing.expect(@sizeOf(Mdl) <= 1024);
     const m = Mdl.init(0xFFFF_8000_0000_1000, 4096);
     try std.testing.expectEqual(@as(u64, 0xFFFF_8000_0000_1000), m.start_va);
     try std.testing.expectEqual(@as(u32, 4096), m.byte_count);

@@ -12,33 +12,64 @@ const std = @import("std");
 const builtin = @import("builtin");
 const kuser_sdk = @import("../sdk/kuser_shared_nt61.zig");
 const vm = @import("vm.zig");
+const arch = @import("../arch.zig");
+const panic_ctx = @import("../rtl/panic_context.zig");
+
+test "KUSER_SHARED_DATA VA page aligned for user mapping" {
+    try std.testing.expect((kuser_sdk.KUSER_SHARED_DATA_VA_X64 & 0xFFF) == 0);
+}
+
+/// 运行时校验：共享页已映射且 **不可写**（x64）；供进程创建路径自检。
+pub fn verifyKuserMappingInAddressSpace(space: *vm.AddressSpace) bool {
+    if (builtin.cpu.arch != .x86_64) return true;
+    const va = kuser_sdk.KUSER_SHARED_DATA_VA_X64;
+    if (space.getPhysical(va) == null) return false;
+    const pg = arch.impl.paging;
+    if (@hasDecl(pg, "isPageWritable") and pg.isPageWritable(space.pml4_phys, va)) return false;
+    return true;
+}
 
 /// 在新进程地址空间中安装共享数据页。失败时调用方应 `releaseProcessAddressSpace`。
 pub fn installInProcessAddressSpace(space: *vm.AddressSpace) bool {
     if (builtin.cpu.arch != .x86_64) return true;
 
+    // 关中断：避免 timer/调度路径与 `panic_context` 交叠导致 phase 误判（Phase 5 首次建进程诊断）。
+    arch.disableInterrupts();
+    defer arch.enableInterrupts();
+
+    panic_ctx.setPhase(0x0005_0120);
     const va = kuser_sdk.KUSER_SHARED_DATA_VA_X64;
+    panic_ctx.setPhase(0x0005_0121);
     const phys = space.mapPageAlloc(va, .{
         .writable = false,
         .user = true,
         .executable = false,
-    }) orelse return false;
+    }) orelse {
+        panic_ctx.setPhase(0);
+        return false;
+    };
 
-    // SAFETY: `phys` 来自 `FrameAllocator`，内核启动路径已 identity-map 可用物理内存；
-    // 写入仅在进程创建时发生，与 `probe`/`mapPage` 契约一致。
+    // `mapPageAlloc` 内 `allocZeroed` 已用 `memsetPhysicalPage` 清零；勿再 `page[0..4096]`（Debug 下末端地址溢出断言）。
+    panic_ctx.setPhase(0x0005_0122);
     const page: [*]align(4096) u8 = @ptrFromInt(phys);
-    @memset(page[0..4096], 0);
-
     const prefix: *align(1) kuser_sdk.KuserSharedDataPrefix = @ptrCast(page);
     prefix.TickCountMultiplier = 0x01000000;
 
     writeU32(page, kuser_sdk.kuser_nt_major_version_offset, 6);
     writeU32(page, kuser_sdk.kuser_nt_minor_version_offset, 1);
 
-    return true;
+    panic_ctx.setPhase(0x0005_0124);
+    const ok = verifyKuserMappingInAddressSpace(space);
+    // 成功路径不设 0：返回后 `createProcess` 立即 setPhase(0x0013)；避免 defer/返回窗口内 getPhase()==0。
+    if (!ok) panic_ctx.setPhase(0);
+    return ok;
 }
 
 fn writeU32(page: [*]align(4096) u8, offset: usize, value: u32) void {
-    if (offset + 4 > 4096) return;
-    std.mem.writeInt(u32, page[offset..][0..4], value, .little);
+    // 避免 `offset + 4` 在 usize 上溢出（Debug 会 panic）；合法写域为 [0, 4092]。
+    if (offset > 4096 - 4) return;
+    // Zig 0.15：`writeInt` 需要 `*[4]u8`，不能传运行时切片。
+    const p: [*]u8 = @ptrCast(page);
+    const dst: *[4]u8 = @ptrCast(p + offset);
+    std.mem.writeInt(u32, dst, value, .little);
 }

@@ -7,6 +7,7 @@
 // This is an independent clean-room implementation.
 // Reference: MS Learn — kernel buffer validation concepts (behavioral only); Intel SDM — U/S and #PF。
 // 全 syscall 覆盖须与 docs/cn/NT61_CONTRACT_MATRIX.md、MVT 中「用户指针探测」行同步审计。
+// 里程碑：新增 Native API 时须在 `syscall.zig` 入口对用户指针做 `probeUserMemory`（与 P5 门禁一致）。
 
 const builtin = @import("builtin");
 const arch = @import("../arch.zig");

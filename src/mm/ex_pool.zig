@@ -9,6 +9,20 @@
 
 const pool = @import("pool.zig");
 
+/// 默认无操作；内核启动后由 `main.zig` 注册为 `ke/irql.assertBelowDispatchForPagedPool`，
+/// 避免 `ex_pool` 直接 `@import("ke/irql")` 导致 `zig test src/mm/slab.zig` 模块路径失败。
+var paged_pool_irql_guard: *const fn () void = struct {
+    fn noop() void {}
+}.noop;
+
+pub fn setPagedPoolIrqlGuard(guard: *const fn () void) void {
+    paged_pool_irql_guard = guard;
+}
+
+fn assertPagedPoolIrqlOk() void {
+    paged_pool_irql_guard();
+}
+
 /// 非分页池分配；`tag` 参与调试统计（见 `pool.zig`）。
 pub fn exAllocatePoolWithTag(size: usize, tag: u32) ?[*]u8 {
     return pool.allocateNonPaged(size, tag);
@@ -16,4 +30,22 @@ pub fn exAllocatePoolWithTag(size: usize, tag: u32) ?[*]u8 {
 
 pub fn exFreePoolWithTag(ptr: [*]u8, size: usize, tag: u32) void {
     pool.freeNonPaged(ptr, size, tag);
+}
+
+/// 显式池类型：`PagedPool` 经 `setPagedPoolIrqlGuard` 注册的回调断言 IRQL（内核默认注册 `ke/irql`）。
+pub fn exAllocatePoolWithTagType(size: usize, tag: u32, pool_type: pool.PoolType) ?[*]u8 {
+    return switch (pool_type) {
+        .non_paged => pool.allocateNonPaged(size, tag),
+        .paged => blk: {
+            assertPagedPoolIrqlOk();
+            break :blk pool.allocatePaged(size, tag);
+        },
+    };
+}
+
+pub fn exFreePoolWithTagType(ptr: [*]u8, size: usize, tag: u32, pool_type: pool.PoolType) void {
+    switch (pool_type) {
+        .non_paged => pool.freeNonPaged(ptr, size, tag),
+        .paged => pool.freePaged(ptr, size, tag),
+    }
 }

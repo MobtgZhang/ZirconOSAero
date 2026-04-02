@@ -2,10 +2,13 @@
 //! NT style: provides address space, map/unmap, permissions
 //! Kernel provides mechanism; policy is in user-space services
 
+const std = @import("std");
 const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const paging = arch.impl.paging;
 const FrameAllocator = @import("frame.zig").FrameAllocator;
+const heap = @import("heap.zig");
+const vad_mod = @import("vad.zig");
 
 /// `mapIdentityByteRange` 统计：x86_64 填 `x86_huge_2m`，LoongArch 填 `la_blocks_32m`，其余为 `leaf_pages`。
 pub const IdentityMapStats = struct {
@@ -20,6 +23,7 @@ pub const IdentityMapStats = struct {
 /// - 其它架构：逐叶映射。
 pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u64, flags: MapFlags) ?IdentityMapStats {
     if (range_len == 0) return IdentityMapStats{};
+    if (range_start > std.math.maxInt(u64) - range_len) return null;
     const ps: u64 = @intCast(paging.page_size);
     var va = range_start & ~(ps - 1);
     const range_end = range_start + range_len;
@@ -29,7 +33,7 @@ pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u
     while (va < range_end) {
         if (builtin.cpu.arch == .x86_64 and @hasDecl(paging, "map2MiBPage") and @hasDecl(paging, "HUGE_PAGE_SIZE")) {
             const huge: u64 = paging.HUGE_PAGE_SIZE;
-            if ((va % huge) == 0 and va + huge <= range_end) {
+            if ((va % huge) == 0 and va <= std.math.maxInt(u64) - huge and va + huge <= range_end) {
                 if (paging.map2MiBPage(space.pml4_phys, va, va, pflags, allocFrameCb, space.allocator)) {
                     st.x86_huge_2m += 1;
                     va += huge;
@@ -42,7 +46,7 @@ pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u
             @hasDecl(paging, "identity_bulk_bytes"))
         {
             const blk: u64 = paging.identity_bulk_bytes;
-            if ((va % blk) == 0 and va + blk <= range_end) {
+            if ((va % blk) == 0 and va <= std.math.maxInt(u64) - blk and va + blk <= range_end) {
                 if (paging.mapIdentity32MiBlock(space.pml4_phys, va, pflags, allocFrameCb, space.allocator)) {
                     st.la_blocks_32m += 1;
                     va += blk;
@@ -52,6 +56,7 @@ pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u
         }
         if (!space.mapPage(va, va, flags)) return null;
         st.leaf_pages += 1;
+        if (va > std.math.maxInt(u64) - ps) return null;
         va += ps;
     }
     return st;
@@ -118,6 +123,7 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     if (@hasDecl(paging, "releaseUserHalfAddressSpace")) {
         paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, @ptrCast(space.allocator));
     }
+    space.vad.clear();
     space.reserved_count = 0;
     @memset(&space.reserved_base, 0);
     @memset(&space.reserved_pages, 0);
@@ -155,6 +161,13 @@ fn ntProtectToPteFlags(prot: u32) ?u64 {
         0x40 => base | paging.Write,
         else => null,
     };
+}
+
+/// Win32 `PAGE_*` → `MapFlags`（用户区）。
+pub fn mapFlagsFromNtProtect(prot: u32) MapFlags {
+    const writable = (prot & 0xCC) != 0;
+    const executable = (prot & 0x70) != 0;
+    return .{ .writable = writable, .user = true, .executable = executable };
 }
 
 /// 通用 VMA 槽位（与 `MEM_RESERVE` 记录互补；供 `NtAllocateVirtualMemory` 等逐步接线）。
@@ -244,22 +257,30 @@ pub fn mapDeviceMmioIdentity(phys_base: u64, size: u64) bool {
     // 尚无内核页表时（如仍沿用 UEFI 映射）：假定固件已映射 MMIO，跳过以免阻塞 VirtIO attach
     const space = g_kernel_space orelse return true;
     if (size == 0) return true;
+    const page_size_u: u64 = @intCast(paging.page_size);
+    if (phys_base > std.math.maxInt(u64) - size) return false;
+    const sum = phys_base + size;
+    if (sum > std.math.maxInt(u64) - (page_size_u - 1)) return false;
     const page_size = paging.page_size;
     const start = phys_base & ~@as(u64, page_size - 1);
-    const end = (phys_base + size + page_size - 1) & ~@as(u64, page_size - 1);
+    const end = (sum + page_size_u - 1) & ~@as(u64, page_size_u - 1);
     var addr = start;
     const flags = MapFlags{ .writable = true, .executable = false, .no_cache = true };
-    while (addr < end) : (addr += page_size) {
-        if (space.mapPage(addr, addr, flags)) continue;
-        if (space.getPhysical(addr)) |p| {
+    while (addr < end) {
+        var advanced = false;
+        if (space.mapPage(addr, addr, flags)) {
+            advanced = true;
+        } else if (space.getPhysical(addr)) |p| {
             if (p == addr) {
                 // LoongArch 等：启动时整段 identity 映射已为 WB/CC，须改为非缓存才能可靠访问 PCI BAR / VirtIO MMIO
                 _ = space.unmapPage(addr);
                 if (!space.mapPage(addr, addr, flags)) return false;
-                continue;
+                advanced = true;
             }
         }
-        return false;
+        if (!advanced) return false;
+        if (addr > std.math.maxInt(u64) - page_size_u) return false;
+        addr += page_size_u;
     }
     return true;
 }
@@ -287,15 +308,20 @@ pub fn remapIdentityRangeUncached(virt_base: usize, size: usize) bool {
     const space = g_kernel_space orelse return true;
     if (size == 0) return true;
     const ps = paging.page_size;
+    if (virt_base > std.math.maxInt(usize) - size) return false;
     const end = virt_base + size;
     const va0 = virt_base & ~@as(usize, ps - 1);
-    const va1 = (end + ps - 1) & ~@as(usize, ps - 1);
+    const ps_u: usize = ps;
+    if (end > std.math.maxInt(usize) - (ps_u - 1)) return false;
+    const va1 = (end + ps_u - 1) & ~@as(usize, ps_u - 1);
     var va = va0;
-    while (va < va1) : (va += ps) {
+    while (va < va1) {
         const phys = space.getPhysical(va) orelse return false;
         _ = space.unmapPage(va);
         if (!space.mapPage(va, phys, .{ .writable = true, .executable = false, .no_cache = true }))
             return false;
+        if (va > std.math.maxInt(usize) - ps_u) return false;
+        va += ps_u;
     }
     if (@hasDecl(paging, "loadCr3")) {
         paging.loadCr3(space.pml4_phys);
@@ -306,9 +332,19 @@ pub fn remapIdentityRangeUncached(virt_base: usize, size: usize) bool {
 pub const max_reserved_regions: usize = 32;
 pub const max_section_views: usize = 32;
 
+/// Win32 内存保护常量子集（`AddressSpace` 方法引用）。
+pub const PAGE_NOACCESS: u32 = 0x01;
+pub const PAGE_READONLY: u32 = 0x02;
+pub const PAGE_READWRITE: u32 = 0x04;
+/// Ref: https://learn.microsoft.com/windows/win32/memory/memory-protection-constants
+pub const PAGE_GUARD: u32 = 0x100;
+pub const MEM_PRIVATE: u32 = 0x20000;
+
 pub const AddressSpace = struct {
     pml4_phys: u64,
     allocator: *FrameAllocator,
+    /// VAD 有序表（Reserve/Commit 元数据；与 `reserved_*` 同步维护）。
+    vad: vad_mod.VadTable = .{},
     /// `MEM_RESERVE` 未提交区间（无 Present PTE）；与 `#PF` 惰性提交配合。
     reserved_count: u8 = 0,
     reserved_base: [max_reserved_regions]u64 = @splat(0),
@@ -325,9 +361,13 @@ pub const AddressSpace = struct {
     vma_user: [max_vma]bool = @splat(false),
     vma_writable: [max_vma]bool = @splat(false),
 
-    pub fn reserveVirtualRange(self: *AddressSpace, virt_base: u64, num_pages: u32) bool {
+    pub fn reserveVirtualRange(self: *AddressSpace, virt_base: u64, num_pages: u32, nt_protect: u32) bool {
         if (self.reserved_count >= max_reserved_regions) return false;
         if (num_pages == 0) return false;
+        const ps: u64 = @intCast(paging.page_size);
+        const end_excl = virt_base + @as(u64, num_pages) * ps;
+        const is_guard = (nt_protect & PAGE_GUARD) != 0;
+        if (!self.vad.insert(virt_base, end_excl, .reserved, nt_protect, is_guard)) return false;
         const i = self.reserved_count;
         self.reserved_base[i] = virt_base;
         self.reserved_pages[i] = num_pages;
@@ -337,18 +377,31 @@ pub const AddressSpace = struct {
 
     fn removeReservedCovering(self: *AddressSpace, virt_base: u64, num_pages: u64) void {
         if (num_pages == 0) return;
-        const page_size = paging.page_size;
-        const end = virt_base + num_pages * page_size;
+        const ps: u64 = @intCast(paging.page_size);
+        if (num_pages > std.math.maxInt(u64) / ps) return;
+        const span = num_pages * ps;
+        if (virt_base > std.math.maxInt(u64) - span) return;
+        const end = virt_base + span;
         var i: u8 = 0;
         while (i < self.reserved_count) {
             const b = self.reserved_base[i];
-            const n = @as(u64, self.reserved_pages[i]) * page_size;
+            const rp = @as(u64, self.reserved_pages[i]);
+            if (ps != 0 and rp > std.math.maxInt(u64) / ps) {
+                i += 1;
+                continue;
+            }
+            const n = rp * ps;
+            if (b > std.math.maxInt(u64) - n) {
+                i += 1;
+                continue;
+            }
             const e = b + n;
             if (b == virt_base and e == end) {
                 const last = self.reserved_count - 1;
                 self.reserved_base[i] = self.reserved_base[last];
                 self.reserved_pages[i] = self.reserved_pages[last];
                 self.reserved_count -= 1;
+                _ = self.vad.removeExact(virt_base, @intCast(num_pages));
                 continue;
             }
             i += 1;
@@ -356,17 +409,38 @@ pub const AddressSpace = struct {
     }
 
     /// 若 `fault_va` 落在某 `MEM_RESERVE` 区间内且尚无 PTE，则提交一页匿名映射。
-    pub fn tryLazyCommitFault(self: *AddressSpace, fault_va: u64) bool {
+    /// `is_write`：为 false 时 **不** 提交 `PAGE_GUARD` 保护页（栈增长写时提交）。
+    pub fn tryLazyCommitFault(self: *AddressSpace, fault_va: u64, is_write: bool) bool {
         const page_size = paging.page_size;
         const page = fault_va & ~@as(u64, page_size - 1);
         if (self.getPhysical(page)) |_| return false;
+
+        if (self.vad.findReservedContaining(fault_va)) |ve| {
+            if (ve.is_guard and !is_write) return false;
+            const flags = mapFlagsFromNtProtect(ve.protect);
+            if (self.mapPageAlloc(page, flags)) |_| {
+                self.vad.upgradeReservedContaining(fault_va);
+                return true;
+            }
+            return false;
+        }
+
+        const psz: u64 = @intCast(page_size);
         var ri: u8 = 0;
         while (ri < self.reserved_count) : (ri += 1) {
             const b = self.reserved_base[ri];
-            const e = b + @as(u64, self.reserved_pages[ri]) * page_size;
+            const rp = @as(u64, self.reserved_pages[ri]);
+            if (psz != 0 and rp > std.math.maxInt(u64) / psz) continue;
+            const span = rp * psz;
+            if (b > std.math.maxInt(u64) - span) continue;
+            const e = b + span;
             if (fault_va >= b and fault_va < e) {
                 const flags = MapFlags{ .writable = true, .user = true, .executable = false };
-                return self.mapPageAlloc(page, flags) != null;
+                if (self.mapPageAlloc(page, flags)) |_| {
+                    self.vad.upgradeReservedContaining(fault_va);
+                    return true;
+                }
+                return false;
             }
         }
         return false;
@@ -384,11 +458,21 @@ pub const AddressSpace = struct {
     }
 
     pub fn mapPageAlloc(self: *AddressSpace, virt: u64, flags: MapFlags) ?u64 {
-        const phys = self.allocator.allocZeroed() orelse return null;
+        const panic_ctx = @import("../rtl/panic_context.zig");
+        panic_ctx.setPhase(0x0005_0130);
+        const phys = self.allocator.allocZeroed() orelse {
+            panic_ctx.setPhase(0);
+            return null;
+        };
+        panic_ctx.setPhase(0x0005_0131);
         if (!self.mapPage(virt, phys, flags)) {
+            panic_ctx.setPhase(0x0005_0132);
             self.allocator.free(phys);
+            panic_ctx.setPhase(0);
             return null;
         }
+        // 成功：保持非零 phase 直至调用方（如 kuser）推进到 0122+，避免 panic 窗口内 getPhase()==0。
+        panic_ctx.setPhase(0x0005_0133);
         return phys;
     }
 
@@ -400,6 +484,7 @@ pub const AddressSpace = struct {
         const pte_flags = ntProtectToPteFlags(new_protect) orelse return false;
         const ps: u64 = @intCast(paging.page_size);
         var va = base & ~(ps - 1);
+        if (base > std.math.maxInt(u64) - size_bytes) return false;
         const end = base + size_bytes;
         while (va < end) {
             if (!paging.protectLeafPage(
@@ -409,6 +494,7 @@ pub const AddressSpace = struct {
                 allocFrameCb,
                 @ptrCast(self.allocator),
             )) return false;
+            if (va > std.math.maxInt(u64) - ps) return false;
             va += ps;
         }
         return true;
@@ -483,39 +569,226 @@ fn allocFrameCb(ctx: ?*anyopaque) ?u64 {
     return @as(*FrameAllocator, @ptrCast(@alignCast(a))).allocZeroed();
 }
 
-pub fn createAddressSpace(allocator: *FrameAllocator) ?AddressSpace {
-    const pml4_phys = allocator.allocZeroed() orelse return null;
-    return .{
-        .pml4_phys = pml4_phys,
-        .allocator = allocator,
+/// 记录已映射的提交区（`MEM_COMMIT`），供 `NtQueryVirtualMemory`。
+pub fn recordCommittedVadRange(space: *AddressSpace, virt_base: u64, num_pages: u32, nt_protect: u32) void {
+    if (num_pages == 0) return;
+    const ps: u64 = @intCast(paging.page_size);
+    const end_excl = virt_base + @as(u64, num_pages) * ps;
+    _ = space.vad.insert(virt_base, end_excl, .committed, nt_protect, false);
+}
+
+/// 与 `MEMORY_BASIC_INFORMATION` x64 布局对齐（Learn / WDK 公开结构；尾填充至 48 字节）。
+pub const MemoryBasicInformation = extern struct {
+    BaseAddress: u64 = 0,
+    AllocationBase: u64 = 0,
+    AllocationProtect: u32 = 0,
+    _pad_align: u32 = 0,
+    RegionSize: u64 = 0,
+    State: u32 = 0,
+    Protect: u32 = 0,
+    Type: u32 = 0,
+    _reserved_tail: u32 = 0,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(MemoryBasicInformation) == 48);
+}
+
+/// `MemoryBasicInformation`（class 0）子集；无 VAD 时按单页推断。
+pub fn fillMemoryBasicInformation(space: *AddressSpace, query_va: u64, out: *MemoryBasicInformation) void {
+    const ps: u64 = @intCast(paging.page_size);
+    const page = query_va & ~(ps - 1);
+    out.* = .{};
+
+    if (space.vad.findContaining(query_va)) |e| {
+        out.BaseAddress = e.start;
+        out.AllocationBase = e.start;
+        out.AllocationProtect = e.protect;
+        out.RegionSize = e.end_exclusive - e.start;
+        out.Type = MEM_PRIVATE;
+        switch (e.state) {
+            .reserved => {
+                out.State = vad_mod.MEM_RESERVE;
+                out.Protect = PAGE_NOACCESS;
+            },
+            .committed => {
+                out.State = vad_mod.MEM_COMMIT;
+                out.Protect = e.protect;
+            },
+        }
+        return;
+    }
+
+    if (space.getPhysical(page)) |_| {
+        const vd = vmaFind(space, query_va);
+        const prot: u32 = if (vd) |d|
+            (if (d.writable) PAGE_READWRITE else PAGE_READONLY)
+        else
+            PAGE_READWRITE;
+        out.BaseAddress = page;
+        out.AllocationBase = page;
+        out.AllocationProtect = prot;
+        out.RegionSize = ps;
+        out.State = vad_mod.MEM_COMMIT;
+        out.Protect = prot;
+        out.Type = MEM_PRIVATE;
+        return;
+    }
+
+    out.BaseAddress = page;
+    out.AllocationBase = page;
+    out.RegionSize = ps;
+    out.State = vad_mod.MEM_FREE;
+}
+
+const mdl_mod = @import("mdl.zig");
+
+/// MDL：自页表解析 PFN（K1.7）；`mdl.zig` 保持仅依赖 `std` 以便主机单测。
+pub fn mdlPopulateFromAddressSpace(mdl: *mdl_mod.Mdl, space: *AddressSpace) bool {
+    mdl.pfn_count = 0;
+    mdl.flags.pages_populated = false;
+    if (mdl.byte_count == 0) return true;
+    const ps: u64 = @intCast(paging.page_size);
+    const pages_needed: u32 = (mdl.byte_count + @as(u32, @truncate(ps)) - 1) / @as(u32, @truncate(ps));
+    if (pages_needed > mdl_mod.max_mdl_pfns) return false;
+    var i: u32 = 0;
+    while (i < pages_needed) : (i += 1) {
+        const va = mdl.start_va + @as(u64, i) * ps;
+        const pa = space.getPhysical(va) orelse return false;
+        mdl.pfns[mdl.pfn_count] = pa >> 12;
+        mdl.pfn_count += 1;
+    }
+    mdl.flags.pages_populated = true;
+    return true;
+}
+
+pub fn mdlLockPagesInFrameAllocator(mdl: *mdl_mod.Mdl, fa: *FrameAllocator) void {
+    if (!mdl.flags.pages_populated or mdl.flags.pages_locked) return;
+    var i: u8 = 0;
+    while (i < mdl.pfn_count) : (i += 1) {
+        fa.lockPfnPhys(mdl.pfns[i] << 12);
+    }
+    mdl.flags.pages_locked = true;
+}
+
+pub fn mdlUnlockPagesInFrameAllocator(mdl: *mdl_mod.Mdl, fa: *FrameAllocator) void {
+    if (!mdl.flags.pages_locked) return;
+    var i: u8 = 0;
+    while (i < mdl.pfn_count) : (i += 1) {
+        fa.unlockPfnPhys(mdl.pfns[i] << 12);
+    }
+    mdl.flags.pages_locked = false;
+}
+
+/// WDK `IoAllocateMdl` / `IoFreeMdl` 语义子集：变长 PFN 表在 **内核堆** 上；与 `frame.lockPfnPhys` 联动。
+pub const IoMdlBuffer = struct {
+    start_va: u64,
+    byte_count: u32,
+    pfn_slice: []u64,
+    pages_locked: bool,
+
+    pub fn release(self: *IoMdlBuffer, fa: *FrameAllocator) void {
+        if (self.pages_locked) {
+            for (self.pfn_slice) |pfn| fa.unlockPfnPhys(pfn << 12);
+            self.pages_locked = false;
+        }
+        if (self.pfn_slice.len > 0) {
+            heap.free(@ptrCast(self.pfn_slice.ptr), @sizeOf(u64) * self.pfn_slice.len, @alignOf(u64));
+            self.pfn_slice = &[_]u64{};
+        }
+    }
+};
+
+/// 自 `AddressSpace` 解析 PFN；任一页未映射则失败并释放已分配堆块。
+pub fn ioAllocateMdl(space: *AddressSpace, start_va: u64, byte_count: u32, lock_pages: bool, fa: *FrameAllocator) ?IoMdlBuffer {
+    const ps_u64: u64 = @intCast(paging.page_size);
+    const ps_u32: u32 = @truncate(ps_u64);
+    if (byte_count == 0) {
+        return IoMdlBuffer{
+            .start_va = start_va,
+            .byte_count = 0,
+            .pfn_slice = &[_]u64{},
+            .pages_locked = false,
+        };
+    }
+    const npages: u32 = (byte_count + ps_u32 - 1) / ps_u32;
+    const pfn_slice = heap.allocSlice(u64, npages) orelse return null;
+    var i: u32 = 0;
+    while (i < npages) : (i += 1) {
+        const va = start_va + @as(u64, i) * ps_u64;
+        const pa = space.getPhysical(va) orelse {
+            heap.free(@ptrCast(pfn_slice.ptr), @sizeOf(u64) * npages, @alignOf(u64));
+            return null;
+        };
+        pfn_slice[i] = pa >> 12;
+    }
+    if (lock_pages) {
+        for (pfn_slice) |pfn| fa.lockPfnPhys(pfn << 12);
+    }
+    return IoMdlBuffer{
+        .start_va = start_va,
+        .byte_count = byte_count,
+        .pfn_slice = pfn_slice,
+        .pages_locked = lock_pages,
     };
 }
 
-pub fn handleLazyCommitFault(space: *AddressSpace, fault_va: u64) bool {
-    return space.tryLazyCommitFault(fault_va);
+/// 将 `space` 整块清零后分配 PML4；用于 BSS 槽位初始化，避免在窄内核栈上按值返回 `AddressSpace`。
+pub fn initAddressSpaceInPlace(space: *AddressSpace, allocator: *FrameAllocator) bool {
+    @memset(std.mem.asBytes(space), 0);
+    const pml4_phys = allocator.allocZeroed() orelse return false;
+    space.pml4_phys = pml4_phys;
+    space.allocator = allocator;
+    return true;
+}
+
+pub fn createAddressSpace(allocator: *FrameAllocator) ?AddressSpace {
+    var space: AddressSpace = undefined;
+    if (!initAddressSpaceInPlace(&space, allocator)) return null;
+    return space;
+}
+
+pub fn handleLazyCommitFault(space: *AddressSpace, fault_va: u64, is_write: bool) bool {
+    return space.tryLazyCommitFault(fault_va, is_write);
 }
 
 /// 是否与任一 `MEM_RESERVE` 记录区间重叠（用于选 `base==0` 时的空洞搜索）。
 pub fn isVirtInReservedRange(space: *const AddressSpace, virt_base: u64, num_pages: usize) bool {
     const ps: u64 = @intCast(paging.page_size);
-    const end = virt_base + @as(u64, @intCast(num_pages)) * ps;
+    const np = @as(u64, @intCast(num_pages));
+    if (ps != 0 and np > std.math.maxInt(u64) / ps) return true;
+    const span = np * ps;
+    if (virt_base > std.math.maxInt(u64) - span) return true;
+    const end = virt_base + span;
     var ri: u8 = 0;
     while (ri < space.reserved_count) : (ri += 1) {
         const b = space.reserved_base[ri];
-        const e = b + @as(u64, space.reserved_pages[ri]) * ps;
+        const rp = @as(u64, space.reserved_pages[ri]);
+        if (ps != 0 and rp > std.math.maxInt(u64) / ps) continue;
+        const rspan = rp * ps;
+        if (b > std.math.maxInt(u64) - rspan) continue;
+        const e = b + rspan;
         if (!(end <= b or virt_base >= e)) return true;
     }
     return false;
 }
 
 pub fn mapRange(space: *AddressSpace, virt_base: u64, num_pages: usize, flags: MapFlags) bool {
+    const ps: u64 = @intCast(paging.page_size);
     var i: usize = 0;
     while (i < num_pages) : (i += 1) {
-        const virt = virt_base + i * paging.page_size;
+        if (ps != 0 and i > std.math.maxInt(u64) / ps) return false;
+        const off = @as(u64, i) * ps;
+        if (virt_base > std.math.maxInt(u64) - off) return false;
+        const virt = virt_base + off;
         if (space.mapPageAlloc(virt, flags) == null) {
             var j: usize = 0;
             while (j < i) : (j += 1) {
-                _ = space.unmapAndFree(virt_base + j * paging.page_size);
+                if (ps != 0 and j > std.math.maxInt(u64) / ps) break;
+                const joff = @as(u64, j) * ps;
+                if (virt_base <= std.math.maxInt(u64) - joff) {
+                    _ = space.unmapAndFree(virt_base + joff);
+                }
             }
             return false;
         }
@@ -524,11 +797,44 @@ pub fn mapRange(space: *AddressSpace, virt_base: u64, num_pages: usize, flags: M
 }
 
 pub fn unmapRange(space: *AddressSpace, virt_base: u64, num_pages: usize) void {
+    const ps: u64 = @intCast(paging.page_size);
+    const np = @as(u64, @intCast(num_pages));
+    if (ps == 0 or np > std.math.maxInt(u64) / ps) return;
+    const span = np * ps;
+    if (virt_base > std.math.maxInt(u64) - span) return;
+    const end_excl = virt_base + span;
     space.removeReservedCovering(virt_base, @intCast(num_pages));
+    if (!space.vad.removeExact(virt_base, @intCast(num_pages))) {
+        _ = space.vad.removePrefixRange(virt_base, end_excl);
+    }
     var i: usize = 0;
     while (i < num_pages) : (i += 1) {
-        _ = space.unmapAndFree(virt_base + i * paging.page_size);
+        if (ps != 0 and i > std.math.maxInt(u64) / ps) break;
+        const off = @as(u64, i) * ps;
+        if (virt_base <= std.math.maxInt(u64) - off) {
+            _ = space.unmapAndFree(virt_base + off);
+        }
     }
+}
+
+/// `MEM_DECOMMIT`：解除 PTE 并将对应 VAD 标回 reserved（子集；须整段落在已提交 VAD 内）。
+pub fn decommitVirtualRange(space: *AddressSpace, virt_base: u64, num_pages: usize) bool {
+    if (num_pages == 0) return false;
+    const ps: u64 = @intCast(paging.page_size);
+    const np = @as(u64, @intCast(num_pages));
+    if (ps == 0 or np > std.math.maxInt(u64) / ps) return false;
+    const span = np * ps;
+    if (virt_base > std.math.maxInt(u64) - span) return false;
+    const end_excl = virt_base + span;
+    if (!space.vad.decommitSubrange(virt_base, end_excl, PAGE_NOACCESS)) return false;
+    var i: usize = 0;
+    while (i < num_pages) : (i += 1) {
+        if (ps != 0 and i > std.math.maxInt(u64) / ps) return false;
+        const off = @as(u64, i) * ps;
+        if (virt_base > std.math.maxInt(u64) - off) return false;
+        _ = space.unmapAndFree(virt_base + off);
+    }
+    return true;
 }
 
 /// `MmFreeVirtualMemory` 语义子集：解除映射并尝试自 `vma` 表移除精确匹配项。

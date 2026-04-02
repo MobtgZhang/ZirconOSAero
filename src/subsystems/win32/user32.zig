@@ -10,6 +10,12 @@ const console_mod = @import("console.zig");
 const subsystem = @import("subsystem.zig");
 const process = @import("../../ps/process.zig");
 const ntdll = @import("../../libs/ntdll.zig");
+const win32k = @import("../win32k/mod.zig");
+const dwm_comp = @import("../../drivers/video/dwm_compositor.zig");
+const ipc = @import("../../lpc/ipc.zig");
+
+/// 未绑定 DWM 重定向表面（`dwm_compositor` 未初始化或分配失败）。
+pub const no_compositor_surface: u16 = 0xFFFF;
 
 pub const BOOL = kernel32.BOOL;
 pub const TRUE = kernel32.TRUE;
@@ -278,6 +284,47 @@ fn msgMatchesFilter(message: u32, min: u32, max: u32) bool {
     return message >= min and message <= max;
 }
 
+const MAX_THREAD_POSTED: usize = 24;
+const ThreadPostedSlot = struct {
+    tid: u32 = 0,
+    used: bool = false,
+    m: MSG = .{},
+};
+var thread_posted: [MAX_THREAD_POSTED]ThreadPostedSlot = [_]ThreadPostedSlot{.{}} ** MAX_THREAD_POSTED;
+
+fn tryQueueThreadPosted(tid: u32, m: MSG) bool {
+    if (tid == 0) return false;
+    for (&thread_posted) |*slot| {
+        if (!slot.used) {
+            slot.* = .{ .tid = tid, .used = true, .m = m };
+            return true;
+        }
+    }
+    return false;
+}
+
+fn tryDequeueThreadPosted(tid: u32, min: u32, max: u32, out: *MSG) bool {
+    for (&thread_posted) |*slot| {
+        if (!slot.used or slot.tid != tid) continue;
+        if (slot.m.message != WM_QUIT and !msgMatchesFilter(slot.m.message, min, max)) continue;
+        out.* = slot.m;
+        slot.used = false;
+        return true;
+    }
+    return false;
+}
+
+fn packMsgForLpc(m: *const MSG, buf: *[44]u8) void {
+    std.mem.writeInt(u64, buf[0..8], m.hwnd, .little);
+    std.mem.writeInt(u32, buf[8..12], m.message, .little);
+    std.mem.writeInt(u32, buf[12..16], 0, .little);
+    std.mem.writeInt(u64, buf[16..24], m.wparam, .little);
+    std.mem.writeInt(i64, buf[24..32], m.lparam, .little);
+    std.mem.writeInt(u32, buf[32..36], m.time, .little);
+    std.mem.writeInt(i32, buf[36..40], m.pt.x, .little);
+    std.mem.writeInt(i32, buf[40..44], m.pt.y, .little);
+}
+
 pub const CREATESTRUCTA = struct {
     create_params: u64 = 0,
     instance: HINSTANCE = 0,
@@ -312,6 +359,10 @@ const Window = struct {
     ex_style: DWORD = 0,
     class_id: u32 = 0,
     owner_pid: u32 = 0,
+    /// 创建该窗口的线程（`GetMessage` hwnd==0 时仅投递到此线程；0 表示任意线程可读，兼容旧路径）。
+    thread_id: u32 = 0,
+    /// 内核 `dwm_compositor` 表面索引；`no_compositor_surface` 表示无。
+    compositor_surface_id: u16 = no_compositor_surface,
     parent: HWND = 0,
     rect: RECT = .{},
     client_rect: RECT = .{},
@@ -469,6 +520,54 @@ pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
     }
 }
 
+fn syncWin32kFromUser32() void {
+    win32k.clearWindowTableForSync();
+    var z: i32 = 0;
+    var i: usize = 0;
+    while (i < window_count) : (i += 1) {
+        const w = &windows[i];
+        if (!w.is_valid) continue;
+        const r = win32k.Rect{
+            .left = w.rect.left,
+            .top = w.rect.top,
+            .right = w.rect.right,
+            .bottom = w.rect.bottom,
+        };
+        _ = win32k.windowAttach(.{
+            .hwnd = w.hwnd,
+            .parent = if (w.parent == 0) null else w.parent,
+            .rect = r,
+            .z_order = z,
+            .visible = w.is_visible,
+        });
+        z += 1;
+    }
+}
+
+fn notifyCompositorWindowGeometry(w: *Window) void {
+    if (!dwm_comp.isInitialized()) return;
+    if (w.compositor_surface_id == no_compositor_surface) return;
+    const id = w.compositor_surface_id;
+    const cw: u32 = @intCast(@max(0, w.rect.width()));
+    const ch: u32 = @intCast(@max(0, w.rect.height()));
+    dwm_comp.moveSurface(id, w.rect.left, w.rect.top);
+    dwm_comp.resizeSurface(id, cw, ch);
+    dwm_comp.markSurfaceDirty(id);
+}
+
+fn syncCompositorZOrderForUserWindows() void {
+    if (!dwm_comp.isInitialized()) return;
+    var zi: i16 = 10;
+    var i: usize = 0;
+    while (i < window_count) : (i += 1) {
+        const w = &windows[i];
+        if (!w.is_valid) continue;
+        if (w.compositor_surface_id == no_compositor_surface) continue;
+        dwm_comp.setSurfaceZOrder(w.compositor_surface_id, zi);
+        zi += 10;
+    }
+}
+
 var user32_initialized: bool = false;
 var total_messages_processed: u64 = 0;
 var total_windows_created: u64 = 0;
@@ -550,7 +649,14 @@ pub fn CreateWindowExA(
     instance: HINSTANCE,
     _: u64,
 ) HWND {
-    if (window_count >= MAX_WINDOWS) return 0;
+    if (window_count >= MAX_WINDOWS) {
+        kernel32.SetLastError(kernel32.ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
+    if (class_name.len > 0 and findClass(class_name) == null) {
+        kernel32.SetLastError(kernel32.ERROR_CANNOT_FIND_WND_CLASS);
+        return 0;
+    }
 
     const cls = findClass(class_name);
     const cls_id: u32 = if (cls) |c| c.atom else 0;
@@ -597,12 +703,25 @@ pub fn CreateWindowExA(
     window_count += 1;
     total_windows_created += 1;
 
+    wnd.thread_id = kernel32.GetCurrentThreadId();
+    wnd.compositor_surface_id = no_compositor_surface;
+    if (dwm_comp.isInitialized()) {
+        const aw: u32 = @intCast(@max(0, actual_w));
+        const ah: u32 = @intCast(@max(0, actual_h));
+        if (dwm_comp.createSurface(actual_x, actual_y, aw, ah, wnd.owner_pid)) |sid| {
+            wnd.compositor_surface_id = sid;
+            syncCompositorZOrderForUserWindows();
+        }
+    }
+
     _ = wnd.postMessage(WM_CREATE, 0, 0);
 
     if ((style & WS_VISIBLE) != 0) {
         wnd.is_visible = true;
         _ = wnd.postMessage(WM_SHOWWINDOW, 1, 0);
     }
+
+    syncWin32kFromUser32();
 
     klog.debug("user32: CreateWindow '%s' hwnd=0x%x (%dx%d)", .{
         window_name, wnd.hwnd, actual_w, actual_h,
@@ -612,7 +731,14 @@ pub fn CreateWindowExA(
 }
 
 pub fn DestroyWindow(hwnd: HWND) BOOL {
-    const wnd = findWindow(hwnd) orelse return FALSE;
+    const wnd = findWindow(hwnd) orelse {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    };
+    if (wnd.compositor_surface_id != no_compositor_surface) {
+        dwm_comp.destroySurface(wnd.compositor_surface_id);
+        wnd.compositor_surface_id = no_compositor_surface;
+    }
     _ = wnd.postMessage(WM_DESTROY, 0, 0);
     wnd.is_valid = false;
     wnd.is_visible = false;
@@ -621,6 +747,8 @@ pub fn DestroyWindow(hwnd: HWND) BOOL {
     if (active_hwnd == hwnd) active_hwnd = 0;
     if (foreground_hwnd == hwnd) foreground_hwnd = 0;
 
+    syncWin32kFromUser32();
+    syncCompositorZOrderForUserWindows();
     return TRUE;
 }
 
@@ -650,6 +778,8 @@ pub fn ShowWindow(hwnd: HWND, cmd: u32) BOOL {
     }
 
     _ = wnd.postMessage(WM_SHOWWINDOW, if (wnd.is_visible) 1 else 0, 0);
+    notifyCompositorWindowGeometry(wnd);
+    syncWin32kFromUser32();
     return if (was_visible) TRUE else FALSE;
 }
 
@@ -705,6 +835,8 @@ fn bringHwndToTop(hw: HWND) void {
             break;
         }
     }
+    syncCompositorZOrderForUserWindows();
+    syncWin32kFromUser32();
 }
 
 pub fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, cx: i32, cy: i32, flags: u32) BOOL {
@@ -745,6 +877,11 @@ pub fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, cx: i32, cy:
 
     _ = wnd.postMessage(WM_MOVE, 0, 0);
     _ = wnd.postMessage(WM_SIZE, 0, 0);
+    notifyCompositorWindowGeometry(wnd);
+    if ((flags & SWP_NOZORDER) == 0) {
+        syncCompositorZOrderForUserWindows();
+    }
+    syncWin32kFromUser32();
     return TRUE;
 }
 
@@ -834,6 +971,11 @@ pub fn SetProcessDesktopByIndex(pid: DWORD, desktop_index: DWORD) BOOL {
 // ── Message Loop ──
 
 pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
+    const tid = kernel32.GetCurrentThreadId();
+    if (tryDequeueThreadPosted(tid, min, max, msg)) {
+        total_messages_processed += 1;
+        return if (msg.message != WM_QUIT) TRUE else FALSE;
+    }
     if (hwnd != 0) {
         const wnd = findWindow(hwnd) orelse return FALSE;
         if (wnd.getMessageFiltered(min, max)) |m| {
@@ -844,6 +986,7 @@ pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
     } else {
         for (windows[0..window_count]) |*wnd| {
             if (!wnd.is_valid) continue;
+            if (wnd.thread_id != 0 and wnd.thread_id != tid) continue;
             if (wnd.getMessageFiltered(min, max)) |m| {
                 msg.* = m;
                 total_messages_processed += 1;
@@ -903,7 +1046,43 @@ pub fn ntUserPeekMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_
     return ntdll.STATUS_SUCCESS;
 }
 
-pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
+/// `NtUserPostMessage`：R10=`HWND`，RDX=`Msg`，R8=`wParam`，R9=`lParam`（按位转 `i64`）。
+pub fn ntUserPostMessageSyscall(hwnd: u64, msg: u32, wparam: u64, lparam_bits: u64) ntdll.NTSTATUS {
+    const lp: i64 = @bitCast(lparam_bits);
+    if (PostMessageA(hwnd, msg, wparam, lp) == TRUE) return ntdll.STATUS_SUCCESS;
+    kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+    return ntdll.STATUS_INVALID_PARAMETER;
+}
+
+/// `NtUserSendMessage`：寄存器约定同 `NtUserPostMessage`（当前实现等价异步 `PostMessage`）。
+pub fn ntUserSendMessageSyscall(hwnd: u64, msg: u32, wparam: u64, lparam_bits: u64) ntdll.NTSTATUS {
+    return ntUserPostMessageSyscall(hwnd, msg, wparam, lparam_bits);
+}
+
+/// `NtUserSetWindowPos`：R10=`HWND`，RDX=`hWndInsertAfter`，R8=`X`，R9=`Y`；栈 +0=`cx`，+8=`cy`，+16=`uFlags`。
+pub fn ntUserSetWindowPosSyscall(
+    hwnd: u64,
+    insert_after: u64,
+    x: u64,
+    y: u64,
+    cx: u64,
+    cy: u64,
+    flags: u32,
+) ntdll.NTSTATUS {
+    const xi: i32 = @truncate(@as(i64, @bitCast(x)));
+    const yi: i32 = @truncate(@as(i64, @bitCast(y)));
+    const cxi: i32 = @truncate(@as(i64, @bitCast(cx)));
+    const cyi: i32 = @truncate(@as(i64, @bitCast(cy)));
+    if (SetWindowPos(hwnd, insert_after, xi, yi, cxi, cyi, flags) == TRUE) return ntdll.STATUS_SUCCESS;
+    kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+    return ntdll.STATUS_INVALID_PARAMETER;
+}
+
+/// 与 `PeekMessageA` 相同，但用显式 `tid`（CSR 路径下无可靠的用户态 `GetCurrentThreadId`）。
+fn peekMessageAForThread(tid: u32, msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
+    if ((remove & PM_REMOVE) != 0) {
+        if (tryDequeueThreadPosted(tid, min, max, msg)) return TRUE;
+    }
     if (hwnd != 0) {
         const wnd = findWindow(hwnd) orelse return FALSE;
         if ((remove & PM_REMOVE) != 0) {
@@ -921,6 +1100,7 @@ pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL
     } else {
         for (windows[0..window_count]) |*wnd| {
             if (!wnd.is_valid) continue;
+            if (wnd.thread_id != 0 and wnd.thread_id != tid) continue;
             if ((remove & PM_REMOVE) != 0) {
                 if (wnd.getMessageFiltered(min, max)) |m| {
                     msg.* = m;
@@ -938,6 +1118,21 @@ pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL
     return FALSE;
 }
 
+/// csrss `get_message`：请求缓冲 0–8=`HWND`，8–12=min，12–16=max，16–20=`PM_*`；20–24=线程 id（小端，`0` 表示由 CSR 用调用方 `pid` 代替）。
+/// 成功时 `ipc.csr_reply_payload` 含 44 字节 `MSG`。
+pub fn csrFillOneMessageForLpc(client_tid: u32, hwnd: HWND, min_v: u32, max_v: u32, remove_flags: u32) i32 {
+    var km: MSG = undefined;
+    if (peekMessageAForThread(client_tid, &km, hwnd, min_v, max_v, remove_flags) == FALSE) return -1;
+    var buf: [44]u8 = undefined;
+    packMsgForLpc(&km, &buf);
+    ipc.csrReplyPayloadSet(&buf);
+    return 0;
+}
+
+pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
+    return peekMessageAForThread(kernel32.GetCurrentThreadId(), msg, hwnd, min, max, remove);
+}
+
 pub fn TranslateMessage(_: *const MSG) BOOL {
     return TRUE;
 }
@@ -950,6 +1145,20 @@ pub fn DispatchMessageA(msg: *const MSG) LRESULT {
 pub fn PostMessageA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) BOOL {
     const wnd = findWindow(hwnd) orelse return FALSE;
     return if (wnd.postMessage(msg, wparam, lparam)) TRUE else FALSE;
+}
+
+/// Ref: Learn — `PostThreadMessage`；与窗口队列分离的每线程投递（先于 `GetMessage` 窗口扫描）。
+pub fn PostThreadMessageA(idThread: u32, msg: u32, wparam: WPARAM, lparam: LPARAM) BOOL {
+    if (idThread == 0) return FALSE;
+    const m = MSG{
+        .hwnd = 0,
+        .message = msg,
+        .wparam = wparam,
+        .lparam = lparam,
+        .time = kernel32.GetTickCount(),
+        .pt = .{},
+    };
+    return if (tryQueueThreadPosted(idThread, m)) TRUE else FALSE;
 }
 
 pub fn SendMessageA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRESULT {
@@ -968,7 +1177,10 @@ pub fn PostQuitMessage(exit_code: i32) void {
 // ── Painting ──
 
 pub fn BeginPaint(hwnd: HWND, ps: *PAINTSTRUCT) HDC {
-    const wnd = findWindow(hwnd) orelse return 0;
+    const wnd = findWindow(hwnd) orelse {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return 0;
+    };
     ps.* = .{};
     ps.paint_rect = wnd.client_rect;
     ps.hdc = hwnd;
@@ -1147,12 +1359,14 @@ fn runModalMoveLoop(hwnd: HWND) LRESULT {
                 wnd.rect.right += dx;
                 wnd.rect.top += dy;
                 wnd.rect.bottom += dy;
+                notifyCompositorWindowGeometry(wnd);
                 _ = PostMessageA(hwnd, WM_MOVING, 0, 0);
             },
             WM_LBUTTONUP => break,
             WM_KEYDOWN => {
                 if (msg.wparam == VK_ESCAPE) {
                     wnd.rect = saved;
+                    notifyCompositorWindowGeometry(wnd);
                     break;
                 }
             },
@@ -1232,6 +1446,7 @@ pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRES
             }
             return 0;
         },
+        WM_NCMOUSEMOVE => return 0,
         WM_DWMCOMPOSITIONCHANGED, WM_DWMNCRENDERINGCHANGED, WM_DWMCOLORIZATIONCOLORCHANGED => return 0,
         WM_CLOSE => return 0,
         WM_DESTROY => return 0,
@@ -1255,6 +1470,16 @@ fn findWindow(hwnd: HWND) ?*Window {
         if (wnd.hwnd == hwnd and wnd.is_valid) return wnd;
     }
     return null;
+}
+
+/// csrss `register_window`：刷新该 HWND 的合成脏区与 win32k 表（LPC 负载见 `subsystem.zig` 注释）。
+pub fn onCsrssRegisterGuiWindow(pid: u32, hwnd: HWND) void {
+    _ = pid;
+    if (findWindow(hwnd)) |w| {
+        notifyCompositorWindowGeometry(w);
+        syncCompositorZOrderForUserWindows();
+    }
+    syncWin32kFromUser32();
 }
 
 fn strEqlI(a: []const u8, b: []const u8) bool {
@@ -1362,6 +1587,8 @@ pub fn runGuiDemo() void {
 // ── Initialization ──
 
 pub fn init() void {
+    win32k.clearWindowTableForSync();
+    for (&thread_posted) |*s| s.* = .{};
     window_count = 0;
     class_count = 0;
     next_hwnd = 0x10000;

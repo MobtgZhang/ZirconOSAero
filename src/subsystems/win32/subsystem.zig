@@ -244,7 +244,10 @@ pub fn setProcessDesktop(pid: u32, desktop_index: u32) bool {
 
 // ── API Dispatch ──
 
-pub fn handleApiCall(api: CsrApiNumber, pid: u32, _: ?*const [ipc.MSG_DATA_SIZE]u8) i32 {
+/// LPC `register_window`：前 8 字节小端 `HWND`（`u64`）。
+/// `post_message`：偏移 0 `HWND`，8 `msg:u32`，12 填充，16 `wparam:u64`，24 `lparam:i64`（小端）。
+/// `get_message`：0–8 `HWND`，8–12 min，12–16 max，16–20 `PM_*`；20–24 线程 id（`0` 则用 `pid`）；应答见 `user32.csrFillOneMessageForLpc`。
+pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DATA_SIZE]u8) i32 {
     api_call_count += 1;
 
     switch (api) {
@@ -287,6 +290,36 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, _: ?*const [ipc.MSG_DATA_SIZE]
             _ = ws.createDesktop(label) orelse return -1;
             return 0;
         },
+        .register_window => {
+            var hwnd: u64 = 0;
+            if (data_opt) |d| {
+                hwnd = std.mem.readInt(u64, d[0..8], .little);
+            }
+            return if (registerGuiWindow(pid, hwnd)) 0 else -1;
+        },
+        .post_message => {
+            if (data_opt) |d| {
+                if (d.len >= 32) {
+                    const hwnd = std.mem.readInt(u64, d[0..8], .little);
+                    const msg = std.mem.readInt(u32, d[8..12], .little);
+                    const wparam = std.mem.readInt(u64, d[16..24], .little);
+                    const lparam = std.mem.readInt(i64, d[24..32], .little);
+                    _ = user32.PostMessageA(hwnd, msg, wparam, lparam);
+                    return 0;
+                }
+            }
+            return -1;
+        },
+        .get_message => {
+            const d = data_opt orelse return -1;
+            const hwnd = std.mem.readInt(u64, d[0..8], .little);
+            const min_v = std.mem.readInt(u32, d[8..12], .little);
+            const max_v = std.mem.readInt(u32, d[12..16], .little);
+            const remove = std.mem.readInt(u32, d[16..20], .little);
+            const tid_in = std.mem.readInt(u32, d[20..24], .little);
+            const client_tid: u32 = if (tid_in != 0) tid_in else pid;
+            return user32.csrFillOneMessageForLpc(client_tid, hwnd, min_v, max_v, remove);
+        },
         else => return -1,
     }
 }
@@ -313,9 +346,8 @@ pub fn initGuiSubsystem() void {
 pub fn registerGuiWindow(pid: u32, hwnd: u64) bool {
     const wp = findWin32Process(pid) orelse return false;
     _ = wp;
-    _ = hwnd;
+    user32.onCsrssRegisterGuiWindow(pid, hwnd);
     gui_window_count += 1;
-    api_call_count += 1;
     return true;
 }
 
@@ -325,9 +357,10 @@ pub fn unregisterGuiWindow(_: u64) bool {
     return true;
 }
 
-pub fn dispatchGuiMessage(_: u64, _: u32, _: u64, _: i64) i64 {
+pub fn dispatchGuiMessage(hwnd: u64, msg: u32, wparam: u64, lparam: i64) i64 {
     gui_message_count += 1;
     api_call_count += 1;
+    _ = user32.PostMessageA(hwnd, msg, wparam, lparam);
     return 0;
 }
 
@@ -379,6 +412,11 @@ pub fn getTotalDesktopCount() usize {
 
 // ── Initialization ──
 
+fn lpcCsrInlineHandler(client_pid: u32, opcode: u32, data: ?*const [ipc.MSG_DATA_SIZE]u8) i32 {
+    const api = std.meta.intToEnum(CsrApiNumber, opcode) catch return -1;
+    return handleApiCall(api, client_pid, data);
+}
+
 pub fn init() void {
     subsystem_state = .initializing;
 
@@ -414,4 +452,6 @@ pub fn init() void {
     });
     klog.info("csrss: %u Win32 processes registered", .{getWin32ProcessCount()});
     klog.info("csrss: GUI message dispatch ready", .{});
+
+    port.setCsrRequestHandler(lpcCsrInlineHandler);
 }

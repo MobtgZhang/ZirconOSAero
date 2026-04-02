@@ -4,6 +4,9 @@
 //!
 //! **分阶段扩展**：区域（HRGN）、路径、字体子集等按 [NT61_CONTRACT_MATRIX.md](../../../docs/cn/NT61_CONTRACT_MATRIX.md)
 //! 中「返回值 vs 功能完整」标注推进；当前部分 API 为存根或简化几何。
+//!
+//! **句柄与窗口寿命**：简化实现中 `CreateCompatibleDC` 等返回的 `HDC` 与 `user32` 的 `HWND` 同源占位；
+//! `DestroyWindow` 之后不得再对该 `hwnd` 调用 `GetDC`/`BitBlt`；跨进程 GDI 句柄表为路线图项（矩阵 §5.1）。
 
 const klog = @import("../../rtl/klog.zig");
 const kernel32 = @import("../../libs/kernel32.zig");

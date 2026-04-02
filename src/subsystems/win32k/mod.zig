@@ -63,6 +63,32 @@ pub fn windowAttach(w: Window) bool {
     return true;
 }
 
+/// 清空内核 win32k 窗口表（供 user32 全量同步；单测直接操作 win32k 时勿与 user32 交错调用）。
+pub fn clearWindowTableForSync() void {
+    win_len = 0;
+}
+
+/// 更新已存在 HWND 的几何与可见性，否则追加（与 user32 单一真相同步）。
+pub fn upsertWindow(w: Window) bool {
+    if (findWindow(w.hwnd)) |wp| {
+        wp.* = w;
+        return true;
+    }
+    return windowAttach(w);
+}
+
+pub fn removeWindow(hwnd_v: HWND) bool {
+    var i: usize = 0;
+    while (i < win_len) : (i += 1) {
+        if (win_store[i].hwnd == hwnd_v) {
+            win_store[i] = win_store[win_len - 1];
+            win_len -= 1;
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn windowCreateSimple(rect: Rect) ?HWND {
     const hwnd = allocHwnd();
     if (!windowAttach(.{
@@ -159,6 +185,30 @@ test "win32k global atoms (P8-3 hook)" {
     atoms.resetForTest();
     const a = atoms.addGlobalAtom("P8") orelse return error.AtomFail;
     try std.testing.expect(a >= 0xC000);
+}
+
+test "win32k upsert and remove" {
+    win_len = 0;
+    next_hwnd = 0x2000;
+    const h = allocHwnd();
+    try std.testing.expect(upsertWindow(.{
+        .hwnd = h,
+        .parent = null,
+        .rect = .{ .left = 0, .top = 0, .right = 1, .bottom = 1 },
+        .z_order = 0,
+        .visible = true,
+    }));
+    try std.testing.expect(findWindow(h) != null);
+    try std.testing.expect(upsertWindow(.{
+        .hwnd = h,
+        .parent = null,
+        .rect = .{ .left = 10, .top = 10, .right = 20, .bottom = 20 },
+        .z_order = 1,
+        .visible = false,
+    }));
+    try std.testing.expectEqual(@as(i32, 10), findWindow(h).?.rect.left);
+    try std.testing.expect(removeWindow(h));
+    try std.testing.expect(findWindow(h) == null);
 }
 
 test "win32k z-order and messages" {

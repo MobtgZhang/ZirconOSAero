@@ -579,12 +579,12 @@ fn timeout100nsToExtraTicks(v_100ns: u64) u64 {
 pub fn NtWaitForSingleObject(handle: HANDLE, alertable: bool, timeout: ?*const i64) NTSTATUS {
     _ = alertable;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
-    var asp = proc.address_space orelse return STATUS_INVALID_HANDLE;
+    const asp = proc.address_space orelse return STATUS_INVALID_HANDLE;
 
     var timeout_val: ?i64 = null;
     if (timeout) |tp| {
         const tva = @intFromPtr(tp);
-        if (!probe.probeUserMemory(&asp, tva, @sizeOf(i64), false)) return STATUS_ACCESS_VIOLATION;
+        if (!probe.probeUserMemory(asp, tva, @sizeOf(i64), false)) return STATUS_ACCESS_VIOLATION;
         timeout_val = @as(*const volatile i64, @ptrFromInt(tva)).*;
     }
 
@@ -623,6 +623,10 @@ pub fn NtWaitForMultipleObjects(_: u32, _: []const HANDLE, _: u32, _: bool, _: ?
 
 // ── Section (Memory-mapped) APIs ──
 
+/// Ref: https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-createfilemappingw — `SEC_*` 与节区属性。
+pub const SEC_FILE: u32 = 0x00800000;
+pub const SEC_IMAGE: u32 = 0x01000000;
+
 pub fn NtCreateSection(
     section_handle: *HANDLE,
     desired_access: u32,
@@ -634,10 +638,27 @@ pub fn NtCreateSection(
 ) NTSTATUS {
     _ = desired_access;
     _ = object_attributes;
-    _ = allocation_attributes;
-    if (file_handle != 0) return STATUS_NOT_IMPLEMENTED;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const max_sz = if (maximum_size) |p| p.* else return STATUS_INVALID_PARAMETER;
+
+    if (file_handle != 0) {
+        if ((allocation_attributes & SEC_IMAGE) != 0) return STATUS_NOT_IMPLEMENTED;
+        const plain_write = (page_protect & 0x44) != 0;
+        const is_cow = (page_protect & 0x88) != 0;
+        if (plain_write and !is_cow) return STATUS_NOT_IMPLEMENTED;
+        const fh: ob.Handle = @truncate(file_handle);
+        const ent = proc.handle_table.lookupHandle(fh) orelse return STATUS_INVALID_HANDLE;
+        if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
+        const fo = @as(*vfs.FileObject, @ptrFromInt(ent.object_ptr));
+        const sec = section_mm.createFileBackedSection(max_sz, page_protect, fo) orelse return STATUS_NO_MEMORY;
+        const h = proc.handle_table.allocHandle(@intFromPtr(sec), ob.GENERIC_ALL, .section) orelse {
+            section_mm.releaseSectionObject(sec);
+            return STATUS_NO_MEMORY;
+        };
+        section_handle.* = h;
+        return STATUS_SUCCESS;
+    }
+
     const sec = section_mm.createAnonymousSection(max_sz, page_protect) orelse return STATUS_NO_MEMORY;
     const h = proc.handle_table.allocHandle(@intFromPtr(sec), ob.GENERIC_ALL, .section) orelse {
         section_mm.releaseSectionObject(sec);
@@ -665,12 +686,13 @@ pub fn NtMapViewOfSection(
     _ = allocation_type;
     _ = win32_protect;
     const off: u64 = if (section_offset) |p| p.* else 0;
-    const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
-    const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
+    const cur = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const h32: ob.Handle = @truncate(section_handle);
-    const ent = proc.handle_table.lookupHandle(h32) orelse return STATUS_INVALID_HANDLE;
+    const ent = cur.handle_table.lookupHandle(h32) orelse return STATUS_INVALID_HANDLE;
     if (ent.obj_type != .section) return STATUS_INVALID_PARAMETER;
     const sec: *section_mm.SectionObject = @ptrFromInt(ent.object_ptr);
+    const tpid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const proc = process.findProcess(tpid) orelse return STATUS_INVALID_HANDLE;
     return section_mm.mapViewIntoProcess(proc, sec, base_address, off, view_size);
 }
 
@@ -751,7 +773,10 @@ pub fn NtDuplicateObject(
 
 pub const MEM_COMMIT: u32 = 0x1000;
 pub const MEM_RESERVE: u32 = 0x2000;
+pub const MEM_DECOMMIT: u32 = 0x4000;
 pub const MEM_RELEASE: u32 = 0x8000;
+/// x64 上 `VirtualAlloc` 保留/释放粒度（Learn — Memory Management）。
+pub const MEM_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
 pub const PAGE_NOACCESS: u32 = 0x01;
 pub const PAGE_READONLY: u32 = 0x02;
 pub const PAGE_READWRITE: u32 = 0x04;
@@ -760,6 +785,7 @@ pub const PAGE_EXECUTE: u32 = 0x10;
 pub const PAGE_EXECUTE_READ: u32 = 0x20;
 pub const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 pub const PAGE_EXECUTE_WRITECOPY: u32 = 0x80;
+pub const PAGE_GUARD: u32 = 0x100;
 
 var user_alloc_va_salt: u32 = 0x9E37_79B9;
 
@@ -772,11 +798,9 @@ pub fn NtAllocateVirtualMemory(
     protect: u32,
 ) NTSTATUS {
     _ = zero_bits;
-    _ = protect;
     const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
-    var space = proc.address_space orelse return STATUS_NO_MEMORY;
-    defer proc.address_space = space;
+    const space = proc.address_space orelse return STATUS_NO_MEMORY;
 
     const commit = (allocation_type & MEM_COMMIT) != 0;
     const reserve = (allocation_type & MEM_RESERVE) != 0;
@@ -786,6 +810,9 @@ pub fn NtAllocateVirtualMemory(
     var size = region_size.*;
     if (size == 0) return STATUS_INVALID_PARAMETER;
     size = (size + page_size - 1) & ~(page_size - 1);
+    if (reserve) {
+        size = (size + MEM_ALLOCATION_GRANULARITY - 1) & ~(MEM_ALLOCATION_GRANULARITY - 1);
+    }
     const num_pages = @as(usize, @intCast(size / page_size));
 
     var base = base_address.*;
@@ -793,23 +820,27 @@ pub fn NtAllocateVirtualMemory(
         user_alloc_va_salt = user_alloc_va_salt *% 1664525 +% 1013904223;
         const slide_pages: u64 = @as(u64, user_alloc_va_salt % 512);
         base = 0x0000_0000_4000_0000 + slide_pages * page_size;
-        while (space.getPhysical(base) != null or vm.isVirtInReservedRange(&space, base, num_pages)) {
-            base += page_size;
+        base &= ~(MEM_ALLOCATION_GRANULARITY - 1);
+        while (space.getPhysical(base) != null or vm.isVirtInReservedRange(space, base, num_pages)) {
+            base += MEM_ALLOCATION_GRANULARITY;
         }
     }
     if (base & (page_size - 1) != 0) return STATUS_INVALID_PARAMETER;
+    if (reserve and (base & (MEM_ALLOCATION_GRANULARITY - 1)) != 0) return STATUS_INVALID_PARAMETER;
 
-    const flags = vm.MapFlags{ .writable = true, .user = true, .executable = false };
+    const prot: u32 = if (protect != 0) protect else PAGE_READWRITE;
+    const flags = vm.mapFlagsFromNtProtect(prot);
 
     if (reserve and commit) {
-        if (!vm.mapRange(&space, base, num_pages, flags)) return STATUS_NO_MEMORY;
+        if (!vm.mapRange(space, base, num_pages, flags)) return STATUS_NO_MEMORY;
+        vm.recordCommittedVadRange(space, base, @intCast(num_pages), prot);
         base_address.* = base;
         region_size.* = size;
         return STATUS_SUCCESS;
     }
 
     if (reserve and !commit) {
-        if (!space.reserveVirtualRange(base, @intCast(num_pages))) return STATUS_NO_MEMORY;
+        if (!space.reserveVirtualRange(base, @intCast(num_pages), prot)) return STATUS_NO_MEMORY;
         base_address.* = base;
         region_size.* = size;
         return STATUS_SUCCESS;
@@ -822,6 +853,11 @@ pub fn NtAllocateVirtualMemory(
         if (space.getPhysical(v) != null) continue;
         if (space.mapPageAlloc(v, flags) == null) return STATUS_NO_MEMORY;
     }
+    const end_excl = base + size;
+    space.vad.markCommittedRange(base, end_excl);
+    if (space.vad.findContaining(base) == null) {
+        vm.recordCommittedVadRange(space, base, @intCast(num_pages), prot);
+    }
     base_address.* = base;
     region_size.* = size;
     return STATUS_SUCCESS;
@@ -833,18 +869,27 @@ pub fn NtFreeVirtualMemory(
     region_size: *u64,
     free_type: u32,
 ) NTSTATUS {
-    if ((free_type & MEM_RELEASE) == 0) return STATUS_INVALID_PARAMETER;
+    const has_rel = (free_type & MEM_RELEASE) != 0;
+    const has_dec = (free_type & MEM_DECOMMIT) != 0;
+    if (has_rel and has_dec) return STATUS_INVALID_PARAMETER;
+    if (!has_rel and !has_dec) return STATUS_INVALID_PARAMETER;
+
     const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
-    var space = proc.address_space orelse return STATUS_NO_MEMORY;
+    const space = proc.address_space orelse return STATUS_NO_MEMORY;
 
     const page_size: u64 = 4096;
     var size = region_size.*;
     if (size == 0) return STATUS_INVALID_PARAMETER;
     size = (size + page_size - 1) & ~(page_size - 1);
     const num_pages = @as(usize, @intCast(size / page_size));
-    vm.unmapRange(&space, base_address.*, num_pages);
-    proc.address_space = space;
+
+    if (has_dec) {
+        if (!vm.decommitVirtualRange(space, base_address.*, num_pages)) return STATUS_INVALID_PARAMETER;
+        return STATUS_SUCCESS;
+    }
+
+    vm.unmapRange(space, base_address.*, num_pages);
     return STATUS_SUCCESS;
 }
 
@@ -857,12 +902,95 @@ pub fn NtQueryVirtualMemory(
     return_length: ?*u32,
 ) NTSTATUS {
     if (return_length) |rl| rl.* = 0;
-    _ = process_handle;
-    _ = base_address;
-    _ = memory_information;
-    _ = memory_information_length;
-    if (memory_information_class == 0) return STATUS_NOT_IMPLEMENTED;
-    return STATUS_INVALID_INFO_CLASS;
+    const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
+    const asp = proc.address_space orelse return STATUS_NO_MEMORY;
+    if (memory_information_class != 0) return STATUS_INVALID_INFO_CLASS;
+    const need = @sizeOf(vm.MemoryBasicInformation);
+    if (memory_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+    const buf = memory_information orelse return STATUS_INVALID_PARAMETER;
+    if (!probe.probeUserMemory(asp, @intFromPtr(buf), need, true)) return STATUS_ACCESS_VIOLATION;
+    // SAFETY: `probeUserMemory` 已确认缓冲区可写；`MEMORY_BASIC_INFORMATION` 要求 8 字节对齐（公开 ABI）。
+    const out: *vm.MemoryBasicInformation = @ptrCast(@alignCast(buf));
+    vm.fillMemoryBasicInformation(asp, base_address, out);
+    if (return_length) |rl| rl.* = need;
+    return STATUS_SUCCESS;
+}
+
+/// Ref: j00ru — Windows 7 SP1 x64 `NtReadVirtualMemory`。
+pub fn NtReadVirtualMemory(
+    process_handle: HANDLE,
+    base_address: u64,
+    buffer: [*]u8,
+    buffer_size: u32,
+    number_of_bytes_read: ?*usize,
+) NTSTATUS {
+    const spid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const srcp = process.findProcess(spid) orelse return STATUS_INVALID_HANDLE;
+    const src_space = srcp.address_space orelse return STATUS_NO_MEMORY;
+    const dstp = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const dst_space = dstp.address_space orelse return STATUS_INVALID_HANDLE;
+    if (buffer_size == 0) {
+        if (number_of_bytes_read) |n| n.* = 0;
+        return STATUS_SUCCESS;
+    }
+    if (!probe.probeUserMemory(dst_space, @intFromPtr(buffer), buffer_size, true)) return STATUS_ACCESS_VIOLATION;
+    if (number_of_bytes_read) |n| {
+        if (!probe.probeUserMemory(dst_space, @intFromPtr(n), @sizeOf(usize), true)) return STATUS_ACCESS_VIOLATION;
+    }
+    var i: u32 = 0;
+    while (i < buffer_size) : (i += 1) {
+        const va = base_address + @as(u64, i);
+        const pa = src_space.getPhysical(va) orelse break;
+        const src_byte: *const volatile u8 = @ptrFromInt(pa);
+        buffer[i] = src_byte.*;
+    }
+    if (number_of_bytes_read) |n| n.* = i;
+    if (i != buffer_size) return STATUS_ACCESS_VIOLATION;
+    return STATUS_SUCCESS;
+}
+
+/// Ref: j00ru — Windows 7 SP1 x64 `NtWriteVirtualMemory`。
+pub fn NtWriteVirtualMemory(
+    process_handle: HANDLE,
+    base_address: u64,
+    buffer: [*]const u8,
+    buffer_size: u32,
+    number_of_bytes_written: ?*usize,
+) NTSTATUS {
+    const dpid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
+    const dstp = process.findProcess(dpid) orelse return STATUS_INVALID_HANDLE;
+    const dst_space = dstp.address_space orelse return STATUS_NO_MEMORY;
+    const srcp = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const src_space = srcp.address_space orelse return STATUS_INVALID_HANDLE;
+    if (buffer_size == 0) {
+        if (number_of_bytes_written) |n| n.* = 0;
+        return STATUS_SUCCESS;
+    }
+    if (!probe.probeUserMemory(src_space, @intFromPtr(buffer), buffer_size, false)) return STATUS_ACCESS_VIOLATION;
+    if (number_of_bytes_written) |n| {
+        if (!probe.probeUserMemory(src_space, @intFromPtr(n), @sizeOf(usize), true)) return STATUS_ACCESS_VIOLATION;
+    }
+    var i: u32 = 0;
+    while (i < buffer_size) : (i += 1) {
+        const va = base_address + @as(u64, i);
+        const pa = dst_space.getPhysical(va) orelse break;
+        if (!pagingIsWritable(dst_space, va)) return STATUS_ACCESS_VIOLATION;
+        const dst_byte: *volatile u8 = @ptrFromInt(pa);
+        dst_byte.* = buffer[i];
+    }
+    if (number_of_bytes_written) |n| n.* = i;
+    if (i != buffer_size) return STATUS_ACCESS_VIOLATION;
+    return STATUS_SUCCESS;
+}
+
+fn pagingIsWritable(space: *vm.AddressSpace, va: u64) bool {
+    const arch_mod = @import("../arch.zig");
+    const paging = arch_mod.impl.paging;
+    if (@hasDecl(paging, "isPageWritable")) {
+        return paging.isPageWritable(space.pml4_phys, va);
+    }
+    return true;
 }
 
 /// 桩：syscall 表对齐 Win7 SP1 x64；完整打开语义见进程管理路线图。
@@ -887,12 +1015,17 @@ pub fn NtProtectVirtualMemory(
     if (old_protect) |op| op.* = PAGE_READWRITE;
     const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
-    var space = proc.address_space orelse return STATUS_NO_MEMORY;
+    const space = proc.address_space orelse return STATUS_NO_MEMORY;
     const base = base_address.*;
     const sz = region_size.*;
     if (sz == 0) return STATUS_INVALID_PARAMETER;
     if (!space.protectVirtualRange(base, sz, new_protect)) return STATUS_INVALID_PARAMETER;
-    proc.address_space = space;
+    const paging = @import("../arch.zig").impl.paging;
+    const ps: u64 = @intCast(paging.page_size);
+    const mask = ps - 1;
+    const r0 = base & ~mask;
+    const r1 = (base + sz + mask) & ~mask;
+    _ = space.vad.replaceSpanProtect(r0, r1, new_protect);
     return STATUS_SUCCESS;
 }
 

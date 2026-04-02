@@ -21,7 +21,20 @@ pub const NtQuerySystemInformation = 0x25;
 pub const NtCreateFile = 0x2C;
 pub const NtYieldExecution = 0x43;
 pub const NtTerminateProcess = 0x29;
-pub const NtCreateThread = 0x4D;
+/// Ref: j00ru `nt-per-system.json` — Windows 7 SP1 x64（与 `NtProtectVirtualMemory` 0x4D 区分）。
+pub const NtCreateThread = 0x4B;
+/// Ref: j00ru — Windows 7 SP1 x64。
+pub const NtProtectVirtualMemory = 0x4D;
+/// Ref: j00ru — Windows 7 SP1 x64。
+pub const NtDelayExecution = 0x31;
+/// Ref: j00ru — Windows 7 SP1 x64。
+pub const NtOpenKey = 0x0F;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtQueryValueKey = 0x14;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCreateKey = 0x1A;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64（与 `NtQueryValueKey` 不同索引）。
+pub const NtSetValueKey = 0x5D;
 pub const NtWriteFile = 0x08;
 pub const NtReadFile = 0x07;
 /// Win32k 在真实 Windows 上为独立服务表；本内核将用户消息 syscall 折叠进同一分发器。
@@ -47,12 +60,21 @@ pub const NtUnmapViewOfSection = 0x2A;
 pub const NtQueryVirtualMemory = 0x20;
 /// Ref: j00ru `nt-per-system.json` — Windows 7 SP1。
 pub const NtOpenProcess = 0x23;
+/// Ref: 公开 Windows 7 x64 syscall 列表（如 OpenRCE / j00ru 对照表）；与 SP1 构建对齐。
+pub const NtDuplicateObject = 0x44;
 
 const std = @import("std");
 
 test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtAllocateVirtualMemory == 0x18);
     try std.testing.expect(NtTerminateProcess == 0x29);
+    try std.testing.expect(NtCreateThread == 0x4B);
+    try std.testing.expect(NtProtectVirtualMemory == 0x4D);
+    try std.testing.expect(NtDelayExecution == 0x31);
+    try std.testing.expect(NtOpenKey == 0x0F);
+    try std.testing.expect(NtQueryValueKey == 0x14);
+    try std.testing.expect(NtCreateKey == 0x1A);
+    try std.testing.expect(NtSetValueKey == 0x5D);
     try std.testing.expect(NtUnmapViewOfSection == 0x2A);
     try std.testing.expect(NtCreatePort == 0x9D);
     try std.testing.expect(NtConnectPort == 0x8F);
@@ -63,4 +85,5 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtQuerySystemInformation == 0x25);
     try std.testing.expect(NtQueryVirtualMemory == 0x20);
     try std.testing.expect(NtOpenProcess == 0x23);
+    try std.testing.expect(NtDuplicateObject == 0x44);
 }

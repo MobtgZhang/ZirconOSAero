@@ -322,6 +322,43 @@ pub fn unmapPage(pml4_phys: u64, virt: u64, alloc_frame: AllocFrameFn, alloc_ctx
     return true;
 }
 
+/// 更新已存在 **4KiB 叶** 映射的保护位（`flags` 为 `Present|User|Write|NoExecute` 等）；遇 2MiB PDE 则先拆分。
+/// Ref: Intel SDM Vol.3 — PTE 标志；与 `ZwProtectVirtualMemory` 公开语义对齐的硬件侧实现。
+pub fn protectLeafPage(
+    pml4_phys: u64,
+    virt: u64,
+    flags: u64,
+    alloc_frame: AllocFrameFn,
+    alloc_ctx: ?*anyopaque,
+) bool {
+    if (!split2MiBIdentityPageIfNeeded(pml4_phys, virt, alloc_frame, alloc_ctx)) return false;
+    const v = VirtAddr{ .value = virt };
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    const pml4e = &pml4.entries[v.pml4Index()];
+    if (!pml4e.isPresent()) return false;
+    const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+    const pdpte = &pdpt.entries[v.pdptIndex()];
+    if (!pdpte.isPresent()) return false;
+    const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde = &pd.entries[v.pdIndex()];
+    if (!pde.isPresent()) return false;
+    const pde_raw = @as(u64, @bitCast(pde.*));
+    if ((pde_raw & LargePage) != 0) {
+        if (!split2MiBIdentityPageIfNeeded(pml4_phys, virt, alloc_frame, alloc_ctx)) return false;
+    }
+    const pd2 = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde2 = &pd2.entries[v.pdIndex()];
+    if (!pde2.isPresent()) return false;
+    const pt = @as(*PageTable, @ptrFromInt(pde2.toFrame()));
+    const pte = &pt.entries[v.ptIndex()];
+    if (!pte.isPresent()) return false;
+    const frame = pte.toFrame();
+    const merged = flags | Present | Accessed;
+    pte.* = PageTableEntry.fromFrame(frame, merged);
+    invlpg(virt);
+    return true;
+}
+
 /// 加载 CR3
 pub fn loadCr3(phys: u64) void {
     asm volatile ("mov %[phys], %%cr3"

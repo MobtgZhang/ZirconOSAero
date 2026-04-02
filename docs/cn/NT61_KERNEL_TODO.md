@@ -2,6 +2,8 @@
 
 本页为内核模式实现的**分阶段跟踪清单**，与 [mdcs/composer2/content1.2.md](../../mdcs/composer2/content1.2.md) 及 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 交叉引用。实现须遵守 clean-room：**仅** Microsoft Learn、WDK 公开文档与硬件规范；禁止 Windows/ReactOS/Wine 源码。
 
+**与「实施计划 Phase A–K」对齐**：里程碑式扩展（闸门、Mm、调度等待、I/O 闭环、Ob、Ps、LPC、Se、SSDT 模块化、HAL/存储占位、完整 API backlog）见 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) 与契约矩阵 §3.1；代码落地仍以本页 **K0–K8** 编号为主便于 PR 引用。
+
 ## 范围
 
 - **在内**：`src/mm`、`src/ke`、`src/hal`、`src/arch`、syscall 分发、`src/io`、`src/ob`、`src/se`、`src/lpc`、`src/ps` 内核对象路径、`src/fs` 与 IRP 桥接。
@@ -100,3 +102,5 @@
 ## 维护
 
 更新本清单时同步 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §7 链接与根 README 若涉及对外完成度表述。
+
+**近期 ABI 落地**（与 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md)「实现检查点」一致）：`KUSER_SHARED_DATA` 进程映射、`TEB` x64 `LastErrorValue` 偏移断言、`kernelbase` 分层、合成 `ntdll` 基址调整 — 见 `src/mm/kuser_shared.zig`、`src/sdk/teb_nt61_x64.zig`、`src/libs/kernelbase.zig`、`tests/nt61_abi_layout_host`。

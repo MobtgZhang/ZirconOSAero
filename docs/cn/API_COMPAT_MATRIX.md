@@ -8,8 +8,10 @@
 
 | 模块        | 代表 API              | 状态     | 备注 |
 |-------------|----------------------|----------|------|
+| ntdll       | LdrInitializeThunk / RtlUserThreadStart | Stub | [`ntdll.zig`](../../src/libs/ntdll.zig)；合成导出见 [`pe.zig`](../../src/loader/pe.zig) |
 | ntdll       | NtAllocateVirtualMemory | Partial | MEM_RESERVE/COMMIT、`#PF` 惰性提交 |
 | ntdll       | NtUserGetMessage / PeekMessage | Partial | SSDT 0x58/0x59，内核消息泵桥接 |
+| kernelbase  | GetLastError / SetLastError | Partial | [`kernelbase.zig`](../../src/libs/kernelbase.zig)；`kernel32` 转发；TEB+0x68 为长期目标 |
 | kernel32    | CreateFileA          | Partial | 见 VFS |
 | user32      | GetMessage / DefWindowProc | Partial | SC_MOVE 模态环、DWM 广播消息 |
 | gdi32       | TextOutA             | Partial | 位图字体；FreeType 为路线图 C-T05 |

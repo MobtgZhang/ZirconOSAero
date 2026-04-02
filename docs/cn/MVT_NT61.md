@@ -14,6 +14,8 @@
 | 池分配器 | 同上 → pool | [src/mm/pool.zig](../../src/mm/pool.zig) |
 | 伙伴系统（逻辑块） | 同上 → buddy | [src/mm/buddy.zig](../../src/mm/buddy.zig) |
 | Slab | 同上 → slab | [src/mm/slab.zig](../../src/mm/slab.zig) |
+| `PAGE_*` → x86_64 PTE 位（与 `vm.zig` `ntProtectToPteFlags` 同步） | 同上 → **vm_nt_protect_pte_host** | [tests/vm_nt_protect_pte_host.zig](../../tests/vm_nt_protect_pte_host.zig) |
+| TEB / KUSER x64 契约（偏移与 VA） | 同上 → **nt61_abi_layout_host** | [tests/nt61_abi_layout_host.zig](../../tests/nt61_abi_layout_host.zig)、[src/sdk/teb_nt61_x64.zig](../../src/sdk/teb_nt61_x64.zig)、[src/sdk/kuser_shared_nt61.zig](../../src/sdk/kuser_shared_nt61.zig) |
 | SSDT 公开索引 | 同上 → ssdt | [src/arch/x86_64/ssdt_nt61.zig](../../src/arch/x86_64/ssdt_nt61.zig) |
 | 用户态 `Ssdt` 与内核 `ssdt_nt61` 子集一致 | 同上 → ssdt_stub_parity | [tests/ssdt_stub_parity.zig](../../tests/ssdt_stub_parity.zig)、[src/sdk/ntdll_syscall_win64.zig](../../src/sdk/ntdll_syscall_win64.zig) |
 | x64 与 x86（Win7 SP1 公开表）服务号不同命名空间 | 同上 → ssdt_x64_x86_namespace | [tests/ssdt_x64_x86_namespace.zig](../../tests/ssdt_x64_x86_namespace.zig) |
@@ -26,15 +28,21 @@
 | PCIe ECAM 偏移 | 同上 → ecam_layout | [src/hal/x86_64/ecam_layout.zig](../../src/hal/x86_64/ecam_layout.zig) |
 | HPET GCAP_ID 解码 | 同上 → hpet_id | [src/hal/x86_64/hpet_id.zig](../../src/hal/x86_64/hpet_id.zig) |
 | LPC `PortKind` ABI | 同上 → lpc_portkind_host | [tests/lpc_portkind_host.zig](../../tests/lpc_portkind_host.zig) |
-| IPv4 固定首部解析 | 同上 → minimal_net | [src/drivers/net/minimal_stack.zig](../../src/drivers/net/minimal_stack.zig) |
+| IPv4 固定首部 + ARP 首部解析 | 同上 → minimal_net | [src/drivers/net/minimal_stack.zig](../../src/drivers/net/minimal_stack.zig) |
 | MDL 子集（PFN 槽、恒等映射填 PFN） | 同上 → mdl_host | [src/mm/mdl.zig](../../src/mm/mdl.zig) |
 | PCI 类码 / VirtIO → 驱动绑定占位 | 同上 → pci_driver_bind_host | [src/drivers/bus/pci_driver_bind.zig](../../src/drivers/bus/pci_driver_bind.zig) |
 | VFS `FileAccessMode` 数值 | 同上 → fs_vfs_constants_host | [tests/fs_vfs_constants_host.zig](../../tests/fs_vfs_constants_host.zig)（与 [src/fs/vfs.zig](../../src/fs/vfs.zig) 同步） |
+| 常见 `NTSTATUS` 与文件打开映射（P6-1 锚点） | 同上 → fs_status_nt_map_host | [tests/fs_status_nt_map_host.zig](../../tests/fs_status_nt_map_host.zig) |
+| FULL_API_BACKLOG §1–§10 分节 CI 锚点 | 同上 → nt61_full_api_backlog_anchors_host | [tests/nt61_full_api_backlog_anchors_host.zig](../../tests/nt61_full_api_backlog_anchors_host.zig) |
 | 调度器策略公式（主机） | 同上 → scheduler_policy_host | [tests/scheduler_policy_host.zig](../../tests/scheduler_policy_host.zig) |
 | Phase F 调度差额（文档化占位） | 同上 → nt61_phase_f_scheduler_gap | [tests/nt61_phase_f_scheduler_gap.zig](../../tests/nt61_phase_f_scheduler_gap.zig) |
 | GpuDevice / ramfb 占位 | 同上 → gpu_device_host | [src/drivers/video/gpu_device.zig](../../src/drivers/video/gpu_device.zig) |
 | Win32k 窗口骨架 | 同上 → win32k_host | [src/subsystems/win32k/mod.zig](../../src/subsystems/win32k/mod.zig) |
 | 合规短语扫描 | `bash scripts/verify-compliance.sh` | [scripts/verify-compliance.sh](../../scripts/verify-compliance.sh)；CI |
+| 节区对象头 / 池容量 | `zig build test`（`object` 等步导入 `section.zig` 时运行其 `test`） | [src/mm/section.zig](../../src/mm/section.zig) |
+| syscall 扩展：读/写文件、LPC 应答、重复句柄 | QEMU/内核烟测 + 代码审查 | [src/arch/x86_64/syscall_nt_extras.zig](../../src/arch/x86_64/syscall_nt_extras.zig)、[syscall_abi.zig](../../src/arch/x86_64/syscall_abi.zig) |
+| VirtIO-Blk PCI 占位 + `B:\` 探测读 | 启动枚举日志；QEMU 含 `virtio-blk-pci` 时挂载 `B:\PROBE.TXT` | [virtio_blk_pci.zig](../../src/drivers/storage/virtio_blk_pci.zig)、[virtio_blk_scratch_fs.zig](../../src/drivers/storage/virtio_blk_scratch_fs.zig)、[acpi_pci_early.zig](../../src/hal/x86_64/acpi_pci_early.zig) |
+| `seAccessCheckMask`（最小访问掩码门闸） | 主机逻辑见 `se_token` 测试镜像 | [src/se/token.zig](../../src/se/token.zig)、[tests/se_token.zig](../../tests/se_token.zig) |
 
 ## CI / 烟测（QEMU 或构建产物）
 

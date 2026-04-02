@@ -107,7 +107,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | ACPI RSDP（Multiboot2 tag 14/15）→ XSDT/RSDT → MCFG | 部分 | `src/boot/multiboot2_parse.zig`、`src/hal/x86_64/acpi_pci_early.zig`；无 AML 解释器 |
 | PCIe ECAM MMIO `configRead32` | 部分 | 同上；启动时探测总线 0 设备 0 |
 | USB XHCI / HID | 未 | 路线图：[HAL_USB_NET_ROADMAP.md](HAL_USB_NET_ROADMAP.md) |
-| IPv4 / ARP / UDP 原型 | 未 | 路线图同上；TCP 非当前里程碑 |
+| IPv4 / ARP / UDP 原型 | 部分 | `minimal_stack.zig`：IPv4 固定头 + ARP 首部 8 字节解析；收发与 TCP 仍为路线图 |
 
 ## 3. 关键 Native API 与文档链接（示例）
 
@@ -116,9 +116,15 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `NtQueryInformationProcess` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess> | `ProcessInformationClass`、长度、`ReturnLength` |
 | `NtQueryInformationThread` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntqueryinformationthread> | 同上 |
 | `NtAllocateVirtualMemory` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntallocatevirtualmemory> | `MEM_*`、`PAGE_*` |
+| `NtProtectVirtualMemory` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntprotectvirtualmemory> | SSDT `0x4D`（Win7 SP1 x64）；`syscall.zig` → `ntdll.zig` → `vm.protectVirtualRange` / `paging.protectLeafPage` |
+| `NtDelayExecution` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntdelayexecution> | SSDT `0x31`；负间隔以 `scheduler.yield` 粗近似（HPET 精确睡眠见路线图） |
 | `NtQuerySystemInformation` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation> | `STATUS_INVALID_INFO_CLASS` |
-| `NtOpenKey` / `NtQueryValueKey` | WDK/Win32 注册表相关 | `OBJECT_ATTRIBUTES`、部分信息类 |
+| `NtOpenKey` / `NtQueryValueKey` / `NtCreateKey` / `NtSetValueKey` | WDK/Win32 注册表相关 | `NtOpenKey` SSDT `0x0F`；`NtQueryValueKey` `0x14`（`KeyValuePartialInformation`）；`NtCreateKey` `0x1A`（桩 `STATUS_NOT_IMPLEMENTED`）；`NtSetValueKey` `0x5D`（桩成功）；均经 `syscall.zig` + `ntdll.zig` + `registry.zig` |
 | `RtlNtStatusToWin32Error` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-rtlntstatustowin32error> | 与 `RtlNtStatusToDosError` 等价名 |
+| `NtReadFile` / `NtWriteFile` | <https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-readfile>（行为级对应 Native 层） | x64 syscall 分发：`syscall_nt_extras.zig` → `ntdll.zig` → VFS/IRP |
+| `NtDuplicateObject` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntduplicateobject> | 同进程句柄表：`ntdll.zig`；SSDT `0x44`（Win7 SP1 x64 公开表） |
+| `NtRequestWaitReplyPort` | WDK — LPC 端口消息 | 简化 ABI：`syscall_nt_extras.zig`；内核 `lpc/port.zig` |
+| `NtWaitForSingleObject` | <https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject>（用户态包装；Native 语义见 Winternl） | 事件对象池 + `scheduler.yield` 轮询超时（简化 wall-clock） |
 
 （随实现推进在 PR 中增删行并更新状态列。）
 
@@ -191,6 +197,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 - [NT61_PR_GATES.md](NT61_PR_GATES.md) — **K0 PR 门禁勾选清单**（契约矩阵、MVT、syscall 注释、合规扫描）  
 - [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) — **NT 6.1 内核模式分阶段待办（K0–K8）**与 clean-room 门禁；PR 与契约矩阵 §8 同步推进  
+- [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) — **完整 NT 6.1 API 能力 backlog**（与当前基础迭代分离的长期清单）  
 - [MVT_NT61.md](MVT_NT61.md) — 最小可验证测试索引（主机测试 + CI）  
 - [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) — 不阻塞内核主里程碑的延后能力（WDDM / 完整 Win32 / WOW64 / AML 等）  
 - [mdcs/composer2/content1.1.md](../../mdcs/composer2/content1.1.md) — 与 NT 6.1 目标之差距综述（与契约矩阵交叉引用）  
@@ -218,6 +225,11 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 | 对象路径规范化 | `src/ob/object.zig` `normalizeNtObjectPath` | `zig build test` → `object` |
 | 合规短语扫描 | `scripts/verify-compliance.sh` | CI：`Compliance phrase scan (src/boot)` |
 | `NtQuerySystemInformation` 子集 | `src/libs/ntdll.zig` | syscall + ntdll 一致性审查 |
+| `NtReadFile` / `NtWriteFile` syscall → VFS | `syscall_nt_extras.zig`、`ntdll.zig`、`vfs.zig` | 指针探测 + `zig build test`；QEMU 烟测扩展 |
+| `NtDuplicateObject`（同进程） | `ntdll.zig`、`syscall_nt_extras.zig`；SSDT `0x44` | **ssdt_stub_parity**（`NtDuplicateObject` 号）；句柄表 **object** 测试 |
+| `NtRequestWaitReplyPort`（简化 ABI） | `syscall_nt_extras.zig`、`lpc/port.zig` | **lpc_portkind_host** + 代码审查 |
+| VirtIO-Blk 枚举占位 | `virtio_blk_pci.zig`、`acpi_pci_early.zig`；`pci_driver_bind` | **pci_driver_bind_host**（`virtio_blk` 绑定） |
+| 完整 API 长期 backlog | [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) | 文档跟踪；与 K0–K8 交付分离 |
 
 **合规**：实现仅依据 MS Learn / WDK 公开描述与硬件规范；提交前运行 `bash scripts/verify-compliance.sh`。
 
@@ -225,9 +237,9 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 
 | 表面 | 公开依据 | 状态 |
 |------|----------|------|
-| `KUSER_SHARED_DATA` 用户映射页（时标、系统调用间隔等） | MSDN / WDK 概念 | **Planned** — 须固定用户 VA 并与 `syscall` 路径一致 |
-| PEB / TEB 中线程与进程信息 | Learn — 进程线程 | **Partial** |
-| Win32k 与 ntos SSDT 分流 | x64 上多表/MSR 行为（公开概述） | **Partial** — 本内核将部分用户消息 syscall 折叠进主 SSDT，见 [SyscallABI.md](SyscallABI.md) |
+| `KUSER_SHARED_DATA` 用户映射页（时标、系统调用间隔等） | WDK `KUSER_SHARED_DATA` DDI | **Partial** — x64 进程创建时映射 `0x7FFE0000` 只读页并写版本桩；见 [`mm/kuser_shared.zig`](../../src/mm/kuser_shared.zig)、[`sdk/kuser_shared_nt61.zig`](../../src/sdk/kuser_shared_nt61.zig)；**ntdll 合成基址** 迁至 `0x7FF6_0000_0000` 避免冲突 |
+| PEB / TEB 中线程与进程信息；`LastErrorValue` x64 偏移 | Learn — 进程线程；调试器实践 | **Partial** — [`sdk/teb_nt61_x64.zig`](../../src/sdk/teb_nt61_x64.zig) 断言 `@offsetOf(LastErrorValue)==0x68`；主机测试 **nt61_abi_layout_host** |
+| Win32k 与 ntos SSDT 分流；全局 ATOM 占位 | x64 上多表/MSR；Learn 原子表概念 | **Partial** — 本内核将部分用户消息 syscall 折叠进主 SSDT，见 [SyscallABI.md](SyscallABI.md)；[`win32k/atoms.zig`](../../src/subsystems/win32k/atoms.zig) |
 | 用户态 `Nt*` → `syscall` 薄层 | AMD64 调用约定 | **Partial** — [`src/sdk/ntdll_syscall_win64.zig`](../../src/sdk/ntdll_syscall_win64.zig)；内核内联桩仍为 `src/libs/ntdll.zig` |
 
 ### 9.1 WOW64：覆盖与已知缺口

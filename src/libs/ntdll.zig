@@ -40,6 +40,8 @@ pub const STATUS_ALERTED: NTSTATUS = 257;
 pub const STATUS_INFO_LENGTH_MISMATCH: NTSTATUS = -1073741820;
 /// 0xC0000003 — invalid `SYSTEM_INFORMATION_CLASS` / info class.
 pub const STATUS_INVALID_INFO_CLASS: NTSTATUS = -1073741821;
+/// `NtEnumerateKey` / `NtEnumerateValueKey` 末项之后；与公开 NTSTATUS 表一致（warning 位）。
+pub const STATUS_NO_MORE_ENTRIES: NTSTATUS = @bitCast(@as(u32, 0x8000001A));
 
 pub const HANDLE = u64;
 pub const INVALID_HANDLE_VALUE: HANDLE = 0xFFFFFFFFFFFFFFFF;
@@ -144,7 +146,14 @@ fn recycleEventObject(object_ptr: u64) void {
     }
 }
 
+pub const KeyBasicInformation: u32 = 0;
+pub const KeyValueFullInformation: u32 = 1;
 pub const KeyValuePartialInformation: u32 = 2;
+
+/// `REG_SZ` / `REG_DWORD_LITTLE_ENDIAN` — WinNT 公开常量值。
+pub const REG_NONE: u32 = 0;
+pub const REG_SZ: u32 = 1;
+pub const REG_DWORD: u32 = 4;
 
 /// x64 `PROCESS_BASIC_INFORMATION` (MSDN). Size must be 48.
 const PROCESS_BASIC_INFORMATION = extern struct {
@@ -1183,6 +1192,40 @@ fn queryValueKeyPartial(
     return STATUS_SUCCESS;
 }
 
+fn queryValueKeyFull(
+    rk: *const registry.RegKey,
+    value_name: ?*const UNICODE_STRING,
+    key_value_information: ?*anyopaque,
+    length: u32,
+    result_length: *u32,
+) NTSTATUS {
+    const vname = value_name orelse return STATUS_INVALID_PARAMETER;
+    if (vname.length == 0) return STATUS_OBJECT_NAME_NOT_FOUND;
+    const name_ascii = vname.buffer[0..vname.length];
+    const val = rk.findValue(name_ascii) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    const name = val.name[0..val.name_len];
+    const name_off: u32 = 20;
+    const after_name = name_off + @as(u32, @intCast(name.len));
+    const data_off_u32: u32 = (after_name + 3) & ~@as(u32, 3);
+    const data_len: u32 = val.data_len;
+    const need = data_off_u32 + data_len;
+    result_length.* = need;
+    if (length < need) return STATUS_BUFFER_TOO_SMALL;
+    const out: [*]u8 = @ptrCast(key_value_information orelse return STATUS_INVALID_PARAMETER);
+    @memset(out[0..data_off_u32], 0);
+    writeU32(out[0..4], 0);
+    writeU32(out[4..8], @intFromEnum(val.value_type));
+    writeU32(out[8..12], data_off_u32);
+    writeU32(out[12..16], data_len);
+    writeU32(out[16..20], @intCast(name.len));
+    @memcpy(out[name_off..][0..name.len], name);
+    if (data_off_u32 > name_off + name.len) {
+        @memset(out[name_off + name.len .. data_off_u32], 0);
+    }
+    @memcpy(out[data_off_u32..][0..data_len], val.data[0..data_len]);
+    return STATUS_SUCCESS;
+}
+
 /// Ref: `NtQueryValueKey` — `KEY_VALUE_INFORMATION_CLASS`, `ResultLength`.
 pub fn NtQueryValueKey(
     key_handle: HANDLE,
@@ -1199,6 +1242,7 @@ pub fn NtQueryValueKey(
     const hdr: *ob.ObjectHeader = @ptrFromInt(ent.object_ptr);
     const rk = registry.regKeyFromHeader(hdr);
     return switch (key_value_information_class) {
+        KeyValueFullInformation => queryValueKeyFull(rk, value_name, key_value_information, length, result_length),
         KeyValuePartialInformation => queryValueKeyPartial(rk, value_name, key_value_information, length, result_length),
         else => blk: {
             result_length.* = 0;
@@ -1207,21 +1251,112 @@ pub fn NtQueryValueKey(
     };
 }
 
-pub fn NtSetValueKey(_: HANDLE, _: []const u8, _: u32, _: u32, _: []const u8) NTSTATUS {
-    return STATUS_SUCCESS;
+/// `NtSetValueKey` — 窄字符 `UNICODE_STRING` 名（与 `NtOpenKey` 路径约定一致）；`REG_SZ` / `REG_DWORD`。
+pub fn NtSetValueKey(
+    key_handle: HANDLE,
+    value_name: ?*const UNICODE_STRING,
+    title_index: u32,
+    reg_type: u32,
+    data: []const u8,
+) NTSTATUS {
+    _ = title_index;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(key_handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .key) return STATUS_INVALID_PARAMETER;
+    const hdr: *ob.ObjectHeader = @ptrFromInt(ent.object_ptr);
+    const idx = registry.keyIndexFromObjectHeader(hdr) orelse return STATUS_INVALID_PARAMETER;
+    const vname = value_name orelse return STATUS_INVALID_PARAMETER;
+    if (vname.length == 0) return STATUS_INVALID_PARAMETER;
+    const nm = vname.buffer[0..vname.length];
+    if (reg_type == REG_SZ) {
+        return if (registry.setValueSz(idx, nm, data)) STATUS_SUCCESS else STATUS_INSUFFICIENT_RESOURCES;
+    }
+    if (reg_type == REG_DWORD and data.len >= 4) {
+        const dv = std.mem.readInt(u32, data[0..4], .little);
+        return if (registry.setValueDword(idx, nm, dv)) STATUS_SUCCESS else STATUS_INSUFFICIENT_RESOURCES;
+    }
+    return STATUS_INVALID_PARAMETER;
 }
+
+pub const REG_CREATED_NEW_KEY: u32 = 0x00000001;
+pub const REG_OPENED_EXISTING_KEY: u32 = 0x00000002;
 
 pub fn NtCreateKey(
     key_handle: ?*HANDLE,
-    _: u32,
-    _: ?*OBJECT_ATTRIBUTES,
-    _: u32,
-    _: ?[]const u8,
-    _: u32,
-    _: ?*u32,
+    desired_access: u32,
+    object_attributes: ?*OBJECT_ATTRIBUTES,
+    title_index: u32,
+    class: ?[]const u8,
+    create_options: u32,
+    disposition: ?*u32,
 ) NTSTATUS {
-    if (key_handle) |kh| kh.* = INVALID_HANDLE_VALUE;
-    return STATUS_NOT_IMPLEMENTED;
+    _ = desired_access;
+    _ = title_index;
+    _ = class;
+    _ = create_options;
+    const kh = key_handle orelse return STATUS_INVALID_PARAMETER;
+    const attrs = object_attributes orelse return STATUS_INVALID_PARAMETER;
+    const uname = attrs.object_name orelse return STATUS_INVALID_PARAMETER;
+    if (uname.length == 0) return STATUS_OBJECT_NAME_NOT_FOUND;
+    const raw = uname.buffer[0..uname.length];
+    const path = ob.normalizeNtObjectPath(raw);
+    const cr = registry.createKeyFromNtPath(path) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    if (disposition) |d| d.* = if (cr.created) REG_CREATED_NEW_KEY else REG_OPENED_EXISTING_KEY;
+    const hdr = registry.keyHeaderPtr(cr.idx) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const mask = ob.GENERIC_READ | ob.GENERIC_WRITE;
+    const h = proc.handle_table.allocHandle(@intFromPtr(hdr), mask, .key) orelse return STATUS_INSUFFICIENT_RESOURCES;
+    kh.* = h;
+    return STATUS_SUCCESS;
+}
+
+pub fn NtEnumerateKey(
+    key_handle: HANDLE,
+    index: u32,
+    key_information_class: u32,
+    key_information: ?*anyopaque,
+    length: u32,
+    result_length: *u32,
+) NTSTATUS {
+    if (key_information_class != KeyBasicInformation) {
+        result_length.* = 0;
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(key_handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .key) return STATUS_INVALID_PARAMETER;
+    const hdr: *ob.ObjectHeader = @ptrFromInt(ent.object_ptr);
+    const idx = registry.keyIndexFromObjectHeader(hdr) orelse return STATUS_INVALID_PARAMETER;
+    const out = key_information orelse return STATUS_INVALID_PARAMETER;
+    const buf: [*]u8 = @ptrCast(out);
+    const st = registry.enumerateSubkeyBasic(idx, index, buf[0..length], result_length);
+    return @intCast(st);
+}
+
+pub fn NtEnumerateValueKey(
+    key_handle: HANDLE,
+    index: u32,
+    key_value_information_class: u32,
+    key_value_information: ?*anyopaque,
+    length: u32,
+    result_length: *u32,
+) NTSTATUS {
+    if (key_value_information_class != KeyValueFullInformation) {
+        result_length.* = 0;
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(key_handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .key) return STATUS_INVALID_PARAMETER;
+    const hdr: *ob.ObjectHeader = @ptrFromInt(ent.object_ptr);
+    const idx = registry.keyIndexFromObjectHeader(hdr) orelse return STATUS_INVALID_PARAMETER;
+    const out = key_value_information orelse return STATUS_INVALID_PARAMETER;
+    const buf: [*]u8 = @ptrCast(out);
+    const st = registry.enumerateValueFull(idx, index, buf[0..length], result_length);
+    return @intCast(st);
 }
 
 // ── RTL Functions ──
@@ -1384,7 +1519,7 @@ pub fn init() void {
     klog.info("ntdll: Memory APIs: NtAllocateVirtualMemory, NtFreeVirtualMemory, NtCreateSection", .{});
     klog.info("ntdll: IPC APIs: NtCreatePort, NtConnectPort, NtRequestWaitReplyPort", .{});
     klog.info("ntdll: System APIs: NtQuerySystemInformation (incl. SystemVersionInformation), NtQueryVirtualMemory", .{});
-    klog.info("ntdll: Registry APIs: NtOpenKey (NT path), NtQueryValueKey (partial), NtCreateKey (not impl)", .{});
+    klog.info("ntdll: Registry: NtOpenKey/NtCreateKey/NtSetValueKey/NtEnumerate* + NtQueryValueKey (Partial/Full)", .{});
     klog.info("ntdll: RTL: RtlGetVersion, RtlNtStatusToDosError / RtlNtStatusToWin32Error, memory utils", .{});
     klog.info("ntdll: Debug: DbgPrint, DbgBreakPoint", .{});
     klog.info("ntdll: Loader stubs: LdrInitializeThunk, LdrLoadDll, RtlUserThreadStart", .{});

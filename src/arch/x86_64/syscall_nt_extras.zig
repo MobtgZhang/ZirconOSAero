@@ -17,7 +17,7 @@ const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
 /// `NtReadFile`：R10=FileHandle, RDX=Event, R8=ApcRoutine, R9=ApcContext；栈：IoStatusBlock, Buffer, Length, ByteOffset, Key。
 pub fn dispatchNtReadFile(frame: *InterruptFrame) i64 {
     const proc = process.getCurrentProcess() orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
-    var asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
+    const asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
 
     const io_user = syscall_abi.userStackArg(frame, 0) orelse
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
@@ -33,12 +33,12 @@ pub fn dispatchNtReadFile(frame: *InterruptFrame) i64 {
     if (io_user == 0 or buf_user == 0) return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_PARAMETER);
     const length: u32 = @truncate(len32);
     if (length == 0) return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_PARAMETER);
-    if (!probe.probeUserMemory(&asp, io_user, @sizeOf(ntdll.IO_STATUS_BLOCK), true))
+    if (!probe.probeUserMemory(asp, io_user, @sizeOf(ntdll.IO_STATUS_BLOCK), true))
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
-    if (!probe.probeUserMemory(&asp, buf_user, length, true))
+    if (!probe.probeUserMemory(asp, buf_user, length, true))
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
     const off_ptr: ?*const u64 = if (byte_off == 0) null else blk: {
-        if (!probe.probeUserMemory(&asp, byte_off, @sizeOf(u64), false))
+        if (!probe.probeUserMemory(asp, byte_off, @sizeOf(u64), false))
             return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
         break :blk @ptrFromInt(byte_off);
     };
@@ -62,7 +62,7 @@ pub fn dispatchNtReadFile(frame: *InterruptFrame) i64 {
 /// `NtWriteFile`：寄存器约定同 `NtReadFile`。
 pub fn dispatchNtWriteFile(frame: *InterruptFrame) i64 {
     const proc = process.getCurrentProcess() orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
-    var asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
+    const asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
 
     const io_user = syscall_abi.userStackArg(frame, 0) orelse
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
@@ -78,12 +78,12 @@ pub fn dispatchNtWriteFile(frame: *InterruptFrame) i64 {
     if (io_user == 0 or buf_user == 0) return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_PARAMETER);
     const length: u32 = @truncate(len32);
     if (length == 0) return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_PARAMETER);
-    if (!probe.probeUserMemory(&asp, io_user, @sizeOf(ntdll.IO_STATUS_BLOCK), true))
+    if (!probe.probeUserMemory(asp, io_user, @sizeOf(ntdll.IO_STATUS_BLOCK), true))
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
-    if (!probe.probeUserMemory(&asp, buf_user, length, false))
+    if (!probe.probeUserMemory(asp, buf_user, length, false))
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
     const off_ptr: ?*const u64 = if (byte_off == 0) null else blk: {
-        if (!probe.probeUserMemory(&asp, byte_off, @sizeOf(u64), false))
+        if (!probe.probeUserMemory(asp, byte_off, @sizeOf(u64), false))
             return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
         break :blk @ptrFromInt(byte_off);
     };
@@ -107,15 +107,15 @@ pub fn dispatchNtWriteFile(frame: *InterruptFrame) i64 {
 /// 本内核简化 ABI：R10=PortHandle，RDX=Opcode，R8=可选发送数据（64 字节）或 0，R9=Reply（`ipc.Message`）用户缓冲区。
 pub fn dispatchNtRequestWaitReplyPort(frame: *InterruptFrame) i64 {
     const proc = process.getCurrentProcess() orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
-    var asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
+    const asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
     const reply_va = frame.r9;
     if (reply_va == 0) return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_PARAMETER);
-    if (!probe.probeUserMemory(&asp, reply_va, @sizeOf(ipc.Message), true))
+    if (!probe.probeUserMemory(asp, reply_va, @sizeOf(ipc.Message), true))
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
 
     const data_va = frame.r8;
     const data_opt: ?*const [ipc.MSG_DATA_SIZE]u8 = if (data_va == 0) null else blk: {
-        if (!probe.probeUserMemory(&asp, data_va, ipc.MSG_DATA_SIZE, false))
+        if (!probe.probeUserMemory(asp, data_va, ipc.MSG_DATA_SIZE, false))
             return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
         break :blk @ptrFromInt(data_va);
     };
@@ -136,10 +136,10 @@ pub fn dispatchNtRequestWaitReplyPort(frame: *InterruptFrame) i64 {
 /// `NtDuplicateObject`：R10=SourceProcess，RDX=SourceHandle，R8=TargetProcess，R9=TargetHandle 指针；栈：DesiredAccess, HandleAttributes, Options。
 pub fn dispatchNtDuplicateObject(frame: *InterruptFrame) i64 {
     const proc = process.getCurrentProcess() orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
-    var asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
+    const asp = proc.address_space orelse return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_HANDLE);
     const target_h_va = frame.r9;
     if (target_h_va == 0) return syscall_abi.ntStatusAsI64(ntdll.STATUS_INVALID_PARAMETER);
-    if (!probe.probeUserMemory(&asp, target_h_va, @sizeOf(ntdll.HANDLE), true))
+    if (!probe.probeUserMemory(asp, target_h_va, @sizeOf(ntdll.HANDLE), true))
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
 
     const want_access = syscall_abi.userStackArg(frame, 0) orelse

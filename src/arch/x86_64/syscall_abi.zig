@@ -14,13 +14,13 @@ const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
 /// 自用户栈读取第 N 个 syscall 扩展参数（N=0 → 第 5 个实参），偏移相对 SYSCALL 时的用户 RSP。
 pub fn userStackArg(frame: *InterruptFrame, nth_stack_arg: u8) ?u64 {
     const proc = process.getCurrentProcess() orelse return null;
-    var asp = proc.address_space orelse return null;
+    const asp = proc.address_space orelse return null;
     const off: u64 = 0x28 + @as(u64, nth_stack_arg) * 8;
     if (frame.rsp > 0xFFFF_FFFF_FFFF_F000) return null;
     const va = frame.rsp +% off;
     if (va < frame.rsp) return null;
     const aligned = va & ~@as(u64, 7);
-    if (!probe.probeUserMemory(&asp, aligned, 8, false)) return null;
+    if (!probe.probeUserMemory(asp, aligned, 8, false)) return null;
     // SAFETY: `probeUserMemory` 已确认用户栈页可读；地址来自用户 RSP + 固定 Win64 syscall 栈偏移。
     return @as(*const volatile u64, @ptrFromInt(va)).*;
 }

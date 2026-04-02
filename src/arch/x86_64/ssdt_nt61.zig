@@ -49,6 +49,13 @@ pub const NtUserPostMessage = 0x5A;
 pub const NtUserSetWindowPos = 0x5B;
 /// 公开表无独立 `NtUserSendMessage`；与 `user32.SendMessageA` 当前简化实现等价。
 pub const NtUserSendMessage = 0x5C;
+/// 本仓库折叠命名空间：`DispatchMessageA` 内核桩（真实 Windows 在 win32k 服务表另有编号）。
+pub const NtUserDispatchMessage = 0x5E;
+
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64 `NtReadVirtualMemory`。
+pub const NtReadVirtualMemory = 0x3D;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64 `NtWriteVirtualMemory`。
+pub const NtWriteVirtualMemory = 0x3E;
 
 /// Ref: j00ru/windows-syscalls `nt-per-syscall.json` — Windows 7 SP1 x64.
 pub const NtRequestWaitReplyPort = 0x1F;
@@ -94,4 +101,7 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtQueryVirtualMemory == 0x20);
     try std.testing.expect(NtOpenProcess == 0x23);
     try std.testing.expect(NtDuplicateObject == 0x44);
+    try std.testing.expect(NtReadVirtualMemory == 0x3D);
+    try std.testing.expect(NtWriteVirtualMemory == 0x3E);
+    try std.testing.expect(NtUserDispatchMessage == 0x5E);
 }

@@ -1,4 +1,4 @@
-//! 输入总线聚合：VirtIO-Input PCI 与 PS/2 8042 同一轮询入口，避免 mouse.zig ↔ virtio 循环依赖。
+//! 输入总线聚合：VirtIO-Input PCI 与 PS/2 8042（及未来 USB HID）**统一经本入口**，再进入 `mouse.zig` 的合并/插值队列（问题六：禁止并行第二套指针状态机）。
 const builtin = @import("builtin");
 
 /// LoongArch 定时器/硬件中断里也会调用 `pollAll`（见 `ke/interrupt_loongarch.zig`），与桌面主循环并发重入。

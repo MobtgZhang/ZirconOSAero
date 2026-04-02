@@ -745,7 +745,8 @@ pub fn registerWithIo() void {
     klog.info("Mouse: class driver registered (\\Device\\Mouse0)", .{});
 }
 
-fn syncFromRegistry() void {
+/// 从 `HKCU\Control Panel\Mouse` 同步灵敏度/加速（`registry.init()` 之后可再次调用，例如用户态改键后）。
+pub fn syncFromRegistry() void {
     const reg = @import("../../registry/registry.zig");
     if (reg.hkcu_control_panel_mouse_key) |k| {
         if (reg.queryValueDword(k, "MouseSensitivity")) |v| {

@@ -17,11 +17,14 @@ var input_hub_rounds: u32 = 0;
 var events_popped_last_tick: u32 = 0;
 /// `renderDesktopFrameEx` 路径分类（与 `DesktopRenderPathKind` 对应）。
 /// 若 `full` 占比异常高，对照 `dwm.zig` 每帧模糊预算与 `handleMouseMove` 的 `needs_full_scene`（壳层打开时勿因光标形态强制全场景）。
+/// 开始菜单打开时：`startmenu_partial` 相对 `full` 的占比低于阈值则打 `warn`（防回归整场景重绘）。
+pub const startmenu_partial_min_pct_when_visible: u32 = 8;
 var desktop_render_full_scene: u32 = 0;
 var desktop_render_cursor_fast: u32 = 0;
 var desktop_render_caption_partial: u32 = 0;
 var desktop_render_drag_layer: u32 = 0;
 var desktop_render_startmenu_partial: u32 = 0;
+var startmenu_ratio_warned: bool = false;
 
 pub const DesktopRenderPathKind = enum {
     full,
@@ -96,14 +99,22 @@ pub fn snapshotVirtio(inst_i: u8, active: bool, used_idx: u16, last_used: u16) v
     });
 }
 
-pub fn desktopHeartbeat(mx: i32, my: i32, virtio_any: bool) void {
+pub fn desktopHeartbeat(mx: i32, my: i32, virtio_any: bool, startmenu_visible: bool) void {
     if (!enabled) return;
     desktop_ticks +%= 1;
     const moved = (mx != last_hb_x or my != last_hb_y);
     if (moved or (desktop_ticks % 48 == 0)) {
         last_hb_x = mx;
         last_hb_y = my;
-        klog.mouseDbg("desktop tick=%u pos=(%d,%d) virtio_pci=%u hub_rounds=%u pops_last=%u render_full=%u render_drag=%u render_cap=%u render_fast=%u", .{
+        const sm = desktop_render_startmenu_partial;
+        const full = desktop_render_full_scene;
+        const denom = sm +% full;
+        const sm_pct: u32 = if (denom == 0 or !startmenu_visible) 0 else @as(u32, @intCast((@as(u64, sm) *% 100) / @as(u64, denom)));
+        if (startmenu_visible and denom >= 48 and sm > 0 and sm_pct < startmenu_partial_min_pct_when_visible and full > sm *% 8 and !startmenu_ratio_warned) {
+            startmenu_ratio_warned = true;
+            klog.warn("mouse_debug: startmenu_partial vs full ratio low (sm=%u full=%u pct=%u) — check needs_full_scene / wallpaper partial path", .{ sm, full, sm_pct });
+        }
+        klog.mouseDbg("desktop tick=%u pos=(%d,%d) virtio_pci=%u hub_rounds=%u pops_last=%u render_full=%u render_sm=%u sm_pct_if_menu=%u render_drag=%u render_cap=%u render_fast=%u", .{
             desktop_ticks,
             mx,
             my,
@@ -111,6 +122,8 @@ pub fn desktopHeartbeat(mx: i32, my: i32, virtio_any: bool) void {
             input_hub_rounds,
             events_popped_last_tick,
             desktop_render_full_scene,
+            desktop_render_startmenu_partial,
+            sm_pct,
             desktop_render_drag_layer,
             desktop_render_caption_partial,
             desktop_render_cursor_fast,

@@ -16,6 +16,25 @@ pub const MessageType = enum(u8) {
     connection_reply = 4,
 };
 
+/// csrss 同步应答：`subsystem` 在 `get_message` 等路径写入，`port.requestWaitReplyPort` 复制到 `Message.data[4..]`。
+pub var csr_reply_payload: [MSG_DATA_SIZE - 4]u8 = [_]u8{0} ** (MSG_DATA_SIZE - 4);
+var csr_reply_payload_len: usize = 0;
+
+pub fn csrReplyPayloadReset() void {
+    csr_reply_payload_len = 0;
+}
+
+pub fn csrReplyPayloadSet(slice: []const u8) void {
+    const n = @min(slice.len, csr_reply_payload.len);
+    if (n == 0) return;
+    @memcpy(csr_reply_payload[0..n], slice[0..n]);
+    csr_reply_payload_len = n;
+}
+
+pub fn csrReplyPayloadLen() usize {
+    return csr_reply_payload_len;
+}
+
 pub const Message = struct {
     sender: u32,
     receiver: u32,

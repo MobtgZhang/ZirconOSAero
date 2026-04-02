@@ -6,9 +6,17 @@
 //! 里程碑：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K6.4（与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 同步）。
 //! **P4-C4**：SMP 下端口队列与 `ipc` 消息环的细粒度锁为长期项；当前假定引导早期单线程初始化路径。
 
+const std = @import("std");
 const ipc = @import("ipc.zig");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
+
+/// csrss Win32 子系统：`opcode` 在 `0x10000..0x1FFFF` 时由 `subsystem` 注册的回调同步处理（同内核占位模型）。
+var csr_lpc_handler: ?*const fn (client_pid: u32, opcode: u32, data: ?*const [ipc.MSG_DATA_SIZE]u8) i32 = null;
+
+pub fn setCsrRequestHandler(handler: ?*const fn (client_pid: u32, opcode: u32, data: ?*const [ipc.MSG_DATA_SIZE]u8) i32) void {
+    csr_lpc_handler = handler;
+}
 
 pub const MAX_PORTS: usize = 32;
 
@@ -179,5 +187,24 @@ pub fn requestWaitReplyPort(
     if (client_port.connected_port == 0) return null;
     const server_port = findPortById(client_port.connected_port) orelse return null;
     _ = ipc.send(client_pid, server_port.owner_pid, opcode, data);
+
+    if (opcode >= 0x10000 and opcode <= 0x1FFFF) {
+        if (csr_lpc_handler) |h| {
+            ipc.csrReplyPayloadReset();
+            const ret = h(client_pid, opcode, data);
+            var msg = ipc.Message.init(server_port.owner_pid, client_pid, opcode);
+            msg.msg_type = .reply;
+            std.mem.writeInt(i32, msg.data[0..4], ret, .little);
+            // `CsrApiNumber.get_message` == 0x10025：附加 `user32` 序列化的 `MSG`（见 `subsystem.zig`）。
+            if (opcode == 0x10025) {
+                const plen = ipc.csrReplyPayloadLen();
+                if (plen > 0 and plen <= msg.data.len - 4) {
+                    @memcpy(msg.data[4..][0..plen], ipc.csr_reply_payload[0..plen]);
+                }
+            }
+            return msg;
+        }
+    }
+
     return ipc.receive(client_pid);
 }

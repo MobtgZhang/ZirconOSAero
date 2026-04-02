@@ -24,6 +24,8 @@ pub const INVALID_SURFACE: u32 = 0;
 pub const CURSOR_SURFACE_Z: i32 = 0x7FFFFF00;
 pub const DESKTOP_SURFACE_Z: i32 = -0x7FFFFF00;
 
+/// 字段名与顺序必须与 [aero_flag_mapping.zig](../../config/aero_flag_mapping.zig) `UserlandSurfaceFlagsLayout`、
+/// [DesktopManagerSpec.md](../../../docs/cn/DesktopManagerSpec.md) §4 一致；`comptime` 块调用 `assertUserlandSurfaceFlagsLayout`。
 pub const SurfaceFlags = struct {
     has_alpha: bool = true,
     needs_shadow: bool = false,
@@ -142,7 +144,8 @@ var dwm_composition_enabled: bool = true;
 var cursor_layer: CursorLayer = .{};
 var vsync_state: VsyncState = .{};
 
-/// Flip3D / 任务切换预览（离屏二次投影）— 宿主在启用时绘制覆盖层
+/// Flip3D / 任务切换预览（离屏二次投影）— 宿主在启用时绘制覆盖层。
+/// 与内核 `display.flip3d_overlay_active` + `flip3d_needs_scene_refresh` 及 `dwm_compositor` 缩略数据源对齐：二者均为 **CPU 预览语义**，非完整 GPU Flip3D。
 pub var flip3d_preview_enabled: bool = false;
 
 pub fn setFlip3dPreviewEnabled(enabled: bool) void {
@@ -582,6 +585,10 @@ pub fn recordPresentTime(now_us: u64) void {
         stats.vsync_misses += 1;
     }
     vsync_state.last_present_tick = now_us;
+}
+
+comptime {
+    @import("aero_flag_mapping").assertUserlandSurfaceFlagsLayout(SurfaceFlags);
 }
 
 test "hitTestTopMost prefers higher z-order" {

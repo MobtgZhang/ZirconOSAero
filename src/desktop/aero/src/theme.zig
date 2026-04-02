@@ -4,6 +4,7 @@
 
 pub const COLORREF = u32;
 
+/// 与 MS Learn **COLORREF** 低 24 位一致（R 在最低字节）。与内核 `drivers/video/theme.zig` 的 BGR 打包不同 — 跨边界请用 `src/config/color_nt61.zig`。
 pub fn rgb(r: u32, g: u32, b: u32) u32 {
     return r | (g << 8) | (b << 16);
 }

@@ -55,6 +55,19 @@
 - **Phase5–7（Native 扩面）**：按上文章节逐 PR 扩展 `Nt*` / 注册表 / LPC，并同步 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与 `tests/`。
 - **Phase8（win32k）**：[`src/subsystems/win32k/`](../../src/subsystems/win32k/)（含 `atoms.zig` 占位）与 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
 
+## 11. NtUser* / win32k SSDT 波次（x64 Win7 SP1 公开索引）
+
+索引来源为 **公开 syscall 枚举**（如 j00ru `windows-syscalls`）；实现须 clean-room，仅名称与编号对齐。
+
+| 波次 | 服务（示例） | 公开索引（SP1 x64） | 状态 |
+|------|----------------|---------------------|------|
+| W5-A（已接线） | `NtUserGetMessage` | `0x58` | 已实现 |
+| W5-A | `NtUserPeekMessage` | `0x59` | 已实现 |
+| W5-B（下一批） | `NtUserPostMessage` / `NtUserSendMessage` / `NtUserSetWindowPos` 等 | 查表后逐条填入 `ssdt_nt61.zig` | Planned |
+| WOW64 | 同上名称的 x86 表项 | `wow64/ssdt_x86_win7_sp1.zig` | Partial |
+
+详细消息/API 与测试 ID 的对应表见 [NT61_WINMSG_API_TRACKER.md](NT61_WINMSG_API_TRACKER.md)。
+
 ## 维护
 
 新增条目时在本文件追加节或表行；**契约矩阵** §3 / §8 仅链接摘要，避免与 `src/` 实现状态脱节。

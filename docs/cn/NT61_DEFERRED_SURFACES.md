@@ -6,7 +6,7 @@
 
 | 跟踪项 | 说明 |
 |--------|------|
-| 完整 WDDM / GPU 离屏合成 | 当前为 CPU 帧缓冲与软件合成演示路径；不声称与 Windows 7 显示驱动模型等价。 |
+| 完整 WDDM / GPU 离屏合成 | 当前为 CPU 帧缓冲与软件合成演示路径；不声称与 Windows 7 显示驱动模型等价；可选里程碑见 `virtio_gpu` / `HAL_USB_NET_ROADMAP.md` 中的显示加速条目。 |
 | 完整 Win32 / user32 / gdi32 | 子系统与壳在 `src/subsystems/win32/`、`src/desktop/aero/`；在内核对象与 VM 语义收紧后扩展。 |
 | 完整 WOW64 | 32→64 服务表与 SysWOW64 对齐为长期项；见 `wow64/` 与 `ssdt_nt61.zig`。 |
 | NT 32 级优先级与完整 boost | 调度器为文档语义的近似；见 [SCHEDULER_API.md](SCHEDULER_API.md)。 |

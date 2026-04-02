@@ -109,7 +109,8 @@
 1. **「已进桌面」以串口关键字为准**，不以固件 ConOut 小窗是否刷新为准：`ramfb:`（或等价的扫描配置日志）、`**Desktop: fb`**、`**Desktop: first frame presented**` 等。
 2. **GUI 仅作辅助**：固件字体易把字母 **O** 与数字 **0** 混淆，勿据此推断 GOP 宽高写错；与 **§9 双缓冲 / 软件光标** 及上文「双表面」一致。
 3. `**first frame presented` 之后的 `KERNEL PANIC: integer overflow`**：按 **Debug 下有符号整数溢出** 排查桌面主循环与合成路径（见 `**desktop_bisect`**），与「GOP 未达首选」无必然关系。已审计路径：`src/drivers/input/mouse.zig`（插值差分用 i64）、`framebuffer.zig` 的 `**pixelByteOffset**`（u64 中间量）、`display.zig` 中多处 **i64 矩形/钳位**；若仍复现，用 `**-Ddesktop_bisect=true`** 区分 panic 落在 `**renderDesktopFrameEx**` 与 `**present**` 之间，并继续查 `**renderer_aero.zig**` 等窄化后的热点。
-4. **串口已证明首选分辨率 + 首帧成功，但 QEMU 主窗仍只见 UEFI 固件文字**：优先改 **QEMU 设备矩阵**（`**LOONGARCH64_QEMU_VIRTIO_GPU`**、`**-display gtk` / `sdl` / `vnc**`、`**GDK_BACKEND=x11**`、**View → 切换 Display**），**不要**为了「让窗口里变大」去反复改 `**build.conf` 的 `RESOLUTION`** 注入逻辑——在串口已显示与首选一致时，问题多在宿主扫哪块显存，而非构建期宽高未生效。
+4. **任务栏子阶段（`panic_context`，与串口 `[phase=0x…]` 对齐）**：全帧路径里 `renderer_aero` 在调用任务栏前写入 `0x00020085`。更细粒度在 `display.renderDesktopAeroTaskbar` 内：`0x00020090` 条带底色/玻璃，`0x00020091` 开始球，`0x00020092` 快速启动列，`0x00020093` 应用磁贴，`0x00020094` 托盘槽与图标，`0x00020095` 托盘飞出，`0x00020096` Show Desktop 条。拖窗路径在绘制任务栏前写入 `0x000200A0`。溢出 panic 行尾阶段号可据此落到具体几何块。
+5. **串口已证明首选分辨率 + 首帧成功，但 QEMU 主窗仍只见 UEFI 固件文字**：优先改 **QEMU 设备矩阵**（`**LOONGARCH64_QEMU_VIRTIO_GPU`**、`**-display gtk` / `sdl` / `vnc**`、`**GDK_BACKEND=x11**`、**View → 切换 Display**），**不要**为了「让窗口里变大」去反复改 `**build.conf` 的 `RESOLUTION`** 注入逻辑——在串口已显示与首选一致时，问题多在宿主扫哪块显存，而非构建期宽高未生效。
 
 #### 4.2.1.0 LoongArch：切换 `RESOLUTION` 检查表
 

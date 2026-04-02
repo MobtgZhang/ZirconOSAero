@@ -197,7 +197,8 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 - [NT61_PR_GATES.md](NT61_PR_GATES.md) — **K0 PR 门禁勾选清单**（契约矩阵、MVT、syscall 注释、合规扫描）  
 - [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) — **NT 6.1 内核模式分阶段待办（K0–K8）**与 clean-room 门禁；PR 与契约矩阵 §8 同步推进  
-- [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) — **完整 NT 6.1 API 能力 backlog**（与当前基础迭代分离的长期清单）  
+- [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) — **完整 NT 6.1 API 能力 backlog**（与当前基础迭代分离的长期清单）
+- [NT61_WINMSG_API_TRACKER.md](NT61_WINMSG_API_TRACKER.md) — **窗口消息 / user32 契约与代码路径追溯表**  
 - [MVT_NT61.md](MVT_NT61.md) — 最小可验证测试索引（主机测试 + CI）  
 - [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) — 不阻塞内核主里程碑的延后能力（WDDM / 完整 Win32 / WOW64 / AML 等）  
 - [mdcs/composer2/content1.1.md](../../mdcs/composer2/content1.1.md) — 与 NT 6.1 目标之差距综述（与契约矩阵交叉引用）  

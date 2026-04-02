@@ -4,6 +4,7 @@
 //!
 //! 内核 FS 待办与 IRP 桥接：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K8；`FileAccessMode` 数值见主机测试 `tests/fs_vfs_constants_host.zig`。
 //! K8.2：`dispatchFileObjectIr` 从文件对象构造最小 `io.Irp`（read/write/close）；PnP 卷栈就绪后应改为经 `io.dispatchIrpThroughStack` 下传（与 K4 设备栈对齐）。
+//! **P6-2 / P6-3**：`readdir` 与目录枚举、备用数据流为路线图；块卷上 `B:\` VirtIO 探测见 `drivers/storage/virtio_blk_scratch_fs.zig`。
 
 const ob = @import("../ob/object.zig");
 const io = @import("../io/io.zig");

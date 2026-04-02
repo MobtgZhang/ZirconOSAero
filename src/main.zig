@@ -23,11 +23,15 @@ fn panicImpl(msg: []const u8, _: ?usize) noreturn {
     arch.consoleWrite("KERNEL PANIC: ");
     arch.consoleWrite(msg);
     const phase = @import("rtl/panic_context.zig").getPhase();
-    if (builtin.mode == .Debug and phase != 0) {
+    if (phase != 0) {
         arch.consoleWrite(" [phase=0x");
         writeHexU32ToConsole(phase);
         arch.consoleWrite("]");
     }
+    // 与配置里 `build_type=debug` 无关；避免 Release 内核 panic 时不带 phase。
+    arch.consoleWrite(" [zig_opt=");
+    arch.consoleWrite(@tagName(builtin.mode));
+    arch.consoleWrite("]");
     arch.consoleWrite("\n");
     arch.halt();
 }
@@ -52,6 +56,8 @@ comptime {
     _ = @import("mm/heap_boot.zig");
     _ = @import("mm/ex_pool.zig");
     _ = @import("mm/probe.zig");
+    _ = @import("mm/vad.zig");
+    _ = @import("ke/irql.zig");
     _ = @import("ke/spinlock.zig");
     _ = @import("ke/percpu_sched.zig");
     if (builtin.cpu.arch == .x86_64) {
@@ -189,11 +195,9 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         });
     }
 
-    var alloc: frame.FrameAllocator = undefined;
-    alloc.init(boot_info, kernel_end);
-    frame.setKernelFrameAllocator(&alloc);
+    frame.initGlobalKernelFrames(boot_info, kernel_end);
     klog.info("Frame allocator: total_frames=%u, frame_size=%u", .{
-        alloc.total_frames, frame.FRAME_SIZE,
+        frame.kernelFrameAllocatorPtr().total_frames, frame.FRAME_SIZE,
     });
 
     // Parse boot mode and desktop theme from multiboot2 command line.
@@ -243,7 +247,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     // ═══ Phase 3: VM + Page Tables ═══
     klog.info("--- Phase 3: VM + Page Tables ---", .{});
 
-    var kernel_space = vm.createAddressSpace(&alloc) orelse {
+    var kernel_space = vm.createAddressSpace(frame.kernelFrameAllocatorPtr()) orelse {
         klog.err("Failed to create kernel address space", .{});
         arch.halt();
     };
@@ -319,12 +323,16 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         heap.freeListDebug().nodes,
     });
 
+    const ex_pool = @import("mm/ex_pool.zig");
+    const irql_early = @import("ke/irql.zig");
+    ex_pool.setPagedPoolIrqlGuard(irql_early.assertBelowDispatchForPagedPool);
+
     const phys_buddy = @import("mm/phys_buddy.zig");
-    phys_buddy.initKernelContiguousBuddy(&alloc);
+    phys_buddy.initKernelContiguousBuddy(frame.kernelFrameAllocatorPtr());
     if (phys_buddy.kernelContiguousBuddyReady()) {
         klog.info("PhysBuddy: contiguous arena leaf_pages=%u (order<=%u)", .{
             phys_buddy.kernelContiguousLeafPages(),
-            phys_buddy.kernel_contiguous_max_order,
+            phys_buddy.kernelContiguousMaxOrder(),
         });
     } else {
         klog.warn("PhysBuddy: no contiguous carve (DMA multi-page may use bitmap scan only)", .{});
@@ -341,14 +349,14 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     // ═══ Phase 5: IPC + System Services ═══
     klog.info("--- Phase 5: IPC + System Services ---", .{});
 
-    server.init(&alloc);
+    server.init(frame.kernelFrameAllocatorPtr());
 
     _ = port.createPort(1, "\\LPC\\PsServer");
     _ = port.createPort(1, "\\LPC\\ObServer");
     _ = port.createPort(1, "\\LPC\\IoServer");
     klog.info("LPC: System service ports created", .{});
 
-    smss.init(&alloc);
+    smss.init(frame.kernelFrameAllocatorPtr());
 
     // ═══ Phase 6: I/O + File System + Driver ═══
     klog.info("--- Phase 6: I/O + File + Driver ---", .{});
@@ -428,7 +436,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     // ═══ Desktop / CMD / Text Mode Selection ═══
     if (boot_mode == .desktop or (boot_mode == .normal and has_gfx_fb and desktop_theme != .none)) {
         enterDesktopSession(
-            &alloc,
+            frame.kernelFrameAllocatorPtr(),
             boot_info,
             desktop_theme,
             false,
@@ -945,8 +953,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         }
     }
 
-    var alloc: frame.FrameAllocator = undefined;
-    // LoongArch：尽早初始化 alloc + VM，map 2GB 以覆盖 GOP framebuffer（可能 >512MB）
+    // LoongArch：尽早初始化帧分配器 + VM，map 2GB 以覆盖 GOP framebuffer（可能 >512MB）
     if (builtin.target.cpu.arch == .loongarch64) {
         // 首选分辨率：`sys_config` 嵌入的 desktop.conf `[resolution]`（由 sync_resolution_config 与 build.conf 对齐）；无效时回退 build_options。
         const bo_w = @import("build_options").kernel_preferred_fb_width;
@@ -999,8 +1006,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         // `_kernel_end` 为零尺寸链接器符号：勿用 @intFromPtr(&_)（LoongArch 上可能为 0）；见 arch/loongarch64/mod.zig `linkerKernelEndExclusive`。
         const la_k_end = (arch.impl.linkerKernelEndExclusive() + frame.FRAME_SIZE - 1) & ~@as(usize, frame.FRAME_SIZE - 1);
         klog.info("Memory: LoongArch kernel_end=0x%x (_kernel_end aligned)", .{la_k_end});
-        alloc.init(boot_info, la_k_end);
-        frame.setKernelFrameAllocator(&alloc);
+        frame.initGlobalKernelFrames(boot_info, la_k_end);
 
         const ramfb = @import("hal/loongarch64/ramfb.zig");
         // QEMU ramfb 扫描使用固定 GPA 0x0F000000..；若在此之后才对 `markPhysRangeUsed`，
@@ -1013,7 +1019,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         if (need_ramfb_scanout) {
             const ramfb_rsv = ramfb.framebufferReservedBytesDims(pref_w, pref_h);
             if (ramfb_rsv > 0) {
-                alloc.markPhysRangeUsed(ramfb.RAMFB_PHYS, ramfb_rsv);
+                frame.kernelFrameAllocatorPtr().markPhysRangeUsed(ramfb.RAMFB_PHYS, ramfb_rsv);
                 klog.info("LoongArch: ramfb scanout reserved %u bytes @0x%x (before page tables)", .{
                     @as(u32, @truncate(ramfb_rsv)), ramfb.RAMFB_PHYS,
                 });
@@ -1021,7 +1027,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         }
 
         const paging = arch.impl.paging;
-        if (vm.createAddressSpace(&alloc)) |ks| {
+        if (vm.createAddressSpace(frame.kernelFrameAllocatorPtr())) |ks| {
             loong_kernel_space = ks;
             const kernel_space = &loong_kernel_space.?;
             // 0–2GiB：GOP/ramfb；GPU MMIO 若落在 2–4GiB，`vm.mapDeviceMmioIdentity` 会按需建 identity 非缓存映射
@@ -1081,7 +1087,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                 boot_info = bi;
                 const rsv = ramfb.framebufferReservedBytesDims(fb_i.width, fb_i.height);
                 if (rsv > 0) {
-                    alloc.markPhysRangeUsed(@as(usize, @truncate(fb_i.addr)), rsv);
+                    frame.kernelFrameAllocatorPtr().markPhysRangeUsed(@as(usize, @truncate(fb_i.addr)), rsv);
                 }
                 klog.info("ramfb: %ux%u@%u addr=0x%x", .{
                     fb_i.width,                       fb_i.height, fb_i.bpp,
@@ -1114,15 +1120,14 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     if (builtin.target.cpu.arch != .loongarch64) {
         const k_reserved = (@intFromPtr(&_kernel_end) + 4095) & ~@as(usize, 4095);
-        alloc.init(boot_info, k_reserved);
-        frame.setKernelFrameAllocator(&alloc);
+        frame.initGlobalKernelFrames(boot_info, k_reserved);
     }
 
     // QEMU virt：启用自有页表并 identity map，否则 ExitBootServices 后 VirtIO PCI / ECAM 访问不可靠
     var virt_qemu_kernel_space: ?vm.AddressSpace = null;
     if (builtin.target.cpu.arch == .aarch64) {
         const paging = arch.impl.paging;
-        if (vm.createAddressSpace(&alloc)) |ks| {
+        if (vm.createAddressSpace(frame.kernelFrameAllocatorPtr())) |ks| {
             virt_qemu_kernel_space = ks;
             const ksp = &virt_qemu_kernel_space.?;
             const npg = (2 * 1024 * 1024 * 1024) / paging.page_size;
@@ -1181,7 +1186,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                     };
                     const rsv = a64_ramfb.framebufferReservedBytes();
                     if (rsv > 0) {
-                        alloc.markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
+                        frame.kernelFrameAllocatorPtr().markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
                     }
                     klog.info("Display: AArch64 ramfb %ux%u @0x%x (no linear UEFI GOP from boot loader)", .{
                         rf.width, rf.height, @as(usize, @truncate(rf.addr)),
@@ -1193,7 +1198,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         }
     } else if (builtin.target.cpu.arch == .riscv64) {
         const paging = arch.impl.paging;
-        if (vm.createAddressSpace(&alloc)) |ks| {
+        if (vm.createAddressSpace(frame.kernelFrameAllocatorPtr())) |ks| {
             virt_qemu_kernel_space = ks;
             const ksp = &virt_qemu_kernel_space.?;
             const flags = vm.MapFlags{ .writable = true, .executable = true };
@@ -1257,7 +1262,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
                     };
                     const rsv = rv_ramfb.framebufferReservedBytes();
                     if (rsv > 0) {
-                        alloc.markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
+                        frame.kernelFrameAllocatorPtr().markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
                     }
                     klog.info("Display: RISC-V64 ramfb %ux%u @0x%x (no linear UEFI GOP from boot loader)", .{
                         rf.width, rf.height, @as(usize, @truncate(rf.addr)),
@@ -1278,7 +1283,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     }
 
     klog.info("Frame allocator: total_frames=%u, frame_size=%u", .{
-        alloc.total_frames, frame.FRAME_SIZE,
+        frame.kernelFrameAllocatorPtr().total_frames, frame.FRAME_SIZE,
     });
 
     const heap_kb_gen: u64 = @min(sys_config.getHeapSizeKb(), @as(u64, 512 * 1024));
@@ -1296,8 +1301,12 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
         heap.usedBytes(),
     });
 
+    const ex_pool_gen = @import("mm/ex_pool.zig");
+    const irql_gen = @import("ke/irql.zig");
+    ex_pool_gen.setPagedPoolIrqlGuard(irql_gen.assertBelowDispatchForPagedPool);
+
     const phys_buddy = @import("mm/phys_buddy.zig");
-    phys_buddy.initKernelContiguousBuddy(&alloc);
+    phys_buddy.initKernelContiguousBuddy(frame.kernelFrameAllocatorPtr());
     if (phys_buddy.kernelContiguousBuddyReady()) {
         klog.info("PhysBuddy: leaf_pages=%u", .{phys_buddy.kernelContiguousLeafPages()});
     } else {
@@ -1322,11 +1331,11 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     io.init();
 
     klog.info("--- Phase 5: IPC + System Services ---", .{});
-    server.init(&alloc);
+    server.init(frame.kernelFrameAllocatorPtr());
     _ = port.createPort(1, "\\LPC\\PsServer");
     _ = port.createPort(1, "\\LPC\\ObServer");
     _ = port.createPort(1, "\\LPC\\IoServer");
-    smss.init(&alloc);
+    smss.init(frame.kernelFrameAllocatorPtr());
 
     klog.info("--- Phase 6: I/O + File + Driver ---", .{});
     const drivers_generic = @import("drivers/mod.zig");
@@ -1393,7 +1402,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     if (boot_mode == .desktop or (boot_mode == .normal and has_gfx_fb and desktop_theme != .none)) {
         enterDesktopSession(
-            &alloc,
+            frame.kernelFrameAllocatorPtr(),
             boot_info,
             desktop_theme,
             true,

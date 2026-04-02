@@ -38,7 +38,43 @@
 | `\LPC\CsrApiPort` | csrss 请求（见 `subsystem.CsrApiNumber`） |
 | `create_window_station` | 创建窗口站（已实现创建 `WinSta0`） |
 | `create_desktop` | 在默认窗口站下新建桌面 |
-| `register_window` / `post_message` | 与合成 Surface 生命周期对齐（后续） |
+| `register_window` / `post_message` | **已实现路径（内核）**：`user32.CreateWindowExA` 在 `dwm_compositor` 已初始化时 `createSurface` 并 `syncCompositorZOrderForUserWindows`；`DestroyWindow` → `destroySurface`；`PostMessageA` / 线程槽 `PostThreadMessageA` 与 `csrFillOneMessageForLpc` 一致；脏区由 `display.renderDesktopFrameEx` 与 `handleMouseMove` 提示驱动（见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4.1） |
+
+### 3.1 csrss 与 user32 直连合成（边界）
+
+- **主路径（当前 Shell）**：`user32` 在同内核地址空间内为 `CreateWindowEx` / `DestroyWindow` 直接分配与销毁 `dwm_compositor` 表面，并维护每窗口消息队列；`HWND`→`compositor_surface_id` 的绑定以该路径为准。
+- **CSRSS `register_window` / `post_message`**：用于 LPC/会话工具与跨进程叙事样本；取消息时须提供与 `user32` 一致的 **线程 id**（`peekMessageAForThread` / `csrFillOneMessageForLpc`），否则队列不匹配。长期可选收敛：CSR 仅转发到上述 `user32` 队列实现单一真源；在收敛前，本文档以 **「内核 GUI = user32 + compositor；CSR = 兼容/测试端口」** 为界。
+
+### 3.2 DWM 通知：`WM_DWM*` 与监听线程
+
+与 content7.1 中「csrss 列表 + LPC」的差异及本仓库等价实现、各消息与 `dwm.zig` 触发关系，见专门短文 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md)。
+
+### 3.3 LPC / csrss 与「单一真源」差距清单（工程核对）
+
+| 主题 | 当前状态 | 备注 |
+|------|----------|------|
+| 窗口创建/销毁 → 合成树 | **主路径闭合**：`user32.CreateWindowEx`/`DestroyWindow` ↔ `dwm_compositor`（`detachCompositorSurface` 单点释放，与 `ensureCompositorSurface` 对偶）；**LPC**：`register_window` / `destroy_window` → `onCsrssRegisterGuiWindow` / `DestroyWindow` | csrss 仅对已存在于 `user32` 表的 HWND 补 `ensureCompositorSurface`；**不能**替代「无 CreateWindow 则无主表面」的语义 |
+| Z-order | **子集**：`SetWindowPos` + `syncCompositorZOrderForUserWindows`；`HWND_TOP` / `HWND_BOTTOM` / `HWND_TOPMOST` / **`HWND_NOTOPMOST`（与 TOP 等价，无独立 topmost 层）** / **指定 HWND 之后** | 见矩阵 §4.1；扩展见 `user32.SetWindowPos` |
+| DWM 监听列表 | **内核线程表**（`registerDwmNotificationListener`），非 csrss 进程内列表 | 与 content7.1 理想拓扑差异见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) §3 |
+| 注册表 → Shell | **ZOSH1 可选文件** + 启动后 `mouse.syncFromRegistry` / `dwm.syncPolicyFromRegistry` | [hive.zig](../../src/registry/hive.zig)、[registry.zig](../../src/registry/registry.zig) |
+| 消息队列 tid | **必须一致**：`GetMessage`/`PostMessage` 与 `csrFillOneMessageForLpc` 使用同一 `thread_id` | LPC 测试若 tid 错配则「有 HWND 无消息」假阴性 |
+
+### 3.4 LPC `CsrApiNumber` → `user32` 调用步骤（问题五）
+
+**无** 单独 LPC「创建 HWND」：`CreateWindowEx` 仅在 **user32** 内部分配槽位与（可选）`dwm_compositor` 表面。下表为 `subsystem.handleApiCall` 与内核 `user32` 的**实际**调用链，避免「以为 LPC 会建窗」的文档歧义。
+
+| LPC API（`subsystem.zig`） | 调用的 `user32` / 其它 | **不**经过的入口 |
+|----------------------------|-------------------------|------------------|
+| `register_window` | `registerGuiWindow` → **`onCsrssRegisterGuiWindow`**（对已存在 `HWND`：`ensureCompositorSurface` + `notifyCompositorWindowGeometry` + `syncCompositorZOrderForUserWindows` + `syncWin32kFromUser32`） | `CreateWindowEx`、`PostMessage`（除非另行调用） |
+| `destroy_window` | **`DestroyWindow`**（内含 `detachCompositorSurface`）→ `unregisterGuiWindow`（计数） | 无单独 `NtUserDestroyWindow` syscall 包装在本表 |
+| `post_message` | **`PostMessageA`** | 不创建窗口、不分配表面 |
+| `get_message` | **`csrFillOneMessageForLpc`**（内部 `peekMessageAForThread`） | 与 `NtUserGetMessage` 共享队列模型但 **非** 同一 syscall 路径 |
+
+### 3.5 `CreateWindowEx` / `register_window` 与合成表面不变量（问题五）
+
+- **`compositor_surface_id == no_compositor_surface`**：`ensureCompositorSurface` / `CreateWindowEx` 仅在 `dwm_compositor` 已初始化且 `createSurface` 成功时写入有效 id；失败则保持无表面（壳层仍可有 HWND）。
+- **销毁**：**仅** `detachCompositorSurface`（`DestroyWindow`）释放 `dwm_compositor` 槽位；禁止在 `is_valid == false` 之后保留非 `no_compositor_surface` 的 id。
+- **双入口一致**：`CreateWindowEx` 与 `onCsrssRegisterGuiWindow` 均通过 **`ensureCompositorSurface`** 分配（见 `user32.zig`），LPC 路径在表面已存在时仍 **`notifyCompositorWindowGeometry`** 以刷新脏区。
 
 ## 4. Surface 标志语义对照
 
@@ -50,6 +86,12 @@
 
 映射原则：`dwm_blur_behind` ↔ `is_glass` + `needs_blur`；`dwm_ncrendering` ↔ 非客户区与 `needs_shadow` / 窗口装饰协同。
 
+**编译期防漂移**：[`aero_flag_mapping.zig`](../../src/config/aero_flag_mapping.zig) 内含 `KernelCompositorSurfaceFlags` 字段序与 `kernelToUserland` 语义 `comptime` 断言；用户态 [`compositor.zig`](../../src/desktop/aero/src/compositor.zig) 在文件末尾对 `SurfaceFlags` 调用 `assertUserlandSurfaceFlagsLayout`。
+
+**颜色跨界（canonical）**：**内核合成主路径**以 [`color_nt61.zig`](../../src/config/color_nt61.zig) 的 **`KernelBgr888Low24`** 为唯一打包语义（与 `drivers/video/theme.zig` 的 `rgb` 一致）；**用户态 / 注册表 / WM 载荷**以 **`ColorrefLow24`** 进出，**必须**经该模块命名转换函数。**不**将「全路径统一 ARGB u32」作为当前里程碑；与 content2.4 收口一致。
+
+**验收（防双轨）**：在 `nt61_aero_defaults.zig` 中仅修改 `KernelDwm.glass_tint_color`（或任一已由 `UserShellDwm` 镜像的字段）而**不**同步更新 `UserShellDwm` 对应别名时，应 **编译失败**（`comptime` 断言）；并 bump `compositor_config_epoch`。
+
 ## 5. DWM 最小内部 API 子集（验收参考）
 
 对照 MSDN「Developing for the Desktop Window Manager」概念，内部模块应对齐以下能力（名称可为 Zig 函数，不必导出 DLL）：
@@ -57,7 +99,7 @@
 - 将玻璃延伸到客户区（等价 `DwmExtendFrameIntoClientArea` 策略）
 - BlurBehind 区域（等价 `DwmEnableBlurBehindWindow`）
 - 合成启用/禁用（等价 `DwmIsCompositionEnabled` / 禁用回退路径）
-- 缩略图 / Flip3D：**可选**（`compositor.flip3d_enabled` 预留）
+- 缩略图 / Flip3D：**内核已实现 CPU 近似**（`display.flip3d_overlay_active`、`dwm_compositor` 每表面缩略缓冲）；用户态 **`compositor.flip3d_preview_enabled`** 表示宿主侧是否参与二次投影预览，与内核 Flip3D 覆盖层语义对齐（均为「预览」非完整 D3D Flip3D）。
 
 ## 6. 资源合规
 
@@ -78,14 +120,16 @@
 
 公开文档中 DWM 将各窗绘制到**离屏表面**再合成；本仓库在无 GPU 合成时于帧缓冲上近似该流程，盒式模糊成本为 \(O(\text{像素} \times \text{半径} \times \text{遍数})\)。
 
-- **`nt61_aero_defaults.KernelDwm.blur_budget_pixel_passes_per_frame`**：每帧 `display.renderDesktopFrameEx` / `renderAeroDesktop` 入口重置；`dwm.zig` 内每次 `boxBlurRect` 按 `宽×高×pass` 扣减，耗尽则本帧后续 blur 跳过，仍保留 tint 与高光。
+- **`nt61_aero_defaults.KernelDwm.blur_budget_pixel_passes_per_frame`**：每帧 `display.renderDesktopFrameEx` / `renderAeroDesktop` 入口重置；`dwm.zig` 内每次 `boxBlurRect` 按 `宽×高×pass` 扣减（与 [`dwm_blur_budget.zig`](../../src/config/dwm_blur_budget.zig) 同源公式，`zig build test` → **dwm_blur_budget_host**），耗尽则本帧后续 blur 跳过，仍保留 tint 与高光。
+- **`-Ddwm_blur_stats=true`**：`renderDesktopFrameEx` / `renderAeroDesktop` 末尾 `dwm.flushBlurFrameStatsDebug` 打 **`klog.debug`** 一行（`box_blur_calls` / `budget_denials` / `tint_only_calls`），与 `-Ddesktop_bisect` 分帧取证配合；详见 [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)。
 - **`blur_max_single_rect_pixels` / `blur_max_rect_calls_per_frame`**：单块面积与每帧调用次数硬顶，避免前几趟大矩形占满整帧（高分 GOP / LoongArch UEFI 下尤关键）。
 - **`blur_resolution_downgrade_pixel_threshold`** 与 **`glass_blur_radius_hd_cap` / `glass_blur_passes_hd_cap`**：帧像素数超阈值时自动下调半径与遍数。
 - **`glass_blur_radius_loongarch_cap` / `glass_blur_passes_loongarch_cap`**：由 **`dwm.applyPlatformAndResolutionTuning`** 在 `display.initAeroDwm`（`fb` 已就绪）时与分辨率策略一并应用到 `dwm`/`dwm_config`/`material`。
 - **`taskbar_blur_radius_cap`**：限制任务栏全宽条带的模糊半径，减轻条带成本。
 - **`renderGlassTintOnly`**：无 `boxBlur`，用于拖窗标题栏、右键菜单、开始菜单首帧大面板等，优先帧率。
 - **壳层打开时** `setGlassLiteBlurEnabled(true)` 仍生效；**任务栏**在上下文菜单 / 开始菜单 / 托盘飞出打开时额外走 **`renderGlassTintOnly`**（`display.renderDesktopAeroTaskbar`），避免与场景模糊叠乘。
-- **取证**：`framebuffer.logDesktopGopSummary()` 在 `initDesktopMode` 打 **`DesktopGOP:`**；`-Ddesktop_bisect=true` 时在 `main.zig` 桌面循环输出 **`renderDesktopFrameEx` 前后 scheduler tick 差** 与 `fb_w`。
+- **取证**：`framebuffer.logDesktopGopSummary()` 在 `initDesktopMode` 打 **`DesktopGOP:`**；`-Ddesktop_bisect=true` 时在 `main.zig` 桌面循环输出 **`renderDesktopFrameEx` 前后 scheduler tick 差** 与 `fb_w`；与 `drivers/input/mouse_debug.zig` 联用时关注开始菜单打开场景下 **`startmenu_partial`** 占比告警阈值（回归局部重绘是否退化成全场景）。
+- **Flip3D / Alt+Tab（`display.flip3d_overlay_active`）**：`arch.consumeFlip3dHotkey`（x86_64 → `keyboard.consumeFlip3dHotkey`）与 `display` 内切换覆盖层消费 **同一热键**；首帧打开置 `flip3d_needs_scene_refresh=true` 以刷新冻结前的壁纸/窗景，随后在 `flip3d_needs_scene_refresh==false` 时 `renderSceneWithoutSoftwareCursorFlip3dAware` **冻结背景采样**，仅叠 Flip3D 层与光标以降低每帧 CPU。卡片缩略数据源：`dwm_compositor.collectShellWindowSurfaceIds`（多 surface，有数量与 z 过滤）及每表面 `refreshSurfaceThumbFromFramebuffer`（2×2 盒滤）；任务栏 Explorer 按钮悬停仍走 `maybeRefreshExplorerTaskbarThumb` 的帧缓冲采样路径（与 HWND→surface 映射说明见契约矩阵 §4.1）。
 
 调参时只改 `nt61_aero_defaults.zig`（单一数值源），避免与 `display.initAeroDwm` 漂移。
 

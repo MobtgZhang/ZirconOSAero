@@ -38,6 +38,11 @@
 | Phase F 调度差额（文档化占位） | 同上 → nt61_phase_f_scheduler_gap | [tests/nt61_phase_f_scheduler_gap.zig](../../tests/nt61_phase_f_scheduler_gap.zig) |
 | GpuDevice / ramfb 占位 | 同上 → gpu_device_host | [src/drivers/video/gpu_device.zig](../../src/drivers/video/gpu_device.zig) |
 | Win32k 窗口骨架 | 同上 → win32k_host | [src/subsystems/win32k/mod.zig](../../src/subsystems/win32k/mod.zig) |
+| Aero 标志映射（内核 ↔ 用户态 `SurfaceFlags`） | 同上 → **aero_flag_mapping_host** | [src/config/aero_flag_mapping.zig](../../src/config/aero_flag_mapping.zig) |
+| COLORREF ↔ 内核 BGR（与 Aero `theme.rgb` 字节序对照） | 同上 → **color_nt61_host** | [color_nt61.zig](../../src/config/color_nt61.zig) |
+| DWM 消息常量 + `WM_DWMSENDICONICTHUMBNAIL` lParam 烟测 | 同上 → **dwm_messages_nt61_host**、**dwm_nt61_integration_host** | [tests/nt61/dwm_messages_nt61.zig](../../tests/nt61/dwm_messages_nt61.zig)、[tests/nt61/dwm_nt61_integration_host.zig](../../tests/nt61/dwm_nt61_integration_host.zig) |
+| ZOSH1 引导覆盖字节布局（与 `registry.mergeFromZosh1Bytes` 同步） | 同上 → **registry_zosh1_host** | [tests/nt61/registry_zosh1_host.zig](../../tests/nt61/registry_zosh1_host.zig) |
+| `PeekMessage` `PM_REMOVE` / `PM_NOYIELD` 分支表（与 Learn） | 同上 → **msg_pm_semantics_host** | [msg_pm_semantics.zig](../../src/subsystems/win32/msg_pm_semantics.zig) |
 | 合规短语扫描 | `bash scripts/verify-compliance.sh` | [scripts/verify-compliance.sh](../../scripts/verify-compliance.sh)；CI |
 | 节区对象头 / 池容量 | `zig build test`（`object` 等步导入 `section.zig` 时运行其 `test`） | [src/mm/section.zig](../../src/mm/section.zig) |
 | syscall 扩展：读/写文件、LPC 应答、重复句柄 | QEMU/内核烟测 + 代码审查 | [src/arch/x86_64/syscall_nt_extras.zig](../../src/arch/x86_64/syscall_nt_extras.zig)、[syscall_abi.zig](../../src/arch/x86_64/syscall_abi.zig) |
@@ -51,6 +56,11 @@
 | 构建与 ELF | `.github/workflows/ci.yml`；本地 `zig build install` | ReleaseSafe 与横幅校验见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) |
 | ZBM / 无头启动 | `bash scripts/ci-qemu-smoke.sh` | MBR 盘、串口可选断言 |
 | 分辨率与串口日志 | 改 `build.conf` 的 `RESOLUTION` → `make sync-resolution` → `make build` → QEMU/串口 | 核对 `Config: display=`、`FB tag`、`Framebuffer Driver` 宽高与 `RESOLUTION` 一致（见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §4.2.2） |
+| VirtIO-GPU 控制队列 + 2D 传输烟测 | 见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md)「VirtIO-GPU（可选）」完整 QEMU 命令行。成功：`VirtIO-GPU: GET_DISPLAY_INFO + RESOURCE_CREATE_2D + TRANSFER_* scratch loop ok`，并可能出现 `display ↔ scratch TRANSFER round-trip ok`。无设备或 2D 失败：不出现上述 info（或出现 framebuffer round-trip `warn`），`compositorOffloadAvailable()` 为 false | [virtio_gpu_pci.zig](../../src/drivers/video/virtio_gpu_pci.zig)、[display.zig](../../src/drivers/video/display.zig) |
+| PS/2 + VirtIO 并存 | `zig build -Dps2_mouse_with_virtio=true`（真机单指针源）；默认 QEMU 仍避免双源 | [arch/x86_64/mod.zig](../../src/arch/x86_64/mod.zig) `handleMouseIrq`；[PointerPolicy_NT61.md](PointerPolicy_NT61.md) §4 |
+| USB HID 鼠标里程碑（问题六 / 可执行拆分） | **M1**：`-Dusb_xhci=true` 枚举 + 中断管道桩（[usb.zig](../../src/drivers/usb/usb.zig)）；**M2**：HID boot 报告解析 → 与 `mouse.zig` 同一注入队列；**M3**：与 PS/2 / VirtIO 优先级写进矩阵与 `input_hub` 注释。本迭代未验收 M2 前，矩阵保持 **Planned**。 | 契约矩阵 §4.1「USB HID 鼠标」行 |
+| DWM 盒式模糊预算成本（`w×h×passes`） | `zig build test` → **dwm_blur_budget_host** | [dwm_blur_budget.zig](../../src/config/dwm_blur_budget.zig)、[dwm.zig](../../src/drivers/video/dwm.zig) |
+| Aero 每帧模糊统计 | `zig build -Ddwm_blur_stats=true`；串口检索关键字 **`dwm blur frame:`**（`box_blur_calls` / `budget_denials` / `tint_only_calls`）。相对基线表见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §3.0 | [display.zig](../../src/drivers/video/display.zig) `renderDesktopFrameEx` 末尾、`dwm.flushBlurFrameStatsDebug` |
 | 节区 / 映射（用户态 API） | 运行依赖 `ntdll` 内 `NtCreateSection` / `NtMapViewOfSection` 的用例（随子系统扩展） | 内核实现见 [src/mm/section.zig](../../src/mm/section.zig)；x64 syscall 见 [src/arch/x86_64/syscall.zig](../../src/arch/x86_64/syscall.zig) |
 
 ## 维护约定

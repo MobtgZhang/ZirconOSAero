@@ -38,7 +38,17 @@ Win32 文档中，非客户区鼠标移动与按钮 **hot tracking** 通常对�
 | D4 | 悬停与离开 | `inputdev/wm-mousehover.md`、`wm-mouseleave.md` | 文档中的 HOVER 时间/矩形；开始菜单项高亮仍走 **`needs_full_scene`**（整屏重绘），局部菜单 blit 为 backlog；标题栏三键热态已走 `caption_partial`。 |
 | D5 | 滚轮与顺序 | `inputdev/wm-mousewheel.md` | 滚轮应触发内容更新；本机 `main` 中 `event.scroll != 0` → `needs_ui_paint`，避免与纯指针移动混淆。 |
 
-## 4. 参考阅读（合法来源）
+## 4. x86_64：PS/2 与 VirtIO 双源（真机 vs QEMU，问题六）
+
+| 场景 | 推荐 | 构建 / 说明 |
+|------|------|-------------|
+| QEMU 默认（VirtIO-Input + i8042 同时存在） | **仅 VirtIO** 驱动指针 | 默认 `-Dps2_mouse_with_virtio=false`：`input_hub.pollAll` 在 VirtIO active 时 **不** `mouse.poll()`，避免双倍相对位移（见 [arch/x86_64/mod.zig](../../src/arch/x86_64/mod.zig) `handleMouseIrq` 与矩阵 §4.1）。 |
+| 真机仅 PS/2 | 必须 PS/2 | VirtIO 未 attach 时 `input_hub` 自动走 `mouse.poll()`；或显式 `-Dps2_mouse_with_virtio=true` 在 **确认仅单指针源** 时与 VirtIO 共存。 |
+| USB HID 鼠标 | 路线图 | 见 [MVT_NT61.md](MVT_NT61.md)「USB HID 鼠标里程碑」；当前指针仍依赖 PS/2 或 VirtIO-Input。 |
+
+`boot.conf` 仅描述显示/UEFI；**指针源策略**由内核构建选项与 `input_hub` 代码路径决定（非本文件键值）。
+
+## 5. 参考阅读（合法来源）
 
 - Microsoft Learn：鼠标、指针、辅助功能相关 **用户文档**（行为级）。
 - VirtIO：`virtio-input` 设备规范（事件编码）。

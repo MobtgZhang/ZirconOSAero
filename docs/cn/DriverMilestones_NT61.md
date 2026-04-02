@@ -22,7 +22,8 @@
 
 1. **PCI 枚举**：在现有 PCI 框架中识别 **1af4:1050**，映射 **BAR（MMIO）**。
 2. **Virtqueues 与协议**：按 **VirtIO GPU 设备规范**（公开 virtio 文档）实现控制队列、资源创建、2D/3D 能力探测的最小子集。
-3. **Scanout 路径**：将资源 **flush** 到 QEMU 可见 scanout，或与现有 `[src/drivers/video/framebuffer.zig](../../src/drivers/video/framebuffer.zig)` / **DWM** 合成输出对接。
+3. **Scanout 路径**：将资源 **flush** 到 QEMU 可见 scanout，或与现有 `[src/drivers/video/framebuffer.zig](../../src/drivers/video/framebuffer.zig)` / **DWM** 合成输出对接。  
+   **当前 PoC（x86_64）**：`virtio_gpu_pci.compositorTryRoundTripFramebufferRect` / `trySubmitFramebufferDirtyRect`（≤32×32 scratch `TRANSFER_*`）；`display.present` 在 flipDirty 小脏区时可选调用（主路径仍为 CPU）。
 4. **Makefile**：在驱动可演示前，保持 `**AARCH64_QEMU_VIRTIO_GPU=0`** / `**RISCV64_QEMU_VIRTIO_GPU=0**` 为默认；启用 `**=1**` 仅用于驱动开发与固件 GOP 实验，并预期 **「Display not active」** 类现象直至 scanout 打通。
 
 **LoongArch64 / 高分辨率 GTK**：若要求 **QEMU 主窗口必显与 `build.conf` 一致的 1920 等桌面**（而非仅串口证明 ramfb 已提交首帧），通常需在 virtio-gpu 上实现 **ResourceFlush / SetScanout**（或等价）并与合成输出对接；为独立工作量。在此之前以 **ramfb + 串口验收** 为准（见 [`AeroDesktopRuntime.md`](AeroDesktopRuntime.md) **正式验收标准**）。

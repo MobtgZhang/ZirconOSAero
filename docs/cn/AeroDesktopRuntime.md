@@ -40,6 +40,19 @@
 | 真机 USB                   | 当前内核 **无 USB HID 鼠标驱动**；仅 PS/2 与 VirtIO-Input PCI 可靠。仅 USB 鼠标时请换 PS/2 或在 QEMU 加 virtio-mouse。                                                                                                                                                                           |
 
 
+### 3.0 `dwm_blur_stats` 相对基线（问题三 / 回归对照）
+
+`-Ddwm_blur_stats=true` 时，每帧 `klog.debug` 输出一行 **`dwm blur frame:`**（字段：`box_blur_calls`、`budget_denials`、`tint_only_calls`）。**非**与真实 Windows 7 数值对比，而是 **同一构建 + 同一 QEMU 分辨率** 下的相对基线，用于 PR 前后对比。
+
+| 典型场景（手测顺序） | 期望的量级趋势（说明） |
+|---------------------|------------------------|
+| 冷启动首帧（`present_count==0`） | `box_blur_calls` 明显偏低或接近 0（`setSkipGlassBoxBlur` 首帧快路径）；`tint_only_calls` 可随壳层而异 |
+| 静止桌面、无开始菜单 | `box_blur_calls` 与窗数/任务栏条带相关；`budget_denials` 在极低预算或极高分辨率下可能 >0 |
+| 打开开始菜单 / 壳层 flyout | `setGlassLiteBlurEnabled` 与 `renderGlassTintOnly` 路径使 **`tint_only_calls` 上升**、`box_blur_calls` 相对受控（见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §8、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)） |
+| 拖标题栏 | `syncAeroGlassFastPath`：`setGlassLiteBlurEnabled(during_drag && !first)`；相对「静止」应观察到盒式模糊与 tint 组合变化 |
+
+记录方式：在 PR 或 issue 中贴 **两行**（改动前 / 改动后）同分辨率串口摘录即可。完整命令与矩阵互链见 [MVT_NT61.md](MVT_NT61.md)。
+
 ### 3.1 诊断：逻辑坐标 vs 屏上像素
 
 在按上表确认输入后仍「看不见动」时，按顺序区分：

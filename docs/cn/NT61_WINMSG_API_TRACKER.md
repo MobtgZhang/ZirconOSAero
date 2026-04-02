@@ -12,7 +12,7 @@
 | API | `BeginPaint` / `EndPaint` | WM_PAINT | 同上 | `PAINTSTRUCT` |
 | 消息 | `WM_DWMCOMPOSITIONCHANGED` 等 | DWM 消息 | `user32.zig` `broadcastDwm*` | 矩阵 §4 |
 | 消息 | `WM_NCHITTEST` / `WM_NCLBUTTONDOWN` | 非客户区 | `user32.zig` `DefWindowProcA` | [PointerPolicy_NT61.md](PointerPolicy_NT61.md) |
-| 消息 | `WM_DWMSENDICONICTHUMBNAIL` | DWM | `dwm_compositor.enqueueIconicThumbnailRequest`（占位） | Planned |
+| 消息 | `WM_DWMSENDICONICTHUMBNAIL` | DWM | `user32.broadcastDwmIconicThumbnailRequested` + `dwm_compositor` 缩略缓冲 | 矩阵 §4 |
 | 内核 | HWND / Z-order 真源 | win32k 概念 | `user32` + `win32k/mod.zig` | `zig build test` → win32k_host |
 | LPC | `register_window` / `post_message` | 子系统 | `subsystem.zig` + `port.setCsrRequestHandler` | MVT / 手测 |
 

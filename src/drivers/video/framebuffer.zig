@@ -136,6 +136,7 @@ var total_flips: u64 = 0;
 // ── Double / triple off-screen buffering ──
 // 双缓冲：单离屏槽 + GOP。三缓冲（乒乓）：两离屏槽 + GOP；present 后切换 draw_slot（概念见 mdcs/ideas.md，自研非 DXGI）。
 // 单缓冲（double_buffer_active=false）：getDrawBuffer() 即 GOP；flipDirty() 仅清 dirty 计数、不做 memcpy（屏前直绘 + 软件光标 save-under 同面）。
+// 路线图：与用户态 DWM 共享合成缓冲时，优先改为 `NtCreateSection` + 跨进程 `NtMapViewOfSection`（见 mdcs/claude/content6.2.md 阶段 D3）。
 const BACK_BUF_MAX: usize = 10 * 1024 * 1024; // 10 MB – covers up to 1920×1080@32bpp
 var back_buf: [BACK_BUF_MAX]u8 align(1) = undefined;
 var double_buffer_active: bool = false;

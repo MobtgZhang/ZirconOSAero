@@ -2,7 +2,9 @@
 //! Integrates with Object Manager, Handle Table, and Security Token
 
 const std = @import("std");
+const builtin = @import("builtin");
 const vm = @import("../mm/vm.zig");
+const kuser_shared = @import("../mm/kuser_shared.zig");
 const FrameAllocator = @import("../mm/frame.zig").FrameAllocator;
 const klog = @import("../rtl/klog.zig");
 const ob = @import("../ob/object.zig");
@@ -125,7 +127,13 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
     if (process_count >= MAX_PROCESSES) return null;
     const pid = allocPid() orelse return null;
 
-    const space = vm.createAddressSpace(frame_alloc) orelse return null;
+    var space = vm.createAddressSpace(frame_alloc) orelse return null;
+    if (builtin.cpu.arch == .x86_64) {
+        if (!kuser_shared.installInProcessAddressSpace(&space)) {
+            vm.releaseProcessAddressSpace(&space);
+            return null;
+        }
+    }
 
     var p = &processes[process_count];
     p.* = Process.init(pid);

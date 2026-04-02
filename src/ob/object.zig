@@ -403,3 +403,8 @@ pub fn normalizeNtObjectPath(path: []const u8) []const u8 {
     }
     return p;
 }
+
+/// 符号链接多跳解析为路线图项（Phase P4-A2）；当前与 `normalizeNtObjectPath` 等价。
+pub fn normalizeNtObjectPathResolveSymlinks(path: []const u8) []const u8 {
+    return normalizeNtObjectPath(path);
+}

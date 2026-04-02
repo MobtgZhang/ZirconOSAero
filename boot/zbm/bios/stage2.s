@@ -155,43 +155,50 @@ display_boot_menu:
     mov $0x2607, %cx
     int $0x10
 
-    # Print boot manager banner
+    # Grey title bar (row 0): attribute from print_color_string
     mov $0x02, %ah                  # Set cursor position
     mov $0x00, %bh
-    mov $0x0200, %dx                # Row 2, Col 0
+    mov $0x0000, %dx                # Row 0, Col 0
     int $0x10
     mov $menu_header, %si
     call print_color_string
 
-    # Print menu border
+    # Prompt lines (Win7-style)
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x0400, %dx                # Row 4
-    int $0x10
-    mov $menu_border_top, %si
-    call .print16
-
-    # Print menu entries
-    mov $0x02, %ah
-    mov $0x00, %bh
-    mov $0x0602, %dx                # Row 6, Col 2
+    mov $0x0500, %dx                # Row 5, Col 0
     int $0x10
     mov $menu_title, %si
+    call .print16
+
+    mov $0x02, %ah
+    mov $0x00, %bh
+    mov $0x0600, %dx                # Row 6, Col 0
+    int $0x10
+    mov $menu_subtitle, %si
+    call .print16
+
+    # Blank row before OS list
+    mov $0x02, %ah
+    mov $0x00, %bh
+    mov $0x0800, %dx                # Row 8
+    int $0x10
+    mov $menu_spacer, %si
     call .print16
 
     # Entry 1 (default, highlighted)
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x0804, %dx                # Row 8, Col 4
+    mov $0x0904, %dx                # Row 9, Col 4
     int $0x10
-    mov $0x70, %bl                  # White on black (highlighted)
+    mov $0x70, %bl                  # Black on light grey (Win7 selection bar)
     mov $entry_1, %si
     call print_attr_string
 
     # Entry 2
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x0904, %dx                # Row 9, Col 4
+    mov $0x0A04, %dx                # Row 10, Col 4
     int $0x10
     mov $entry_2, %si
     call .print16
@@ -199,7 +206,7 @@ display_boot_menu:
     # Entry 3
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x0A04, %dx                # Row 10, Col 4
+    mov $0x0B04, %dx                # Row 11, Col 4
     int $0x10
     mov $entry_3, %si
     call .print16
@@ -207,7 +214,7 @@ display_boot_menu:
     # Entry 4
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x0B04, %dx                # Row 11, Col 4
+    mov $0x0C04, %dx                # Row 12, Col 4
     int $0x10
     mov $entry_4, %si
     call .print16
@@ -215,42 +222,50 @@ display_boot_menu:
     # Entry 5
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x0C04, %dx                # Row 12, Col 4
+    mov $0x0D04, %dx                # Row 13, Col 4
     int $0x10
     mov $entry_5, %si
     call .print16
 
-    # Bottom border
+    # F8 hint
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x0E00, %dx                # Row 14
+    mov $0x0F00, %dx                # Row 15, Col 0
     int $0x10
-    mov $menu_border_bot, %si
+    mov $menu_f8, %si
     call .print16
 
-    # Instructions
+    # Tools section (static; BIOS path has no TAB handler)
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x1002, %dx                # Row 16, Col 2
+    mov $0x1100, %dx                # Row 17, Col 0
     int $0x10
-    mov $menu_instructions, %si
+    mov $menu_tools_label, %si
+    call .print16
+
+    mov $0x02, %ah
+    mov $0x00, %bh
+    mov $0x1200, %dx                # Row 18, Col 0
+    int $0x10
+    mov $menu_tools_entry, %si
     call .print16
 
     # Timer countdown
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x1202, %dx                # Row 18, Col 2
+    mov $0x1400, %dx                # Row 20, Col 0
     int $0x10
     mov $menu_timer, %si
     call .print16
 
-    # Footer
+    # Footer bar (row 24, grey)
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x1700, %dx                # Row 23
+    mov $0x1800, %dx                # Row 24, Col 0
     int $0x10
+    mov $0x70, %bl
     mov $menu_footer, %si
-    call .print16
+    call print_attr_string
 
     ret
 
@@ -289,7 +304,7 @@ wait_for_selection:
     je .move_down
     cmp $0x1C, %ah                  # Enter
     je .selection_done
-    cmp $0x3B, %ah                  # F1 (help)
+    cmp $0x42, %ah                  # F8 (advanced options — not implemented on BIOS path)
     je .wait_loop
 
     # Number keys 1-5
@@ -321,14 +336,14 @@ wait_for_selection:
 
 # ── Redraw menu highlight ──
 redraw_menu_selection:
-    # Clear all highlights (rows 8-12)
+    # Clear all highlights (rows 9-13)
     mov $0, %cl
 .redraw_loop:
     push %cx
     mov $0x02, %ah
     mov $0x00, %bh
-    add $8, %cl
     mov %cl, %dh
+    add $9, %dh
     mov $4, %dl
     int $0x10
 
@@ -385,7 +400,7 @@ print_attr_string:
 
 # ── Print colored string for header ──
 print_color_string:
-    mov $0x1F, %bl                  # White on blue
+    mov $0x70, %bl                  # Black on light grey (Win7 title bar)
     jmp print_attr_string
 
 # ── Simple delay (~1 second) ──
@@ -409,7 +424,7 @@ delay_one_second:
 update_countdown:
     mov $0x02, %ah
     mov $0x00, %bh
-    mov $0x124E, %dx                # Row 18, Col 78 (approx)
+    mov $0x144E, %dx                # Row 20, Col 78 (timer line)
     int $0x10
     movb (countdown), %al
     add $0x30, %al
@@ -841,11 +856,19 @@ entry_table:
 
 # ── Menu Strings ──
 menu_header:
-    .asciz "              ZirconOS Boot Manager  v1.0                                       "
-menu_border_top:
-    .asciz "  +======================================================================+\r\n"
+    .asciz "                    ZirconOSAero Boot Manager                               \r\n"
+menu_spacer:
+    .asciz "\r\n"
 menu_title:
-    .asciz "  Choose an operating system to start:\r\n"
+    .asciz "    Choose an operating system to start, or press TAB to select a tool:\r\n"
+menu_subtitle:
+    .asciz "    (Use the arrow keys to highlight your choice, then press ENTER.)\r\n"
+menu_f8:
+    .asciz "    To specify an advanced option for this choice, press F8.\r\n"
+menu_tools_label:
+    .asciz "    Tools:\r\n"
+menu_tools_entry:
+    .asciz "    ZirconOS Memory Diagnostic\r\n"
 entry_1:
     .asciz "  ZirconOS v1.0                                  "
 entry_2:
@@ -856,14 +879,10 @@ entry_4:
     .asciz "  ZirconOS v1.0 [Recovery Console]               "
 entry_5:
     .asciz "  ZirconOS v1.0 [Last Known Good Configuration]  "
-menu_border_bot:
-    .asciz "  +======================================================================+\r\n"
-menu_instructions:
-    .asciz "  Use the arrow keys to highlight your choice, then press ENTER.\r\n"
 menu_timer:
-    .asciz "  Seconds until the highlighted choice will be started automatically:  10"
+    .asciz "    Seconds until the highlighted choice will be started automatically:  10"
 menu_footer:
-    .asciz "  ENTER=Choose  |  F1=Help  |  ESC=Advanced Options"
+    .asciz "    ENTER=Choose                 TAB=Menu                  ESC=Cancel\r\n"
 
 # ── Protected mode messages ──
 pm_msg_loading:

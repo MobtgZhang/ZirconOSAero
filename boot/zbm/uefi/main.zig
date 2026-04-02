@@ -59,6 +59,10 @@ pub fn main() noreturn {
                 );
                 menu.displayBootManagerMenu(out, arch_name, debug_mode);
             },
+            .cancel => {
+                _ = bs.exit(uefi.handle, uefi.Status.aborted, null) catch {};
+                halt();
+            },
         }
     }
 

@@ -215,6 +215,10 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
                 );
                 menu.displayBootManagerMenu(out, arch_name, debug_mode);
             },
+            .cancel => {
+                _ = bs.exit(uefi.handle, uefi.Status.aborted, null) catch {};
+                haltLa();
+            },
         }
     }
 

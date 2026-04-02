@@ -1,19 +1,13 @@
 //! ZirconOS Boot Manager — Text-Mode Boot Menu
 //!
-//! Renders a Windows 7 style boot menu on VGA text console (80×25)
-//! or UEFI Simple Text Output Protocol.
+//! Renders a Windows 7–style boot menu on VGA text console (80×25).
 //!
-//! Layout (Windows Boot Manager style):
-//! ┌──────────────────────────────────────────────────────────────────────────┐
-//! │ Row 0-1:  Header bar (blue background)                                  │
-//! │ Row 3:    "Choose an operating system to start:"                        │
-//! │ Row 4:    "(Use the arrow keys to highlight your choice, then ENTER)"   │
-//! │ Row 6-N:  Boot entries (highlighted = reverse video)                    │
-//! │ Row N+2:  Separator line                                                │
-//! │ Row N+4:  "Seconds until default starts: XX"                            │
-//! │ Row 22:   Description / help text                                       │
-//! │ Row 24:   Footer: "ENTER=Choose  TAB=Tools  ESC=Cancel"                 │
-//! └──────────────────────────────────────────────────────────────────────────┘
+//! Layout (aligned with Windows Boot Manager text UI):
+//! - Row 0:    Single grey header bar, title centered (black on light grey)
+//! - Row 2–3:  Choose / TAB hint + parenthetical arrow-key hint
+//! - Row 5+:   OS entries (full-width grey highlight; `>` at right column)
+//! - After list: F8 advanced-options line; countdown; “Tools:” + tool line(s)
+//! - Row 24:   Grey footer bar — ENTER=Choose | TAB=Menu | ESC=Cancel
 
 const bcd = @import("bcd.zig");
 
@@ -21,18 +15,43 @@ pub const SCREEN_WIDTH: u32 = 80;
 pub const SCREEN_HEIGHT: u32 = 25;
 pub const VGA_TEXT_BASE: u32 = 0xB8000;
 
+/// One placeholder tool row (matches “Tools” section in Win7-style UI).
+pub const tool_placeholder_line = "ZirconOS Memory Diagnostic";
+
 // ── Color Attributes ──
 
 pub const Attr = struct {
-    pub const HEADER: u8 = 0x1F; // White on blue
+    /// Light grey background, black foreground (header, footer, selection bar)
+    pub const BAR: u8 = 0x70;
     pub const NORMAL: u8 = 0x07; // Light gray on black
-    pub const HIGHLIGHT: u8 = 0x70; // Black on light gray
-    pub const BORDER: u8 = 0x08; // Dark gray on black
+    pub const HIGHLIGHT: u8 = 0x70; // Same as Win7 selection bar
     pub const TITLE: u8 = 0x0F; // White on black
-    pub const FOOTER: u8 = 0x17; // Light gray on blue
     pub const TIMER: u8 = 0x0E; // Yellow on black
-    pub const DESCRIPTION: u8 = 0x0B; // Light cyan on black
 };
+
+// ── Row layout (80×25, footer fixed at row 24) ──
+
+pub fn rowEntryFirst() u32 {
+    return 5;
+}
+
+fn rowF8(entry_count: usize) u32 {
+    return @intCast(6 + entry_count);
+}
+
+fn rowTimer(entry_count: usize) u32 {
+    return @intCast(8 + entry_count);
+}
+
+fn rowToolsLabel(entry_count: usize) u32 {
+    return @intCast(10 + entry_count);
+}
+
+fn rowToolsFirst(entry_count: usize) u32 {
+    return @intCast(11 + entry_count);
+}
+
+pub const FOOTER_ROW: u32 = 24;
 
 // ── Menu State ──
 
@@ -92,7 +111,6 @@ pub const MenuState = struct {
 };
 
 // ── VGA Text Mode Renderer (BIOS/Protected Mode) ──
-// Direct VGA memory writes at 0xB8000
 
 pub const VgaRenderer = struct {
     base: [*]volatile u16,
@@ -151,13 +169,6 @@ pub const VgaRenderer = struct {
             c += 1;
         }
     }
-
-    pub fn drawHorizontalLine(self: *VgaRenderer, row: u32, col_start: u32, col_end: u32, ch: u8, attr: u8) void {
-        var c = col_start;
-        while (c < col_end and c < SCREEN_WIDTH) : (c += 1) {
-            self.putChar(row, c, ch, attr);
-        }
-    }
 };
 
 // ── Menu Rendering Functions ──
@@ -168,49 +179,45 @@ pub fn renderFullMenu(vga: *VgaRenderer, state: *const MenuState) void {
     renderHeader(vga);
     renderTitle(vga);
     renderEntries(vga, state);
-    renderSeparator(vga, @intCast(8 + state.entry_count));
-    renderTimer(vga, state, @intCast(10 + state.entry_count));
-    renderDescription(vga, state, 22);
+    renderF8Line(vga, state.entry_count);
+    renderTimer(vga, state, rowTimer(state.entry_count));
+    renderToolsSection(vga, state.entry_count);
     renderFooter(vga);
 }
 
 fn renderHeader(vga: *VgaRenderer) void {
-    vga.fillRow(0, Attr.HEADER);
-    vga.fillRow(1, Attr.HEADER);
-
-    const title = "ZirconOS Boot Manager";
-    const col = (SCREEN_WIDTH - title.len) / 2;
-    vga.putString(0, col, title, Attr.HEADER);
-
-    const ver = "Version 1.0";
-    const vcol = (SCREEN_WIDTH - ver.len) / 2;
-    vga.putString(1, vcol, ver, Attr.HEADER);
+    vga.fillRow(0, Attr.BAR);
+    const title = "ZirconOSAero Boot Manager";
+    const col = (SCREEN_WIDTH - @as(u32, @intCast(title.len))) / 2;
+    vga.putString(0, col, title, Attr.BAR);
 }
 
 fn renderTitle(vga: *VgaRenderer) void {
-    vga.putString(3, 4, "Choose an operating system to start:", Attr.TITLE);
-    vga.putString(4, 4, "(Use the arrow keys to highlight your choice, then press ENTER.)", Attr.NORMAL);
+    vga.putString(2, 4, "Choose an operating system to start, or press TAB to select a tool:", Attr.TITLE);
+    vga.putString(3, 4, "(Use the arrow keys to highlight your choice, then press ENTER.)", Attr.NORMAL);
 }
 
 fn renderEntries(vga: *VgaRenderer, state: *const MenuState) void {
+    const first = rowEntryFirst();
     for (0..state.entry_count) |i| {
-        const row: u32 = @intCast(6 + i);
-        const attr = if (i == state.selected) Attr.HIGHLIGHT else Attr.NORMAL;
-
-        if (i == state.selected) {
+        const row: u32 = first + @as(u32, @intCast(i));
+        const sel = i == state.selected;
+        if (sel) {
             vga.fillRow(row, Attr.HIGHLIGHT);
         }
-
-        vga.putString(row, 4, "  ", attr);
-
+        const attr: u8 = if (sel) Attr.HIGHLIGHT else Attr.NORMAL;
         if (state.store.getEntry(i)) |obj| {
-            vga.putString(row, 6, obj.getDescription(), attr);
+            vga.putString(row, 4, obj.getDescription(), attr);
+        }
+        if (sel) {
+            vga.putChar(row, SCREEN_WIDTH - 2, '>', attr);
         }
     }
 }
 
-fn renderSeparator(vga: *VgaRenderer, row: u32) void {
-    vga.drawHorizontalLine(row, 2, 78, 0xC4, Attr.BORDER); // ─
+fn renderF8Line(vga: *VgaRenderer, entry_count: usize) void {
+    const row = rowF8(entry_count);
+    vga.putString(row, 4, "To specify an advanced option for this choice, press F8.", Attr.NORMAL);
 }
 
 fn renderTimer(vga: *VgaRenderer, state: *const MenuState, row: u32) void {
@@ -222,40 +229,32 @@ fn renderTimer(vga: *VgaRenderer, state: *const MenuState, row: u32) void {
     }
 }
 
-fn renderDescription(vga: *VgaRenderer, state: *const MenuState, row: u32) void {
-    const mode = state.store.getBootMode(state.selected);
-    const desc = switch (mode) {
-        .normal => "Start ZirconOS normally.",
-        .debug => "Start ZirconOS with debug logging and serial output enabled.",
-        .safe_mode => "Start ZirconOS with minimal drivers and services.",
-        .safe_mode_networking => "Start ZirconOS in safe mode with network support.",
-        .safe_mode_cmdprompt => "Start ZirconOS in safe mode with command prompt only.",
-        .recovery => "Start the ZirconOS Recovery Console for system repair.",
-        .last_known_good => "Start ZirconOS using the last configuration that worked.",
-    };
-    vga.putString(row, 4, desc, Attr.DESCRIPTION);
+fn renderToolsSection(vga: *VgaRenderer, entry_count: usize) void {
+    const label_row = rowToolsLabel(entry_count);
+    const item_row = rowToolsFirst(entry_count);
+    vga.putString(label_row, 4, "Tools:", Attr.TITLE);
+    vga.putString(item_row, 4, tool_placeholder_line, Attr.NORMAL);
 }
 
 fn renderFooter(vga: *VgaRenderer) void {
-    vga.fillRow(24, Attr.FOOTER);
-    vga.putString(24, 2, "ENTER=Choose", Attr.FOOTER);
-    vga.putString(24, 18, "|", Attr.FOOTER);
-    vga.putString(24, 20, "TAB=Tools", Attr.FOOTER);
-    vga.putString(24, 33, "|", Attr.FOOTER);
-    vga.putString(24, 35, "ESC=Advanced Options", Attr.FOOTER);
-    vga.putString(24, 60, "|", Attr.FOOTER);
-    vga.putString(24, 62, "F1=Help", Attr.FOOTER);
+    vga.fillRow(FOOTER_ROW, Attr.BAR);
+    const left = "ENTER=Choose";
+    const mid = "TAB=Menu";
+    const right = "ESC=Cancel";
+    vga.putString(FOOTER_ROW, 2, left, Attr.BAR);
+    const mid_col = (SCREEN_WIDTH - @as(u32, @intCast(mid.len))) / 2;
+    vga.putString(FOOTER_ROW, mid_col, mid, Attr.BAR);
+    const rcol = SCREEN_WIDTH - @as(u32, @intCast(right.len)) - 1;
+    vga.putString(FOOTER_ROW, rcol, right, Attr.BAR);
 }
 
-/// Update only the changed parts of the menu (entries + timer)
+/// Redraw OS list rows only (same geometry as `renderFullMenu`).
 pub fn renderEntryUpdate(vga: *VgaRenderer, state: *const MenuState) void {
     renderEntries(vga, state);
-    renderDescription(vga, state, 22);
 }
 
 pub fn renderTimerUpdate(vga: *VgaRenderer, state: *const MenuState) void {
-    const row: u32 = @intCast(10 + state.entry_count);
-    // Clear timer line
+    const row = rowTimer(state.entry_count);
     for (4..SCREEN_WIDTH) |col| {
         vga.putChar(row, @intCast(col), ' ', Attr.NORMAL);
     }

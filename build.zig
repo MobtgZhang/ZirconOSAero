@@ -440,6 +440,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_slab_tests = b.addRunArtifact(slab_tests);
 
+    const vm_nt_protect_pte_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/vm_nt_protect_pte_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const vm_nt_protect_pte_tests = b.addTest(.{
+        .root_module = vm_nt_protect_pte_host_mod,
+        .name = "vm_nt_protect_pte_host",
+    });
+    const run_vm_nt_protect_pte_tests = b.addRunArtifact(vm_nt_protect_pte_tests);
+
     const ssdt_test_mod = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/ssdt_nt61.zig"),
         .target = b.graph.host,
@@ -603,6 +614,28 @@ pub fn build(b: *std.Build) void {
     });
     const run_fs_vfs_constants_tests = b.addRunArtifact(fs_vfs_constants_tests);
 
+    const fs_status_nt_map_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/fs_status_nt_map_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const fs_status_nt_map_tests = b.addTest(.{
+        .root_module = fs_status_nt_map_host_mod,
+        .name = "fs_status_nt_map_host",
+    });
+    const run_fs_status_nt_map_tests = b.addRunArtifact(fs_status_nt_map_tests);
+
+    const nt61_backlog_anchors_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61_full_api_backlog_anchors_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const nt61_backlog_anchors_tests = b.addTest(.{
+        .root_module = nt61_backlog_anchors_host_mod,
+        .name = "nt61_full_api_backlog_anchors_host",
+    });
+    const run_nt61_backlog_anchors_tests = b.addRunArtifact(nt61_backlog_anchors_tests);
+
     const sched_policy_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/scheduler_policy_host.zig"),
         .target = b.graph.host,
@@ -658,6 +691,31 @@ pub fn build(b: *std.Build) void {
     });
     const run_display_flip_journal_tests = b.addRunArtifact(display_flip_journal_tests);
 
+    const teb_nt61_x64_mod = b.createModule(.{
+        .root_source_file = b.path("src/sdk/teb_nt61_x64.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const kuser_shared_nt61_mod = b.createModule(.{
+        .root_source_file = b.path("src/sdk/kuser_shared_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const nt61_abi_layout_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61_abi_layout_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "teb", .module = teb_nt61_x64_mod },
+            .{ .name = "kuser", .module = kuser_shared_nt61_mod },
+        },
+    });
+    const nt61_abi_layout_tests = b.addTest(.{
+        .root_module = nt61_abi_layout_host_mod,
+        .name = "nt61_abi_layout_host",
+    });
+    const run_nt61_abi_layout_tests = b.addRunArtifact(nt61_abi_layout_tests);
+
     const win32k_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32k/mod.zig"),
         .target = b.graph.host,
@@ -695,11 +753,12 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_x64_x86_namespace_tests = b.addRunArtifact(ssdt_x64_x86_namespace_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, win32k_host, wow64_ssdt_x86)");
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
     test_step.dependOn(&run_slab_tests.step);
+    test_step.dependOn(&run_vm_nt_protect_pte_tests.step);
     test_step.dependOn(&run_ssdt_tests.step);
     test_step.dependOn(&run_ssdt_stub_parity_tests.step);
     test_step.dependOn(&run_se_token_tests.step);
@@ -714,11 +773,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mdl_tests.step);
     test_step.dependOn(&run_pci_bind_tests.step);
     test_step.dependOn(&run_fs_vfs_constants_tests.step);
+    test_step.dependOn(&run_fs_status_nt_map_tests.step);
+    test_step.dependOn(&run_nt61_backlog_anchors_tests.step);
     test_step.dependOn(&run_sched_policy_tests.step);
     test_step.dependOn(&run_nt61_phase_f_tests.step);
     test_step.dependOn(&run_gpu_device_tests.step);
     test_step.dependOn(&run_virtio_gpu_spec_tests.step);
     test_step.dependOn(&run_display_flip_journal_tests.step);
+    test_step.dependOn(&run_nt61_abi_layout_tests.step);
     test_step.dependOn(&run_win32k_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
     test_step.dependOn(&run_ssdt_x64_x86_namespace_tests.step);

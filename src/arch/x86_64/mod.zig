@@ -64,6 +64,9 @@ pub fn initKeyboard() void {
     pic.unmaskIrq(1);
 }
 
+/// PS/2 鼠标经 **IRQ12**（8042/i8042prt 类路径）投递。QEMU 若同时启用 **virtio-input** 鼠标，默认 **只消费 VirtIO**，
+/// 避免双源指针打架：`handleMouseIrq` 在 `virtio_input_pci.isActive()` 且 **未** 设置 `-Dps2_mouse_with_virtio=true` 时直接 return。
+/// **无 VirtIO 的真机或旧机器**：不要挂 virtio-input；或显式 `zig build … -Dps2_mouse_with_virtio=true` 在双源并存下仍处理 IRQ12。
 pub fn initMouse() void {
     const mouse = @import("../../drivers/input/mouse.zig");
     mouse.initHardware();
@@ -76,7 +79,9 @@ pub fn handleKeyboardIrq() void {
 
 pub fn handleMouseIrq() void {
     const virtio_input_pci = @import("../../drivers/input/virtio_input_pci.zig");
-    if (virtio_input_pci.isActive()) return;
+    const bopts = @import("build_options");
+    // 策略说明见 `initMouse` 注释；与 [NT61_CONTRACT_MATRIX.md](../../docs/cn/NT61_CONTRACT_MATRIX.md) §4.1「PS/2 与 VirtIO 双源」一致。
+    if (virtio_input_pci.isActive() and !bopts.ps2_mouse_with_virtio) return;
     const mouse = @import("../../drivers/input/mouse.zig");
     mouse.handleIrq();
 }
@@ -101,6 +106,10 @@ pub fn consumeTaskMgrHotkey() bool {
 
 pub fn consumeWallpaperCycleHotkey() bool {
     return keyboard.consumeWallpaperCycleHotkey();
+}
+
+pub fn consumeFlip3dHotkey() bool {
+    return keyboard.consumeFlip3dHotkey();
 }
 
 pub fn takeCursorNudge() @import("../../drivers/input/cursor_types.zig").CursorNudge {

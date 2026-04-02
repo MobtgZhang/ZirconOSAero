@@ -23,6 +23,8 @@ var initialized: bool = false;
 var taskmgr_hotkey_pending: bool = false;
 /// Ctrl+Alt+F9 → 循环 Aero 壁纸预设（`consumeWallpaperCycleHotkey`）
 var wallpaper_cycle_pending: bool = false;
+/// Alt+Tab（make 0x0F）→ Flip3D 近似切换（`consumeFlip3dHotkey`）
+var flip3d_hotkey_pending: bool = false;
 
 /// 扩展键前缀（方向键等为 E0 xx）
 var e0_prefix: bool = false;
@@ -224,6 +226,12 @@ pub fn handleScancodeByte(scancode: u8) void {
         return;
     }
 
+    // Alt+Tab：Tab make 0x0F（先于字符入环，避免把 Tab 当文本）
+    if (scancode == 0x0F and alt_held and !ctrl_held) {
+        flip3d_hotkey_pending = true;
+        return;
+    }
+
     // WASD 微移光标（PS/2 不可用时仍可操作桌面）
     const kstep: i32 = 10;
     switch (scancode) {
@@ -314,6 +322,14 @@ pub fn consumeTaskMgrHotkey() bool {
 pub fn consumeWallpaperCycleHotkey() bool {
     if (wallpaper_cycle_pending) {
         wallpaper_cycle_pending = false;
+        return true;
+    }
+    return false;
+}
+
+pub fn consumeFlip3dHotkey() bool {
+    if (flip3d_hotkey_pending) {
+        flip3d_hotkey_pending = false;
         return true;
     }
     return false;

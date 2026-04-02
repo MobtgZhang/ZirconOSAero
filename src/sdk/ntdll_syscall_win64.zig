@@ -18,6 +18,8 @@ pub const Ssdt = struct {
     pub const NtQueryValueKey: u32 = 0x14;
     pub const NtCreateKey: u32 = 0x1A;
     pub const NtSetValueKey: u32 = 0x5D;
+    pub const NtEnumerateKey: u32 = 0x32;
+    pub const NtEnumerateValueKey: u32 = 0x13;
     pub const NtYieldExecution: u32 = 0x43;
     pub const NtAllocateVirtualMemory: u32 = 0x18;
     pub const NtFreeVirtualMemory: u32 = 0x1B;
@@ -76,6 +78,8 @@ comptime {
     _ = Ssdt.NtQueryValueKey;
     _ = Ssdt.NtCreateKey;
     _ = Ssdt.NtSetValueKey;
+    _ = Ssdt.NtEnumerateKey;
+    _ = Ssdt.NtEnumerateValueKey;
     _ = Ssdt.NtYieldExecution;
     _ = Ssdt.NtAllocateVirtualMemory;
     _ = Ssdt.NtFreeVirtualMemory;

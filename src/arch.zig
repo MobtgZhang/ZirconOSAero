@@ -158,6 +158,13 @@ pub fn consumeWallpaperCycleHotkey() bool {
     return false;
 }
 
+pub fn consumeFlip3dHotkey() bool {
+    if (@hasDecl(impl, "consumeFlip3dHotkey")) {
+        return impl.consumeFlip3dHotkey();
+    }
+    return false;
+}
+
 const CursorNudge = @import("drivers/input/cursor_types.zig").CursorNudge;
 
 pub fn takeCursorNudge() CursorNudge {

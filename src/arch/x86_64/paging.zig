@@ -112,7 +112,9 @@ pub const PhysAddr = struct {
         return self.value >> 12;
     }
     pub fn alignDown(self: *PhysAddr) void {
-        self.value &= ~PAGE_MASK;
+        // 显式 u64 掩码：避免 `usize` 位宽与 `u64.value` 混算时在非 64 位 `usize` 目标上截断高位。
+        const mask: u64 = @intCast(PAGE_MASK);
+        self.value &= ~mask;
     }
 };
 
@@ -153,7 +155,9 @@ pub fn split2MiBIdentityPageIfNeeded(
     pt.zero();
     var i: usize = 0;
     while (i < 512) : (i += 1) {
-        const p = huge_base + i * PAGE_SIZE;
+        const off = @as(u64, @intCast(i)) * @as(u64, PAGE_SIZE);
+        if (huge_base > std.math.maxInt(u64) - off) return false;
+        const p = huge_base + off;
         pt.entries[i] = PageTableEntry.fromFrame(p, pte_flags);
     }
     pde.* = PageTableEntry.fromFrame(pt_frame, Present | Write);
@@ -482,7 +486,8 @@ pub fn translateVirtualToPhysical(pml4_phys: u64, virt: u64) ?u64 {
     const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
     const pte = &pt.entries[v.ptIndex()];
     if (!pte.isPresent()) return null;
-    return pte.toFrame() | (virt & page_mask);
+    const pm: u64 = @intCast(page_mask);
+    return pte.toFrame() | (virt & pm);
 }
 
 pub const page_size = PAGE_SIZE;

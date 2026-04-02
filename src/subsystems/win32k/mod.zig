@@ -8,8 +8,11 @@
 // No Windows source code or ReactOS source code was referenced.
 // Reference: https://learn.microsoft.com/windows/win32/winmsg/window-features
 // Reference: https://learn.microsoft.com/windows/win32/winmsg/about-messages-and-message-queues
+// Phase P8：`atoms.zig` 与将来 `NtAddAtom`/`NtFindAtom` SSDT 合一为路线图；GDI 句柄表见 P8-4。
 
 const std = @import("std");
+
+pub const atoms = @import("atoms.zig");
 
 pub const HWND = usize;
 
@@ -150,6 +153,12 @@ test "win32k hwnd allocation" {
     const a = allocHwnd();
     const b = allocHwnd();
     try std.testing.expect(a != b);
+}
+
+test "win32k global atoms (P8-3 hook)" {
+    atoms.resetForTest();
+    const a = atoms.addGlobalAtom("P8") orelse return error.AtomFail;
+    try std.testing.expect(a >= 0xC000);
 }
 
 test "win32k z-order and messages" {

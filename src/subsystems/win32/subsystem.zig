@@ -15,6 +15,8 @@ const gdi32 = @import("gdi32.zig");
 
 pub const CSRSS_VERSION: []const u8 = "ZirconOSAero CSRSS v1.0";
 
+// **P4-C3**：`CsrApiNumber` 与窗口站/桌面占位结构与契约矩阵 §9.2 对齐；完整 CSRSS 握手见 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md)。
+
 pub const SubsystemType = enum(u8) {
     unknown = 0,
     native = 1,

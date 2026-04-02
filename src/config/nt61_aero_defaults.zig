@@ -27,7 +27,8 @@ pub const KernelDwm = struct {
     pub const smooth_cursor = true;
     pub const cursor_lerp_factor: i32 = 255;
     /// 每帧盒式模糊「像素·遍」近似预算（宽×高×pass 累加超过则跳过后续 blur，保留 tint/高光）。
-    pub const blur_budget_pixel_passes_per_frame: u32 = 12_000_000;
+    /// 略低于 12M：高分辨率下减轻壳层交互与全帧叠加之 CPU 占用（仍优先 tint/高光）。
+    pub const blur_budget_pixel_passes_per_frame: u32 = 10_000_000;
     /// 0 = 不限制；否则任务栏 `boxBlur` 半径上限（减轻全宽条带成本）。
     pub const taskbar_blur_radius_cap: u8 = 5;
     /// 单块 `boxBlurRect` 面积超过则跳过该次模糊（防全屏条带拖死主循环）。
@@ -50,6 +51,8 @@ pub const KernelCompositor = struct {
     pub const peek_enabled = true;
     pub const flip3d_enabled = true;
     pub const animation_speed: u16 = 250;
+    /// Aero Snap / 贴靠壳策略总开关（与 `dwm_surface_spec.KernelCompositorSurfaceFlags.snap_target` 配对）。
+    pub const snap_shell_enabled = true;
 };
 
 /// 用户 Aero `theme.DwmDefaults` — 数值与 `KernelDwm` 对齐（命名沿用 Shell 侧习惯）
@@ -74,4 +77,11 @@ comptime {
     std.debug.assert(UserShellDwm.blur_radius == KernelDwm.glass_blur_radius);
     std.debug.assert(UserShellDwm.blur_passes == KernelDwm.glass_blur_passes);
     std.debug.assert(UserShellDwm.glass_opacity == KernelDwm.glass_opacity);
+}
+
+test "KernelDwm CPU blur budget constants are usable" {
+    try std.testing.expect(KernelDwm.blur_budget_pixel_passes_per_frame > 0);
+    try std.testing.expect(KernelDwm.blur_max_rect_calls_per_frame > 0);
+    try std.testing.expect(KernelDwm.blur_max_single_rect_pixels > 0);
+    try std.testing.expect(KernelCompositor.snap_shell_enabled);
 }

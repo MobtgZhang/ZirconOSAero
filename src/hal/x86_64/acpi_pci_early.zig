@@ -46,7 +46,10 @@ fn tryParseMcfg(mcfg_phys: u64) bool {
     const h: [*]align(1) const u8 = @ptrFromInt(@as(usize, @truncate(mcfg_phys)));
     if (!std.mem.eql(u8, h[0..4], "MCFG")) return false;
     const tbl_len = readU32(h, 4);
-    if (tbl_len < 44) return false;
+    if (tbl_len < 44) {
+        klog.warn("ACPI: MCFG at 0x%x length %u too small (ignored)", .{ mcfg_phys, tbl_len });
+        return false;
+    }
     ecam_base_phys = readU64(h, 44);
     ecam_segment = readU16(h, 52);
     ecam_bus_lo = h[54];
@@ -101,7 +104,7 @@ pub fn initFromRsdp(rsdp_phys: usize) void {
     };
     walkRoot(root);
     if (ecam_base_phys == 0) {
-        klog.info("ACPI/PCI: MCFG not found (ECAM disabled)", .{});
+        klog.info("ACPI/PCI: MCFG not found or unusable (ECAM disabled)", .{});
         return;
     }
     klog.info("ACPI/PCI: ECAM base=0x%x seg=%u buses %u..%u", .{
@@ -116,6 +119,20 @@ pub fn initFromRsdp(rsdp_phys: usize) void {
         @as(u16, @truncate(id_lo >> 16)),
     });
     if (DEBUG_MODE) logBus0Function0Snapshot();
+    noteVirtioDevicesOnBus0();
+}
+
+/// 总线 0 快速扫描：通知 VirtIO 块设备等占位驱动（不依赖 DEBUG_MODE）。
+fn noteVirtioDevicesOnBus0() void {
+    const virtio_blk_pci = @import("../../drivers/storage/virtio_blk_pci.zig");
+    var d: u8 = 0;
+    while (d < 32) : (d += 1) {
+        const id = configRead32(0, d, 0, 0);
+        const ven = @as(u16, @truncate(id & 0xffff));
+        if (ven == 0xffff) continue;
+        const did = @as(u16, @truncate(id >> 16));
+        virtio_blk_pci.noteVirtioBlkIfPresent(ven, did);
+    }
 }
 
 const DEBUG_MODE = @import("build_options").debug;

@@ -27,8 +27,7 @@ fn activateCr3ForProcessId(pid: u32) void {
     }
     if (process_mod.findProcess(pid)) |pp| {
         if (pp.address_space) |asp| {
-            var a = asp;
-            a.activate();
+            asp.activate();
             return;
         }
     }

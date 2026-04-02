@@ -92,10 +92,9 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
         const user_fault = (frame.error_code & 4) != 0;
         if (user_fault) {
             if (process.getCurrentProcess()) |proc| {
-                if (proc.address_space) |_| {
-                    var asp = proc.address_space.?;
-                    if (@import("../mm/vm.zig").handleLazyCommitFault(&asp, cr2)) {
-                        proc.address_space = asp;
+                if (proc.address_space) |asp| {
+                    const is_write = (frame.error_code & 2) != 0;
+                    if (@import("../mm/vm.zig").handleLazyCommitFault(asp, cr2, is_write)) {
                         return;
                     }
                     const pid = proc.pid;

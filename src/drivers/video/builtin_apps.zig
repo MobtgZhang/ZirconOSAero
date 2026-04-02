@@ -671,7 +671,7 @@ pub fn isDragging() bool {
     return drag_slot != null;
 }
 
-/// 左键释放：若刚结束内置窗标题栏拖拽，返回 true，供桌面主循环触发一帧整场景以退出 `drag_light`。
+/// 左键释放：若刚结束内置窗标题栏拖拽，返回 true；主循环用 `display.handleMouseRelease` 的 `needs_post_drag_composite` 走壳层全帧（非 `scene_dirty`）。
 pub fn onMouseRelease() bool {
     paint_down = false;
     const ended_builtin_drag = drag_slot != null;
@@ -1187,18 +1187,27 @@ pub fn renderShellHostedApps(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors
 fn renderOneWindowLight(w: *WinSlot, t: *const theme.ThemeColors) void {
     const wx = w.x;
     const wy = w.y;
-    fb.fillRect(wx + 3, wy + 3, DEF_W, DEF_H, rgb(0x30, 0x30, 0x30));
-    fb.fillRect(wx, wy + CAPTION_H, DEF_W, DEF_H - CAPTION_H, t.window_bg);
     const dwm = @import("dwm.zig");
+    if (dwm.isInitialized() and dwm.getConfig().shadow_enabled) {
+        fb.fillRect(wx + 4, wy + 4, DEF_W, DEF_H, rgb(0x28, 0x28, 0x30));
+    } else {
+        fb.fillRect(wx + 3, wy + 3, DEF_W, DEF_H, rgb(0x30, 0x30, 0x30));
+    }
+    fb.fillRect(wx, wy + CAPTION_H, DEF_W, DEF_H - CAPTION_H, t.window_bg);
     if (dwm.isGlassEnabled()) {
         dwm.renderGlassTintOnly(wx, wy, DEF_W, CAPTION_H, t.titlebar_active_left, .caption);
     } else {
         fb.drawGradientH(wx, wy, DEF_W, CAPTION_H, t.titlebar_active_left, t.titlebar_active_right);
     }
     drawCaptionButtons(wx, wy, DEF_W, CAPTION_H, w.cap_hover);
-    fb.drawTextTransparent(wx + 8, wy + 6, titleOf(w.app), t.titlebar_text);
-    fb.draw3DRect(wx, wy, DEF_W, DEF_H, rgb(0xC8, 0xD8, 0xE8), rgb(0x40, 0x50, 0x60));
-    fb.fillRect(wx + 2, wy + CAPTION_H, DEF_W - 4, DEF_H - CAPTION_H - 2, rgb(0xFE, 0xFE, 0xFF));
+    if (iconOf(w.app)) |ic| {
+        icons.drawThemedIcon(ic, wx + 6, wy + 6, 1, .aero);
+        fb.drawTextTransparent(wx + 30, wy + 6, titleOf(w.app), t.titlebar_text);
+    } else {
+        fb.drawTextTransparent(wx + 8, wy + 6, titleOf(w.app), t.titlebar_text);
+    }
+    fb.draw3DRect(wx, wy, DEF_W, DEF_H, rgb(0xE8, 0xF0, 0xF8), rgb(0x50, 0x60, 0x70));
+    renderClient(w, t);
 }
 
 fn renderOneWindow(w: *WinSlot, t: *const theme.ThemeColors) void {

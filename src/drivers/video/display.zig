@@ -700,7 +700,7 @@ pub fn renderDesktopFrame() void {
 }
 
 /// `scene_dirty`：整壁纸+壳层；`startmenu_repaint`：开始菜单悬停行变化时的局部重绘（Harmony 壁纸预设下避免整帧）；`caption_chrome_only`：仅标题栏带；`drag_repaint`：仅拖窗合成（`renderDragFrame`），不计入整场景以免与光标快速路径冲突。
-/// `shell_geometry_repaint`：边框缩放等非拖动态几何变化（`renderFrameEx` 全壳层，非整场景 `scene_dirty`）。
+/// `shell_geometry_repaint`：边框缩放或 `needs_post_drag_composite`（松手恢复全窗玻璃）等：`renderFrameEx` 全壳层，非整场景 `scene_dirty`。
 /// `scene_dirty` 为真时优先于其余路径。
 pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_repaint: bool, startmenu_repaint: bool, shell_geometry_repaint: bool) void {
     const panic_ctx = @import("../../rtl/panic_context.zig");
@@ -1278,6 +1278,8 @@ pub const MouseMovePaintHint = struct {
     needs_drag_repaint: bool = false,
     /// 边框拖拽改变 Explorer / 任务管理器几何：走 `renderer_aero.renderFrameEx` 非拖动态全壳层（非 `scene_dirty`）。
     needs_shell_frame_repaint: bool = false,
+    /// 左键释放在标题栏拖放结束：同上壳层全帧，但不 `scene_dirty`（不 `cursor_plane.invalidate`）。
+    needs_post_drag_composite: bool = false,
     needs_caption_chrome_only: bool = false,
     cursor_shape_changed: bool = false,
 
@@ -1287,6 +1289,7 @@ pub const MouseMovePaintHint = struct {
             .needs_startmenu_repaint = a.needs_startmenu_repaint or b.needs_startmenu_repaint,
             .needs_drag_repaint = a.needs_drag_repaint or b.needs_drag_repaint,
             .needs_shell_frame_repaint = a.needs_shell_frame_repaint or b.needs_shell_frame_repaint,
+            .needs_post_drag_composite = a.needs_post_drag_composite or b.needs_post_drag_composite,
             .needs_caption_chrome_only = a.needs_caption_chrome_only or b.needs_caption_chrome_only,
             .cursor_shape_changed = a.cursor_shape_changed or b.cursor_shape_changed,
         };
@@ -1379,6 +1382,7 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
         .needs_startmenu_repaint = needs_startmenu_repaint,
         .needs_drag_repaint = needs_drag_repaint,
         .needs_shell_frame_repaint = shell_geometry_changed,
+        .needs_post_drag_composite = false,
         .needs_caption_chrome_only = needs_caption_chrome_only,
         .cursor_shape_changed = cursor_shape_changed,
     };
@@ -1473,8 +1477,14 @@ pub fn isWindowDragging() bool {
     return drag_active or taskmgr_drag_active or builtin_apps.isDragging();
 }
 
-/// 左键释放：若曾拖动 Explorer / 任务管理器 / 内置窗，返回 true，主循环据此触发重绘（恢复完整标题栏玻璃，避免 noop mouseup 整屏 scene_dirty）。
-pub fn handleMouseRelease() bool {
+/// 左键释放：`needs_full_scene` 与 `MouseMovePaintHint.needs_full_scene` 合并后驱动 `scene_dirty`；`needs_post_drag_composite` 仅壳层全帧、不 invalidate。
+pub const MouseReleasePaintHint = struct {
+    needs_full_scene: bool = false,
+    needs_post_drag_composite: bool = false,
+};
+
+/// 边框缩放结束须 `scene_dirty`（`invalidate`）；仅标题栏拖放结束用 `needs_post_drag_composite`，避免松手整屏 save-under 失效导致卡顿。
+pub fn handleMouseRelease() MouseReleasePaintHint {
     const was_explorer = drag_active;
     const was_taskmgr = taskmgr_drag_active;
     const was_resize = (explorer_edge_resize != .none) or (taskmgr_edge_resize != .none);
@@ -1483,7 +1493,11 @@ pub fn handleMouseRelease() bool {
     explorer_edge_resize = .none;
     taskmgr_edge_resize = .none;
     const was_builtin_drag = builtin_apps.onMouseRelease();
-    return was_explorer or was_taskmgr or was_builtin_drag or was_resize;
+    const drag_shell = was_explorer or was_taskmgr or was_builtin_drag;
+    return .{
+        .needs_full_scene = was_resize,
+        .needs_post_drag_composite = drag_shell and !was_resize,
+    };
 }
 
 pub fn renderAeroDesktop() void {
@@ -2057,8 +2071,9 @@ fn renderTaskManagerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) voi
     renderTaskMgrW2kContent(win_x + 2, win_y + th, tm_w - 4, tm_h - th - 2, t);
 }
 
-/// 拖动态：标题栏无盒式模糊，客户区单色，与 `renderer_aero.renderExplorerWindowDragLight` 对齐。
+/// 拖动态：标题栏 TintOnly；客户区与 `renderTaskManagerW2kWindow` 一致（非白板）。
 pub fn renderTaskManagerWinDragLight(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
+    if (taskmgr_shell_state == .minimized) return;
     initTaskMgrPosition(scr_w, scr_h);
     const tm_w = taskmgr_w;
     const tm_h = taskmgr_h;
@@ -2066,7 +2081,11 @@ pub fn renderTaskManagerWinDragLight(scr_w: i32, scr_h: i32, t: *const ThemeColo
     const win_y = taskmgr_y;
     const th = shellTitlebarH();
 
-    fb.fillRect(win_x + 3, win_y + 3, tm_w, tm_h, rgb(0x30, 0x30, 0x30));
+    if (dwm_initialized and dwm_config.shadow_enabled) {
+        renderShadow(win_x, win_y, tm_w, tm_h, 6);
+    } else {
+        fb.fillRect(win_x + 3, win_y + 3, tm_w, tm_h, rgb(0x30, 0x30, 0x30));
+    }
     fb.fillRect(win_x, win_y + th, tm_w, tm_h - th, t.window_bg);
     if (dwm_initialized and dwm_config.glass_enabled) {
         renderGlassTintOnly(win_x, win_y, tm_w, th, t.titlebar_active_left, .caption);
@@ -2076,7 +2095,7 @@ pub fn renderTaskManagerWinDragLight(scr_w: i32, scr_h: i32, t: *const ThemeColo
     drawAeroCaptionButtons(win_x, win_y, tm_w, th, t, getTaskMgrCaptionBtnHover());
     fb.drawTextTransparent(win_x + 8, win_y + 5, "Zircon Task Manager", t.titlebar_text);
     drawAeroWindowFrameBorder(win_x, win_y, tm_w, tm_h);
-    fb.fillRect(win_x + 2, win_y + th, tm_w - 4, tm_h - th - 2, rgb(0xFE, 0xFE, 0xFF));
+    renderTaskMgrW2kContent(win_x + 2, win_y + th, tm_w - 4, tm_h - th - 2, t);
 }
 
 /// 大图标视图：标签在图标下方居中，并裁剪在右窗格与滚动条之间，避免中文溢出格子。

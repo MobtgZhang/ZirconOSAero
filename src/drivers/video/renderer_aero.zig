@@ -181,7 +181,8 @@ pub fn redrawCaptionBandsOnly() void {
 
 fn redrawExplorerCaptionBand(win_x: i32, win_y: i32, win_w: i32, aero_tb_h: i32, t: *const theme.ThemeColors) void {
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+        // 热态刷新每帧全宽 boxBlur 极重；与任务栏一致用 TintOnly。
+        dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
     } else {
         fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
     }
@@ -191,7 +192,7 @@ fn redrawExplorerCaptionBand(win_x: i32, win_y: i32, win_w: i32, aero_tb_h: i32,
 
 fn redrawTaskMgrCaptionBand(win_x: i32, win_y: i32, tm_w: i32, th: i32, t: *const theme.ThemeColors) void {
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(win_x, win_y, tm_w, th, t.titlebar_active_left, .caption);
+        dwm.renderGlassTintOnly(win_x, win_y, tm_w, th, t.titlebar_active_left, .caption);
     } else {
         fb.drawGradientH(win_x, win_y, tm_w, th, t.titlebar_active_left, t.titlebar_active_right);
     }
@@ -266,6 +267,7 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     // 略大于拖影/伪阴影外扩，避免局部重绘与 `paint_icons`/`paint_taskbar` 判定漏区。
     const dirty_pad: i32 = 22;
     const dirty_u = dragFrameDirtyUnion(w, h, ds, dirty_pad);
+    // `paint_icons` / `paint_taskbar` 仅在脏区与图标带/任务栏相交时重画，避免每像素移动全屏副产物。
 
     patchDragBackground(w, h);
 
@@ -343,7 +345,7 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     display.markCursorMotionDirtyRegions();
 }
 
-/// 拖动态：仅标题栏玻璃 + 窗框 + 单色客户区，避免每帧重绘导航/列表。
+/// 拖动态：标题栏仍为 TintOnly（无盒式模糊）；客户区与常态相同，避免「白板」观感。
 fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
     const wr = display.getWindowRect(scr_w, scr_h);
     const win_w = wr.w;
@@ -352,10 +354,13 @@ fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeCo
     const win_y = wr.y;
     const aero_tb_h: i32 = display.AERO_TITLEBAR_H;
 
-    fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
+    if (dwm.isShadowEnabled() and display.getPresentCount() > 0) {
+        mat.renderShadow(win_x, win_y, win_w, win_h, 8, 4);
+    } else {
+        fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
+    }
     fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
     if (dwm.isGlassEnabled()) {
-        // 拖动时每帧不重跑标题栏 boxBlur，仅 tint+高光，避免拖窗卡顿。
         dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
     } else {
         fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
@@ -366,7 +371,7 @@ fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeCo
     display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
 
     display.drawAeroWindowFrameBorder(win_x, win_y, win_w, win_h);
-    fb.fillRect(win_x + 2, win_y + aero_tb_h, win_w - 4, win_h - aero_tb_h - 2, rgb(0xFE, 0xFE, 0xFF));
+    renderExplorerContent(win_x + 2, win_y + aero_tb_h, win_w - 4, win_h - aero_tb_h - 2, t);
 }
 
 fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {

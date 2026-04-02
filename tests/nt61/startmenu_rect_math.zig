@@ -1,4 +1,5 @@
 //! 开始菜单扩展脏区：轴对齐矩形并集（主机 `zig test`，无内核依赖）。
+//! 与 `renderer_aero.redrawStartMenuRegionOnly` / `startmenu.getHoverHighlightRepaintBounds` 数学一致；**不依赖**嵌入壁纸预设索引。
 const std = @import("std");
 
 const Rect = struct { x: i32, y: i32, w: i32, h: i32 };
@@ -55,4 +56,14 @@ test "start menu shutdown chip fits in bottom band and inside main column" {
     const sd_rel_x = main_w - 116;
     try std.testing.expect(sd_rel_x >= 0);
     try std.testing.expect(sd_rel_x + sd_w <= main_w);
+}
+
+// 行级 hover 脏区并集应远小于整扇菜单高度（与 AERO7_ROW_H=24 及左右列行高一致的量级）。
+test "hover highlight dirty union is row sized not full panel" {
+    const row_h: i32 = 24;
+    const row1 = Rect{ .x = 58, .y = 200, .w = 188, .h = row_h };
+    const row2 = Rect{ .x = 258, .y = 260, .w = 170, .h = row_h };
+    const u = rectUnion(row1, row2);
+    try std.testing.expect(u.h < 200);
+    try std.testing.expect(u.h >= row_h and u.h <= row_h * 2 + 80);
 }

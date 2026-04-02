@@ -11,6 +11,8 @@ test "user syscall stub Ssdt matches ssdt_nt61" {
     try std.testing.expectEqual(ssdt.NtQueryValueKey, stub.Ssdt.NtQueryValueKey);
     try std.testing.expectEqual(ssdt.NtCreateKey, stub.Ssdt.NtCreateKey);
     try std.testing.expectEqual(ssdt.NtSetValueKey, stub.Ssdt.NtSetValueKey);
+    try std.testing.expectEqual(ssdt.NtEnumerateKey, stub.Ssdt.NtEnumerateKey);
+    try std.testing.expectEqual(ssdt.NtEnumerateValueKey, stub.Ssdt.NtEnumerateValueKey);
     try std.testing.expectEqual(ssdt.NtYieldExecution, stub.Ssdt.NtYieldExecution);
     try std.testing.expectEqual(ssdt.NtAllocateVirtualMemory, stub.Ssdt.NtAllocateVirtualMemory);
     try std.testing.expectEqual(ssdt.NtFreeVirtualMemory, stub.Ssdt.NtFreeVirtualMemory);

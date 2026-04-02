@@ -38,9 +38,17 @@ pub const NtSetValueKey = 0x5D;
 pub const NtWriteFile = 0x08;
 pub const NtReadFile = 0x07;
 /// Win32k 在真实 Windows 上为独立服务表；本内核将用户消息 syscall 折叠进同一分发器。
-/// 索引与项目路线图（NT 6.1 x64 公开对照表）对齐；完整核对见 j00ru/windows-syscalls 等公开枚举。
+/// `NtUserGetMessage`/`NtUserPeekMessage` 所用 **0x58/0x59** 与 j00ru `nt-per-system.json` 中 ntos **0x58=NtQueryAttributesFile** 等不一致，属本仓库有意折叠命名空间。
+/// 下列 **0x5A–0x5C** 同理；括号内为 j00ru `win32k-per-syscall.json` Win7 SP1 x64 **win32k** 服务号（对照用，非本内核 `RAX` 商业等价）。
+/// 见 [docs/cn/NT61_FULL_API_BACKLOG.md](../../../docs/cn/NT61_FULL_API_BACKLOG.md) §11、[docs/cn/SyscallABI.md](../../../docs/cn/SyscallABI.md)。
 pub const NtUserGetMessage = 0x58;
 pub const NtUserPeekMessage = 0x59;
+/// win32k 服务 **4111**（NtUserPostMessage）。
+pub const NtUserPostMessage = 0x5A;
+/// win32k 服务 **4132**（NtUserSetWindowPos）。
+pub const NtUserSetWindowPos = 0x5B;
+/// 公开表无独立 `NtUserSendMessage`；与 `user32.SendMessageA` 当前简化实现等价。
+pub const NtUserSendMessage = 0x5C;
 
 /// Ref: j00ru/windows-syscalls `nt-per-syscall.json` — Windows 7 SP1 x64.
 pub const NtRequestWaitReplyPort = 0x1F;

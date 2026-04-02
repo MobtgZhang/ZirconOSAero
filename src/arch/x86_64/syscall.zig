@@ -336,6 +336,15 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             const st = user32.ntUserPeekMessageSyscall(p1, p2, @truncate(p3), @truncate(p4), @truncate(a5));
             break :blk ntResult(st);
         },
+        ssdt.NtUserPostMessage => ntResult(user32.ntUserPostMessageSyscall(p1, @truncate(p2), p3, p4)),
+        ssdt.NtUserSetWindowPos => blk: {
+            const cxv = syscall_abi.userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const cyv = syscall_abi.userStackArg(frame, 8) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const flg = syscall_abi.userStackArg(frame, 16) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+            const st = user32.ntUserSetWindowPosSyscall(p1, p2, p3, p4, cxv, cyv, @truncate(flg));
+            break :blk ntResult(st);
+        },
+        ssdt.NtUserSendMessage => ntResult(user32.ntUserSendMessageSyscall(p1, @truncate(p2), p3, p4)),
         ssdt.NtCreatePort => dispatchNtCreatePort(frame),
         ssdt.NtConnectPort => dispatchNtConnectPort(frame),
         ssdt.NtRequestWaitReplyPort => syscall_nt_extras.dispatchNtRequestWaitReplyPort(frame),

@@ -7,8 +7,16 @@ const stub = @import("stub");
 
 test "user syscall stub Ssdt matches ssdt_nt61" {
     try std.testing.expectEqual(ssdt.NtClose, stub.Ssdt.NtClose);
+    try std.testing.expectEqual(ssdt.NtOpenKey, stub.Ssdt.NtOpenKey);
+    try std.testing.expectEqual(ssdt.NtQueryValueKey, stub.Ssdt.NtQueryValueKey);
+    try std.testing.expectEqual(ssdt.NtCreateKey, stub.Ssdt.NtCreateKey);
+    try std.testing.expectEqual(ssdt.NtSetValueKey, stub.Ssdt.NtSetValueKey);
     try std.testing.expectEqual(ssdt.NtYieldExecution, stub.Ssdt.NtYieldExecution);
     try std.testing.expectEqual(ssdt.NtAllocateVirtualMemory, stub.Ssdt.NtAllocateVirtualMemory);
     try std.testing.expectEqual(ssdt.NtFreeVirtualMemory, stub.Ssdt.NtFreeVirtualMemory);
+    try std.testing.expectEqual(ssdt.NtDelayExecution, stub.Ssdt.NtDelayExecution);
+    try std.testing.expectEqual(ssdt.NtCreateThread, stub.Ssdt.NtCreateThread);
+    try std.testing.expectEqual(ssdt.NtProtectVirtualMemory, stub.Ssdt.NtProtectVirtualMemory);
     try std.testing.expectEqual(ssdt.NtQuerySystemInformation, stub.Ssdt.NtQuerySystemInformation);
+    try std.testing.expectEqual(ssdt.NtDuplicateObject, stub.Ssdt.NtDuplicateObject);
 }

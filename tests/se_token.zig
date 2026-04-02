@@ -46,6 +46,13 @@ fn checkPrivilege(token: *const Token, priv: u64) bool {
     return (token.privileges & priv) == priv;
 }
 
+/// 与 `src/se/token.zig` `seAccessCheckMask` 同构（主机镜像，避免拉整棵内核依赖）。
+fn seAccessCheckMask(token: *const Token, desired: u32, object_grants: u32) bool {
+    if (token.owner.eql(SYSTEM_SID)) return true;
+    if (token.is_elevated) return true;
+    return (object_grants & desired) == desired;
+}
+
 test "checkAccess system SID grants all" {
     const sys = Token{ .owner = SYSTEM_SID, .is_elevated = true, .privileges = 0xFFFF_FFFF_FFFF_FFFF };
     try std.testing.expect(checkAccess(&sys, 0xFFFF_FFFF, 0) == true);
@@ -62,4 +69,10 @@ test "checkPrivilege" {
     try std.testing.expect(checkPrivilege(&sys, PRIV_DEBUG) == true);
     const user = Token{ .owner = USER_SID, .is_elevated = false, .privileges = 0 };
     try std.testing.expect(checkPrivilege(&user, PRIV_DEBUG) == false);
+}
+
+test "seAccessCheckMask grants must cover desired" {
+    const user = Token{ .owner = USER_SID, .is_elevated = false, .privileges = 0 };
+    try std.testing.expect(seAccessCheckMask(&user, GENERIC_READ, GENERIC_READ | GENERIC_WRITE));
+    try std.testing.expect(!seAccessCheckMask(&user, GENERIC_READ | GENERIC_WRITE, GENERIC_READ));
 }

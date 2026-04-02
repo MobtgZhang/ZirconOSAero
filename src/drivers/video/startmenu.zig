@@ -18,6 +18,7 @@ const dwm = @import("dwm.zig");
 const shell_strings = @import("shell_strings.zig");
 const app_cfg = @import("../../config/config.zig");
 const builtin_apps = @import("builtin_apps.zig");
+const kernel32 = @import("../../libs/kernel32.zig");
 
 fn drawMenuIcon(id: icons.IconId, x: i32, y: i32, scale: u32) void {
     icons.drawThemedIcon(id, x, y, scale, .aero);
@@ -105,6 +106,8 @@ pub const MenuAction = enum {
 
 var menu_visible: bool = false;
 var hover_index: i32 = -1;
+/// `updatePointerHover` 检测到变化时的上一索引，供 `getHoverHighlightRepaintBounds` 与当前 `hover_index` 做行级脏区并集。
+var hover_prev_for_partial_repaint: i32 = -1;
 /// 搜索框输入（开始菜单打开时由主循环 `feedSearchFromKeyboard` 填充）。
 var search_buf: [96]u8 = [_]u8{0} ** 96;
 var search_len: usize = 0;
@@ -120,19 +123,25 @@ pub fn isVisible() bool {
 pub fn show(_: MenuStyle) void {
     menu_visible = true;
     hover_index = -1;
+    hover_prev_for_partial_repaint = -1;
     power_flyout_open = false;
     all_programs_open = false;
     menu_frames_since_open = 0;
     search_len = 0;
+    search_hover_cached_bounds = null;
+    search_hover_cache_tick = 0;
 }
 
 pub fn hide() void {
     menu_visible = false;
     hover_index = -1;
+    hover_prev_for_partial_repaint = -1;
     power_flyout_open = false;
     all_programs_open = false;
     menu_frames_since_open = 0;
     search_len = 0;
+    search_hover_cached_bounds = null;
+    search_hover_cache_tick = 0;
 }
 
 /// 开始菜单可见时消费键盘字符；有缓冲变化返回 true。
@@ -256,6 +265,133 @@ pub fn getPaintBounds(scr_w: i32, scr_h: i32) MenuRect {
     return getInteractiveBounds(scr_w, scr_h);
 }
 
+/// 主面板内「列表项 / 底栏关机条 / 电源飞出 / 所有程序行」悬停高亮所需的**最小**轴对齐脏区（上一索引与当前索引对应行的并集）。
+/// `hoverIndexRowBounds` 已按搜索过滤与侧栏几何计算；若两索引均无法解析则返回 `null`，调用方回退 `getPaintBounds`。
+/// Ref: docs/cn/DesktopManagerSpec.md — 开始菜单局部重绘与 Shell 合成边界。
+pub fn getHoverHighlightRepaintBounds(scr_w: i32, scr_h: i32) ?MenuRect {
+    if (!menu_visible) return null;
+
+    var u: ?MenuRect = null;
+    if (hoverIndexRowBounds(scr_w, scr_h, hover_prev_for_partial_repaint)) |r| {
+        u = r;
+    }
+    if (hoverIndexRowBounds(scr_w, scr_h, hover_index)) |r| {
+        u = if (u) |uu| rectUnion(uu, r) else r;
+    }
+    if (search_len > 0) {
+        const now = kernel32.GetTickCount();
+        if (u) |fresh| {
+            if (search_hover_cached_bounds) |cb| {
+                if (now -% search_hover_cache_tick < search_hover_repaint_min_ms) {
+                    return cb;
+                }
+            }
+            search_hover_cached_bounds = fresh;
+            search_hover_cache_tick = now;
+        }
+    } else {
+        search_hover_cached_bounds = null;
+    }
+    return u;
+}
+
+fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
+    if (idx < 0) return null;
+    const L = innerLayout(scr_h);
+    const main_x = L.main_x;
+    const main_w = L.main_w;
+    const content_y = L.content_y;
+    const bottom_y = L.bottom_y;
+    const split_x = L.split_x;
+    const all_prog_y = L.all_prog_y;
+
+    if (idx >= 0 and idx < aero7_left.len) {
+        return hoverIndexRowBoundsLeft(scr_h, idx, content_y, all_prog_y, main_x, split_x);
+    }
+    if (idx >= 100 and idx < IDX_FLYOUT_BASE) {
+        const ri = idx - 100;
+        if (ri < 0 or ri >= aero7_right.len) return null;
+        return hoverIndexRowBoundsRight(scr_h, @intCast(ri), content_y, bottom_y, split_x, main_x, main_w);
+    }
+    if (idx == AERO7_IDX_ALL) {
+        return .{
+            .x = main_x + 6,
+            .y = all_prog_y - 1,
+            .w = AERO7_LEFT_W - 12,
+            .h = AERO7_ROW_H,
+        };
+    }
+    if (idx == IDX_FOOT_SHUTDOWN_BTN or idx == IDX_FOOT_SHUTDOWN_CHEVRON) {
+        const sd_x = main_x + main_w - 116;
+        const sd_y = bottom_y + @divTrunc(AERO7_BOTTOM_BAND_H - 28, 2);
+        return .{ .x = sd_x, .y = sd_y, .w = 106, .h = 28 };
+    }
+    if (idx >= IDX_FLYOUT_BASE + 1 and idx <= IDX_FLYOUT_BASE + 7) {
+        const fr = powerFlyoutRect(scr_w, scr_h);
+        const row = idx - (IDX_FLYOUT_BASE + 1);
+        const row_h: i32 = 22;
+        const iy = fr.y + 3 + row * row_h;
+        return .{ .x = fr.x + 3, .y = iy - 1, .w = fr.w - 6, .h = row_h };
+    }
+    if (idx >= IDX_ALLPROG_BASE and idx < IDX_ALLPROG_BASE + ALL_PROG_COUNT) {
+        const pr = allProgramsPanelRect(scr_w, scr_h);
+        const row_i = idx - IDX_ALLPROG_BASE;
+        const pad: i32 = 8;
+        var iy: i32 = pr.y + pad;
+        var i: i32 = 0;
+        while (i < ALL_PROG_COUNT) : (i += 1) {
+            if (!menuItemMatchesSearch(allProgEntryLabel(i))) continue;
+            if (i == row_i) {
+                return .{ .x = pr.x + 4, .y = iy - 1, .w = pr.w - 8, .h = AERO7_ROW_H };
+            }
+            iy += AERO7_ROW_H;
+        }
+        return null;
+    }
+    return null;
+}
+
+fn hoverIndexRowBoundsLeft(_: i32, li_target: i32, content_y: i32, all_prog_y: i32, main_x: i32, _: i32) ?MenuRect {
+    var iy: i32 = content_y + 6;
+    for (aero7_left, 0..) |item, li| {
+        if (!menuItemMatchesSearch(item.label)) continue;
+        if (iy + AERO7_ROW_H > all_prog_y - 2) break;
+        if (@as(i32, @intCast(li)) == li_target) {
+            return .{
+                .x = main_x + 6,
+                .y = iy - 1,
+                .w = AERO7_LEFT_W - 12,
+                .h = AERO7_ROW_H,
+            };
+        }
+        iy += AERO7_ROW_H;
+        if (search_len == 0 and item.separator_after) {
+            iy += 4;
+            if (li + 1 == pinned_left_count) iy += 5;
+        }
+    }
+    return null;
+}
+
+fn hoverIndexRowBoundsRight(_: i32, ri: usize, content_y: i32, bottom_y: i32, split_x: i32, _: i32, main_w: i32) ?MenuRect {
+    var iy: i32 = content_y + 6;
+    for (aero7_right, 0..) |item, rj| {
+        if (!menuItemMatchesSearch(item.label)) continue;
+        if (iy + AERO7_ROW_H > bottom_y - 6) break;
+        if (rj == ri) {
+            return .{
+                .x = split_x + 4,
+                .y = iy - 1,
+                .w = main_w - AERO7_LEFT_W - 12,
+                .h = AERO7_ROW_H,
+            };
+        }
+        iy += AERO7_ROW_H;
+        if (search_len == 0 and item.separator_after) iy += 4;
+    }
+    return null;
+}
+
 pub const MenuRect = struct {
     x: i32,
     y: i32,
@@ -272,6 +408,11 @@ pub const MenuRect = struct {
         return pxi >= x0 and pxi < x0 + w0 and pyi >= y0 and pyi < y0 + h0;
     }
 };
+
+/// 搜索过滤开启时合并 hover 重绘：两次 `getHoverHighlightRepaintBounds` 间隔不低于该毫秒数（`GetTickCount` 回绕安全用 `-%`）。
+const search_hover_repaint_min_ms: u32 = 50;
+var search_hover_cached_bounds: ?MenuRect = null;
+var search_hover_cache_tick: u32 = 0;
 
 fn innerLayout(scr_h: i32) struct {
     inner_x: i32,
@@ -407,6 +548,9 @@ pub fn updatePointerHover(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
     if (!menu_visible) return false;
     const prev = hover_index;
     hover_index = aero7HoverIndex(px, py, scr_w, scr_h);
+    if (prev != hover_index) {
+        hover_prev_for_partial_repaint = prev;
+    }
     return prev != hover_index;
 }
 
@@ -667,6 +811,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const inner_h = L.inner_h;
 
     if (dwm.isGlassEnabled()) {
+        // `panel_open_lite`：`renderGlassTintOnly` 无盒式模糊、不占 `blur_budget`；与 `display` 壳层 `setGlassLiteBlurEnabled` 同属交互降级（SOFTWARE_COMPOSITOR_WDDM.md）。
         if (panel_open_lite) {
             dwm.renderGlassTintOnly(inner_x, inner_y, inner_w, inner_h, rgb(0x28, 0x40, 0x60), .panel);
         } else {

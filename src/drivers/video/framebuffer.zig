@@ -120,6 +120,42 @@ pub fn markFullScreenDirty() void {
     dirty_count = MAX_DIRTY_RECTS;
 }
 
+/// 当前待 `flipDirty` 的脏矩形轴对齐外包（`dirty_count >= MAX` 视为整屏回退，返回 `null`）。不修改 dirty 状态。
+pub fn peekDirtyUnionPx() ?Rect {
+    if (dirty_count == 0 or dirty_count >= MAX_DIRTY_RECTS) return null;
+    var ux0: i32 = 0;
+    var uy0: i32 = 0;
+    var ux1: i32 = 0;
+    var uy1: i32 = 0;
+    var first = true;
+    const fw: i32 = @intCast(fb_config.width);
+    const fh: i32 = @intCast(fb_config.height);
+    for (dirty_rects[0..dirty_count]) |r| {
+        const rx0: i32 = @max(r.x, 0);
+        const ry0: i32 = @max(r.y, 0);
+        const rw: i32 = @max(r.w, 0);
+        const rh: i32 = @max(r.h, 0);
+        if (rw == 0 or rh == 0) continue;
+        const rx1: i32 = @min(rx0 + rw, fw);
+        const ry1: i32 = @min(ry0 + rh, fh);
+        if (rx0 >= rx1 or ry0 >= ry1) continue;
+        if (first) {
+            ux0 = rx0;
+            uy0 = ry0;
+            ux1 = rx1;
+            uy1 = ry1;
+            first = false;
+        } else {
+            ux0 = @min(ux0, rx0);
+            uy0 = @min(uy0, ry0);
+            ux1 = @max(ux1, rx1);
+            uy1 = @max(uy1, ry1);
+        }
+    }
+    if (first) return null;
+    return .{ .x = ux0, .y = uy0, .w = ux1 - ux0, .h = uy1 - uy0 };
+}
+
 // ── Driver State ──
 
 var fb_config: FramebufferConfig = .{};

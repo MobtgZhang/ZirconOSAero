@@ -1,6 +1,7 @@
 //! DWM 合成器 — NT 6.1 Aero（D3D9 风格重定向表面 + 高斯模糊玻璃）
 //! 表面标志语义见 `src/config/dwm_surface_spec.zig`、`docs/cn/DesktopManagerSpec.md`。
 
+const std = @import("std");
 const klog = @import("../../rtl/klog.zig");
 const nt61_aero = @import("nt61_aero_defaults");
 const dwm_surface_spec = @import("../../config/dwm_surface_spec.zig");
@@ -61,6 +62,11 @@ pub const AeroConfig = struct {
 };
 
 const MAX_SURFACES: usize = 128;
+
+/// 每表面缩略图（任务栏 / Flip3D 共用降采样源）。Win7 级预览常见更大外包；此处 **20×15** 为 NT61 契约下的 CPU 成本 **语义子集**（2×2 盒滤 + 节流，见契约矩阵 §4.1）。
+pub const surface_thumb_w: u32 = 20;
+pub const surface_thumb_h: u32 = 15;
+pub const surface_thumb_pixels: usize = surface_thumb_w * surface_thumb_h;
 
 var backend: CompositorBackend = .none;
 var state: CompositorState = .uninitialized;
@@ -163,6 +169,20 @@ pub fn markSurfaceDirty(id: u16) void {
     surfaces[id].dirty = true;
 }
 
+/// 单点写入 `RedirectedSurface.flags`（光标层等特例经 `cursorOverlayKernelSurfaceFlags`）。
+pub fn setSurfaceKernelFlags(id: u16, flags: SurfaceFlags) void {
+    if (id >= surface_count) return;
+    surfaces[id].flags = flags;
+}
+
+fn cursorOverlayKernelSurfaceFlags() SurfaceFlags {
+    return .{
+        .topmost = true,
+        .has_caption = false,
+        .dwm_ncrendering = true,
+    };
+}
+
 pub fn compose() void {
     if (state != .ready) return;
     state = .composing;
@@ -199,8 +219,7 @@ fn allocateCursorSurface() void {
     if (id) |cid| {
         cursor_surface_id = cid;
         surfaces[cid].z_order = 32767;
-        surfaces[cid].flags.topmost = true;
-        surfaces[cid].flags.has_caption = false;
+        setSurfaceKernelFlags(cid, cursorOverlayKernelSurfaceFlags());
     }
 }
 
@@ -223,14 +242,115 @@ pub fn getFrameNumber() u64 {
 pub fn notifyFramePresented() void {
     if (!compositor_initialized) return;
     frame_number += 1;
+    const sched = @import("../../ke/scheduler.zig");
+    const now = sched.getTicks();
+    var i: u16 = 0;
+    while (i < surface_count) : (i += 1) {
+        if (!surfaces[i].visible or surfaces[i].owner_pid == 0) continue;
+        if (!surfaces[i].dirty) continue;
+        refreshSurfaceThumbFromFramebuffer(i, now);
+    }
 }
 
 pub fn isInitialized() bool {
     return compositor_initialized;
 }
 
-/// 占位：`WM_DWMSENDICONICTHUMBNAIL` / 任务栏缩略图协议（NT 6.1 DWM）；依赖离屏表面与 Shell 队列后实现。
-pub fn enqueueIconicThumbnailRequest(_: u16) void {}
+var iconic_thumbnail_serial: u64 = 0;
+
+/// 每表面缩略像素 + 上次刷新调度 tick（节流间隔见 `thumb_refresh_min_ticks`）。
+var surface_thumb_buf: [MAX_SURFACES][surface_thumb_pixels]u32 = undefined;
+var surface_thumb_last_tick: [MAX_SURFACES]u64 = @splat(0);
+
+/// 缩略图刷新最小间隔：**调度器 tick**（非毫秒）。换算：`ms ≈ ticks * (1000 / tick_hz)`；tick_hz 见 `config.sys_config.getTickRateHz()`（典型 100Hz → 20 tick ≈ 200ms，减轻任务栏悬停缩略 CPU 缩放）。
+pub var thumb_refresh_min_ticks: u64 = 20;
+
+pub fn getSurfaceZOrder(id: u16) ?i16 {
+    if (id >= surface_count) return null;
+    return surfaces[id].z_order;
+}
+
+pub fn isSurfaceVisible(id: u16) bool {
+    if (id >= surface_count) return false;
+    return surfaces[id].visible;
+}
+
+/// 只读访问缩略缓冲（无则未刷新过，可能全 0）。
+pub fn getSurfaceThumbPixels(id: u16) ?[]const u32 {
+    if (id >= surface_count) return null;
+    return surface_thumb_buf[id][0..surface_thumb_pixels];
+}
+
+fn refreshSurfaceThumbFromFramebuffer(id: u16, now_tick: u64) void {
+    if (id >= surface_count or !surfaces[id].visible) return;
+    const prev = surface_thumb_last_tick[id];
+    if (prev != 0 and now_tick -% prev < thumb_refresh_min_ticks) return;
+    surface_thumb_last_tick[id] = now_tick;
+
+    const s = surfaces[id];
+    const fw: i64 = @intCast(fb.getWidth());
+    const fh: i64 = @intCast(fb.getHeight());
+    if (fw <= 0 or fh <= 0) return;
+    const sw: i64 = @max(1, @as(i64, @intCast(s.width)));
+    const sh: i64 = @max(1, @as(i64, @intCast(s.height)));
+    const x0 = @as(i64, s.x);
+    const y0 = @as(i64, s.y);
+
+    var ty: u32 = 0;
+    while (ty < surface_thumb_h) : (ty += 1) {
+        var tx: u32 = 0;
+        while (tx < surface_thumb_w) : (tx += 1) {
+            const u_tx: i64 = @intCast(tx);
+            const u_ty: i64 = @intCast(ty);
+            const sx64 = x0 + @divTrunc(u_tx * sw, @as(i64, @intCast(surface_thumb_w)));
+            const sy64 = y0 + @divTrunc(u_ty * sh, @as(i64, @intCast(surface_thumb_h)));
+            const sx = std.math.clamp(sx64, 0, fw - 1);
+            const sy = std.math.clamp(sy64, 0, fh - 1);
+            const sx1 = @min(sx + 1, fw - 1);
+            const sy1 = @min(sy + 1, fh - 1);
+            var rr: u32 = 0;
+            var gg: u32 = 0;
+            var bb: u32 = 0;
+            for ([_]i64{ 0, 1 }) |ox| {
+                for ([_]i64{ 0, 1 }) |oy| {
+                    const px = if (ox == 0) sx else sx1;
+                    const py = if (oy == 0) sy else sy1;
+                    const c = fb.getPixel32(@intCast(px), @intCast(py));
+                    rr += c & 0xFF;
+                    gg += (c >> 8) & 0xFF;
+                    bb += (c >> 16) & 0xFF;
+                }
+            }
+            surface_thumb_buf[id][ty * surface_thumb_w + tx] = (rr / 4) | ((gg / 4) << 8) | ((bb / 4) << 16);
+        }
+    }
+}
+
+/// 供 Flip3D / 调试：收集「像用户窗」的表面（略过壁纸/光标占位等）。
+pub fn collectShellWindowSurfaceIds(buf: []u16) usize {
+    var n: usize = 0;
+    var i: u16 = 0;
+    while (i < surface_count) : (i += 1) {
+        const s = surfaces[i];
+        if (!s.visible or s.owner_pid == 0) continue;
+        if (s.width < 16 or s.height < 16) continue;
+        if (s.z_order >= 30000) continue;
+        if (n < buf.len) buf[n] = i;
+        n += 1;
+    }
+    return n;
+}
+
+/// `WM_DWMSENDICONICTHUMBNAIL` / 任务栏缩略图请求计数（与 `display` 壳层采样帧缓冲配合；语义见 MS Learn DWM 消息）。
+pub fn enqueueIconicThumbnailRequest(surface_id: u16) void {
+    iconic_thumbnail_serial +%= 1;
+    const sched = @import("../../ke/scheduler.zig");
+    refreshSurfaceThumbFromFramebuffer(surface_id, sched.getTicks());
+}
+
+pub fn iconicThumbnailSerial() u64 {
+    return iconic_thumbnail_serial;
+}
 
 pub fn getAeroConfig() *const AeroConfig {
     return &aero_cfg;

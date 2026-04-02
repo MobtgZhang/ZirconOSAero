@@ -7,6 +7,7 @@
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 
+const std = @import("std");
 const fb = @import("framebuffer.zig");
 const wd = @import("wallpaper_data");
 
@@ -59,6 +60,12 @@ fn coverMap(dx: u32, dy: u32, sw: u32, sh: u32, dw: u32, dh: u32) struct { sx: u
     const sy = y0 + @as(u32, @intCast((@as(u64, dy) * vh1) / dy_d));
     const sx = @as(u32, @intCast((@as(u64, dx) * @as(u64, sw -| 1)) / dx_d));
     return .{ .sx = @min(sx, sw - 1), .sy = @min(sy, sh - 1) };
+}
+
+/// 与 `renderer_aero.wallpaper_preset_count`（12）一致；用于开始菜单局部重绘门闸。
+pub fn presetSupportsPartialRedraw(preset: u8) bool {
+    const sl = presetSlice(preset % 12) orelse return false;
+    return sl.w > 0 and sl.h > 0;
 }
 
 fn presetSlice(preset: u8) ?struct { bytes: []const u8, w: u32, h: u32 } {
@@ -117,5 +124,12 @@ pub fn drawPresetRegion(preset: u8, scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw
             const c = sampleRgba(info.bytes, sw, sh, m.sx, m.sy);
             fb.putPixel32(dx, dy, c);
         }
+    }
+}
+
+test "all embedded wallpaper presets support partial redraw regions" {
+    var p: u8 = 0;
+    while (p < 12) : (p += 1) {
+        try std.testing.expect(presetSupportsPartialRedraw(p));
     }
 }

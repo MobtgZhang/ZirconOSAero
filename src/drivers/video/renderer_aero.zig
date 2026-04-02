@@ -74,18 +74,23 @@ pub fn renderFrame() void {
 }
 
 /// 仅 Explorer + 任务管理器标题栏带（毛玻璃/渐变 + 三键热态），供 `display.renderDesktopFrameEx` 局部刷新；不画壁纸与窗体客户区。
-/// 当前壁纸预设是否支持「开始菜单脏区」局部修补（与 `patchHarmonyWallpaperRegion` 一致）。
+/// 当前壁纸预设是否支持「开始菜单脏区」局部修补（嵌入 PNG 存在且尺寸非零；否则应回退整场景，见契约矩阵 §4.1）。
 pub fn startMenuRepaintCanPatchWallpaper() bool {
-    return true;
+    return wallpaper_bitmap.presetSupportsPartialRedraw(wallpaperPresetIndex());
 }
 
+/// 与任务栏相交高度 ≤ 此阈值时视为「底边 seam 膨胀」所致，跳过整根任务栏重绘（避免 hover 每行触发全宽 Aero 任务栏合成）。
+const startmenu_taskbar_seam_skip_max_h: i32 = 8;
+
 /// 开始菜单悬停变化时：仅修补壁纸条带 + 与脏区相交的壳层，再重画菜单（避免整帧 `renderFullFrame`）。
+/// 行级脏区：`getHoverHighlightRepaintBounds` 与壁纸预设无关（`startmenu` 内统一数学）；缺省时回退 `getPaintBounds`。
 pub fn redrawStartMenuRegionOnly(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
     if (!startmenu.isVisible()) return;
 
-    const mb = startmenu.getPaintBounds(w, h);
+    const mb = startmenu.getHoverHighlightRepaintBounds(w, h) orelse startmenu.getPaintBounds(w, h);
     var dirty = display.ShellRect{ .x = mb.x, .y = mb.y, .w = mb.w, .h = mb.h };
-    dirty = display.rectInflate(dirty, 8);
+    // 行级脏区已紧包高亮条；用小膨胀即可，减小与任务栏带的相交面积。
+    dirty = display.rectInflate(dirty, 4);
     dirty = display.rectClampToScreen(dirty, w, h);
     if (dirty.w <= 0 or dirty.h <= 0) return;
 
@@ -123,7 +128,13 @@ pub fn redrawStartMenuRegionOnly(w: i32, h: i32, t: *const theme.ThemeColors, tb
     }
 
     const tb_r = display.taskbarBoundsRect(w, h);
-    if (display.rectsOverlap(dirty, tb_r)) {
+    var redraw_taskbar = display.rectsOverlap(dirty, tb_r);
+    if (redraw_taskbar) {
+        if (display.rectIntersection(dirty, tb_r)) |inter| {
+            if (inter.h <= startmenu_taskbar_seam_skip_max_h) redraw_taskbar = false;
+        }
+    }
+    if (redraw_taskbar) {
         renderTaskbar(w, h, t, tb_h);
         dirty = display.rectUnion(dirty, tb_r);
     }

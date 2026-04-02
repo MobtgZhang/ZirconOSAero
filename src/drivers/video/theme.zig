@@ -1,7 +1,7 @@
 //! NT 6.1 (Windows 7) Aero — 唯一受支持的桌面主题。
 //!
-//! `rgb`：**BGR888 装入 u32 低 24 位**（与 Win32 COLORREF / `nt61_aero_defaults` 字面值一致）。
-//! 用户态 Aero 库 `desktop/aero/src/theme.zig` 使用相反分量顺序，勿混用。
+//! `rgb`：**BGR888 装入 u32 低 24 位**（B 最低字节；与 MS Learn **COLORREF** 的 R-低字节顺序不同）。
+//! 与用户态 `desktop/aero/src/theme.zig` 或注册表 DWORD 互通时，**必须**经 `src/config/color_nt61.zig` 转换，勿混用字面量。
 
 pub fn rgb(r: u32, g: u32, b: u32) u32 {
     return b | (g << 8) | (r << 16);

@@ -20,6 +20,9 @@ const cursor_plane = @import("cursor_plane.zig");
 const builtin_apps = @import("builtin_apps.zig");
 const config = @import("../../config/config.zig");
 const process = @import("../../ps/process.zig");
+const user32 = @import("../../subsystems/win32/user32.zig");
+const virtio_gpu_pci = @import("virtio_gpu_pci.zig");
+const color_nt61 = @import("../../config/color_nt61.zig");
 
 pub const theme_mod = @import("theme.zig");
 pub const dwm_mod = @import("dwm.zig");
@@ -202,6 +205,19 @@ const taskmgr_min_frame_h: i32 = 160;
 
 var explorer_caption_btn_hover: AeroCaptionBtnHover = .none;
 var taskmgr_caption_btn_hover: AeroCaptionBtnHover = .none;
+
+/// Alt+Tab 风格 Flip3D 近似：全屏暗化 + 叠放窗口卡片（CPU 2D；无 GPU 透视）。
+var flip3d_overlay_active: bool = false;
+/// 打开 Flip3D 后首帧需整场景采样；之后冻结背景仅叠光标/覆盖层（见 `renderSceneWithoutSoftwareCursorFlip3dAware`）。
+var flip3d_needs_scene_refresh: bool = false;
+/// 任务栏 Explorer 磁贴悬停缩略图（`WM_DWMSENDICONICTHUMBNAIL` 壳层可视占位；自帧缓冲降采样）。
+var taskbar_explorer_thumb: [20 * 15]u32 = [_]u32{0} ** (20 * 15);
+var taskbar_explorer_thumb_valid: bool = false;
+var taskbar_explorer_thumb_last_tick: u64 = 0;
+
+pub fn isFlip3dOverlayActive() bool {
+    return flip3d_overlay_active;
+}
 
 pub fn getExplorerCaptionBtnHover() AeroCaptionBtnHover {
     return explorer_caption_btn_hover;
@@ -516,7 +532,7 @@ pub fn patchVerticalGradientRegion(scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw:
     fb.drawGradientV(r.x, r.y, r.w, r.h, c_top, c_bot);
 }
 
-/// Redraw wallpaper in a dirty rectangle (must match full-frame `wallpaper_bitmap` cover mapping).
+/// Redraw wallpaper in a dirty rectangle（**所有** `wallpaper_bitmap` 预设；函数名历史遗留「Harmony」）。
 pub fn patchHarmonyWallpaperRegion(scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw: i32, rh: i32) void {
     wallpaper_bitmap.drawPresetRegion(renderer_aero.wallpaperPresetIndex(), scr_w, scr_h, rx, ry, rw, rh);
 }
@@ -556,6 +572,16 @@ fn renderSceneWithoutSoftwareCursor() void {
     syncAeroGlassFastPath();
     panic_ctx.setPhase(0x0002_0071);
     renderer_aero.renderFrameEx(false);
+}
+
+fn renderSceneWithoutSoftwareCursorFlip3dAware(scene_dirty: bool) void {
+    const freeze_bg = flip3d_overlay_active and !flip3d_needs_scene_refresh;
+    if (freeze_bg and !scene_dirty) {
+        syncAeroGlassFastPath();
+    } else {
+        renderSceneWithoutSoftwareCursor();
+        if (flip3d_overlay_active) flip3d_needs_scene_refresh = false;
+    }
 }
 
 /// Returns the taskbar height for the active theme（与 Aero 任务栏绘制一致）。
@@ -702,6 +728,7 @@ pub fn renderDesktopFrame() void {
 /// `scene_dirty`：整壁纸+壳层；`startmenu_repaint`：开始菜单悬停行变化时的局部重绘（Harmony 壁纸预设下避免整帧）；`caption_chrome_only`：仅标题栏带；`drag_repaint`：仅拖窗合成（`renderDragFrame`），不计入整场景以免与光标快速路径冲突。
 /// `shell_geometry_repaint`：边框缩放或 `needs_post_drag_composite`（松手恢复全窗玻璃）等：`renderFrameEx` 全壳层，非整场景 `scene_dirty`。
 /// `scene_dirty` 为真时优先于其余路径。
+/// **诊断**：`-Ddwm_blur_stats=true` 时本帧结束打 `klog.debug` 一行（盒式模糊调用次数、预算拒绝、`renderGlassTintOnly` 次数）；常与 `-Ddesktop_bisect` 分帧日志配合。
 pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_repaint: bool, startmenu_repaint: bool, shell_geometry_repaint: bool) void {
     const panic_ctx = @import("../../rtl/panic_context.zig");
     panic_ctx.setPhase(0x0002_0001);
@@ -710,6 +737,8 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
 
     dwm_mod.beginFrameBlurBudget();
 
+    // Blur 策略（与 `syncAeroGlassFastPath` 矩阵，见 SOFTWARE_COMPOSITOR_WDDM.md）：此处按 **壳层 UI** 打开态启用轻量模糊；
+    // `present`/其他路径上较晚调用的 `syncAeroGlassFastPath` 再按 **首帧跳过盒式模糊**、**拖窗** 覆盖。二者均为 dwm 帧内布尔开关，不重复扣 `blur_budget_pixel_passes`。
     const shell_glass_lite = ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible;
     dwm_mod.setGlassLiteBlurEnabled(shell_glass_lite);
     defer dwm_mod.setGlassLiteBlurEnabled(false);
@@ -724,7 +753,8 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     // 否则光标停留在 syncCursorFromMouse 的初值（VirtIO 事件无法驱动绘制）。
     const mouse = @import("../../drivers/input/mouse.zig");
 
-    const interp_limit: u32 = if (isWindowDragging() or ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) 2 else 8;
+    // 开始菜单打开时仍保留适度插值步数，避免重绘帧后光标长时间「追赶」指针（原 2 步过苛）。
+    const interp_limit: u32 = if (isWindowDragging() or ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) 5 else 8;
     var interp_steps: u32 = 0;
     while (mouse.isInterpolating() and interp_steps < interp_limit) : (interp_steps += 1) {
         mouse.interpolateStep();
@@ -746,7 +776,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     if (scene_dirty) {
         path_kind = .full;
         panic_ctx.setPhase(0x0002_0030);
-        renderSceneWithoutSoftwareCursor();
+        renderSceneWithoutSoftwareCursorFlip3dAware(true);
         panic_ctx.setPhase(0x0002_0040);
         cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     } else if (drag_repaint) {
@@ -783,7 +813,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
         } else {
             path_kind = .full;
             panic_ctx.setPhase(0x0002_0031);
-            renderSceneWithoutSoftwareCursor();
+            renderSceneWithoutSoftwareCursorFlip3dAware(true);
             panic_ctx.setPhase(0x0002_0044);
             cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
         }
@@ -809,7 +839,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
             } else {
                 path_kind = .full;
                 panic_ctx.setPhase(0x0002_0032);
-                renderSceneWithoutSoftwareCursor();
+                renderSceneWithoutSoftwareCursorFlip3dAware(false);
                 panic_ctx.setPhase(0x0002_0046);
                 cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
             }
@@ -818,11 +848,16 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
             if (!cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
                 path_kind = .full;
                 panic_ctx.setPhase(0x0002_0033);
-                renderSceneWithoutSoftwareCursor();
+                renderSceneWithoutSoftwareCursorFlip3dAware(false);
                 panic_ctx.setPhase(0x0002_0047);
                 cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
             }
         }
+    }
+    if (flip3d_overlay_active) {
+        panic_ctx.setPhase(0x0002_0067);
+        renderFlip3dOverlay(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
+        cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     }
     panic_ctx.setPhase(0x0002_0060);
     syncDwmCompositorShellMetadata(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
@@ -834,6 +869,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     if (shell_blur_cooldown_frames > 0) {
         shell_blur_cooldown_frames -= 1;
     }
+    dwm_mod.flushBlurFrameStatsDebug();
 }
 
 fn updateSmoothCursor(raw_x: i32, raw_y: i32) void {
@@ -887,9 +923,16 @@ pub fn hideStartMenu() void {
     cursor_plane.invalidate();
 }
 
-/// 键盘快捷键（如 Ctrl+Shift+Esc → 任务管理器；Ctrl+Alt+F9 → 循环壁纸预设）。返回 true 时需整屏重绘。
+/// 键盘快捷键（如 Ctrl+Shift+Esc → 任务管理器；Ctrl+Alt+F9 → 循环壁纸预设；Alt+Tab → Flip3D 近似）。返回 true 时需整屏重绘。
 pub fn handleDesktopHotkeys() bool {
     const arch = @import("../../arch.zig");
+    const nt61_aero = @import("nt61_aero_defaults");
+    if (nt61_aero.KernelCompositor.flip3d_enabled and arch.consumeFlip3dHotkey()) {
+        flip3d_overlay_active = !flip3d_overlay_active;
+        flip3d_needs_scene_refresh = flip3d_overlay_active;
+        cursor_plane.invalidate();
+        return true;
+    }
     if (arch.consumeTaskMgrHotkey()) {
         bringTaskManagerToFront();
         return true;
@@ -1377,6 +1420,8 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
     updateDesktopCursorKind(x, y, prev_kind);
     const cursor_shape_changed = prev_kind != desktop_cursor_kind;
 
+    maybeRefreshExplorerTaskbarThumb(x, y, scr_w, scr_h);
+
     return .{
         .needs_full_scene = false,
         .needs_startmenu_repaint = needs_startmenu_repaint,
@@ -1505,6 +1550,7 @@ pub fn renderAeroDesktop() void {
     syncAeroGlassFastPath();
     renderer_aero.renderFrameEx(false);
     cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
+    dwm_mod.flushBlurFrameStatsDebug();
 }
 
 /// Harmony-style wallpaper (Zircon brand: deep blue + soft bloom + edge vignette; Aero 7 氛围)
@@ -1674,6 +1720,7 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     fb.drawVLine(peek_x, tb_y, tb_h, rgb(0x90, 0xB0, 0xD0));
     const right_rail_x = clampI32FromI64(@as(i64, scr_w) - 1);
     fb.drawVLine(right_rail_x, tb_y, tb_h, rgb(0x20, 0x30, 0x44));
+    paintExplorerTaskbarThumbnailPreview(scr_w, scr_h);
 }
 
 pub fn initAeroDwm() void {
@@ -1688,11 +1735,13 @@ pub fn initAeroDwm() void {
         klog.debug("AeroDWM: compositor_config_epoch=%u (config handshake trace)", .{dwm_mod.compositor_config_epoch});
 
         dwm_mod.init(cfg);
+        dwm_mod.syncPolicyFromRegistry();
         if (fb.isInitialized()) {
             dwm_mod.applyPlatformAndResolutionTuning(fb.getWidth(), fb.getHeight());
         }
         const tuned = dwm_mod.getConfig().*;
         dwm_config = tuned;
+        desktop_ctx.dwm_active = tuned.composition_enabled and tuned.glass_enabled;
 
         mat.init(.glass);
         mat.configureGlass(.{
@@ -1705,6 +1754,22 @@ pub fn initAeroDwm() void {
         });
 
         dwm_comp.initAero(.{});
+
+        const hz = config.getTickRateHz();
+        dwm_comp.thumb_refresh_min_ticks = @max(4, (hz *% 120) / 1000);
+        virtio_gpu_pci.bringupMmioIfProbed();
+        // 可选 GPU 路径：VirtIO 2D scratch 与帧缓冲子矩形恒等往返（失败仅打日志，合成仍走 CPU）。
+        if (fb.isInitialized() and virtio_gpu_pci.compositorOffloadAvailable()) {
+            const w = @min(@as(u32, 4), fb.getWidth());
+            const h = @min(@as(u32, 4), fb.getHeight());
+            if (w > 0 and h > 0) {
+                if (virtio_gpu_pci.compositorTryRoundTripFramebufferRect(0, 0, w, h)) {
+                    klog.info("VirtIO-GPU: display ↔ scratch TRANSFER round-trip ok ({d}×{d})", .{ w, h });
+                } else {
+                    klog.warn("VirtIO-GPU: display ↔ scratch round-trip failed (CPU compositor only; check 32bpp)", .{});
+                }
+            }
+        }
     }
 }
 
@@ -1722,12 +1787,12 @@ var dwm_initialized: bool = false;
 pub fn initDwm(cfg: DwmConfig) void {
     dwm_config = cfg;
     dwm_initialized = true;
-    desktop_ctx.dwm_active = cfg.glass_enabled;
+    desktop_ctx.dwm_active = cfg.composition_enabled and cfg.glass_enabled;
     desktop_ctx.smooth_cursor.lerp_factor = cfg.cursor_lerp_factor;
 }
 
 pub fn isDwmEnabled() bool {
-    return dwm_initialized and dwm_config.glass_enabled;
+    return dwm_initialized and dwm_config.composition_enabled;
 }
 
 pub fn getDwmConfig() *const DwmConfig {
@@ -1735,8 +1800,9 @@ pub fn getDwmConfig() *const DwmConfig {
 }
 
 pub fn setDwmGlass(enabled: bool) void {
-    dwm_config.glass_enabled = enabled;
-    desktop_ctx.dwm_active = enabled;
+    dwm_mod.setGlass(enabled);
+    dwm_config = dwm_mod.getConfig().*;
+    desktop_ctx.dwm_active = dwm_config.composition_enabled and dwm_config.glass_enabled;
 }
 
 pub fn setSmoothCursorFactor(factor: i32) void {
@@ -1744,7 +1810,7 @@ pub fn setSmoothCursorFactor(factor: i32) void {
 }
 
 /// Aero Glass（NT 6.1 DWM 概念）: 委托 `dwm.zig`（每帧模糊预算、`glass_lite`、任务栏半径上限与 `nt61_aero_defaults` 一致）。
-pub fn renderGlassEffect(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: GlassChrome) void {
+pub fn renderGlassEffect(x: i32, y: i32, w: i32, h: i32, tint: color_nt61.KernelBgr888Low24, chrome: GlassChrome) void {
     if (!use_framebuffer or !fb.isInitialized()) return;
     if (!dwm_initialized or !dwm_config.glass_enabled) {
         fb.fillRect(x, y, w, h, if (tint != 0) tint else dwm_config.glass_tint_color);
@@ -1754,7 +1820,7 @@ pub fn renderGlassEffect(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: Glas
 }
 
 /// 无盒式模糊（小菜单、拖窗标题栏等）；仍走 tint + 高光 + `GlassChrome` 边框。
-pub fn renderGlassTintOnly(x: i32, y: i32, w: i32, h: i32, tint: u32, chrome: GlassChrome) void {
+pub fn renderGlassTintOnly(x: i32, y: i32, w: i32, h: i32, tint: color_nt61.KernelBgr888Low24, chrome: GlassChrome) void {
     if (!use_framebuffer or !fb.isInitialized()) return;
     if (!dwm_initialized or !dwm_config.glass_enabled) {
         fb.fillRect(x, y, w, h, if (tint != 0) tint else dwm_config.glass_tint_color);
@@ -2892,6 +2958,127 @@ fn hitTestTaskbarComputerPill(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
     return pointInRectI32(px, py, r.x, r.y, r.w, r.h);
 }
 
+/// 任务栏「计算机」磁贴悬停缩略：当前采样 **Explorer 客户区帧缓冲**（与 `syncDwmCompositorShellMetadata` 中 `explorer_dwm_surface_id` 元数据并行，非第三方 HWND 枚举）。
+fn maybeRefreshExplorerTaskbarThumb(px: i32, py: i32, scr_w: i32, scr_h: i32) void {
+    const pill = taskbarComputerPillRect(scr_w, scr_h) orelse {
+        taskbar_explorer_thumb_valid = false;
+        return;
+    };
+    if (!pointInRectI32(px, py, pill.x, pill.y, pill.w, pill.h)) {
+        taskbar_explorer_thumb_valid = false;
+        return;
+    }
+    if (explorer_shell_state == .minimized) {
+        taskbar_explorer_thumb_valid = false;
+        return;
+    }
+    const sched = @import("../../ke/scheduler.zig");
+    const now = sched.getTicks();
+    if (taskbar_explorer_thumb_valid and now -% taskbar_explorer_thumb_last_tick < dwm_comp.thumb_refresh_min_ticks) return;
+    taskbar_explorer_thumb_last_tick = now;
+
+    const wr = getWindowRect(scr_w, scr_h);
+    const tw: u32 = 20;
+    const th: u32 = 15;
+    const sw: u32 = @intCast(@max(1, wr.w));
+    const sh: u32 = @intCast(@max(1, wr.h));
+    const wx: u32 = @intCast(wr.x);
+    const wy: u32 = @intCast(wr.y);
+    var ty: u32 = 0;
+    while (ty < th) : (ty += 1) {
+        var tx: u32 = 0;
+        while (tx < tw) : (tx += 1) {
+            const sx = wx + (tx *% sw) / tw;
+            const sy = wy + (ty *% sh) / th;
+            taskbar_explorer_thumb[ty * tw + tx] = fb.getPixel32(sx, sy);
+        }
+    }
+    taskbar_explorer_thumb_valid = true;
+    dwm_comp.enqueueIconicThumbnailRequest(0);
+    user32.broadcastDwmIconicThumbnailRequested(dwm_comp.surface_thumb_w, dwm_comp.surface_thumb_h);
+}
+
+fn paintExplorerTaskbarThumbnailPreview(scr_w: i32, scr_h: i32) void {
+    if (!taskbar_explorer_thumb_valid) return;
+    const pr = taskbarComputerPillRect(scr_w, scr_h) orelse return;
+    const tw: i32 = 20;
+    const th: i32 = 15;
+    const scale: i32 = 3;
+    const ox = pr.x + pr.w + 6;
+    var oy = pr.y - th * scale - 8;
+    if (oy < 4) oy = pr.y + pr.h + 4;
+    var j: i32 = 0;
+    while (j < th) : (j += 1) {
+        var i: i32 = 0;
+        while (i < tw) : (i += 1) {
+            const c = taskbar_explorer_thumb[@intCast(@as(usize, @intCast(j)) * 20 + @as(usize, @intCast(i)))];
+            fb.fillRect(ox + i * scale, oy + j * scale, scale, scale, c);
+        }
+    }
+    fb.drawRect(ox - 1, oy - 1, tw * scale + 2, th * scale + 2, rgb(0xE0, 0xF0, 0xFF));
+}
+
+/// 将 `dwm_compositor` 表面缩略图以简单列偏移「梯形」近似贴到 Flip3D 卡片（CPU；与用户态 `compositor.flip3d_preview_enabled` 同为预览语义）。
+fn flip3dPaintSurfaceThumb(dst_x: i32, dst_y: i32, scale: i32, sid_opt: ?u16) void {
+    if (scale < 1) return;
+    const sid = sid_opt orelse return;
+    const px = dwm_comp.getSurfaceThumbPixels(sid) orelse return;
+    const tw = dwm_comp.surface_thumb_w;
+    const th = dwm_comp.surface_thumb_h;
+    const wpl: i32 = @as(i32, @intCast(tw)) * scale;
+    const hpl: i32 = @as(i32, @intCast(th)) * scale;
+    var ix: i32 = 0;
+    while (ix < wpl) : (ix += 1) {
+        const col: u32 = @intCast(@divTrunc(ix, scale));
+        if (col >= tw) continue;
+        const skew = @divTrunc(ix * 4, wpl + 1);
+        var iy: i32 = 0;
+        while (iy < hpl) : (iy += 1) {
+            const row: u32 = @intCast(@divTrunc(iy, scale));
+            if (row >= th) continue;
+            const c = px[row * tw + col];
+            fb.fillRect(dst_x + ix, dst_y + iy + skew, 1, 1, c);
+        }
+    }
+}
+
+/// Flip3D 覆盖层：**专用合成模式** — 激活时 `renderSceneWithoutSoftwareCursorFlip3dAware` 在 `flip3d_needs_scene_refresh==false` 下冻结壁纸采样，仅叠本层 + 光标；首帧打开或需刷新背景时置 `flip3d_needs_scene_refresh`。
+/// **性能模型**：仍走桌面主合成节拍（非独立 Win7 级帧预算）；冻结壁纸主要为减采样而非停调度。
+/// CPU 预算：本函数内多卡片为 O(缩略像素×scale)；勿在此调用全屏 `boxBlur`。
+fn renderFlip3dOverlay(scr_w: i32, scr_h: i32) void {
+    const nt61_aero = @import("nt61_aero_defaults");
+    if (!nt61_aero.KernelCompositor.flip3d_enabled) return;
+    const t = theme_mod.getActiveTheme();
+    fb.blendTintRect(0, 0, scr_w, scr_h, rgb(0x08, 0x10, 0x20), 165, 220);
+    const wr = getWindowRect(scr_w, scr_h);
+    const cx = @divTrunc(scr_w, 2) - 120;
+    const cy = @divTrunc(scr_h, 2) - 100;
+    fb.fillRoundedRect(cx + 28, cy + 24, 220, 160, 10, rgb(0x20, 0x30, 0x48));
+    fb.fillRoundedRect(cx, cy, 220, 160, 10, t.window_bg);
+    fb.drawRect(cx, cy, 220, 160, rgb(0xA8, 0xC8, 0xE8));
+    fb.drawTextTransparentUi(cx + 10, cy + 8, "Explorer", t.titlebar_text);
+    flip3dPaintSurfaceThumb(cx + 14, cy + 40, 3, explorer_dwm_surface_id);
+    _ = wr;
+    initTaskMgrPosition(scr_w, scr_h);
+    if (taskmgr_shell_state != .minimized) {
+        const w2 = @divTrunc(taskmgr_w * 2, 3);
+        const h2 = @divTrunc(taskmgr_h * 2, 3);
+        fb.fillRoundedRect(cx + 40, cy + 40, w2, h2, 8, t.window_bg);
+        fb.drawRect(cx + 40, cy + 40, w2, h2, rgb(0x88, 0xA8, 0xC8));
+        fb.drawTextTransparentUi(cx + 48, cy + 48, "TaskMgr", t.titlebar_text);
+        flip3dPaintSurfaceThumb(cx + 48, cy + 56, 2, taskmgr_dwm_surface_id);
+    }
+    // `collectShellWindowSurfaceIds`：多表面缩略条（与 user32 窗体表面并存；降级为 0 张时仅保留上方面孔卡片）。
+    var shell_sids: [6]u16 = undefined;
+    const n_shell = dwm_comp.collectShellWindowSurfaceIds(&shell_sids);
+    var si: usize = 0;
+    const max_preview = @min(@as(usize, 4), n_shell);
+    while (si < max_preview) : (si += 1) {
+        flip3dPaintSurfaceThumb(cx - 70 + @as(i32, @intCast(si * 52)), cy + 118, 2, shell_sids[si]);
+    }
+    fb.drawTextTransparentUi(@divTrunc(scr_w, 2) - 60, 24, "Flip3D (Alt+Tab) — CPU preview", rgb(0xE8, 0xF0, 0xFF));
+}
+
 fn hitTestTaskMgrTrayChip(px: i32, py: i32) bool {
     const r = taskmgr_tray_chip_rect;
     if (r.w <= 0 or r.h <= 0) return false;
@@ -3337,6 +3524,7 @@ pub fn renderLoginScreen(width: u32, height: u32, top_color: u32, bottom_color: 
 
 pub fn present() void {
     if (!use_framebuffer) return;
+    // VirtIO-GPU：`flipDirty` 且脏外包 ≤32×32 时尝试 `trySubmitFramebufferDirtyRect`（PoC，与 init 4×4 往返同命令路径）；失败或非 offload 不影响 CPU 提交。
     // 首帧强制整幅 flip：LoongArch+QEMU 双缓冲下若脏矩形与合成路径偶发不同步，屏上可长期黑/花；后续帧仍可按配置走 flipDirty。
     const first_present = (desktop_ctx.present_count == 0);
     // 双缓冲：`present_full_flip` 默认整幅 memcpy（避免漏画光标区）；关则用脏矩形 flipDirty（须完整 mark dirty）。
@@ -3344,6 +3532,16 @@ pub fn present() void {
         if (config.isPresentFullFlipEnabled() or first_present) {
             fb.flip();
         } else {
+            // VirtIO-GPU：小脏区可走 `trySubmitFramebufferDirtyRect`（≤32×32）做 PoC 级传输自检；主路径仍以 CPU flipDirty。
+            if (virtio_gpu_pci.compositorOffloadAvailable()) {
+                if (fb.peekDirtyUnionPx()) |r| {
+                    const rw: u32 = @intCast(r.w);
+                    const rh: u32 = @intCast(r.h);
+                    if (rw > 0 and rh > 0 and rw <= 32 and rh <= 32) {
+                        _ = virtio_gpu_pci.trySubmitFramebufferDirtyRect(fb.getWidth(), fb.getHeight(), @intCast(r.x), @intCast(r.y), rw, rh);
+                    }
+                }
+            }
             fb.flipDirty();
         }
     } else {
@@ -3499,6 +3697,7 @@ pub fn getPresentCount() u64 {
 
 /// Aero：在首次 `present()` 之前跳过盒式模糊，首屏尽快可见（DesktopManagerSpec 合成节拍）。
 /// 拖窗时用轻量单遍模糊替代「完全跳过」，兼顾帧率与玻璃观感。
+/// 与 `renderDesktopFrameEx` 内 `setGlassLiteBlurEnabled(shell_glass_lite)` 的关系：本函数在帧后期多次调用，**后写者优先**；预算仍只在 `boxBlurRect` 成功路径扣减（`dwm_blur_budget.zig`）。
 fn syncAeroGlassFastPath() void {
     const during_drag = drag_active or taskmgr_drag_active or builtin_apps.isDragging();
     var first = desktop_ctx.present_count == 0;

@@ -3,6 +3,7 @@
 //! message loop, input processing, and basic UI primitives.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const klog = @import("../../rtl/klog.zig");
 const kernel32 = @import("../../libs/kernel32.zig");
 const build_options = @import("build_options");
@@ -13,6 +14,8 @@ const ntdll = @import("../../libs/ntdll.zig");
 const win32k = @import("../win32k/mod.zig");
 const dwm_comp = @import("../../drivers/video/dwm_compositor.zig");
 const ipc = @import("../../lpc/ipc.zig");
+const pm_sem = @import("msg_pm_semantics.zig");
+const sched_mod = @import("../../ke/scheduler.zig");
 
 /// 未绑定 DWM 重定向表面（`dwm_compositor` 未初始化或分配失败）。
 pub const no_compositor_surface: u16 = 0xFFFF;
@@ -109,9 +112,9 @@ pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_SHOWWINDOW: u32 = 0x0040;
 pub const SWP_HIDEWINDOW: u32 = 0x0080;
 
-pub const PM_NOREMOVE: u32 = 0x0000;
-pub const PM_REMOVE: u32 = 0x0001;
-pub const PM_NOYIELD: u32 = 0x0002;
+pub const PM_NOREMOVE = pm_sem.PM_NOREMOVE;
+pub const PM_REMOVE = pm_sem.PM_REMOVE;
+pub const PM_NOYIELD = pm_sem.PM_NOYIELD;
 
 pub const VK_ESCAPE: WPARAM = 0x1B;
 
@@ -292,11 +295,62 @@ const ThreadPostedSlot = struct {
 };
 var thread_posted: [MAX_THREAD_POSTED]ThreadPostedSlot = [_]ThreadPostedSlot{.{}} ** MAX_THREAD_POSTED;
 
+/// 调度线程 `tid`（`scheduler.getCurrentThreadId()`，小于 32）在 `GetMessage` 空队列上阻塞时的等待位（与 `wakeOneMsgWaiter` 配对）。
+var msg_wait_mask: u32 = 0;
+
+fn msgWaitBit(sched_tid: usize) u32 {
+    if (sched_tid >= 32) return 0;
+    const sh: u5 = @intCast(sched_tid);
+    return @as(u32, 1) << sh;
+}
+
+fn clearMsgWaitBit(sched_tid: usize) void {
+    msg_wait_mask &= ~msgWaitBit(sched_tid);
+}
+
+/// 唤醒首个在消息等待掩码上的线程（`PostMessage` / `PostThreadMessage` 路径调用）。
+fn wakeOneMsgWaiter() void {
+    if (!sched_mod.isInitialized()) return;
+    var i: u32 = 0;
+    while (i < 32) : (i += 1) {
+        const sh: u5 = @truncate(i);
+        const b = @as(u32, 1) << sh;
+        if ((msg_wait_mask & b) != 0) {
+            msg_wait_mask &= ~b;
+            sched_mod.unblockThread(@intCast(i));
+            return;
+        }
+    }
+}
+
+/// DWM 状态广播：除各窗口队列外，向登记线程投递 `PostThreadMessage`（NT 6.1 壳层监听路径）。
+const MAX_DWM_LISTENERS: usize = 8;
+var dwm_listener_tids: [MAX_DWM_LISTENERS]u32 = [_]u32{0} ** MAX_DWM_LISTENERS;
+var dwm_listener_count: usize = 0;
+
+pub fn registerDwmNotificationListener(tid: u32) void {
+    if (tid == 0) return;
+    for (dwm_listener_tids[0..dwm_listener_count]) |t| {
+        if (t == tid) return;
+    }
+    if (dwm_listener_count >= MAX_DWM_LISTENERS) return;
+    dwm_listener_tids[dwm_listener_count] = tid;
+    dwm_listener_count += 1;
+}
+
+fn broadcastDwmToListenerThreads(msg: u32, wp: WPARAM, lp: LPARAM) void {
+    var i: usize = 0;
+    while (i < dwm_listener_count) : (i += 1) {
+        _ = PostThreadMessageA(dwm_listener_tids[i], msg, wp, lp);
+    }
+}
+
 fn tryQueueThreadPosted(tid: u32, m: MSG) bool {
     if (tid == 0) return false;
     for (&thread_posted) |*slot| {
         if (!slot.used) {
             slot.* = .{ .tid = tid, .used = true, .m = m };
+            wakeOneMsgWaiter();
             return true;
         }
     }
@@ -398,6 +452,7 @@ const Window = struct {
         };
         self.msg_tail = (self.msg_tail + 1) % MAX_MSG_QUEUE;
         self.msg_count += 1;
+        wakeOneMsgWaiter();
         return true;
     }
 
@@ -496,6 +551,7 @@ pub fn broadcastDwmCompositionChanged(composition_on: BOOL) void {
             _ = windows[wi].postMessage(WM_DWMCOMPOSITIONCHANGED, wp, 0);
         }
     }
+    broadcastDwmToListenerThreads(WM_DWMCOMPOSITIONCHANGED, wp, 0);
 }
 
 /// `WM_DWMCOLORIZATIONCOLORCHANGED`：`wParam` 为 `COLORREF` 风格 ARGB，`lParam` 非零表示启用混合（简化语义）。
@@ -508,6 +564,7 @@ pub fn broadcastDwmColorizationChanged(argb: u32, blend_enabled: BOOL) void {
             _ = windows[wi].postMessage(WM_DWMCOLORIZATIONCOLORCHANGED, wp, lp);
         }
     }
+    broadcastDwmToListenerThreads(WM_DWMCOLORIZATIONCOLORCHANGED, wp, lp);
 }
 
 pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
@@ -518,6 +575,22 @@ pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
             _ = windows[wi].postMessage(WM_DWMNCRENDERINGCHANGED, wp, 0);
         }
     }
+    broadcastDwmToListenerThreads(WM_DWMNCRENDERINGCHANGED, wp, 0);
+}
+
+/// Ref: Learn — WM_DWMSENDICONICTHUMBNAIL；`lParam` 低 16 位为请求最大宽度、高 16 位为最大高度（与 `MAKELPARAM` 布局一致）。
+pub fn broadcastDwmIconicThumbnailRequested(max_w: u32, max_h: u32) void {
+    const low: u32 = @min(max_w, 0xFFFF);
+    const high: u32 = @min(max_h, 0xFFFF);
+    const packed32: u32 = (high << 16) | low;
+    const lp: LPARAM = @intCast(@as(i32, @bitCast(packed32)));
+    var wi: usize = 0;
+    while (wi < window_count) : (wi += 1) {
+        if (windows[wi].is_valid) {
+            _ = windows[wi].postMessage(WM_DWMSENDICONICTHUMBNAIL, 0, lp);
+        }
+    }
+    broadcastDwmToListenerThreads(WM_DWMSENDICONICTHUMBNAIL, 0, lp);
 }
 
 fn syncWin32kFromUser32() void {
@@ -541,6 +614,19 @@ fn syncWin32kFromUser32() void {
             .visible = w.is_visible,
         });
         z += 1;
+    }
+}
+
+/// LPC `register_window` 与 `CreateWindowEx` 共用的合成表面分配（问题五 P5-5）：避免两处 `createSurface` 分叉漂移。
+fn ensureCompositorSurface(w: *Window) void {
+    if (!dwm_comp.isInitialized()) return;
+    if (w.compositor_surface_id != no_compositor_surface) return;
+    const aw: u32 = @intCast(@max(0, w.rect.width()));
+    const ah: u32 = @intCast(@max(0, w.rect.height()));
+    if (dwm_comp.createSurface(w.rect.left, w.rect.top, aw, ah, w.owner_pid)) |sid| {
+        w.compositor_surface_id = sid;
+        notifyCompositorWindowGeometry(w);
+        syncCompositorZOrderForUserWindows();
     }
 }
 
@@ -633,8 +719,16 @@ fn findClass(class_name: []const u8) ?*WindowClass {
 
 // ── Window Creation/Destruction ──
 
+fn detachCompositorSurface(w: *Window) void {
+    if (w.compositor_surface_id != no_compositor_surface) {
+        dwm_comp.destroySurface(w.compositor_surface_id);
+        w.compositor_surface_id = no_compositor_surface;
+    }
+}
+
 pub const CW_USEDEFAULT: i32 = @as(i32, @bitCast(@as(u32, 0x80000000)));
 
+/// Ref: Microsoft Learn — `CreateWindowEx` 成功返回 HWND、失败 `NULL` 与 `SetLastError`（矩阵 §5）。
 pub fn CreateWindowExA(
     ex_style: DWORD,
     class_name: []const u8,
@@ -705,14 +799,7 @@ pub fn CreateWindowExA(
 
     wnd.thread_id = kernel32.GetCurrentThreadId();
     wnd.compositor_surface_id = no_compositor_surface;
-    if (dwm_comp.isInitialized()) {
-        const aw: u32 = @intCast(@max(0, actual_w));
-        const ah: u32 = @intCast(@max(0, actual_h));
-        if (dwm_comp.createSurface(actual_x, actual_y, aw, ah, wnd.owner_pid)) |sid| {
-            wnd.compositor_surface_id = sid;
-            syncCompositorZOrderForUserWindows();
-        }
-    }
+    ensureCompositorSurface(wnd);
 
     _ = wnd.postMessage(WM_CREATE, 0, 0);
 
@@ -727,6 +814,7 @@ pub fn CreateWindowExA(
         window_name, wnd.hwnd, actual_w, actual_h,
     });
 
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return wnd.hwnd;
 }
 
@@ -735,10 +823,8 @@ pub fn DestroyWindow(hwnd: HWND) BOOL {
         kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
         return FALSE;
     };
-    if (wnd.compositor_surface_id != no_compositor_surface) {
-        dwm_comp.destroySurface(wnd.compositor_surface_id);
-        wnd.compositor_surface_id = no_compositor_surface;
-    }
+    // 先释放合成表面再失效窗口，避免 `dwm_compositor` 残留 id 指向已释放槽位（与 `onCsrssRegisterGuiWindow` 分配路径对偶）。
+    detachCompositorSurface(wnd);
     _ = wnd.postMessage(WM_DESTROY, 0, 0);
     wnd.is_valid = false;
     wnd.is_visible = false;
@@ -824,6 +910,11 @@ pub fn GetClientRect(hwnd: HWND, rect: *RECT) BOOL {
     return TRUE;
 }
 
+pub fn BringWindowToTop(hwnd: HWND) BOOL {
+    bringHwndToTop(hwnd);
+    return TRUE;
+}
+
 fn bringHwndToTop(hw: HWND) void {
     var i: usize = 0;
     while (i < window_count) : (i += 1) {
@@ -831,6 +922,22 @@ fn bringHwndToTop(hw: HWND) void {
             var j = i;
             while (j + 1 < window_count) : (j += 1) {
                 std.mem.swap(Window, &windows[j], &windows[j + 1]);
+            }
+            break;
+        }
+    }
+    syncCompositorZOrderForUserWindows();
+    syncWin32kFromUser32();
+}
+
+/// 与 `bringHwndToTop` 对称：将窗口移到 `windows` 槽位前端，使 `syncCompositorZOrderForUserWindows` 赋予最低 z。
+fn sendHwndToBottom(hw: HWND) void {
+    var i: usize = 0;
+    while (i < window_count) : (i += 1) {
+        if (windows[i].hwnd == hw and windows[i].is_valid) {
+            var j = i;
+            while (j > 0) : (j -= 1) {
+                std.mem.swap(Window, &windows[j], &windows[j - 1]);
             }
             break;
         }
@@ -862,6 +969,13 @@ pub fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, cx: i32, cy:
     if ((flags & SWP_NOZORDER) == 0) {
         if (insert_after == HWND_TOP or insert_after == HWND_TOPMOST) {
             bringHwndToTop(hwnd);
+        } else if (insert_after == HWND_BOTTOM) {
+            sendHwndToBottom(hwnd);
+        } else if (insert_after == HWND_NOTOPMOST) {
+            // NT61 子集：合成 Z 序无独立 topmost 层时，与 HWND_TOP 等价（契约矩阵 §4.1）。
+            bringHwndToTop(hwnd);
+        } else if (findWindow(insert_after) != null) {
+            placeHwndAboveInsertAfter(hwnd, insert_after);
         }
     }
 
@@ -998,6 +1112,31 @@ pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
     return FALSE;
 }
 
+/// 与 `GetMessageA` 相同语义；空队列时多线程下可经 `blockThread` + 投递路径 `wakeOneMsgWaiter` 近似 Learn 的阻塞；单线程或仅一调度线程时仍为协作式 `yield`，耗尽后 `NtUserGetMessage` 返回 `STATUS_PENDING`（与 Learn「无限阻塞直至有消息」有差距，见契约矩阵）。
+pub fn getMessageAWithYield(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
+    const max_spins: u32 = 4096;
+    var s: u32 = 0;
+    const sched_tid: usize = if (sched_mod.isInitialized()) sched_mod.getCurrentThreadId() else 0;
+    while (s < max_spins) : (s += 1) {
+        if (GetMessageA(msg, hwnd, min, max) == TRUE) {
+            if (sched_tid < 32) clearMsgWaitBit(sched_tid);
+            return TRUE;
+        }
+        if (sched_mod.isInitialized()) {
+            if (sched_mod.getThreadCount() > 1 and sched_tid < 32) {
+                msg_wait_mask |= msgWaitBit(sched_tid);
+                sched_mod.blockThread(sched_tid);
+            }
+            sched_mod.yield();
+        } else if (builtin.target.cpu.arch == .x86_64) {
+            asm volatile ("pause" ::: .{ .memory = true });
+        }
+    }
+    if (sched_tid < 32) clearMsgWaitBit(sched_tid);
+    msg.* = .{};
+    return FALSE;
+}
+
 fn userVirtRangeMapped(va: u64, len: u64) bool {
     if (len == 0) return false;
     const proc = process.getCurrentProcess() orelse return false;
@@ -1015,12 +1154,16 @@ fn userVirtRangeMapped(va: u64, len: u64) bool {
 }
 
 /// `NtUserGetMessage` 内核路径：AMD64 约定第 1 参在 `R10`（`MSG *`）。
+/// 与 Learn：`GetMessage` 在空队列时应阻塞直至有消息；本实现 **不** 在内核里无限阻塞用户线程：
+/// - 多线程：`getMessageAWithYield` 可 `blockThread`，由 `PostMessage`/`wakeOneMsgWaiter` 唤醒；
+/// - 单线程：协作式 `yield` 后仍无消息则 **`STATUS_PENDING`** 且将用户 `MSG*` 清零（与 Win32 `GetMessage` 不返回直到有消息 **不同**，用户态须轮询或接调度器）。
+/// `syscall.zig` 将 `NTSTATUS` 透传为 syscall 结果；勿假设与真 NT `NtUserGetMessage` 阻塞语义逐位一致。
 pub fn ntUserGetMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_msg: u32) ntdll.NTSTATUS {
     const msg_len: u64 = @sizeOf(MSG);
     if ((msg_user_va & 7) != 0) return ntdll.STATUS_INVALID_PARAMETER;
     if (!userVirtRangeMapped(msg_user_va, msg_len)) return ntdll.STATUS_ACCESS_VIOLATION;
     var km: MSG = undefined;
-    if (GetMessageA(&km, hwnd, min_msg, max_msg) == FALSE) {
+    if (getMessageAWithYield(&km, hwnd, min_msg, max_msg) == FALSE) {
         const um: *volatile MSG = @ptrFromInt(msg_user_va);
         um.* = .{};
         return ntdll.STATUS_PENDING;
@@ -1031,6 +1174,7 @@ pub fn ntUserGetMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_m
 }
 
 /// `NtUserPeekMessage`：第 5 参 `wRemoveMsg`（如 `PM_REMOVE`）在用户栈上。
+/// 与 Learn：`PeekMessage` 无消息时返回 **FALSE** 且通常 **不** 视其为错误；本 syscall 在无消息时返回 **`STATUS_PENDING`** 并清零 `MSG*`（与 `NtUserGetMessage` 并列的简化内核契约，**非** NT 上 `PeekMessage` 的 BOOL 返回值映射）。
 pub fn ntUserPeekMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_msg: u32, remove_flags: u32) ntdll.NTSTATUS {
     const msg_len: u64 = @sizeOf(MSG);
     if ((msg_user_va & 7) != 0) return ntdll.STATUS_INVALID_PARAMETER;
@@ -1087,12 +1231,13 @@ pub fn ntUserSetWindowPosSyscall(
 
 /// 与 `PeekMessageA` 相同，但用显式 `tid`（CSR 路径下无可靠的用户态 `GetCurrentThreadId`）。
 fn peekMessageAForThread(tid: u32, msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
-    if ((remove & PM_REMOVE) != 0) {
+    const do_remove = pm_sem.removeMsgFromQueueOnPeek(remove);
+    if (do_remove) {
         if (tryDequeueThreadPosted(tid, min, max, msg)) return TRUE;
     }
     if (hwnd != 0) {
         const wnd = findWindow(hwnd) orelse return FALSE;
-        if ((remove & PM_REMOVE) != 0) {
+        if (do_remove) {
             if (wnd.getMessageFiltered(min, max)) |m| {
                 msg.* = m;
                 total_messages_processed += 1;
@@ -1108,7 +1253,7 @@ fn peekMessageAForThread(tid: u32, msg: *MSG, hwnd: HWND, min: u32, max: u32, re
         for (windows[0..window_count]) |*wnd| {
             if (!wnd.is_valid) continue;
             if (wnd.thread_id != 0 and wnd.thread_id != tid) continue;
-            if ((remove & PM_REMOVE) != 0) {
+            if (do_remove) {
                 if (wnd.getMessageFiltered(min, max)) |m| {
                     msg.* = m;
                     total_messages_processed += 1;
@@ -1137,6 +1282,8 @@ pub fn csrFillOneMessageForLpc(client_tid: u32, hwnd: HWND, min_v: u32, max_v: u
 }
 
 pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
+    // Ref: Learn — `PeekMessage`：`PM_NOREMOVE` 值为 0，故「窥视不移除」= 未置 `PM_REMOVE`；`PM_NOYIELD` 抑制调度让出（`NtUserPeekMessage` 单次返回、无忙等，与带 `yield` 的 `GetMessage` 路径区分）。
+    _ = pm_sem.allowSchedulerYieldForPeekFlags(remove);
     return peekMessageAForThread(kernel32.GetCurrentThreadId(), msg, hwnd, min, max, remove);
 }
 
@@ -1209,12 +1356,45 @@ pub fn InvalidateRect(hwnd: HWND, _: ?*const RECT, _: BOOL) BOOL {
     return TRUE;
 }
 
+/// 供 gdi32 校验：`GetDC(hwnd)` 成功时本子集将 **`HDC == hwnd`**（与 `CreateCompatibleDC` 池内句柄并存）。
+/// Ref: Microsoft Learn — `GetDC` / `GetDC` 对 `NULL` 的屏幕 DC 概念（本仓库为 **Partial**：`hwnd==0` 返回 `0` 且成功，见 `GetDC`）。
+pub fn hdcIsWindowClientDrawable(hdc: HDC) bool {
+    return findWindow(hdc) != null;
+}
+
+/// Ref: Microsoft Learn — `GetDC` 成功返回 DC 句柄，失败 `NULL` 与 `SetLastError`；`GetDC(NULL)` 为屏幕 DC（此处 `hwnd==0` 返回 `0` 且 `ERROR_SUCCESS`，**非**完整屏幕位图语义）。
 pub fn GetDC(hwnd: HWND) HDC {
-    if (findWindow(hwnd) != null) return hwnd;
+    if (hwnd == 0) {
+        kernel32.SetLastError(kernel32.ERROR_SUCCESS);
+        return 0;
+    }
+    if (findWindow(hwnd) != null) {
+        kernel32.SetLastError(kernel32.ERROR_SUCCESS);
+        return hwnd;
+    }
+    kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
     return 0;
 }
 
-pub fn ReleaseDC(_: HWND, _: HDC) i32 {
+/// Ref: Microsoft Learn — `ReleaseDC` 须与取得 DC 的方式配对；窗口 DC 子集要求 `hdc == hwnd`。
+pub fn ReleaseDC(hwnd: HWND, hdc: HDC) i32 {
+    if (hdc == 0) {
+        if (hwnd != 0) {
+            kernel32.SetLastError(kernel32.ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        kernel32.SetLastError(kernel32.ERROR_SUCCESS);
+        return 1;
+    }
+    if (findWindow(hdc) != null) {
+        if (hwnd != hdc) {
+            kernel32.SetLastError(kernel32.ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        kernel32.SetLastError(kernel32.ERROR_SUCCESS);
+        return 1;
+    }
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return 1;
 }
 
@@ -1454,7 +1634,8 @@ pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRES
             return 0;
         },
         WM_NCMOUSEMOVE => return 0,
-        WM_DWMCOMPOSITIONCHANGED, WM_DWMNCRENDERINGCHANGED, WM_DWMCOLORIZATIONCOLORCHANGED => return 0,
+        // DWM 通知：应用通常自行处理以刷新主题/缩略图；未处理时 `DefWindowProc` 返回 0 即可（与 Learn「须处理」不冲突——无默认绘制）。
+        WM_DWMCOMPOSITIONCHANGED, WM_DWMNCRENDERINGCHANGED, WM_DWMCOLORIZATIONCOLORCHANGED, WM_DWMSENDICONICTHUMBNAIL => return 0,
         WM_CLOSE => return 0,
         WM_DESTROY => return 0,
         WM_PAINT => return 0,
@@ -1479,10 +1660,39 @@ fn findWindow(hwnd: HWND) ?*Window {
     return null;
 }
 
+fn findWindowIndex(hw: HWND) ?usize {
+    var i: usize = 0;
+    while (i < window_count) : (i += 1) {
+        if (windows[i].hwnd == hw and windows[i].is_valid) return i;
+    }
+    return null;
+}
+
+/// `hWndInsertAfter` 为**另一有效 HWND** 时：将 `hwnd` 置于该窗口**之上**（`windows` 数组中紧跟其后的槽位，与 `syncCompositorZOrderForUserWindows` 递增 z 一致）。
+fn placeHwndAboveInsertAfter(hwnd: HWND, insert_after: HWND) void {
+    if (hwnd == insert_after) return;
+    while (true) {
+        const ia = findWindowIndex(insert_after) orelse return;
+        const ib = findWindowIndex(hwnd) orelse return;
+        if (ia + 1 >= window_count) {
+            bringHwndToTop(hwnd);
+            return;
+        }
+        const t = ia + 1;
+        if (ib == t) break;
+        if (ib < t) {
+            std.mem.swap(Window, &windows[ib], &windows[ib + 1]);
+        } else {
+            std.mem.swap(Window, &windows[ib], &windows[ib - 1]);
+        }
+    }
+}
+
 /// csrss `register_window`：刷新该 HWND 的合成脏区与 win32k 表（LPC 负载见 `subsystem.zig` 注释）。
 pub fn onCsrssRegisterGuiWindow(pid: u32, hwnd: HWND) void {
     _ = pid;
     if (findWindow(hwnd)) |w| {
+        ensureCompositorSurface(w);
         notifyCompositorWindowGeometry(w);
         syncCompositorZOrderForUserWindows();
     }
@@ -1596,6 +1806,7 @@ pub fn runGuiDemo() void {
 pub fn init() void {
     win32k.clearWindowTableForSync();
     for (&thread_posted) |*s| s.* = .{};
+    msg_wait_mask = 0;
     window_count = 0;
     class_count = 0;
     next_hwnd = 0x10000;

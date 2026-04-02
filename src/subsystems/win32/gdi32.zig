@@ -5,6 +5,11 @@
 //! **分阶段扩展**：区域（HRGN）、路径、字体子集等按 [NT61_CONTRACT_MATRIX.md](../../../docs/cn/NT61_CONTRACT_MATRIX.md)
 //! 中「返回值 vs 功能完整」标注推进；当前部分 API 为存根或简化几何。
 //!
+//! **高流量 API 与 Learn（问题四核对清单）**：下列入口须在修改时核对 **成功非零 / 失败 0** 与 `SetLastError`（与矩阵 §5 同步）：
+//! - `BitBlt` / `PatBlt` / `StretchBlt` — Learn「成功返回非零」。
+//! - `Rectangle` / `Ellipse` / `TextOut` / `ExtTextOut` — 无效 DC：`ERROR_INVALID_HANDLE`。
+//! - `CreateCompatibleDC` / `SelectObject` — 池满 / 类型不匹配等错误路径。
+//!
 //! **句柄与窗口寿命**：简化实现中 `CreateCompatibleDC` 等返回的 `HDC` 与 `user32` 的 `HWND` 同源占位；
 //! `DestroyWindow` 之后不得再对该 `hwnd` 调用 `GetDC`/`BitBlt`；跨进程 GDI 句柄表为路线图项（矩阵 §5.1）。
 
@@ -256,7 +261,10 @@ var total_gdi_objects_created: u64 = 0;
 
 pub fn CreateCompatibleDC(hdc: HDC) HDC {
     _ = hdc;
-    if (dc_count >= MAX_DCS) return 0;
+    if (dc_count >= MAX_DCS) {
+        kernel32.SetLastError(kernel32.ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
 
     var dc = &device_contexts[dc_count];
     dc.* = .{};
@@ -275,6 +283,11 @@ pub fn CreateCompatibleDC(hdc: HDC) HDC {
 }
 
 pub fn DeleteDC(hdc: HDC) BOOL {
+    // Ref: Learn — `DeleteDC` 用于 **内存 DC** 等；`GetDC` 返回的窗口 DC 须 `ReleaseDC`，不得 `DeleteDC`。
+    if (hdc == 0 or user32.hdcIsWindowClientDrawable(hdc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
     const dc = findDC(hdc) orelse return FALSE;
     dc.is_valid = false;
     return TRUE;
@@ -293,8 +306,14 @@ pub fn RestoreDC(hdc: HDC, _: i32) BOOL {
 // ── Object Selection ──
 
 pub fn SelectObject(hdc: HDC, obj: HGDIOBJ) HGDIOBJ {
-    const dc = findDC(hdc) orelse return 0;
-    const gdi = findGdiObj(obj) orelse return 0;
+    const dc = findDC(hdc) orelse {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    const gdi = findGdiObj(obj) orelse {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return 0;
+    };
 
     return switch (gdi.obj_type) {
         .pen => blk: {
@@ -317,7 +336,10 @@ pub fn SelectObject(hdc: HDC, obj: HGDIOBJ) HGDIOBJ {
             dc.current_bitmap = obj;
             break :blk old;
         },
-        else => 0,
+        else => {
+            kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+            return 0;
+        },
     };
 }
 
@@ -468,11 +490,14 @@ pub fn LineTo(hdc: HDC, x: i32, y: i32) BOOL {
 }
 
 pub fn Rectangle(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32) BOOL {
-    _ = hdc;
     _ = left;
     _ = top;
     _ = right;
     _ = bottom;
+    if (!hdcAcceptsStubDraw(hdc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
     total_draw_calls += 1;
     return TRUE;
 }
@@ -528,8 +553,11 @@ pub fn Polygon(_: HDC, _: []const user32.POINT) BOOL {
 
 /// 当前为位图字体路径；路线图 C-T05：可在此接入 FreeType/HarfBuzz + 次像素渲染（许可见 THIRD_PARTY）。
 pub fn TextOutA(hdc: HDC, _: i32, _: i32, text: []const u8) BOOL {
-    _ = hdc;
     _ = text;
+    if (!hdcAcceptsStubDraw(hdc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
     total_draw_calls += 1;
     return TRUE;
 }
@@ -575,8 +603,10 @@ pub fn BitBlt(
     _: i32,
     rop: DWORD,
 ) BOOL {
-    _ = dest_dc;
-    _ = src_dc;
+    if (!hdcAcceptsStubDraw(dest_dc) or !hdcAcceptsStubDraw(src_dc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
     _ = rop;
     total_draw_calls += 1;
     return TRUE;
@@ -595,15 +625,20 @@ pub fn StretchBlt(
     _: i32,
     rop: DWORD,
 ) BOOL {
-    _ = dest_dc;
-    _ = src_dc;
+    if (!hdcAcceptsStubDraw(dest_dc) or !hdcAcceptsStubDraw(src_dc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
     _ = rop;
     total_draw_calls += 1;
     return TRUE;
 }
 
 pub fn PatBlt(hdc: HDC, _: i32, _: i32, _: i32, _: i32, rop: DWORD) BOOL {
-    _ = hdc;
+    if (!hdcAcceptsStubDraw(hdc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
     _ = rop;
     total_draw_calls += 1;
     return TRUE;
@@ -659,6 +694,13 @@ pub fn SetWindowOrgEx(hdc: HDC, x: i32, y: i32, old: ?*user32.POINT) BOOL {
 }
 
 // ── Helpers ──
+
+/// 内存 DC（`CreateCompatibleDC`）或 `GetDC` / `GetDC(NULL)` 子集（`user32`：`HDC` 可为 `HWND` 或 `0`）。
+fn hdcAcceptsStubDraw(hdc: HDC) bool {
+    if (findDC(hdc) != null) return true;
+    if (hdc == 0) return true;
+    return user32.hdcIsWindowClientDrawable(hdc);
+}
 
 fn findDC(hdc: HDC) ?*DeviceContext {
     for (device_contexts[0..dc_count]) |*dc| {

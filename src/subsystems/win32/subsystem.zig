@@ -55,6 +55,7 @@ pub const CsrApiNumber = enum(u32) {
     post_message = 0x10024,
     get_message = 0x10025,
     create_dc = 0x10026,
+    register_dwm_listener = 0x10027,
     shutdown_system = 0x10030,
     _,
 };
@@ -247,6 +248,7 @@ pub fn setProcessDesktop(pid: u32, desktop_index: u32) bool {
 /// LPC `register_window`：前 8 字节小端 `HWND`（`u64`）。
 /// `post_message`：偏移 0 `HWND`，8 `msg:u32`，12 填充，16 `wparam:u64`，24 `lparam:i64`（小端）。
 /// `get_message`：0–8 `HWND`，8–12 min，12–16 max，16–20 `PM_*`；20–24 线程 id（`0` 则用 `pid`）；应答见 `user32.csrFillOneMessageForLpc`。
+/// **步骤总表（问题五）**：与 [DesktopManagerSpec.md](../../docs/cn/DesktopManagerSpec.md) §3.4 同步；LPC **不**替代 `CreateWindowEx` 建 HWND。
 pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DATA_SIZE]u8) i32 {
     api_call_count += 1;
 
@@ -290,12 +292,34 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             _ = ws.createDesktop(label) orelse return -1;
             return 0;
         },
+        // DesktopManagerSpec：LPC `register_window` 在用户态创建 HWND 之后调用；`user32.onCsrssRegisterGuiWindow`
+        // 为该 HWND 补绑 `dwm_compositor` 重定向表面（与 `CreateWindowEx` 内联分配互为双保险）。
         .register_window => {
             var hwnd: u64 = 0;
             if (data_opt) |d| {
                 hwnd = std.mem.readInt(u64, d[0..8], .little);
             }
             return if (registerGuiWindow(pid, hwnd)) 0 else -1;
+        },
+        .destroy_window => {
+            var hwnd: u64 = 0;
+            if (data_opt) |d| {
+                hwnd = std.mem.readInt(u64, d[0..8], .little);
+            }
+            if (user32.DestroyWindow(hwnd) == user32.TRUE) {
+                _ = unregisterGuiWindow(hwnd);
+                return 0;
+            }
+            return -1;
+        },
+        .register_dwm_listener => {
+            var tid: u32 = 0;
+            if (data_opt) |d| {
+                if (d.len >= 4) tid = std.mem.readInt(u32, d[0..4], .little);
+            }
+            if (tid == 0) tid = pid;
+            user32.registerDwmNotificationListener(tid);
+            return 0;
         },
         .post_message => {
             if (data_opt) |d| {
@@ -338,6 +362,7 @@ var gui_message_count: u64 = 0;
 pub fn initGuiSubsystem() void {
     gui_subsystem_active = true;
     klog.info("csrss: GUI subsystem activated", .{});
+    user32.registerDwmNotificationListener(3);
     user32.broadcastDwmCompositionChanged(user32.TRUE);
     user32.broadcastDwmColorizationChanged(0xFF_70_90_D0, user32.TRUE);
     user32.broadcastDwmNcRenderingChanged(user32.TRUE);

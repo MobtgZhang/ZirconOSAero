@@ -711,10 +711,12 @@ pub fn getExeCount() usize {
 }
 
 fn initSystemDlls() void {
-    const ntdll_result = loadDll("ntdll.dll", 0x7FFE0000);
+    // 与 `KUSER_SHARED_DATA` 固定页 0x7FFE0000 分离，避免与 `mm/kuser_shared.zig` 冲突。
+    const ntdll_base: u64 = 0x0000_7FF6_0000_0000;
+    const ntdll_result = loadDll("ntdll.dll", ntdll_base);
     if (ntdll_result.image) |img| {
         img.subsystem = IMAGE_SUBSYSTEM_NATIVE;
-        img.entry_point = 0x7FFE0000 + 0x1000;
+        img.entry_point = ntdll_base + 0x1000;
         img.size_of_image = 0x1A0000;
         img.addSection(".text", 0x1000, 0x100000, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE);
         img.addSection(".data", 0x101000, 0x20000, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_CNT_INITIALIZED_DATA);
@@ -741,6 +743,10 @@ fn initSystemDlls() void {
         img.addExport("RtlCopyMemory", 0x2020, 101);
         img.addExport("RtlZeroMemory", 0x2040, 102);
         img.addExport("RtlGetVersion", 0x2060, 103);
+        img.addExport("LdrInitializeThunk", 0x2080, 104);
+        img.addExport("LdrLoadDll", 0x20A0, 105);
+        img.addExport("LdrGetProcedureAddress", 0x20C0, 106);
+        img.addExport("RtlUserThreadStart", 0x20E0, 107);
     }
 
     const k32_result = loadDll("kernel32.dll", 0x7FFD0000);

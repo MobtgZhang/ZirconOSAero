@@ -371,6 +371,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
 
     registry.init();
+    @import("registry/hive.zig").tryLoadBootstrapOverlays();
 
     klog.info("File Systems: FAT32 (C:\\) + NTFS (D:\\) mounted", .{});
     klog.info("VFS: %u mount points, %u open files", .{
@@ -646,7 +647,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
 
         const mx = mouse.getX();
         const my = mouse.getY();
-        mouse_debug.desktopHeartbeat(mx, my, virtio_input_pci.isActive());
+        mouse_debug.desktopHeartbeat(mx, my, virtio_input_pci.isActive(), display.isStartMenuVisible());
         const pixel_moved = (mx != last_draw_cx or my != last_draw_cy);
         const scene_dirty = needs_ui_paint or move_paint.needs_full_scene;
         const interpolating = mouse.isInterpolating();
@@ -658,7 +659,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
 
         // `interpolating` 不可删：`interpolateStep` 在 `renderDesktopFrameEx` 内执行；仅靠 `pixel_moved` 会在插值中间帧漏绘。
         // 全屏重绘仅在 `display.renderDesktopFrameEx` 中 `moveOnly` 失败时回退（壳层打开时优先光标快路径）。
-        const need_paint = scene_dirty or cursor_dirty or caption_chrome_only or drag_repaint or startmenu_repaint or shell_geometry_repaint or interpolating;
+        const need_paint = scene_dirty or cursor_dirty or caption_chrome_only or drag_repaint or startmenu_repaint or shell_geometry_repaint or interpolating or display.isFlip3dOverlayActive();
 
         mouse_debug.setEventsPoppedLastTick(pop_count);
 
@@ -769,6 +770,9 @@ fn enterDesktopSession(
     }
     drivers.video.framebuffer.logFramebufferMemorySummary();
     klog.info("Desktop: first frame presented (taskbar+shell+cursor)", .{});
+
+    @import("drivers/input/mouse.zig").syncFromRegistry();
+    display.dwm_mod.syncPolicyFromRegistry();
 
     runDesktopMainLoop(bisect_prefix);
 }
@@ -1348,7 +1352,9 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
 
     registry.init();
+    @import("registry/hive.zig").tryLoadBootstrapOverlays();
     klog.info("Registry: %u keys in 5 hives", .{registry.getKeyCount()});
+    @import("drivers/input/mouse.zig").syncFromRegistry();
 
     klog.info("--- Phase 7: Loader ---", .{});
     elf_loader.init();

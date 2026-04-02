@@ -30,6 +30,11 @@ test "normalizeNtObjectPath strips NT prefixes" {
     try std.testing.expectEqualStrings("DosDevices\\Vol", ob.normalizeNtObjectPath("\\??\\DosDevices\\Vol"));
 }
 
+test "normalizeNtObjectPathResolveSymlinks matches normalizeNtObjectPath until P4-A2" {
+    const s = "\\??\\REGISTRY\\A";
+    try std.testing.expectEqualStrings(ob.normalizeNtObjectPath(s), ob.normalizeNtObjectPathResolveSymlinks(s));
+}
+
 test "handle table lookup and checkAccess" {
     var table = ob.HandleTable.init(99);
     var hdr = ob.ObjectHeader{ .obj_type = .mutex, .ref_count = 0, .handle_count = 0 };
@@ -38,5 +43,6 @@ test "handle table lookup and checkAccess" {
     const ent = table.lookupHandle(h) orelse return error.Lookup;
     try std.testing.expect(ent.obj_type == .mutex);
     try std.testing.expect(table.checkAccess(h, ob.GENERIC_READ));
+    try std.testing.expect(!table.checkAccess(h, 0x0000_0001)); // P4-B3：未授予的访问位须失败
     try std.testing.expect(table.closeHandle(h));
 }

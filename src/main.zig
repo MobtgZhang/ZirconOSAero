@@ -102,6 +102,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const drivers = @import("drivers/mod.zig");
     const audio = @import("drivers/audio/audio.zig");
     const registry = @import("registry/registry.zig");
+    const virtio_blk_scratch_fs = @import("drivers/storage/virtio_blk_scratch_fs.zig");
 
     // ═══════════════════════════════════════════════════════
     //  Stage A: Early Serial Log  (output: serial only)
@@ -359,6 +360,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     vfs_mod.init();
     fat32_mod.init();
     ntfs_mod.init();
+    virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
 
     registry.init();
 
@@ -878,10 +880,11 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     const sys_config = @import("config/config.zig");
     const audio = @import("drivers/audio/audio.zig");
     const registry = @import("registry/registry.zig");
+    const virtio_blk_scratch_fs = @import("drivers/storage/virtio_blk_scratch_fs.zig");
 
     arch.initSerial();
 
-    // 极早 handoff 诊断（UEFI→kernel）：区分「未进内核」与「进内核后崩溃」；与 ZBM 写入的 mb2_phys 对照。
+    // 极早 handoff 诊断（UEFI→内核）：区分「未进内核」与「进内核后崩溃」；与 ZBM 写入的 mb2_phys 对照。
     switch (builtin.target.cpu.arch) {
         .aarch64 => {
             const ab = @import("arch/aarch64/boot.zig");
@@ -1331,6 +1334,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     vfs_mod.init();
     fat32_mod.init();
     ntfs_mod.init();
+    virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
 
     registry.init();
     klog.info("Registry: %u keys in 5 hives", .{registry.getKeyCount()});

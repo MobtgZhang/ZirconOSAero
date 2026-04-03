@@ -16,6 +16,7 @@ const vm_mod = @import("../mm/vm.zig");
 const process_mod = @import("../ps/process.zig");
 const spinlock_mod = @import("spinlock.zig");
 const percpu_sched = @import("percpu_sched.zig");
+const kpcr = @import("kpcr.zig");
 const ob = @import("../ob/object.zig");
 const KeApc = @import("apc_object.zig").KeApc;
 
@@ -329,6 +330,7 @@ fn isBspIdleThreadForSteal() bool {
         threads[current_thread].priority == PRIORITY_IDLE;
 }
 
+/// J8：BSP（调度 **槽 0**）idle 时从其它逻辑 CPU **最长就绪链**窃取一头，与 `pickBalancedHomeCpu` 的新线程均衡协同。
 fn workStealBalanceIfIdleImpl() void {
     const n = schedNumCpus();
     if (n <= 1) return;
@@ -534,14 +536,17 @@ fn terminateThreadsForProcess(pid: u32) void {
     }
     if (current_thread < thread_count and threads[current_thread].process_id == pid) {
         current_thread = 0;
+        kpcr.setCurrentThreadIndex(0);
         activateCr3ForProcessId(0);
     }
 }
 
 pub fn init() void {
+    kpcr.setProcessorNumber(0);
     resetReadyQueues();
     thread_count = 0;
     current_thread = 0;
+    kpcr.setCurrentThreadIndex(0);
     tick_count = 0;
     initialized = true;
     scheduling_enabled = false;
@@ -571,6 +576,7 @@ fn createIdleThread() ?usize {
 
     thread_count += 1;
     current_thread = idx;
+    kpcr.setCurrentThreadIndex(@intCast(idx));
 
     klog.info("Scheduler: idle thread (tid=%u) created", .{idx});
     return idx;
@@ -666,6 +672,7 @@ pub fn tick() void {
         threads[next_blk].state = .running;
         threads[next_blk].slice_remaining = quantumTicksForThread(&threads[next_blk]);
         current_thread = next_blk;
+        kpcr.setCurrentThreadIndex(@intCast(next_blk));
         activateCr3ForProcessId(threads[next_blk].process_id);
         return;
     }
@@ -698,6 +705,7 @@ pub fn tick() void {
     threads[next].state = .running;
     threads[next].slice_remaining = quantumTicksForThread(&threads[next]);
     current_thread = next;
+    kpcr.setCurrentThreadIndex(@intCast(next));
     activateCr3ForProcessId(threads[next].process_id);
 }
 
@@ -833,6 +841,20 @@ pub fn noteGuiInputBoostStub() void {}
 
 pub fn isInitialized() bool {
     return initialized;
+}
+
+/// AP 在线程/按核 tick 全量镜像前：开中断并在 **sti;hlt** 中等待（PIT/IOAPIC 或 IPI 可唤醒）。
+pub fn apProcessorIdleLoop() noreturn {
+    if (builtin.cpu.arch == .x86_64) {
+        const arch_x = @import("../arch/x86_64/mod.zig");
+        arch_x.enableInterrupts();
+        while (true) {
+            asm volatile ("sti; hlt" ::: .{ .memory = true });
+        }
+    }
+    while (true) {
+        std.atomic.spinLoopHint();
+    }
 }
 
 /// 供测试或调试对照 `effectivePriority`（与内部算法一致）。

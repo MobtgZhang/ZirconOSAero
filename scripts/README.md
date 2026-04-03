@@ -2,6 +2,7 @@
 
 | 路径 | 说明 |
 |------|------|
+| `check-docs-links.sh` | 校验 `docs/*.md` 与根目录 `README*.md` 中**相对路径**链接是否存在（CI 调用） |
 | `fetch-assets.sh` / `gen_wallpaper_placeholders.py` | 缺失时生成 Aero 壁纸 PNG 占位（与 `build.zig` 中路径一致） |
 | `configure.py` | 交互式编辑根目录 `build.conf` |
 | `build/mkiso-uefi-zbm.sh` | 生成 UEFI 可启动 ISO（`xorriso` + 内嵌 FAT ESP） |

@@ -37,8 +37,11 @@ SECTIONS
     *(.bss .bss.*)
   }
 
-  . = ALIGN(4K);
-  PROVIDE(_kernel_end = .);
+  /* 映像末尾（首字节不属于内核）；见 src/arch/x86_64/kernel_end.s `_kernel_end`。 */
+  .kernel_image_end : ALIGN(4K)
+  {
+    KEEP(*(.kernel_image_end))
+  }
 
   /DISCARD/ :
   {

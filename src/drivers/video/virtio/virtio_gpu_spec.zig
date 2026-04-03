@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/virtio_gpu_spec.zig
+// Module: src/drivers/video/virtio/virtio_gpu_spec.zig
 // Purpose: VirtIO GPU device command types and wire layouts (host-testable constants).
 //
 // This is an independent clean-room implementation.
@@ -30,6 +30,15 @@ pub const CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0203;
 pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0204;
 pub const CMD_TRANSFER_TO_HOST_2D: u32 = 0x0205;
 pub const CMD_TRANSFER_FROM_HOST_2D: u32 = 0x0206;
+
+/// 3D / VirGL：与 Linux `uapi/linux/virtio_gpu.h` 中 `VIRTIO_GPU_CMD_CTX_CREATE` 数值一致（BSD 许可头文件，仅常量）。
+pub const CMD_CTX_CREATE: u32 = 0x0200;
+
+/// 光标队列：`VIRTIO_GPU_CMD_MOVE_CURSOR`（仅更新位置，不提交新位图）。
+pub const CMD_MOVE_CURSOR: u32 = 0x0301;
+
+/// 设备特性字 low 32 位中的 VirGL 位（`VIRTIO_GPU_F_VIRGL` = 0）。
+pub const FEATURE_MASK_VIRGL: u32 = 1;
 
 /// Response `type` values (device → driver), VirtIO GPU device section.
 pub const RESP_OK_NODATA: u32 = 0x1100;
@@ -70,6 +79,11 @@ test "set_scanout and flush wire sizes" {
     try std.testing.expectEqual(@as(usize, 64), resourceAttachBackingReqLen(2));
 }
 
+test "ctx create and move cursor wire sizes" {
+    try std.testing.expectEqual(@as(usize, 96), ctx_create_req_len);
+    try std.testing.expectEqual(@as(usize, 56), move_cursor_req_len);
+}
+
 /// Wire size of `virtio_gpu_resource_create_2d` (hdr + resource_id + format + width + height).
 pub const resource_create_2d_req_len: usize = @sizeOf(CtrlHdr) + 16;
 
@@ -87,6 +101,13 @@ pub const resource_flush_req_len: usize = set_scanout_req_len;
 pub fn resourceAttachBackingReqLen(nr_entries: usize) usize {
     return @sizeOf(CtrlHdr) + 8 + 16 * nr_entries;
 }
+
+/// 与 [build.conf](build.conf) 注释表最大档 **3840×2160×32** 对齐：屏前缓冲按 4KiB 页拆成 `virtio_gpu_mem_entry` 的条数上界（最坏散列 GPA）。
+pub const max_scanout_width: u32 = 3840;
+pub const max_scanout_height: u32 = 2160;
+pub const max_virtio_backing_mem_entries: usize = @intCast((@as(u64, @intCast(max_scanout_width)) *% @as(u64, @intCast(max_scanout_height)) *% 4 + 4095) / 4096);
+/// 单条 `CMD_RESOURCE_ATTACH_BACKING` 控制请求体最大长度（`virtio_gpu_pci` / `framebuffer` 共用）。
+pub const max_attach_backing_wire_bytes: usize = resourceAttachBackingReqLen(max_virtio_backing_mem_entries);
 
 /// Fill `hdr.type` and zero the rest of the 24-byte control header.
 pub fn writeCtrlHdrType(out: []u8, cmd_type: u32) void {
@@ -167,6 +188,34 @@ pub const GpuMemEntry = struct {
     length: u32,
 };
 
+/// `virtio_gpu_ctx_create`：hdr + nlen + context_init + debug_name[64]（Linux uapi 布局）。
+pub const ctx_create_req_len: usize = @sizeOf(CtrlHdr) + 4 + 4 + 64;
+
+/// `virtio_gpu_update_cursor` / `MOVE_CURSOR` 共用布局（MOVE 时 resource/hot 字段设备可忽略）。
+pub const move_cursor_req_len: usize = @sizeOf(CtrlHdr) + 16 + 4 + 4 + 4 + 4;
+
+/// Build `VIRTIO_GPU_CMD_CTX_CREATE`：`ctx_id` 写入 hdr；`debug_name` 截断至 63 字节 + NUL。
+pub fn writeCtxCreate(out: []u8, ctx_id: u32, debug_name: []const u8) void {
+    std.debug.assert(out.len >= ctx_create_req_len);
+    @memset(out[0..ctx_create_req_len], 0);
+    std.mem.writeInt(u32, out[0..4], CMD_CTX_CREATE, .little);
+    std.mem.writeInt(u32, out[16..20], ctx_id, .little);
+    const ncopy = @min(debug_name.len, 63);
+    std.mem.writeInt(u32, out[24..28], @intCast(ncopy), .little);
+    std.mem.writeInt(u32, out[28..32], 0, .little); // context_init
+    if (ncopy > 0) @memcpy(out[32 .. 32 + ncopy], debug_name[0..ncopy]);
+}
+
+/// `CMD_MOVE_CURSOR`：仅位置（scanout 0）；resource_id=0 表示不更换光标图像。
+pub fn writeMoveCursor(out: []u8, scanout_id: u32, x: u32, y: u32) void {
+    std.debug.assert(out.len >= move_cursor_req_len);
+    @memset(out[0..move_cursor_req_len], 0);
+    std.mem.writeInt(u32, out[0..4], CMD_MOVE_CURSOR, .little);
+    std.mem.writeInt(u32, out[24..28], scanout_id, .little);
+    std.mem.writeInt(u32, out[28..32], x, .little);
+    std.mem.writeInt(u32, out[32..36], y, .little);
+}
+
 /// Multi-chunk attach (`nr_entries` virtio_gpu_mem_entry).
 pub fn writeResourceAttachBackingN(out: []u8, resource_id: u32, entries: []const GpuMemEntry) void {
     const need = resourceAttachBackingReqLen(entries.len);
@@ -181,4 +230,9 @@ pub fn writeResourceAttachBackingN(out: []u8, resource_id: u32, entries: []const
         std.mem.writeInt(u32, out[o + 12 ..][0..4], 0, .little);
         o += 16;
     }
+}
+
+test "4k scanout backing entry and wire caps" {
+    try std.testing.expectEqual(@as(usize, 8100), max_virtio_backing_mem_entries);
+    try std.testing.expectEqual(@as(usize, 32 + 16 * 8100), max_attach_backing_wire_bytes);
 }

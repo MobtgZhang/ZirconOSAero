@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/virtio_gpu_pci.zig
+// Module: src/drivers/video/virtio/virtio_gpu_pci.zig
 // Purpose: VirtIO-GPU PCI (1af4:1050) modern transport；控制队列、`GET_DISPLAY_INFO`、scratch `TRANSFER_*` 自检、**SET_SCANOUT**（guest 帧缓冲 backing + `RESOURCE_FLUSH` 减设备侧陈旧像素）。
 //
 // This is an independent clean-room implementation.
@@ -10,10 +10,10 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const klog = @import("../../rtl/klog.zig");
-const pcie = @import("../bus/pcie.zig");
-const vm = @import("../../mm/vm.zig");
-const fb = @import("framebuffer.zig");
+const klog = @import("../../../rtl/klog.zig");
+const pcie = @import("../../bus/pcie.zig");
+const vm = @import("../../../mm/vm.zig");
+const fb = @import("../core/framebuffer.zig");
 const spec = @import("virtio_gpu_spec.zig");
 
 const VIRTIO_PCI_CAP: u8 = 0x09;
@@ -49,7 +49,6 @@ var scanout_h: u32 = 0;
 var common_base: usize = 0;
 var notify_base: usize = 0;
 var notify_mult: u32 = 0;
-var queue_notify_off: u16 = 0;
 var queue_size: u16 = 0;
 
 var ring_page: [4096]u8 align(4096) = undefined;
@@ -68,6 +67,31 @@ const gpu_scratch_dim: u32 = 32;
 /// 控制队列请求/响应分置于低 4KiB 与高 4KiB，满足设备对描述符 GPA 的常见对齐假设。
 const gpu_cmd_io_split: usize = 4096;
 var gpu_cmd_io: [8192]u8 align(4096) = undefined;
+/// 大块 `RESOURCE_ATTACH_BACKING`（多 mem_entry）请求体；响应仍用 `gpu_cmd_io` 高半区。长度与 `virtio_gpu_spec.max_attach_backing_wire_bytes`（4K@32bpp 最坏页散列）一致。
+var gpu_attach_blob: [spec.max_attach_backing_wire_bytes]u8 align(4096) = undefined;
+
+/// 设备特性 low（`device_feature_select=0` 读回）；bit0 = VirGL（Linux `VIRTIO_GPU_F_VIRGL`）。
+var device_features_low: u32 = 0;
+var virgl_feature_negotiated: bool = false;
+var virgl_ctx_alive: bool = false;
+const virgl_gpu_ctx_id: u32 = 1;
+var scanout_multipage_backing: bool = false;
+
+/// `present()` 内控制队列操作预算，避免单帧过量 MMIO 轮询（见 `beginPresentVirtioBudget`）。
+var present_virtio_budget: u32 = 0;
+var present_virtio_budget_active: bool = false;
+
+var ring_cursor: [4096]u8 align(4096) = undefined;
+var queue_size_cursor: u16 = 0;
+var desc_off_c: usize = 0;
+var avail_off_c: usize = 0;
+var used_off_c: usize = 0;
+var local_avail_idx_c: u16 = 0;
+var last_used_idx_c: u16 = 0;
+var cursor_queue_ready: bool = false;
+var gpu_cursor_io: [4096]u8 align(4096) = undefined;
+const gpu_cursor_io_split: usize = 2048;
+var hardware_cursor_move_ok: bool = false;
 
 /// True after PCI locate of 1af4:1050（MMIO 尚未就绪时亦为 true）。
 pub fn isPresent() bool {
@@ -169,15 +193,47 @@ fn availRingIndex(i: u16) *volatile u16 {
     return @as(*volatile u16, @ptrFromInt(p));
 }
 
-fn kickControlQueue() void {
-    if (notify_base == 0) return;
-    mmio_w16(common_base, 0x16, 0);
+fn descTableCursor() [*]VirtqDesc {
+    return @as([*]VirtqDesc, @ptrFromInt(@intFromPtr(&ring_cursor) + desc_off_c));
+}
+
+fn readUsedIdxCursor() u16 {
+    const p = @intFromPtr(&ring_cursor) + used_off_c;
+    return @as(*volatile u16, @ptrFromInt(p + 2)).*;
+}
+
+fn writeAvailIdxCursor(val: u16) void {
+    const p = @intFromPtr(&ring_cursor) + avail_off_c;
+    @as(*volatile u16, @ptrFromInt(p + 2)).* = val;
+}
+
+fn availRingIndexCursor(i: u16) *volatile u16 {
+    const p = @intFromPtr(&ring_cursor) + avail_off_c + 4 + @as(usize, @intCast(i)) * 2;
+    return @as(*volatile u16, @ptrFromInt(p));
+}
+
+fn kickCursorQueue() void {
+    if (notify_base == 0 or !cursor_queue_ready) return;
+    mmio_w16(common_base, 0x16, spec.vq_cursor);
     fullMemoryFence();
+    const notify_off_c = mmio_r16(common_base, 0x1e);
     const port: usize = if (notify_mult == 0)
         notify_base
     else
-        notify_base + @as(usize, notify_mult) * @as(usize, queue_notify_off);
-    @as(*volatile u16, @ptrFromInt(port)).* = 0;
+        notify_base + @as(usize, notify_mult) * @as(usize, notify_off_c);
+    @as(*volatile u16, @ptrFromInt(port)).* = spec.vq_cursor;
+}
+
+fn kickControlQueue() void {
+    if (notify_base == 0) return;
+    mmio_w16(common_base, 0x16, spec.vq_control);
+    fullMemoryFence();
+    const no = mmio_r16(common_base, 0x1e);
+    const port: usize = if (notify_mult == 0)
+        notify_base
+    else
+        notify_base + @as(usize, notify_mult) * @as(usize, no);
+    @as(*volatile u16, @ptrFromInt(port)).* = spec.vq_control;
 }
 
 pub fn probe() void {
@@ -205,17 +261,26 @@ pub fn bringupMmioIfProbed() void {
     }
 }
 
-/// Submit one control-queue command；`req` 置于 `gpu_cmd_io` 低半区，响应写入高半区。返回响应 `type` 或超时 `null`。
-fn submitControl(req: []const u8, rsp_len: u32) ?u32 {
-    if (req.len > 3800 or rsp_len > 3800 or rsp_len < 4) return null;
-    @memcpy(gpu_cmd_io[0..req.len], req);
+pub fn beginPresentVirtioBudget() void {
+    present_virtio_budget = 32;
+    present_virtio_budget_active = true;
+}
+
+pub fn endPresentVirtioBudget() void {
+    present_virtio_budget_active = false;
+}
+
+/// Submit one control-queue command；`req_phys` 指向请求 GPA，`rsp` 仍写入 `gpu_cmd_io` 高半区。
+fn submitControlRaw(req_phys: u64, req_len: u32, rsp_len: u32) ?u32 {
+    if (rsp_len > 3800 or rsp_len < 4) return null;
+    if (present_virtio_budget_active) {
+        if (present_virtio_budget == 0) return null;
+        present_virtio_budget -= 1;
+    }
     @memset(gpu_cmd_io[gpu_cmd_io_split..][0..rsp_len], 0);
+    const rsp_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_cmd_io)) + @as(u64, gpu_cmd_io_split));
 
-    const page_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_cmd_io)));
-    const req_phys = page_phys;
-    const rsp_phys = page_phys + @as(u64, gpu_cmd_io_split);
-
-    descTable()[0] = .{ .addr = req_phys, .len = @intCast(req.len), .flags = VRING_DESC_F_NEXT, .next = 1 };
+    descTable()[0] = .{ .addr = req_phys, .len = req_len, .flags = VRING_DESC_F_NEXT, .next = 1 };
     descTable()[1] = .{ .addr = rsp_phys, .len = rsp_len, .flags = VRING_DESC_F_WRITE, .next = 0 };
 
     const ai = local_avail_idx % queue_size;
@@ -239,32 +304,94 @@ fn submitControl(req: []const u8, rsp_len: u32) ?u32 {
     return null;
 }
 
+/// 小请求：`req` 拷入 `gpu_cmd_io` 低半区。
+fn submitControl(req: []const u8, rsp_len: u32) ?u32 {
+    if (req.len > gpu_cmd_io_split - 64) return null;
+    @memcpy(gpu_cmd_io[0..req.len], req);
+    const page_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_cmd_io)));
+    return submitControlRaw(page_phys, @intCast(req.len), rsp_len);
+}
+
+/// 大块 attach 等：请求已在 `gpu_attach_blob`（或调用方保证 GPA 连续可 DMA）。
+fn submitControlFromAttachBlob(req_len: usize, rsp_len: u32) ?u32 {
+    if (req_len > gpu_attach_blob.len) return null;
+    const phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_attach_blob)));
+    return submitControlRaw(phys, @intCast(req_len), rsp_len);
+}
+
+/// 光标队列：`req` 置于 `gpu_cursor_io` 低半区，响应高半区。
+fn submitCursor(req_len: u32, rsp_len: u32) ?u32 {
+    if (!cursor_queue_ready) return null;
+    if (req_len > gpu_cursor_io_split - 64 or rsp_len > gpu_cursor_io_split - 64 or rsp_len < 4) return null;
+    if (present_virtio_budget_active) {
+        if (present_virtio_budget == 0) return null;
+        present_virtio_budget -= 1;
+    }
+    @memset(gpu_cursor_io[gpu_cursor_io_split..][0..rsp_len], 0);
+    const req_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_cursor_io)));
+    const rsp_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_cursor_io)) + @as(u64, gpu_cursor_io_split));
+
+    descTableCursor()[0] = .{ .addr = req_phys, .len = req_len, .flags = VRING_DESC_F_NEXT, .next = 1 };
+    descTableCursor()[1] = .{ .addr = rsp_phys, .len = rsp_len, .flags = VRING_DESC_F_WRITE, .next = 0 };
+
+    const ai = local_avail_idx_c % queue_size_cursor;
+    availRingIndexCursor(ai).* = 0;
+    local_avail_idx_c +%= 1;
+    writeAvailIdxCursor(local_avail_idx_c);
+    fullMemoryFence();
+    kickCursorQueue();
+
+    var poll: u32 = 0;
+    while (poll < 200_000) : (poll += 1) {
+        fullMemoryFence();
+        if (readUsedIdxCursor() != last_used_idx_c) {
+            last_used_idx_c = readUsedIdxCursor();
+            return std.mem.readInt(u32, gpu_cursor_io[gpu_cursor_io_split..][0..4], .little);
+        }
+        if (builtin.target.cpu.arch == .x86_64) {
+            asm volatile ("pause" ::: .{ .memory = true });
+        }
+    }
+    return null;
+}
+
 fn trySetupScanoutFromFramebuffer() bool {
     scanout_active = false;
     scanout_w = 0;
     scanout_h = 0;
+    scanout_multipage_backing = false;
     if (!gpu_offload_ready) return false;
     if (!fb.isInitialized()) return false;
-    const span = fb.getFrontBufferPhysContiguousForVirtio() orelse return false;
     const w = fb.getWidth();
     const h = fb.getHeight();
     if (w == 0 or h == 0) return false;
 
-    var cmd: [512]u8 = undefined;
-    if (spec.resourceAttachBackingReqLen(1) > cmd.len) return false;
+    var local_entries: [spec.max_virtio_backing_mem_entries]fb.VirtioBackingMemEntry = undefined;
+    const n: usize = blk: {
+        if (fb.getFrontBufferPhysContiguousForVirtio()) |span| {
+            local_entries[0] = .{ .addr = span.base, .length = @intCast(span.len) };
+            break :blk 1;
+        }
+        const m = fb.fillFrontBufferVirtioBackingEntries(&local_entries) orelse return false;
+        if (m == 0) return false;
+        break :blk m;
+    };
+    scanout_multipage_backing = n > 1;
 
+    var spec_entries: [spec.max_virtio_backing_mem_entries]spec.GpuMemEntry = undefined;
+    for (0..n) |i| {
+        spec_entries[i] = .{ .addr = local_entries[i].addr, .length = local_entries[i].length };
+    }
+    const attach_len = spec.resourceAttachBackingReqLen(n);
+    if (attach_len > gpu_attach_blob.len) return false;
+
+    var cmd: [512]u8 = undefined;
     spec.writeResourceCreate2D(cmd[0..spec.resource_create_2d_req_len], gpu_scanout_res_id, spec.FORMAT_B8G8R8X8_UNORM, w, h);
     const rt0 = submitControl(cmd[0..spec.resource_create_2d_req_len], 64) orelse return false;
     if (rt0 != spec.RESP_OK_NODATA) return false;
 
-    const len_u32: u32 = @intCast(span.len);
-    const attach_entries: [1]spec.GpuMemEntry = .{.{
-        .addr = span.base,
-        .length = len_u32,
-    }};
-    spec.writeResourceAttachBackingN(cmd[0..spec.resourceAttachBackingReqLen(1)], gpu_scanout_res_id, &attach_entries);
-    const attach_len = spec.resourceAttachBackingReqLen(1);
-    const rt1 = submitControl(cmd[0..attach_len], 64) orelse return false;
+    spec.writeResourceAttachBackingN(gpu_attach_blob[0..attach_len], gpu_scanout_res_id, spec_entries[0..n]);
+    const rt1 = submitControlFromAttachBlob(attach_len, 64) orelse return false;
     if (rt1 != spec.RESP_OK_NODATA) return false;
 
     spec.writeSetScanout(cmd[0..spec.set_scanout_req_len], 0, gpu_scanout_res_id, 0, 0, w, h);
@@ -277,8 +404,8 @@ fn trySetupScanoutFromFramebuffer() bool {
     scanout_active = true;
     scanout_w = w;
     scanout_h = h;
-    klog.info("VirtIO-GPU: scanout resource=%u %ux%u bytes=%u (guest RAM backing + flush path)", .{
-        gpu_scanout_res_id, w, h, len_u32,
+    klog.info("VirtIO-GPU: scanout resource=%u %ux%u mem_entries=%u multipage=%s (guest RAM + RESOURCE_FLUSH)", .{
+        gpu_scanout_res_id, w, h, @as(u32, @truncate(n)), if (n > 1) "yes" else "no",
     });
     return true;
 }
@@ -319,6 +446,9 @@ pub fn notifyScanoutFrontUpdated(dirty_opt: ?fb.Rect) void {
     var cmd: [64]u8 = undefined;
     spec.writeResourceFlush(cmd[0..spec.resource_flush_req_len], gpu_scanout_res_id, rx, ry, rw, rh);
     _ = submitControl(cmd[0..spec.resource_flush_req_len], 64);
+
+    const flip_journal = @import("../core/display_flip_journal.zig");
+    flip_journal.noteVirtioResourceFlush(rw >= w and rh >= h);
 }
 
 fn tryGpuScratch2dValidate() bool {
@@ -449,6 +579,18 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
     mmio_w8(common_base, 0x14, 0);
     mmio_w8(common_base, 0x14, STATUS_ACK | STATUS_DRIVER);
 
+    mmio_w32(common_base, 0x0, 0);
+    const dev_lo = mmio_r32(common_base, 0x4);
+    device_features_low = dev_lo;
+    virgl_feature_negotiated = (dev_lo & spec.FEATURE_MASK_VIRGL) != 0;
+    var driver_lo: u32 = 0;
+    if (virgl_feature_negotiated) {
+        driver_lo |= spec.FEATURE_MASK_VIRGL;
+        klog.info("VirtIO-GPU: device offers VIRGL (feature low bit0); negotiating", .{});
+    }
+    mmio_w32(common_base, 0x8, 0);
+    mmio_w32(common_base, 0xc, driver_lo);
+
     mmio_w32(common_base, 0x0, 1);
     const dev_hi = mmio_r32(common_base, 0x4);
     if ((dev_hi & VIRTIO_F_VERSION_1) != 0) {
@@ -466,7 +608,7 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
     mmio_w16(common_base, 0x16, 0);
     fullMemoryFence();
     const qs = mmio_r16(common_base, 0x18);
-    if (qs < 2 or qs > 1024) {
+    if (qs < 1 or qs > 1024) {
         failGpu(mmio_r8(common_base, 0x14));
         return false;
     }
@@ -498,8 +640,41 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
     mmio_w32(common_base, 0x30, @truncate(page_phys + used_off));
     mmio_w32(common_base, 0x34, @truncate((page_phys + used_off) >> 32));
 
-    queue_notify_off = mmio_r16(common_base, 0x1e);
     mmio_w16(common_base, 0x1c, 1);
+
+    cursor_queue_ready = false;
+    mmio_w16(common_base, 0x16, spec.vq_cursor);
+    fullMemoryFence();
+    const qs1 = mmio_r16(common_base, 0x18);
+    if (qs1 >= 1 and qs1 <= 1024) {
+        queue_size_cursor = @min(qs1, 8);
+        mmio_w16(common_base, 0x18, queue_size_cursor);
+        mmio_w16(common_base, 0x1a, 0xFFFF);
+
+        desc_off_c = 0;
+        avail_off_c = 16 * @as(usize, @intCast(queue_size_cursor));
+        var uc = avail_off_c + 4 + 2 * @as(usize, @intCast(queue_size_cursor));
+        uc = (uc + 3) & ~@as(usize, 3);
+        used_off_c = uc;
+        const used_end_c = used_off_c + 4 + 8 * @as(usize, @intCast(queue_size_cursor));
+        if (used_end_c <= ring_cursor.len) {
+            @memset(&ring_cursor, 0);
+            local_avail_idx_c = 0;
+            last_used_idx_c = 0;
+            const page_phys_c: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&ring_cursor)));
+            mmio_w32(common_base, 0x20, @truncate(page_phys_c));
+            mmio_w32(common_base, 0x24, @truncate(page_phys_c >> 32));
+            mmio_w32(common_base, 0x28, @truncate(page_phys_c + avail_off_c));
+            mmio_w32(common_base, 0x2c, @truncate((page_phys_c + avail_off_c) >> 32));
+            mmio_w32(common_base, 0x30, @truncate(page_phys_c + used_off_c));
+            mmio_w32(common_base, 0x34, @truncate((page_phys_c + used_off_c) >> 32));
+            mmio_w16(common_base, 0x1c, 1);
+            cursor_queue_ready = true;
+            klog.info("VirtIO-GPU: cursor queue enabled (vq=%u size=%u)", .{ spec.vq_cursor, queue_size_cursor });
+        }
+    }
+    mmio_w16(common_base, 0x16, 0);
+    fullMemoryFence();
 
     mmio_w8(common_base, 0x14, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
     fullMemoryFence();
@@ -509,7 +684,24 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
     const rt_info = submitControl(&hdr, 512) orelse return false;
     if (rt_info != spec.RESP_OK_DISPLAY_INFO) return false;
 
-    return tryGpuScratch2dValidate();
+    if (!tryGpuScratch2dValidate()) return false;
+
+    virgl_ctx_alive = false;
+    if (virgl_feature_negotiated) {
+        var cbuf: [spec.ctx_create_req_len]u8 = undefined;
+        spec.writeCtxCreate(&cbuf, virgl_gpu_ctx_id, "zircon");
+        if (submitControl(&cbuf, 64)) |rt_ctx| {
+            if (rt_ctx == spec.RESP_OK_NODATA) {
+                virgl_ctx_alive = true;
+                klog.info("VirtIO-GPU: CMD_CTX_CREATE ok (ctx_id=%u); SUBMIT_3D blur 仍待接線", .{virgl_gpu_ctx_id});
+            } else {
+                klog.warn("VirtIO-GPU: CMD_CTX_CREATE unexpected rsp=0x{x}", .{rt_ctx});
+            }
+        } else {
+            klog.warn("VirtIO-GPU: CMD_CTX_CREATE timeout or transport fail (non-fatal)", .{});
+        }
+    }
+    return true;
 }
 
 /// `true` 当控制队列完成 `GET_DISPLAY_INFO` 且 scratch 上 `CREATE_2D` + `TRANSFER_*` 自检通过。
@@ -517,23 +709,59 @@ pub fn compositorOffloadAvailable() bool {
     return gpu_offload_ready;
 }
 
-/// 帧缓冲子矩形经 scratch `RESOURCE` 做 **FROM_HOST + TO_HOST** 恒等校验（与 `compositorTryRoundTripFramebufferRect` 同路径）。
-/// 尚非真实 scanout 纹理；`w,h` 须 ≤32 且与 scratch 格式一致。失败时调用方仍走 CPU `flip`/`flipDirty`。
-/// 见 `SOFTWARE_COMPOSITOR_WDDM.md` 第七阶段与 `display.present` 注释。
-pub fn trySubmitFramebufferDirtyRect(
-    scr_w: u32,
-    scr_h: u32,
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
+pub fn getDeviceFeaturesLow() u32 {
+    return device_features_low;
+}
+
+pub fn virglFeatureNegotiated() bool {
+    return virgl_feature_negotiated;
+}
+
+pub fn virglContextReady() bool {
+    return virgl_ctx_alive;
+}
+
+pub fn scanoutUsesMultipageBacking() bool {
+    return scanout_multipage_backing;
+}
+
+pub fn hardwareCursorActive() bool {
+    return hardware_cursor_move_ok;
+}
+
+/// 每帧 `present` 末尾同步指针位置到 VirtIO 光标队列（成功后可关软件光标叠加）。
+pub fn syncHardwareCursorFromPresent(cursor_x: i32, cursor_y: i32) void {
+    if (!cursor_queue_ready or !scanout_active) return;
+    const fw = scanout_w;
+    const fh = scanout_h;
+    if (fw == 0 or fh == 0) return;
+    const max_x: i32 = if (fw > 0) @as(i32, @intCast(fw - 1)) else 0;
+    const max_y: i32 = if (fh > 0) @as(i32, @intCast(fh - 1)) else 0;
+    const cx = std.math.clamp(cursor_x, 0, max_x);
+    const cy = std.math.clamp(cursor_y, 0, max_y);
+    spec.writeMoveCursor(gpu_cursor_io[0..spec.move_cursor_req_len], 0, @intCast(cx), @intCast(cy));
+    if (submitCursor(@intCast(spec.move_cursor_req_len), 64)) |rt| {
+        if (rt == spec.RESP_OK_NODATA) {
+            hardware_cursor_move_ok = true;
+        }
+    }
+}
+
+/// VirGL 上下文已就绪时尝试将盒式模糊交给 GPU；**当前**尚未发送 `SUBMIT_3D`，恒为 `false`（占位回退 CPU）。
+pub fn tryVirglBlurBoxDelegation(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    radius: u32,
+    passes: u32,
 ) bool {
-    _ = scr_w;
-    _ = scr_h;
-    // Scanout 路径由 `display.present` 在 flip 后统一 `RESOURCE_FLUSH`；此处避免重复命令。
-    if (scanout_active) return false;
-    if (!gpu_offload_ready) return false;
-    if (w == 0 or h == 0) return false;
-    if (w > gpu_scratch_dim or h > gpu_scratch_dim) return false;
-    return compositorTryRoundTripFramebufferRect(x, y, w, h);
+    _ = x;
+    _ = y;
+    _ = w;
+    _ = h;
+    _ = radius;
+    _ = passes;
+    if (!virgl_ctx_alive) return false;
+    return false;
 }

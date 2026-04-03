@@ -20,6 +20,10 @@ pub const NtConnectPort: u32 = 0x3B;
 pub const NtCreateProcess: u32 = 0x4F;
 pub const NtCreateSection: u32 = 0x54;
 pub const NtCreateThread: u32 = 0x57;
+/// Win7 SP1 x86 服务号 **98**（`j00ru/windows-syscalls` `x86/json/nt-per-system.json` → `Windows 7` / `SP1`）。
+pub const NtDelayExecution: u32 = 0x62;
+/// Win7 SP1 x86 服务号 **57**（`j00ru/windows-syscalls` `nt-per-system.json`）。
+pub const NtDuplicateObject: u32 = 0x39;
 pub const NtFreeVirtualMemory: u32 = 0x83;
 pub const NtMapViewOfSection: u32 = 0xA8;
 pub const NtOpenFile: u32 = 0xB3;
@@ -41,6 +45,12 @@ pub const NtWriteVirtualMemory: u32 = 0x18F;
 /// **win32k** 服务十进制 **4111**（公开表：`NtUserPostMessage`）→ `0x100F`；与 x64 折叠槽 `ssdt_nt61.NtUserPostMessage == 0x5A` 为**名称对照**（非同一编号空间）。
 pub const Win32kNtUserPostMessage_x86_index4111: u32 = 0x100F;
 
+/// x86 **win32k.sys** 服务号与 ntos 不同命名空间；十进制服务号常 ≥ 0x1000（如公开表 `NtUserPostMessage`）。
+/// Thunk 层对命中此范围的调用返回 `STATUS_NOT_IMPLEMENTED`，避免与 ntos 子集误映射。
+pub fn isX86Win32kServiceIndex(syscall_num: u32) bool {
+    return syscall_num >= 0x1000;
+}
+
 /// `translateSyscall32to64` 演示路径：对上述公开服务号返回成功；其余 `STATUS_NOT_IMPLEMENTED`。
 pub fn wow64SyscallStubReturnsSuccess(syscall_num: u32) bool {
     inline for (.{
@@ -53,6 +63,7 @@ pub fn wow64SyscallStubReturnsSuccess(syscall_num: u32) bool {
         NtCreateProcess,
         NtCreateSection,
         NtCreateThread,
+        NtDuplicateObject,
         NtFreeVirtualMemory,
         NtMapViewOfSection,
         NtOpenFile,
@@ -64,6 +75,7 @@ pub fn wow64SyscallStubReturnsSuccess(syscall_num: u32) bool {
         NtReadFile,
         NtReadVirtualMemory,
         NtRequestWaitReplyPort,
+        NtDelayExecution,
         NtTerminateProcess,
         NtTerminateThread,
         NtWaitForSingleObject,
@@ -76,10 +88,12 @@ pub fn wow64SyscallStubReturnsSuccess(syscall_num: u32) bool {
 }
 
 test "WOW64 x86 Win7 SP1 reference indices" {
+    try std.testing.expect(NtDuplicateObject == 0x39);
     try std.testing.expect(NtClose == 0x32);
     try std.testing.expect(NtOpenProcess == 0xBE);
     try std.testing.expect(NtQueryVirtualMemory == 0x10B);
     try std.testing.expect(NtTerminateProcess == 0x172);
+    try std.testing.expect(NtDelayExecution == 0x62);
     try std.testing.expect(NtCreateFile == 0x42);
     try std.testing.expect(NtConnectPort == 0x3B);
     try std.testing.expect(NtRequestWaitReplyPort == 0x12B);
@@ -92,4 +106,9 @@ test "wow64SyscallStubReturnsSuccess covers thunk table syscalls" {
     try std.testing.expect(wow64SyscallStubReturnsSuccess(NtConnectPort));
     try std.testing.expect(wow64SyscallStubReturnsSuccess(NtRequestWaitReplyPort));
     try std.testing.expect(!wow64SyscallStubReturnsSuccess(0xFFFF));
+}
+
+test "x86 win32k service indices are not ntos stubs" {
+    try std.testing.expect(isX86Win32kServiceIndex(Win32kNtUserPostMessage_x86_index4111));
+    try std.testing.expect(!isX86Win32kServiceIndex(NtClose));
 }

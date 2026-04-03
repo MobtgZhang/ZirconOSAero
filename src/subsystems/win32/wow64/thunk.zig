@@ -11,27 +11,39 @@ const types = @import("types.zig");
 const ntdll = @import("../../../libs/ntdll.zig");
 const x86 = @import("ssdt_x86_win7_sp1.zig");
 const x64_alias = @import("x64_semantic_alias.zig");
+const marshal = @import("marshal.zig");
 
 pub var total_syscall_translations: u64 = 0;
 pub var total_ptr_conversions: u64 = 0;
 
+pub const userVaFromWow64Ptr32 = marshal.userVaFromWow64Ptr32;
+
 pub fn translateSyscall32to64(wow_proc: *types.Wow64Process, syscall_num: u32) ntdll.NTSTATUS {
+    return translateSyscall32to64WithArgs(wow_proc, syscall_num, &[_]u32{});
+}
+
+/// 带 stdcall 实参（u32 槽，按形参从左到右对应 `args[0]..`）的 32→64 翻译；供 `marshal` 与演示路径使用。
+pub fn translateSyscall32to64WithArgs(wow_proc: *types.Wow64Process, syscall_num: u32, args: []const u32) ntdll.NTSTATUS {
     wow_proc.syscall_count += 1;
     total_syscall_translations += 1;
 
+    if (x86.isX86Win32kServiceIndex(syscall_num)) {
+        wow_proc.last_x64_ssdt_alias = null;
+        return ntdll.STATUS_NOT_IMPLEMENTED;
+    }
+
     wow_proc.last_x64_ssdt_alias = x64_alias.x64SsdtIndexForWin7Sp1X86(syscall_num);
 
-    // 阶段 4：`NtConnectPort` / `NtRequestWaitReplyPort` 与 csrss、DWM 监听 LPC 同族；索引见 `ssdt_x86_win7_sp1.zig`。
-    // G2：在返回演示成功前写入 `last_x64_ssdt_alias`，供主机测与后续接 x64 分发器使用（仍非完整 SysWOW64 封送）。
-    if (x86.wow64SyscallStubReturnsSuccess(syscall_num)) {
-        return ntdll.STATUS_SUCCESS;
+    if (!x86.wow64SyscallStubReturnsSuccess(syscall_num)) {
+        return ntdll.STATUS_NOT_IMPLEMENTED;
     }
-    return ntdll.STATUS_NOT_IMPLEMENTED;
+    return marshal.dispatchWow64Stub(wow_proc, syscall_num, args);
 }
 
 pub fn convertPtr32to64(ptr32: u32) u64 {
     total_ptr_conversions += 1;
     if (ptr32 == 0) return 0;
+    if (ptr32 > types.WOW64_MAX_ADDR) return 0;
     return @as(u64, ptr32);
 }
 

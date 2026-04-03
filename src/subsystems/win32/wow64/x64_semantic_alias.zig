@@ -13,7 +13,7 @@ const ssdt64 = @import("../../../arch/x86_64/ssdt_nt61.zig");
 const x86 = @import("ssdt_x86_win7_sp1.zig");
 
 /// 若 `syscall_num` 为 Win7 SP1 x86 上某 **ntos** 服务且本仓库 `ssdt_nt61` 有同名常量，返回对应 **x64** 索引；否则 `null`。
-/// 典型缺口：`NtTerminateThread` 等尚未收入 `ssdt_nt61` 的项 — 仍为 `null`，`translateSyscall32to64` 仍可凭 stub 列表返回演示成功。
+/// `NtTerminateThread`：x86 公开号与 x64 索引经 `ssdt_nt61.NtTerminateThread`（ZOA 槽 **0x55**，见该文件注释与 j00ru 冲突说明）对照。
 pub fn x64SsdtIndexForWin7Sp1X86(syscall_num: u32) ?u32 {
     if (syscall_num == x86.NtAllocateVirtualMemory) return ssdt64.NtAllocateVirtualMemory;
     if (syscall_num == x86.NtClose) return ssdt64.NtClose;
@@ -24,6 +24,7 @@ pub fn x64SsdtIndexForWin7Sp1X86(syscall_num: u32) ?u32 {
     if (syscall_num == x86.NtCreateProcess) return ssdt64.NtCreateProcess;
     if (syscall_num == x86.NtCreateSection) return ssdt64.NtCreateSection;
     if (syscall_num == x86.NtCreateThread) return ssdt64.NtCreateThread;
+    if (syscall_num == x86.NtDelayExecution) return ssdt64.NtDelayExecution;
     if (syscall_num == x86.NtFreeVirtualMemory) return ssdt64.NtFreeVirtualMemory;
     if (syscall_num == x86.NtMapViewOfSection) return ssdt64.NtMapViewOfSection;
     if (syscall_num == x86.NtOpenFile) return ssdt64.NtOpenFile;
@@ -36,7 +37,7 @@ pub fn x64SsdtIndexForWin7Sp1X86(syscall_num: u32) ?u32 {
     if (syscall_num == x86.NtReadVirtualMemory) return ssdt64.NtReadVirtualMemory;
     if (syscall_num == x86.NtRequestWaitReplyPort) return ssdt64.NtRequestWaitReplyPort;
     if (syscall_num == x86.NtTerminateProcess) return ssdt64.NtTerminateProcess;
-    if (syscall_num == x86.NtTerminateThread) return null;
+    if (syscall_num == x86.NtTerminateThread) return ssdt64.NtTerminateThread;
     if (syscall_num == x86.NtWaitForSingleObject) return ssdt64.NtWaitForSingleObject;
     if (syscall_num == x86.NtWriteFile) return ssdt64.NtWriteFile;
     if (syscall_num == x86.NtWriteVirtualMemory) return ssdt64.NtWriteVirtualMemory;

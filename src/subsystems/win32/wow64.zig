@@ -10,9 +10,12 @@
 //! **路线图 / 阶段 G**：[PHASE_G_WOW64.md](../../../docs/cn/PHASE_G_WOW64.md)；将 thunk 与 x64 `ssdt_nt61` / `syscall_dispatch_mm.zig` 语义逐条对齐（[SSDT_Roadmap.md](../../../docs/cn/SSDT_Roadmap.md) 阶段 3）。
 //! **阶段五（路线图 content7.4）**：完整 SysWOW64 / `wow64cpu` 类语义为长期项；回归见 `zig build test`（`wow64_ssdt_x86`、`dwmapi_wow64_host` 等）。
 
+const std = @import("std");
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");
 const ntdll = @import("../../libs/ntdll.zig");
+const os_version = @import("../../config/os_version.zig");
+const process = @import("../../ps/process.zig");
 const subsystem = @import("subsystem.zig");
 const console_mod = @import("console.zig");
 
@@ -39,6 +42,7 @@ pub const Wow64Process = types.Wow64Process;
 pub const ThunkEntry = types.ThunkEntry;
 
 pub const translateSyscall32to64 = thunk.translateSyscall32to64;
+pub const translateSyscall32to64WithArgs = thunk.translateSyscall32to64WithArgs;
 pub const convertPtr32to64 = thunk.convertPtr32to64;
 pub const convertPtr64to32 = thunk.convertPtr64to32;
 pub const convertHandle32to64 = thunk.convertHandle32to64;
@@ -103,23 +107,29 @@ pub fn createWow64Process(name: []const u8, parent_pid: u32) ?*Wow64Process {
     proc.context.esp = proc.stack_base;
     proc.context.ebp = proc.stack_base;
 
-    proc.peb32 = .{};
+    proc.peb32 = std.mem.zeroes(types.PEB32);
     proc.peb32.mutant = 0xFFFFFFFF;
     proc.peb32.image_base_address = proc.image_base;
-    proc.peb32.os_major_version = 10;
-    proc.peb32.os_build_number = 19041;
-    proc.peb32.os_platform_id = 2;
+    proc.peb32.os_major_version = os_version.major();
+    proc.peb32.os_minor_version = os_version.minor();
+    proc.peb32.os_build_number = @truncate(os_version.buildNumber());
+    proc.peb32.os_csd_version = os_version.servicePackMajor();
+    proc.peb32.os_platform_id = os_version.platformId();
     proc.peb32.image_subsystem = 3;
     proc.peb32.image_subsystem_major_version = 6;
     proc.peb32.number_of_processors = 1;
 
-    proc.teb32 = .{};
+    proc.teb32 = std.mem.zeroes(types.TEB32);
     proc.teb32.nt_tib_exception_list = 0xFFFFFFFF;
     proc.teb32.process_id = proc.pid;
     proc.teb32.thread_id = proc.pid;
     proc.teb32.nt_tib_stack_base = proc.stack_base;
     proc.teb32.nt_tib_stack_limit = proc.stack_limit;
     proc.teb32.locale_id = 0x0409;
+    proc.teb32.peb = types.PEB32_DEFAULT_USER_VA;
+    proc.teb32.nt_tib_self = types.TEB32_DEFAULT_USER_VA;
+
+    process.attachWow64IfPresent(proc.pid, types.PEB32_DEFAULT_USER_VA, types.TEB32_DEFAULT_USER_VA);
 
     _ = subsystem.registerProcess(proc.pid, .win32_cui, name, parent_pid);
     _ = subsystem.connectProcess(proc.pid);
@@ -172,16 +182,16 @@ pub fn Wow64NtAllocateVirtualMemory(proc: *Wow64Process, _: u32, _: u32) ntdll.N
     return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtAllocateVirtualMemory);
 }
 
-pub fn Wow64NtClose(proc: *Wow64Process, _: u32) ntdll.NTSTATUS {
+pub fn Wow64NtClose(proc: *Wow64Process, handle: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
-    return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtClose);
+    return translateSyscall32to64WithArgs(proc, ssdt_x86_win7_sp1.NtClose, &.{handle});
 }
 
-pub fn Wow64NtWaitForSingleObject(proc: *Wow64Process, _: u32) ntdll.NTSTATUS {
+pub fn Wow64NtWaitForSingleObject(proc: *Wow64Process, handle: u32, alertable: u32, timeout_va: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
-    return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtWaitForSingleObject);
+    return translateSyscall32to64WithArgs(proc, ssdt_x86_win7_sp1.NtWaitForSingleObject, &.{ handle, alertable, timeout_va });
 }
 
 pub fn getActiveWow64Count() usize {
@@ -253,7 +263,7 @@ pub fn runWow64Demo() void {
         }
 
         _ = Wow64NtCreateFile(proc, 0, 0);
-        _ = Wow64NtWaitForSingleObject(proc, 1);
+        _ = Wow64NtWaitForSingleObject(proc, 1, 0, 0);
 
         _ = terminateWow64Process(proc.pid, 0);
     }

@@ -7,7 +7,15 @@
 // This is an independent clean-room implementation.
 // Reference: MSDN PE32 / WOW64 概念描述（非结构体逐字段抄录）。
 
+const std = @import("std");
+
 pub const WOW64_VERSION: []const u8 = "ZirconOSAero WOW64 v1.0 (NT 6.1)";
+
+/// 32 位 PEB 典型用户 VA（与公开 WOW64 文档中常见区域同阶；**非**商业系统逐字节保证）。
+/// Ref: https://learn.microsoft.com/windows/win32/api/winternl/ns-winternl-peb （概念层）
+pub const PEB32_DEFAULT_USER_VA: u32 = 0x7FFDE000;
+/// 单线程演示用 TEB32 用户 VA；与 `PEB32_DEFAULT_USER_VA` 分离以便后续多线程扩展。
+pub const TEB32_DEFAULT_USER_VA: u32 = 0x7FFDD000;
 
 pub const WOW64_MAX_ADDR: u64 = 0x7FFFFFFF;
 pub const WOW64_STACK_SIZE: u32 = 0x100000;
@@ -65,50 +73,51 @@ pub const CONTEXT32 = struct {
     seg_ss: u32 = 0x002B,
 };
 
-pub const PEB32 = struct {
-    inherited_address_space: u8 = 0,
-    read_image_file_exec_options: u8 = 0,
-    being_debugged: u8 = 0,
-    spare_bool: u8 = 0,
-    mutant: u32 = 0,
-    image_base_address: u32 = 0,
-    ldr: u32 = 0,
-    process_parameters: u32 = 0,
-    sub_system_data: u32 = 0,
-    process_heap: u32 = 0,
-    fast_peb_lock: u32 = 0,
-    os_major_version: u32 = 0,
-    os_minor_version: u32 = 0,
-    os_build_number: u16 = 0,
-    os_csd_version: u16 = 0,
-    os_platform_id: u32 = 0,
-    image_subsystem: u32 = 0,
-    image_subsystem_major_version: u32 = 0,
-    image_subsystem_minor_version: u32 = 0,
-    number_of_processors: u32 = 0,
-    nt_global_flag: u32 = 0,
-    session_id: u32 = 0,
+/// 32 位 PEB 子集，`extern` 以匹配 x86 上常见 C/Win32 布局（4×`u8` 后 `Mutant`@4、`ImageBaseAddress`@8）。
+pub const PEB32 = extern struct {
+    inherited_address_space: u8,
+    read_image_file_exec_options: u8,
+    being_debugged: u8,
+    spare_bool: u8,
+    mutant: u32,
+    image_base_address: u32,
+    ldr: u32,
+    process_parameters: u32,
+    sub_system_data: u32,
+    process_heap: u32,
+    fast_peb_lock: u32,
+    os_major_version: u32,
+    os_minor_version: u32,
+    os_build_number: u16,
+    os_csd_version: u16,
+    os_platform_id: u32,
+    image_subsystem: u32,
+    image_subsystem_major_version: u32,
+    image_subsystem_minor_version: u32,
+    number_of_processors: u32,
+    nt_global_flag: u32,
+    session_id: u32,
 };
 
-pub const TEB32 = struct {
-    nt_tib_exception_list: u32 = 0,
-    nt_tib_stack_base: u32 = 0,
-    nt_tib_stack_limit: u32 = 0,
-    nt_tib_sub_system_tib: u32 = 0,
-    nt_tib_fiber_data: u32 = 0,
-    nt_tib_arbitrary_user_pointer: u32 = 0,
-    nt_tib_self: u32 = 0,
-    environment_pointer: u32 = 0,
-    process_id: u32 = 0,
-    thread_id: u32 = 0,
-    active_rpc_handle: u32 = 0,
-    thread_local_storage: u32 = 0,
-    peb: u32 = 0,
-    last_error_value: u32 = 0,
-    count_of_owned_critical_sections: u32 = 0,
-    wow64_reserved: u32 = 0,
-    locale_id: u32 = 0,
-    tls_slots: [WOW64_TLS_SLOTS]u32 = [_]u32{0} ** WOW64_TLS_SLOTS,
+pub const TEB32 = extern struct {
+    nt_tib_exception_list: u32,
+    nt_tib_stack_base: u32,
+    nt_tib_stack_limit: u32,
+    nt_tib_sub_system_tib: u32,
+    nt_tib_fiber_data: u32,
+    nt_tib_arbitrary_user_pointer: u32,
+    nt_tib_self: u32,
+    environment_pointer: u32,
+    process_id: u32,
+    thread_id: u32,
+    active_rpc_handle: u32,
+    thread_local_storage: u32,
+    peb: u32,
+    last_error_value: u32,
+    count_of_owned_critical_sections: u32,
+    wow64_reserved: u32,
+    locale_id: u32,
+    tls_slots: [WOW64_TLS_SLOTS]u32,
 };
 
 pub const MAX_WOW64_PROCESSES: usize = 32;
@@ -118,8 +127,8 @@ pub const Wow64Process = struct {
     state: Wow64State = .inactive,
     is_active: bool = false,
     context: CONTEXT32 = .{},
-    peb32: PEB32 = .{},
-    teb32: TEB32 = .{},
+    peb32: PEB32 = std.mem.zeroes(PEB32),
+    teb32: TEB32 = std.mem.zeroes(TEB32),
     image_name: [64]u8 = [_]u8{0} ** 64,
     image_name_len: usize = 0,
     image_base: u32 = 0,
@@ -153,6 +162,16 @@ pub const ThunkEntry = struct {
 };
 
 test "Wow64Process embeds PEB32 and TEB32" {
-    const std = @import("std");
     try std.testing.expect(@sizeOf(Wow64Process) > @sizeOf(PEB32) + @sizeOf(TEB32));
+}
+
+// Ref: https://learn.microsoft.com/windows/win32/api/winternl/ns-winternl-peb （字段语义）
+// Ref: https://learn.microsoft.com/windows/win32/api/winternl/ns-winternl-teb （TEB；x86 上 `Fs:[0x30]` → PEB）
+test "PEB32 TEB32 field offsets (public layout subset)" {
+    // Ref: https://learn.microsoft.com/windows/win32/api/winternl/ns-winternl-peb
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(PEB32, "image_base_address"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(PEB32, "process_parameters"));
+    try std.testing.expectEqual(@as(usize, 32), @offsetOf(PEB32, "os_major_version"));
+    try std.testing.expectEqual(@as(usize, 0x30), @offsetOf(TEB32, "peb"));
+    try std.testing.expectEqual(@as(usize, 32), @offsetOf(TEB32, "process_id"));
 }

@@ -3,6 +3,7 @@ zig-out/
 # Root output dir only; plain `build/` wrongly ignores `scripts/build/*.sh`.
 /build/
 mdcs/
+external/
 run-iso.sh
 # Local helper; intentionally not versioned (see script header).
 push.sh

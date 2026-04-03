@@ -120,6 +120,11 @@ pub fn build(b: *std.Build) void {
         "ps2_mouse_with_virtio",
         "x86_64: handle IRQ12 PS/2 mouse even when VirtIO-Input is active (default false; QEMU 双源叠加风险；真机单 PS/2 时可开)",
     ) orelse false;
+    const force_gop_present_opt = b.option(
+        bool,
+        "force_gop_present",
+        "Keep GOP/linear framebuffer as active present backend even when VirtIO-GPU scanout is active (diagnostics / A-B compare)",
+    ) orelse false;
     const enable_idt_opt = b.option(bool, "enable_idt", "Enable IDT, timer and syscall (x86_64 only)") orelse true;
     const lapic_periodic_tick_opt = b.option(
         bool,
@@ -372,6 +377,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "desktop_idle_spin", desktop_idle_spin_opt);
     build_opts.addOption(bool, "aero_blur_light", aero_blur_light_opt);
     build_opts.addOption(bool, "ps2_mouse_with_virtio", ps2_mouse_with_virtio_opt);
+    build_opts.addOption(bool, "force_gop_present", force_gop_present_opt);
     build_opts.addOption(bool, "usb_xhci", usb_xhci_opt);
     build_opts.addOption(bool, "usb_ehci", usb_ehci_opt);
     build_opts.addOption([]const u8, "default_desktop", desktop_default);
@@ -1275,6 +1281,20 @@ pub fn build(b: *std.Build) void {
     });
     const run_wow64_ssdt_x86_tests = b.addRunArtifact(wow64_ssdt_x86_tests);
 
+    const phase4_host_anchors_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/phase4_host_anchors.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "ssdt_x86_win7_sp1", .module = wow64_ssdt_x86_mod },
+        },
+    });
+    const phase4_host_anchors_tests = b.addTest(.{
+        .root_module = phase4_host_anchors_mod,
+        .name = "phase4_host_anchors",
+    });
+    const run_phase4_host_anchors_tests = b.addRunArtifact(phase4_host_anchors_tests);
+
     const ssdt_x64_x86_namespace_mod = b.createModule(.{
         .root_source_file = b.path("tests/ssdt_x64_x86_namespace.zig"),
         .target = b.graph.host,
@@ -1400,6 +1420,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_dwm_nt61_abi_inventory_tests.step);
     test_step.dependOn(&run_dwmapi_wow64_tests.step);
     test_step.dependOn(&run_ntfs_hive_minimum_tests.step);
+    test_step.dependOn(&run_phase4_host_anchors_tests.step);
     test_step.dependOn(&run_win32k_api_semantics_tests.step);
     test_step.dependOn(&run_csr_lpc_policy_tests.step);
     test_step.dependOn(&run_dwm_messages_nt61_tests.step);

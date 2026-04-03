@@ -449,6 +449,8 @@ pub fn notifyScanoutFrontUpdated(dirty_opt: ?fb.Rect) void {
 
     const flip_journal = @import("../core/display_flip_journal.zig");
     flip_journal.noteVirtioResourceFlush(rw >= w and rh >= h);
+    // 单 scanout 资源一次 flush；第二平面（overlay）落地后在此传入累计次数 >1。
+    flip_journal.noteVirtioPresentFlushBatch(1);
 }
 
 fn tryGpuScratch2dValidate() bool {

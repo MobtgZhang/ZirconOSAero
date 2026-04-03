@@ -4,11 +4,30 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
+const klog = @import("../rtl/klog.zig");
 const arch = @import("../arch.zig");
 const paging = arch.impl.paging;
-const FrameAllocator = @import("frame.zig").FrameAllocator;
+pub const FrameAllocator = @import("frame.zig").FrameAllocator;
 const heap = @import("heap.zig");
 const vad_mod = @import("vad.zig");
+
+/// 惰性提交后从文件视图填页（避免 `vm` ↔ `section` 循环依赖；由 `main` 注册）。
+var section_lazy_commit_fill_hook: ?*const fn (*AddressSpace, u64) bool = null;
+
+pub fn setSectionLazyCommitFillHook(h: ?*const fn (*AddressSpace, u64) bool) void {
+    section_lazy_commit_fill_hook = h;
+}
+
+/// 在 `kernel_space.activate()` 之前：`memsetPhysicalPage` 仍走固件/引导 CR3 的恒等映射。
+/// 页表 walk 用物理地址指针，但 **清零新帧** 须用固件已映射可写的低 GPA；上限内优先 `allocZeroedBelowMaxPhys`。
+var g_paging_alloc_phys_ceiling_exclusive: ?u64 = null;
+var g_paging_alloc_low_mem_logged: bool = false;
+
+pub fn setPagingAllocPhysCeilingExclusive(ceiling_exclusive: ?u64) void {
+    g_paging_alloc_phys_ceiling_exclusive = ceiling_exclusive;
+    if (ceiling_exclusive == null) g_paging_alloc_low_mem_logged = false;
+}
 
 /// `mapIdentityByteRange` 统计：x86_64 填 `x86_huge_2m`，LoongArch 填 `la_blocks_32m`，其余为 `leaf_pages`。
 pub const IdentityMapStats = struct {
@@ -24,13 +43,22 @@ pub const IdentityMapStats = struct {
 pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u64, flags: MapFlags) ?IdentityMapStats {
     if (range_len == 0) return IdentityMapStats{};
     if (range_start > std.math.maxInt(u64) - range_len) return null;
+    if (klog.DEBUG_MODE and builtin.os.tag == .freestanding)
+        klog.debug("VM: identity map begin start=0x%x len=0x%x", .{ range_start, range_len });
     const ps: u64 = @intCast(paging.page_size);
     var va = range_start & ~(ps - 1);
     const range_end = range_start + range_len;
     var st = IdentityMapStats{};
     const pflags = flags.toPagingFlags();
+    var progress: usize = 0;
 
     while (va < range_end) {
+        if (build_options.debug and builtin.mode == .Debug) {
+            progress +%= 1;
+            if ((progress & 0x3FFF) == 0) {
+                klog.info("VM: identity map progress va=0x%x / end=0x%x", .{ va, range_end });
+            }
+        }
         if (builtin.cpu.arch == .x86_64 and @hasDecl(paging, "map2MiBPage") and @hasDecl(paging, "HUGE_PAGE_SIZE")) {
             const huge: u64 = paging.HUGE_PAGE_SIZE;
             if ((va % huge) == 0 and va <= std.math.maxInt(u64) - huge and va + huge <= range_end) {
@@ -85,6 +113,7 @@ pub const USER_VA_MAX_HINT_X86_64: u64 = 0x0000_7FFF_FFFF_FFFF;
 /// - **Reserved**：VA 区间计入地址空间，无页表 Present / 无物理页。
 /// - **Committed**：页表项有效并具备后备（匿名页或段视图）。
 /// 当前内核中 `mapPage` / `mapPageAlloc` / `mapRange` 表示已提交映射；独占式 VAD + 先 reserve 再按需 commit 为后续里程碑。
+/// 矩阵与惰性提交：`tryLazyCommitFault` / `fork_cow_share_nt61_host`；见 `docs/cn/MVT_NT61.md`。
 pub const VirtualCommitPhase = enum(u8) {
     reserved = 0,
     committed = 1,
@@ -121,7 +150,7 @@ fn freeFrameForRelease(ctx: ?*anyopaque, phys: u64) void {
 /// 调用方还须保证 **无** 仍在运行的线程持有该 `pml4_phys` 作为当前 CR3（见 `ps/process.zig` `terminateProcess` 与调度器配合）。
 pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     // 多核：拆除整棵用户子树前记录 shootdown 提示；`releaseUserHalf` 内部逐页路径亦会在 `unmapRange` 中递增（K1.4/K2.5）。
-    if (builtin.cpu.arch == .x86_64) {
+    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding) {
         const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
         tlb.notePendingGlobalShootdown();
         tlb.noteUserMappingInvalidatedSmp();
@@ -137,6 +166,7 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     @memset(&space.section_view_base, 0);
     @memset(&space.section_view_pages, 0);
     @memset(&space.section_view_obj, 0);
+    @memset(&space.section_view_file_off, 0);
     @memset(&space.section_view_token, 0);
     space.vma_len = 0;
     @memset(&space.vma_base, 0);
@@ -144,7 +174,7 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     @memset(&space.vma_user, false);
     @memset(&space.vma_writable, false);
     space.allocator.free(space.pml4_phys);
-    if (builtin.cpu.arch == .x86_64) {
+    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding) {
         const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
         tlb.requestGlobalFlushStub();
     }
@@ -369,6 +399,8 @@ pub const AddressSpace = struct {
     section_view_pages: [max_section_views]u32 = @splat(0),
     section_view_obj: [max_section_views]u64 = @splat(0),
     section_view_token: [max_section_views]u32 = @splat(0),
+    /// `NtMapViewOfSection` 时文件视图的起始字节偏移（惰性填页用）。
+    section_view_file_off: [max_section_views]u64 = @splat(0),
     /// 显式 VMA 记录（与 `reserved_*` 不重复登记：reserve 仅走 `reserved_*`；`vmaInsert` 用于已映射或其它视图）。
     vma_len: u8 = 0,
     vma_base: [max_vma]u64 = @splat(0),
@@ -435,6 +467,7 @@ pub const AddressSpace = struct {
             const flags = mapFlagsFromNtProtect(ve.protect);
             if (self.mapPageAlloc(page, flags)) |_| {
                 self.vad.upgradeReservedContaining(fault_va);
+                if (section_lazy_commit_fill_hook) |h| _ = h(self, page);
                 return true;
             }
             return false;
@@ -453,6 +486,7 @@ pub const AddressSpace = struct {
                 const flags = MapFlags{ .writable = true, .user = true, .executable = false };
                 if (self.mapPageAlloc(page, flags)) |_| {
                     self.vad.upgradeReservedContaining(fault_va);
+                    if (section_lazy_commit_fill_hook) |h| _ = h(self, page);
                     return true;
                 }
                 return false;
@@ -551,12 +585,13 @@ pub const AddressSpace = struct {
         paging.loadCr3(self.pml4_phys);
     }
 
-    pub fn recordSectionView(self: *AddressSpace, base: u64, pages: u32, sec_ptr: u64) bool {
+    pub fn recordSectionView(self: *AddressSpace, base: u64, pages: u32, sec_ptr: u64, file_start_off: u64) bool {
         if (self.section_view_count >= max_section_views) return false;
         const i = self.section_view_count;
         self.section_view_base[i] = base;
         self.section_view_pages[i] = pages;
         self.section_view_obj[i] = sec_ptr;
+        self.section_view_file_off[i] = file_start_off;
         self.section_view_token[i] = g_section_view_token_seq.fetchAdd(1, .monotonic);
         self.section_view_count += 1;
         return true;
@@ -580,6 +615,7 @@ pub const AddressSpace = struct {
                 self.section_view_base[i] = self.section_view_base[last];
                 self.section_view_pages[i] = self.section_view_pages[last];
                 self.section_view_obj[i] = self.section_view_obj[last];
+                self.section_view_file_off[i] = self.section_view_file_off[last];
                 self.section_view_token[i] = self.section_view_token[last];
                 self.section_view_count -= 1;
                 return pages;
@@ -590,8 +626,16 @@ pub const AddressSpace = struct {
 };
 
 fn allocFrameCb(ctx: ?*anyopaque) ?u64 {
-    const a = ctx orelse return null;
-    return @as(*FrameAllocator, @ptrCast(@alignCast(a))).allocZeroed();
+    const fa: *FrameAllocator = @ptrCast(@alignCast(ctx orelse return null));
+    if (g_paging_alloc_phys_ceiling_exclusive) |ceil| {
+        if (fa.allocZeroedBelowMaxPhys(ceil)) |p| return p;
+        if (!g_paging_alloc_low_mem_logged) {
+            g_paging_alloc_low_mem_logged = true;
+            klog.err("VM: paging frame alloc below GPA 0x{x} exhausted (pre-activate); need more free frames under firmware identity map", .{ceil});
+        }
+        return null;
+    }
+    return fa.allocZeroed();
 }
 
 /// 记录已映射的提交区（`MEM_COMMIT`），供 `NtQueryVirtualMemory`。
@@ -759,12 +803,43 @@ pub fn ioAllocateMdl(space: *AddressSpace, start_va: u64, byte_count: u32, lock_
     };
 }
 
-/// 将 `space` 整块清零后分配 PML4；用于 BSS 槽位初始化，避免在窄内核栈上按值返回 `AddressSpace`。
+/// 显式初始化各字段并分配 PML4；**避免**对整块 `AddressSpace` `@memset`（含巨型 `VadTable.nodes`，启动期可阻塞串口观感「卡住」）。
 pub fn initAddressSpaceInPlace(space: *AddressSpace, allocator: *FrameAllocator) bool {
-    @memset(std.mem.asBytes(space), 0);
-    const pml4_phys = allocator.allocZeroed() orelse return false;
-    space.pml4_phys = pml4_phys;
-    space.allocator = allocator;
+    // 与 `main.zig` identity 下限对齐：在自有页表启用前，`memsetPhysicalPage` 依赖固件恒等映射，优先取低 GPA。
+    const pml4_boot_ceiling: u64 = 512 * 1024 * 1024;
+    klog.info("VM: allocating PML4 frame (low 512MiB + fallback)...", .{});
+    if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
+        klog.debug("VM: PML4 allocZeroed enter", .{});
+        arch.flushDebugSerialOutput();
+    }
+    const pml4_phys = allocator.allocZeroedBelowMaxPhys(pml4_boot_ceiling) orelse allocator.allocZeroed() orelse {
+        klog.err("VM: PML4 alloc failed (allocZeroedBelowMaxPhys + allocZeroed; out of frames or implausible GPA)", .{});
+        return false;
+    };
+    klog.info("VM: PML4 phys=0x%x (post-alloc, pre-wire)", .{pml4_phys});
+    if (builtin.os.tag == .freestanding) arch.flushDebugSerialOutput();
+    if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) klog.debug("VM: PML4 allocZeroed ok, wiring AddressSpace", .{});
+    klog.info("VM: PML4 frame GPA 0x%x", .{pml4_phys});
+    space.* = .{
+        .pml4_phys = pml4_phys,
+        .allocator = allocator,
+        .vad = .{},
+        .reserved_count = 0,
+        .reserved_base = @splat(0),
+        .reserved_pages = @splat(0),
+        .section_view_count = 0,
+        .section_view_base = @splat(0),
+        .section_view_pages = @splat(0),
+        .section_view_obj = @splat(0),
+        .section_view_token = @splat(0),
+        .section_view_file_off = @splat(0),
+        .vma_len = 0,
+        .vma_base = @splat(0),
+        .vma_pages = @splat(0),
+        .vma_user = @splat(false),
+        .vma_writable = @splat(false),
+    };
+    space.vad.initEmpty();
     return true;
 }
 
@@ -774,8 +849,139 @@ pub fn createAddressSpace(allocator: *FrameAllocator) ?AddressSpace {
     return space;
 }
 
+/// fork 路径 NTSTATUS 数值（与 Win32 一致；`vm` 不依赖 `io` 模块以免静态环）。
+const fork_dup_status_success: i32 = 0;
+const fork_dup_status_invalid_parameter: i32 = -1073741811;
+const fork_dup_status_no_memory: i32 = -1073741801;
+const fork_dup_status_not_supported: i32 = -1073741822;
+
+fn forkDupChildPteFlags(pte_raw: u64) u64 {
+    return switch (builtin.cpu.arch) {
+        .x86_64 => blk: {
+            const pe = @as(paging.PageTableEntry, @bitCast(pte_raw));
+            var f: u64 = paging.Present | paging.Accessed;
+            if (pe.user) f |= paging.User;
+            if (pe.write_through) f |= paging.WriteThrough;
+            if (pe.cache_disable) f |= paging.CacheDisable;
+            if (pe.global) f |= paging.Global;
+            if (pe.dirty) f |= paging.Dirty;
+            if (pe.no_execute) f |= paging.NoExecute;
+            break :blk f;
+        },
+        else => pte_raw,
+    };
+}
+
+const DupForkWalkCtx = struct {
+    dst: *AddressSpace,
+    status: i32 = fork_dup_status_success,
+};
+
+fn duplicateForkLeafWalkCb(ctx_raw: ?*anyopaque, virt: u64, phys: u64, pte_raw: u64) bool {
+    const c = @as(*DupForkWalkCtx, @ptrCast(@alignCast(ctx_raw.?)));
+    if (c.dst.getPhysical(virt)) |_| return true;
+    c.dst.allocator.notePageShared(phys);
+    const flags = forkDupChildPteFlags(pte_raw);
+    if (!paging.mapPage(
+        c.dst.pml4_phys,
+        virt,
+        phys,
+        flags,
+        allocFrameCb,
+        @ptrCast(c.dst.allocator),
+    )) {
+        c.dst.allocator.releaseShareCount(phys);
+        c.status = fork_dup_status_no_memory;
+        return false;
+    }
+    return true;
+}
+
+fn copyUserSideMetadataForFork(dst: *AddressSpace, src: *const AddressSpace) bool {
+    var entries: [vad_mod.max_vad]vad_mod.VadEntry = undefined;
+    const n = src.vad.collectEntriesInorder(&entries);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const e = entries[i];
+        if (!dst.vad.insert(e.start, e.end_exclusive, e.state, e.protect, e.is_guard)) return false;
+    }
+    dst.reserved_count = src.reserved_count;
+    @memcpy(&dst.reserved_base, &src.reserved_base);
+    @memcpy(&dst.reserved_pages, &src.reserved_pages);
+    dst.section_view_count = src.section_view_count;
+    @memcpy(&dst.section_view_base, &src.section_view_base);
+    @memcpy(&dst.section_view_pages, &src.section_view_pages);
+    @memcpy(&dst.section_view_obj, &src.section_view_obj);
+    @memcpy(&dst.section_view_file_off, &src.section_view_file_off);
+    @memcpy(&dst.section_view_token, &src.section_view_token);
+    dst.vma_len = src.vma_len;
+    @memcpy(&dst.vma_base, &src.vma_base);
+    @memcpy(&dst.vma_pages, &src.vma_pages);
+    @memcpy(&dst.vma_user, &src.vma_user);
+    @memcpy(&dst.vma_writable, &src.vma_writable);
+    return true;
+}
+
+/// fork 子集：将 `src` 用户半区 **4KiB 用户叶** 复制到 `dst`（`notePageShared`、子侧 PTE **不可写**），并复制 VAD / `reserved_*` / `section_view_*` / VMA。
+/// - **大页**（1GiB/2MiB）当前不枚举（见 `paging.forEachUser4KiPresentLeaf`）。
+/// - 若 `dst` 某 VA 已有映射（如 `kuser_shared`），跳过该 VA，保留子侧原页。
+/// - 要求：`dst` 在复制前 **无** VAD / 保留区 / 段视图 / VMA 元数据（与 `createProcess` + `kuser` 后状态一致）。
+pub fn duplicateUserMappingsForFork(dst: *AddressSpace, src: *const AddressSpace) i32 {
+    if (builtin.cpu.arch != .x86_64) return fork_dup_status_not_supported;
+    if (!@hasDecl(paging, "forEachUser4KiPresentLeaf")) return fork_dup_status_not_supported;
+    if (@intFromPtr(dst) == @intFromPtr(src)) return fork_dup_status_invalid_parameter;
+    if (dst.vad.len() != 0 or dst.reserved_count != 0 or dst.section_view_count != 0 or dst.vma_len != 0)
+        return fork_dup_status_invalid_parameter;
+    if (!copyUserSideMetadataForFork(dst, src)) return fork_dup_status_no_memory;
+    var walk: DupForkWalkCtx = .{ .dst = dst };
+    if (!paging.forEachUser4KiPresentLeaf(src.pml4_phys, @ptrCast(&walk), duplicateForkLeafWalkCb)) {
+        return walk.status;
+    }
+    return fork_dup_status_success;
+}
+
 pub fn handleLazyCommitFault(space: *AddressSpace, fault_va: u64, is_write: bool) bool {
     return space.tryLazyCommitFault(fault_va, is_write);
+}
+
+/// 写故障 CoW：`pfn_share_count>0` 时复制到新帧并重映射可写叶项；**不**释放旧帧（其它别名或进程可能仍映射）。
+pub fn tryCowWriteFault(space: *AddressSpace, fault_va: u64) bool {
+    if (!@hasDecl(paging, "remapLeafPhysical")) return false;
+    const frame_mod = @import("frame.zig");
+    const ps: u64 = @intCast(paging.page_size);
+    const page = fault_va & ~(ps - 1);
+    const old_phys = space.getPhysical(page) orelse return false;
+    if (space.allocator.shareCount(old_phys) == 0) return false;
+    const new_phys = space.allocator.alloc() orelse return false;
+    frame_mod.memcpyPhysicalPage(new_phys, old_phys);
+    const ve = space.vad.findContaining(page) orelse {
+        space.allocator.free(new_phys);
+        return false;
+    };
+    const pte_flags = ntProtectToPteFlags(ve.protect) orelse {
+        space.allocator.free(new_phys);
+        return false;
+    };
+    if (!paging.remapLeafPhysical(
+        space.pml4_phys,
+        page,
+        new_phys,
+        pte_flags,
+        allocFrameCb,
+        @ptrCast(space.allocator),
+    )) {
+        space.allocator.free(new_phys);
+        return false;
+    }
+    space.allocator.releaseShareCount(old_phys);
+    return true;
+}
+
+/// #PF 用户态：`tryLazyCommitFault` → `tryCowWriteFault`。
+pub fn handleUserDemandOrCowFault(space: *AddressSpace, fault_va: u64, is_write: bool) bool {
+    if (space.tryLazyCommitFault(fault_va, is_write)) return true;
+    if (is_write and tryCowWriteFault(space, fault_va)) return true;
+    return false;
 }
 
 /// 是否与任一 `MEM_RESERVE` 记录区间重叠（用于选 `base==0` 时的空洞搜索）。
@@ -841,7 +1047,7 @@ pub fn unmapRange(space: *AddressSpace, virt_base: u64, num_pages: usize) void {
             _ = space.unmapAndFree(virt_base + off);
         }
     }
-    if (builtin.cpu.arch == .x86_64 and num_pages > 0) {
+    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding and num_pages > 0) {
         const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
         tlb.noteUserMappingInvalidatedSmp();
     }
@@ -864,7 +1070,7 @@ pub fn decommitVirtualRange(space: *AddressSpace, virt_base: u64, num_pages: usi
         if (virt_base > std.math.maxInt(u64) - off) return false;
         _ = space.unmapAndFree(virt_base + off);
     }
-    if (builtin.cpu.arch == .x86_64 and num_pages > 0) {
+    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding and num_pages > 0) {
         const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
         tlb.noteUserMappingInvalidatedSmp();
     }

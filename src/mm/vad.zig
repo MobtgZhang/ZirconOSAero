@@ -2,26 +2,27 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/mm/vad.zig
-// Purpose: Virtual Address Descriptor 表（有序槽位）— Reserve/Commit 元数据，供 `NtQueryVirtualMemory` 与惰性提交。
+// Purpose: 虚拟地址描述符 **AVL 树**（按 `start` 键）— Reserve/Commit、`NtQueryVirtualMemory`、惰性提交与保护拆分。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 // Ref: https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-memory_basic_information
+// AVL: textbook insertion/deletion with subtree heights (Cormen et al. style, clean-room).
 
 const std = @import("std");
 
-/// 常规用户/内核页大小（当前目标均为 4KiB，与 `arch` 分页一致）。
-/// 内联常量以便 `zig test src/mm/vad.zig` 不依赖 `arch` 模块路径。
 const page_size_bytes: u64 = 4096;
 
-pub const max_vad: usize = 384;
+/// AVL 节点上限；受 `AddressSpace` 总大小约束（见 `ps/process.zig` 静态断言）。
+pub const max_vad: usize = 512;
+const MAX_NODES: usize = max_vad;
+const NULL_IDX: u16 = 0;
 
 pub const VadState = enum(u8) {
     reserved = 0,
     committed = 1,
 };
 
-/// 与 `MEMORY_BASIC_INFORMATION.State` 对齐的常量（公开 Win32）。
 pub const MEM_COMMIT: u32 = 0x1000;
 pub const MEM_RESERVE: u32 = 0x2000;
 pub const MEM_FREE: u32 = 0x10000;
@@ -31,7 +32,6 @@ pub const VadEntry = struct {
     end_exclusive: u64,
     state: VadState,
     protect: u32,
-    /// 栈底保护页：命中后由 #PF 路径尝试扩展（见 `tryExpandGuard`）。
     is_guard: bool = false,
 
     pub fn contains(self: *const VadEntry, va: u64) bool {
@@ -39,38 +39,332 @@ pub const VadEntry = struct {
     }
 };
 
+const TreeNode = struct {
+    start: u64,
+    end_exclusive: u64,
+    state: VadState,
+    protect: u32,
+    is_guard: bool,
+    left: u16 = NULL_IDX,
+    right: u16 = NULL_IDX,
+    height: u8 = 1,
+};
+
+fn nodeHeight(t: *const VadTable, i: u16) i32 {
+    if (i == NULL_IDX) return 0;
+    return t.nodes[i].height;
+}
+
+fn maxInt(a: i32, b: i32) i32 {
+    return @max(a, b);
+}
+
+fn updateHeight(t: *VadTable, i: u16) void {
+    const l = t.nodes[i].left;
+    const r = t.nodes[i].right;
+    const lh = nodeHeight(t, l);
+    const rh = nodeHeight(t, r);
+    t.nodes[i].height = @as(u8, @intCast(1 + maxInt(lh, rh)));
+}
+
+fn balanceFactor(t: *const VadTable, i: u16) i32 {
+    return nodeHeight(t, t.nodes[i].left) - nodeHeight(t, t.nodes[i].right);
+}
+
+fn rotateRight(t: *VadTable, y: u16) u16 {
+    const x = t.nodes[y].left;
+    const t2 = t.nodes[x].right;
+    t.nodes[x].right = y;
+    t.nodes[y].left = t2;
+    updateHeight(t, y);
+    updateHeight(t, x);
+    return x;
+}
+
+fn rotateLeft(t: *VadTable, x: u16) u16 {
+    const y = t.nodes[x].right;
+    const t2 = t.nodes[y].left;
+    t.nodes[y].left = x;
+    t.nodes[x].right = t2;
+    updateHeight(t, x);
+    updateHeight(t, y);
+    return y;
+}
+
+fn rebalance(t: *VadTable, n: u16) u16 {
+    updateHeight(t, n);
+    const cur = n;
+    const bf = balanceFactor(t, cur);
+    if (bf > 1 and balanceFactor(t, t.nodes[cur].left) >= 0) {
+        return rotateRight(t, cur);
+    }
+    if (bf > 1 and balanceFactor(t, t.nodes[cur].left) < 0) {
+        t.nodes[cur].left = rotateLeft(t, t.nodes[cur].left);
+        return rotateRight(t, cur);
+    }
+    if (bf < -1 and balanceFactor(t, t.nodes[cur].right) <= 0) {
+        return rotateLeft(t, cur);
+    }
+    if (bf < -1 and balanceFactor(t, t.nodes[cur].right) > 0) {
+        t.nodes[cur].right = rotateRight(t, t.nodes[cur].right);
+        return rotateLeft(t, cur);
+    }
+    return cur;
+}
+
 pub const VadTable = struct {
-    entries: [max_vad]VadEntry = undefined,
-    len: u16 = 0,
+    root: u16 = NULL_IDX,
+    nodes: [MAX_NODES + 1]TreeNode = undefined,
+    free_stack: [MAX_NODES]u16 = undefined,
+    free_top: u16 = 0,
+    next_slot: u16 = 1,
+    node_count: u16 = 0,
+
+    pub fn len(self: *const VadTable) u16 {
+        return self.node_count;
+    }
 
     pub fn clear(self: *VadTable) void {
-        self.len = 0;
+        self.root = NULL_IDX;
+        self.free_top = 0;
+        self.next_slot = 1;
+        self.node_count = 0;
     }
 
-    /// 按 `start` 升序；返回第一个 `entries[i].start > va` 的下标，或 `len`。
-    fn lowerBoundStart(self: *const VadTable, va: u64) u16 {
-        // `start` 严格升序；首个 `start > va` 的位置。
-        var lo: u16 = 0;
-        var hi: u16 = self.len;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (self.entries[mid].start <= va) {
-                lo = mid + 1;
+    /// 地址空间创建时显式调用（与 `vm.initAddressSpaceInPlace` 配套）；等价于 `clear`，语义上表示「空树」而非中途清空。
+    pub fn initEmpty(self: *VadTable) void {
+        self.clear();
+    }
+
+    fn allocIndex(self: *VadTable) ?u16 {
+        if (self.free_top > 0) {
+            self.free_top -= 1;
+            return self.free_stack[self.free_top];
+        }
+        if (self.next_slot > MAX_NODES) return null;
+        const i = self.next_slot;
+        self.next_slot += 1;
+        return i;
+    }
+
+    fn freeIndex(self: *VadTable, i: u16) void {
+        if (i == NULL_IDX) return;
+        std.debug.assert(self.free_top < MAX_NODES);
+        self.free_stack[self.free_top] = i;
+        self.free_top += 1;
+        self.nodes[i] = .{
+            .start = 0,
+            .end_exclusive = 0,
+            .state = .reserved,
+            .protect = 0,
+            .is_guard = false,
+            .left = NULL_IDX,
+            .right = NULL_IDX,
+            .height = 1,
+        };
+    }
+
+    fn toEntry(n: TreeNode) VadEntry {
+        return .{
+            .start = n.start,
+            .end_exclusive = n.end_exclusive,
+            .state = n.state,
+            .protect = n.protect,
+            .is_guard = n.is_guard,
+        };
+    }
+
+    fn intervalsOverlap(a0: u64, a1: u64, b0: u64, b1: u64) bool {
+        return !(a1 <= b0 or b1 <= a0);
+    }
+
+    /// 最大 `start` 且 `start <= key` 的节点下标；无则 NULL_IDX。
+    fn floorIndex(self: *const VadTable, key: u64) u16 {
+        var cur = self.root;
+        var cand: u16 = NULL_IDX;
+        while (cur != NULL_IDX) {
+            if (self.nodes[cur].start <= key) {
+                cand = cur;
+                cur = self.nodes[cur].right;
             } else {
-                hi = mid;
+                cur = self.nodes[cur].left;
             }
         }
-        return lo;
+        return cand;
     }
 
-    /// 合并相邻且 `state`/`protect`/`is_guard` 相同的条目（插入或保护变更后调用）。
+    /// 最小 `start` 且 `start >= key` 的节点下标。
+    fn ceilIndex(self: *const VadTable, key: u64) u16 {
+        var cur = self.root;
+        var cand: u16 = NULL_IDX;
+        while (cur != NULL_IDX) {
+            if (self.nodes[cur].start >= key) {
+                cand = cur;
+                cur = self.nodes[cur].left;
+            } else {
+                cur = self.nodes[cur].right;
+            }
+        }
+        return cand;
+    }
+
+    fn findByStart(self: *const VadTable, start: u64) ?u16 {
+        var cur = self.root;
+        while (cur != NULL_IDX) {
+            if (self.nodes[cur].start == start) return cur;
+            if (start < self.nodes[cur].start) {
+                cur = self.nodes[cur].left;
+            } else {
+                cur = self.nodes[cur].right;
+            }
+        }
+        return null;
+    }
+
+    pub fn findContaining(self: *const VadTable, va: u64) ?VadEntry {
+        const fi = self.floorIndex(va);
+        if (fi == NULL_IDX) return null;
+        const n = self.nodes[fi];
+        if (va >= n.start and va < n.end_exclusive) return toEntry(n);
+        return null;
+    }
+
+    /// 区间 `[s,e)` 是否与现有 VAD 相交（插入前检查）。
+    pub fn wouldOverlap(self: *const VadTable, s: u64, e: u64) bool {
+        const f = self.floorIndex(s);
+        if (f != NULL_IDX) {
+            const n = self.nodes[f];
+            if (intervalsOverlap(s, e, n.start, n.end_exclusive)) return true;
+        }
+        const c = self.ceilIndex(s);
+        if (c != NULL_IDX) {
+            const n = self.nodes[c];
+            if (intervalsOverlap(s, e, n.start, n.end_exclusive)) return true;
+        }
+        return false;
+    }
+
+    fn insertRec(self: *VadTable, root: u16, start: u64, end_exclusive: u64, state: VadState, protect: u32, is_guard: bool) ?u16 {
+        if (root == NULL_IDX) {
+            const ni = self.allocIndex() orelse return null;
+            self.nodes[ni] = .{
+                .start = start,
+                .end_exclusive = end_exclusive,
+                .state = state,
+                .protect = protect,
+                .is_guard = is_guard,
+                .left = NULL_IDX,
+                .right = NULL_IDX,
+                .height = 1,
+            };
+            self.node_count += 1;
+            return ni;
+        }
+        if (start < self.nodes[root].start) {
+            const nl = self.insertRec(self.nodes[root].left, start, end_exclusive, state, protect, is_guard) orelse return null;
+            self.nodes[root].left = nl;
+        } else if (start > self.nodes[root].start) {
+            const nr = self.insertRec(self.nodes[root].right, start, end_exclusive, state, protect, is_guard) orelse return null;
+            self.nodes[root].right = nr;
+        } else {
+            return null;
+        }
+        return rebalance(self, root);
+    }
+
+    /// `coalesce_tail`：为 false 时不在末尾调用 `coalesceAdjacent`（供 `coalesceAdjacent` 重建树，避免无限递归）。
+    pub fn insert(self: *VadTable, start: u64, end_exclusive: u64, state: VadState, protect: u32, is_guard: bool) bool {
+        return self.insertEx(start, end_exclusive, state, protect, is_guard, true);
+    }
+
+    fn insertEx(self: *VadTable, start: u64, end_exclusive: u64, state: VadState, protect: u32, is_guard: bool, coalesce_tail: bool) bool {
+        if (start >= end_exclusive) return false;
+        if (self.wouldOverlap(start, end_exclusive)) return false;
+        const nr = self.insertRec(self.root, start, end_exclusive, state, protect, is_guard) orelse return false;
+        self.root = nr;
+        if (coalesce_tail) self.coalesceAdjacent();
+        return true;
+    }
+
+    fn minStartNode(self: *const VadTable, n: u16) u16 {
+        var cur: u16 = n;
+        while (self.nodes[cur].left != NULL_IDX) {
+            cur = self.nodes[cur].left;
+        }
+        return cur;
+    }
+
+    fn deleteRec(self: *VadTable, root: u16, start_key: u64) struct { root: u16, found: bool } {
+        if (root == NULL_IDX) return .{ .root = NULL_IDX, .found = false };
+        if (start_key < self.nodes[root].start) {
+            const sub = self.deleteRec(self.nodes[root].left, start_key);
+            if (!sub.found) return .{ .root = root, .found = false };
+            self.nodes[root].left = sub.root;
+            return .{ .root = rebalance(self, root), .found = true };
+        }
+        if (start_key > self.nodes[root].start) {
+            const sub = self.deleteRec(self.nodes[root].right, start_key);
+            if (!sub.found) return .{ .root = root, .found = false };
+            self.nodes[root].right = sub.root;
+            return .{ .root = rebalance(self, root), .found = true };
+        }
+        if (self.nodes[root].left == NULL_IDX or self.nodes[root].right == NULL_IDX) {
+            const tmp = if (self.nodes[root].left != NULL_IDX) self.nodes[root].left else self.nodes[root].right;
+            self.freeIndex(root);
+            self.node_count -= 1;
+            return .{ .root = tmp, .found = true };
+        }
+        const succ = self.minStartNode(self.nodes[root].right);
+        self.nodes[root].start = self.nodes[succ].start;
+        self.nodes[root].end_exclusive = self.nodes[succ].end_exclusive;
+        self.nodes[root].state = self.nodes[succ].state;
+        self.nodes[root].protect = self.nodes[succ].protect;
+        self.nodes[root].is_guard = self.nodes[succ].is_guard;
+        const sub = self.deleteRec(self.nodes[root].right, self.nodes[succ].start);
+        self.nodes[root].right = sub.root;
+        return .{ .root = rebalance(self, root), .found = true };
+    }
+
+    pub fn deleteByStart(self: *VadTable, start: u64) bool {
+        const r = self.deleteRec(self.root, start);
+        if (!r.found) return false;
+        self.root = r.root;
+        return true;
+    }
+
+    /// 中序导出 VAD 节点（只读遍历）；供 fork 复制等路径使用。
+    pub fn collectEntriesInorder(self: *const VadTable, out: []VadEntry) usize {
+        var stack: [MAX_NODES]u16 = undefined;
+        var sp: usize = 0;
+        var cur = self.root;
+        var w: usize = 0;
+        while (sp > 0 or cur != NULL_IDX) {
+            while (cur != NULL_IDX) {
+                stack[sp] = cur;
+                sp += 1;
+                cur = self.nodes[cur].left;
+            }
+            sp -= 1;
+            cur = stack[sp];
+            if (w < out.len) {
+                out[w] = toEntry(self.nodes[cur]);
+                w += 1;
+            }
+            cur = self.nodes[cur].right;
+        }
+        return w;
+    }
+
     pub fn coalesceAdjacent(self: *VadTable) void {
-        if (self.len <= 1) return;
-        var out: u16 = 0;
-        var r: u16 = 1;
-        while (r < self.len) : (r += 1) {
-            const left = &self.entries[out];
-            const right = self.entries[r];
+        if (self.node_count <= 1) return;
+        var tmp: [MAX_NODES]VadEntry = undefined;
+        const n = self.collectEntriesInorder(&tmp);
+        if (n <= 1) return;
+        var out: usize = 0;
+        var r: usize = 1;
+        while (r < n) : (r += 1) {
+            const left = &tmp[out];
+            const right = tmp[r];
             if (left.end_exclusive == right.start and
                 left.state == right.state and
                 left.protect == right.protect and
@@ -79,79 +373,49 @@ pub const VadTable = struct {
                 left.end_exclusive = right.end_exclusive;
             } else {
                 out += 1;
-                self.entries[out] = right;
+                tmp[out] = right;
             }
         }
-        self.len = out + 1;
-    }
-
-    fn overlaps(a0: u64, a1: u64, b0: u64, b1: u64) bool {
-        return !(a1 <= b0 or b1 <= a0);
-    }
-
-    /// 按 `start` 升序插入；与现有区间重叠则失败。
-    pub fn insert(self: *VadTable, start: u64, end_exclusive: u64, state: VadState, protect: u32, is_guard: bool) bool {
-        if (start >= end_exclusive) return false;
-        if (self.len >= max_vad) return false;
+        const new_len = out + 1;
+        self.clear();
         var i: usize = 0;
-        while (i < self.len) : (i += 1) {
-            const e = self.entries[i];
-            if (overlaps(start, end_exclusive, e.start, e.end_exclusive)) return false;
+        while (i < new_len) : (i += 1) {
+            const e = tmp[i];
+            if (!self.insertEx(e.start, e.end_exclusive, e.state, e.protect, e.is_guard, false)) return;
         }
-        const slot: u16 = self.lowerBoundStart(start);
-        var s: u16 = self.len;
-        while (s > slot) : (s -= 1) {
-            self.entries[s] = self.entries[s - 1];
-        }
-        self.entries[slot] = .{
-            .start = start,
-            .end_exclusive = end_exclusive,
-            .state = state,
-            .protect = protect,
-            .is_guard = is_guard,
-        };
-        self.len += 1;
-        self.coalesceAdjacent();
-        return true;
     }
 
-    /// 移除与 `[start, start+num_pages*ps)` 完全相等的条目（精确匹配单条 VAD）。
     pub fn removeExact(self: *VadTable, start: u64, num_pages: u32) bool {
         const ps: u64 = page_size_bytes;
         const end = start + @as(u64, num_pages) * ps;
-        var i: u16 = 0;
-        while (i < self.len) : (i += 1) {
-            const e = self.entries[i];
-            if (e.start == start and e.end_exclusive == end) {
-                const last = self.len - 1;
-                self.entries[i] = self.entries[last];
-                self.len -= 1;
-                return true;
-            }
+        const i = self.findByStart(start) orelse return false;
+        const n = self.nodes[i];
+        if (n.start == start and n.end_exclusive == end) {
+            _ = self.deleteByStart(start);
+            return true;
         }
         return false;
     }
 
-    /// 若某 VAD 以 `range_start` 为起点且覆盖至少 `range_end_exclusive`，则删去前缀 `[range_start, range_end_exclusive)`，
-    /// 保留右侧（用于 `MEM_RELEASE` / unmap 与 VAD 对齐）。
     pub fn removePrefixRange(self: *VadTable, range_start: u64, range_end_exclusive: u64) bool {
         if (range_start >= range_end_exclusive) return false;
-        var i: u16 = 0;
-        while (i < self.len) : (i += 1) {
-            const e = self.entries[i];
-            if (e.start == range_start and e.end_exclusive >= range_end_exclusive) {
-                if (e.end_exclusive == range_end_exclusive) {
-                    self.removeAt(i);
-                    return true;
-                }
-                self.entries[i].start = range_end_exclusive;
-                return true;
+        const i = self.findByStart(range_start) orelse return false;
+        const n = self.nodes[i];
+        if (n.start == range_start and n.end_exclusive >= range_end_exclusive) {
+            if (n.end_exclusive == range_end_exclusive) {
+                return self.deleteByStart(range_start);
             }
+            const ns = range_end_exclusive;
+            const ne = n.end_exclusive;
+            const st = n.state;
+            const pr = n.protect;
+            const ig = n.is_guard;
+            if (!self.deleteByStart(range_start)) return false;
+            return self.insertEx(ns, ne, st, pr, ig, true);
         }
         return false;
     }
 
-    /// 将已提交区内 `[range_start, range_end_exclusive)` 标回 **reserved**（`MEM_DECOMMIT` 元数据；调用方负责 unmap PTE）。
     pub fn decommitSubrange(self: *VadTable, range_start: u64, range_end_exclusive: u64, no_access_protect: u32) bool {
         if (range_start >= range_end_exclusive) return false;
         var cur = range_start;
@@ -160,15 +424,11 @@ pub const VadTable = struct {
             if (e.state != .committed) return false;
             const seg_end = @min(range_end_exclusive, e.end_exclusive);
             if (!self.replaceRangeProtect(cur, seg_end, no_access_protect)) return false;
-            // 将刚写入的中间段改回 reserved（replaceRangeProtect 拆条后需按区间找条目）
-            var j: u16 = 0;
-            while (j < self.len) : (j += 1) {
-                if (self.entries[j].start == cur and self.entries[j].end_exclusive == seg_end) {
-                    self.entries[j].state = .reserved;
-                    self.entries[j].protect = no_access_protect;
-                    self.entries[j].is_guard = false;
-                    break;
-                }
+            const j = self.findByStart(cur) orelse return false;
+            if (self.nodes[j].start == cur and self.nodes[j].end_exclusive == seg_end) {
+                self.nodes[j].state = .reserved;
+                self.nodes[j].protect = no_access_protect;
+                self.nodes[j].is_guard = false;
             }
             cur = seg_end;
         }
@@ -176,17 +436,6 @@ pub const VadTable = struct {
         return true;
     }
 
-    /// 查找包含 `va` 的 VAD（任意状态）；表按 `start` 有序。
-    pub fn findContaining(self: *const VadTable, va: u64) ?VadEntry {
-        if (self.len == 0) return null;
-        const lb = self.lowerBoundStart(va);
-        const i = if (lb > 0) lb - 1 else 0;
-        if (self.entries[i].contains(va)) return self.entries[i];
-        return null;
-    }
-
-    /// 查找包含 `va` 且仍为 reserved 的条目（可惰性提交）。
-    /// 跨多条 VAD 的 `NtProtectVirtualMemory`：自 `range_start` 起逐段调用 `replaceRangeProtect`。
     pub fn replaceSpanProtect(self: *VadTable, range_start: u64, range_end_exclusive: u64, new_protect: u32) bool {
         var cur = range_start;
         while (cur < range_end_exclusive) {
@@ -205,67 +454,54 @@ pub const VadTable = struct {
         return e;
     }
 
-    /// 将覆盖 `va` 的 reserved VAD 整条标为 committed（在调用方已映射全部页或采用全区提交策略时使用）。
     pub fn markCommittedRange(self: *VadTable, start: u64, end_exclusive: u64) void {
-        var i: u16 = 0;
-        while (i < self.len) : (i += 1) {
-            if (self.entries[i].start == start and self.entries[i].end_exclusive == end_exclusive) {
-                self.entries[i].state = .committed;
-                return;
-            }
+        const i = self.findByStart(start) orelse return;
+        if (self.nodes[i].end_exclusive == end_exclusive) {
+            self.nodes[i].state = .committed;
         }
     }
 
-    /// 将 `va` 所在 reserved 区升级为 committed（单条 VAD 整体）。
     pub fn upgradeReservedContaining(self: *VadTable, va: u64) void {
-        var i: u16 = 0;
-        while (i < self.len) : (i += 1) {
-            if (self.entries[i].contains(va) and self.entries[i].state == .reserved) {
-                self.entries[i].state = .committed;
-                return;
-            }
+        const i = self.floorIndex(va);
+        if (i == NULL_IDX) return;
+        const n = self.nodes[i];
+        if (va >= n.start and va < n.end_exclusive and n.state == .reserved) {
+            self.nodes[i].state = .committed;
         }
     }
 
-    fn removeAt(self: *VadTable, idx: u16) void {
-        if (self.len == 0) return;
-        const last = self.len - 1;
-        self.entries[idx] = self.entries[last];
-        self.len -= 1;
-    }
-
-    /// `NtProtectVirtualMemory` 后同步 VAD：唯一覆盖 `[range_start, range_end_exclusive)` 的条目更新 `protect`；
-    /// 若为真子区间则拆成至多 3 条（拆分后 `is_guard` 清零，与栈 guard 细化为后续项）。
     pub fn replaceRangeProtect(self: *VadTable, range_start: u64, range_end_exclusive: u64, new_protect: u32) bool {
         if (range_start >= range_end_exclusive) return false;
-        var i: u16 = 0;
-        while (i < self.len) : (i += 1) {
-            const e = self.entries[i];
-            if (e.start <= range_start and e.end_exclusive >= range_end_exclusive) {
-                if (e.start == range_start and e.end_exclusive == range_end_exclusive) {
-                    self.entries[i].protect = new_protect;
-                    self.coalesceAdjacent();
-                    return true;
-                }
-                var pieces: u8 = 1;
-                if (e.start < range_start) pieces += 1;
-                if (range_end_exclusive < e.end_exclusive) pieces += 1;
-                if (@as(usize, self.len) - 1 + @as(usize, pieces) > max_vad) return false;
-
-                self.removeAt(i);
-
-                if (e.start < range_start) {
-                    if (!self.insert(e.start, range_start, e.state, e.protect, false)) return false;
-                }
-                if (!self.insert(range_start, range_end_exclusive, e.state, new_protect, false)) return false;
-                if (range_end_exclusive < e.end_exclusive) {
-                    if (!self.insert(range_end_exclusive, e.end_exclusive, e.state, e.protect, false)) return false;
-                }
-                self.coalesceAdjacent();
-                return true;
-            }
+        const i = self.floorIndex(range_start);
+        if (i == NULL_IDX) return false;
+        const e = self.nodes[i];
+        if (range_start < e.start or range_end_exclusive > e.end_exclusive) return false;
+        if (e.start == range_start and e.end_exclusive == range_end_exclusive) {
+            self.nodes[i].protect = new_protect;
+            self.nodes[i].is_guard = false;
+            self.coalesceAdjacent();
+            return true;
         }
-        return false;
+        var pieces: u8 = 1;
+        if (e.start < range_start) pieces += 1;
+        if (range_end_exclusive < e.end_exclusive) pieces += 1;
+        if (@as(usize, self.node_count) - 1 + @as(usize, pieces) > MAX_NODES) return false;
+
+        const old_start = e.start;
+        const old_end = e.end_exclusive;
+        const old_state = e.state;
+        const old_prot = e.protect;
+        _ = self.deleteByStart(old_start);
+
+        if (old_start < range_start) {
+            if (!self.insert(old_start, range_start, old_state, old_prot, false)) return false;
+        }
+        if (!self.insert(range_start, range_end_exclusive, old_state, new_protect, false)) return false;
+        if (range_end_exclusive < old_end) {
+            if (!self.insert(range_end_exclusive, old_end, old_state, old_prot, false)) return false;
+        }
+        self.coalesceAdjacent();
+        return true;
     }
 };
 
@@ -273,9 +509,7 @@ test "vad insert sorted no overlap" {
     var t: VadTable = .{};
     try std.testing.expect(t.insert(0x4000, 0x5000, .reserved, 0x04, false));
     try std.testing.expect(t.insert(0x2000, 0x3000, .reserved, 0x04, false));
-    try std.testing.expectEqual(@as(u16, 2), t.len);
-    try std.testing.expectEqual(@as(u64, 0x2000), t.entries[0].start);
-    try std.testing.expectEqual(@as(u64, 0x4000), t.entries[1].start);
+    try std.testing.expectEqual(@as(u16, 2), t.len());
     try std.testing.expect(!t.insert(0x2500, 0x4500, .reserved, 0x04, false));
 }
 
@@ -284,8 +518,8 @@ test "vad replaceRangeProtect exact" {
     const ps: u64 = 4096;
     try std.testing.expect(t.insert(0x20000, 0x20000 + ps, .committed, 0x04, false));
     try std.testing.expect(t.replaceRangeProtect(0x20000, 0x20000 + ps, 0x02));
-    try std.testing.expectEqual(@as(u16, 1), t.len);
-    try std.testing.expectEqual(@as(u32, 0x02), t.entries[0].protect);
+    try std.testing.expectEqual(@as(u16, 1), t.len());
+    try std.testing.expectEqual(@as(u32, 0x02), t.findContaining(0x20000).?.protect);
 }
 
 test "vad replaceRangeProtect splits three pieces" {
@@ -293,7 +527,7 @@ test "vad replaceRangeProtect splits three pieces" {
     const ps: u64 = 4096;
     try std.testing.expect(t.insert(0x10000, 0x10000 + 5 * ps, .committed, 0x04, false));
     try std.testing.expect(t.replaceRangeProtect(0x10000 + ps, 0x10000 + 4 * ps, 0x02));
-    try std.testing.expectEqual(@as(u16, 3), t.len);
+    try std.testing.expectEqual(@as(u16, 3), t.len());
     try std.testing.expectEqual(@as(u32, 0x04), t.findContaining(0x10000).?.protect);
     try std.testing.expectEqual(@as(u32, 0x02), t.findContaining(0x10000 + 2 * ps).?.protect);
     try std.testing.expectEqual(@as(u32, 0x04), t.findContaining(0x10000 + 4 * ps).?.protect);
@@ -305,7 +539,7 @@ test "vad find and remove exact" {
     _ = t.insert(0x10000, 0x10000 + 3 * ps, .reserved, 0x04, false);
     try std.testing.expect(t.findContaining(0x11000) != null);
     try std.testing.expect(t.removeExact(0x10000, 3));
-    try std.testing.expectEqual(@as(u16, 0), t.len);
+    try std.testing.expectEqual(@as(u16, 0), t.len());
 }
 
 test "vad findContaining gap returns null" {
@@ -327,14 +561,45 @@ test "vad coalesce after insert" {
     var t: VadTable = .{};
     try std.testing.expect(t.insert(0x1000, 0x2000, .committed, 0x04, false));
     try std.testing.expect(t.insert(0x2000, 0x3000, .committed, 0x04, false));
-    try std.testing.expectEqual(@as(u16, 1), t.len);
-    try std.testing.expectEqual(0x3000, t.entries[0].end_exclusive);
+    try std.testing.expectEqual(@as(u16, 1), t.len());
+    try std.testing.expectEqual(@as(u64, 0x3000), t.findContaining(0x1000).?.end_exclusive);
 }
 
 test "vad decommitSubrange" {
     var t: VadTable = .{};
     const ps: u64 = 4096;
-    try std.testing.expect(t.insert(0x1000, 0x5000, .committed, 0x04, false)); // 4 pages
+    try std.testing.expect(t.insert(0x1000, 0x5000, .committed, 0x04, false));
     try std.testing.expect(t.decommitSubrange(0x1000 + ps, 0x1000 + 3 * ps, 0x01));
     try std.testing.expectEqual(VadState.reserved, t.findContaining(0x2000).?.state);
+}
+
+test "vad avl random insert delete balanced height" {
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE);
+    const r = prng.random();
+    var t: VadTable = .{};
+    var inserted: [256]u64 = undefined;
+    var n: usize = 0;
+    var k: usize = 0;
+    while (k < 200) : (k += 1) {
+        const base = r.intRangeLessThan(u64, 1, 0x100000) * page_size_bytes;
+        const pages = r.intRangeLessThan(u32, 1, 4);
+        const end = base + @as(u64, pages) * page_size_bytes;
+        if (base < end and !t.wouldOverlap(base, end)) {
+            if (t.insert(base, end, .reserved, 0x04, false)) {
+                if (n < inserted.len) {
+                    inserted[n] = base;
+                    n += 1;
+                }
+            }
+        }
+    }
+    try std.testing.expect(t.len() > 0);
+    if (t.root != NULL_IDX) {
+        try std.testing.expect(t.nodes[t.root].height < 40);
+    }
+    while (n > 0) {
+        n -= 1;
+        _ = t.deleteByStart(inserted[n]);
+    }
+    try std.testing.expectEqual(@as(u16, 0), t.len());
 }

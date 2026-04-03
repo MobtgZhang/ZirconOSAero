@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/mm/heap.zig
-// Purpose: 内核通用堆 — bump 高水位 + 带元数据的空闲链表、`kfree`、**相邻空闲块按地址合并**；可选 **可增长 arena**（由 `heap_boot.zig` 注册 `map_range` 回调做 VM 映射），主机单测用静态缓冲。
+// Purpose: 内核通用堆 — **bump 高水位仅作 arena 内快速路径**，与 **空闲链表合并** 并存；大块与 **池 zone**（`pool_zone.zig` + `pool.zig`）为热路径，勿依赖「纯 bump、不可释放」作为长期策略。可选可增长 arena（`heap_boot.zig` → `vm.mapPageAlloc`）。
 //
 // This is an independent clean-room implementation.
 // Reference: OS textbook free-list heap with coalescing; MS Learn — kernel pool concepts (behavioral only).

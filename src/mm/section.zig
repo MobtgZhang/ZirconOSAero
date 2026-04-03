@@ -38,7 +38,7 @@ pub const SectionObject = struct {
     active_view_count: u32 = 0,
     /// `SEC_IMAGE` 等：完整 PE 映射为路线图；仅作标志供加载器探测。
     is_image_section: bool = false,
-    /// 写时拷贝：尚未实现；为真时 `mapViewIntoProcess` 应拒绝或走 COW 路径。
+    /// 写时拷贝：**文件后备**仍为路线图；**匿名**节上 `PAGE_WRITECOPY` 与私有 RW 等价（fork 时由 `duplicateUserMappingsForFork` 做 CoW）。
     cow_requested: bool = false,
 };
 
@@ -60,11 +60,13 @@ pub fn createAnonymousSection(max_size: u64, page_protection: u32) ?*SectionObje
             g_section_used[i] = true;
             const s = &g_sections[i];
             const aligned = if (max_size == 0) @as(u64, @intCast(paging.page_size)) else pageAlignUp(max_size);
+            const cow = (page_protection & 0x88) != 0; // WRITECOPY / EXECUTE_WRITECOPY
             s.* = .{
                 .header = .{ .obj_type = .section, .ref_count = 1, .handle_count = 0 },
                 .maximum_size = aligned,
                 .page_protection = page_protection,
                 .file_backed = false,
+                .cow_requested = cow,
             };
             return s;
         }
@@ -140,7 +142,7 @@ fn pickUserBase(space: *vm.AddressSpace, num_pages: u32) ?u64 {
     return null;
 }
 
-/// `NtMapViewOfSection`：匿名页 **或** 文件后备（映射时读入内容）。可写文件后备为 **整段 eager copy**（非真 COW）；`cow_requested` 仍为路线图。
+/// `NtMapViewOfSection`：匿名页 **或** 文件后备（映射时读入内容）。可写文件后备为 **整段 eager copy**（非真 COW）。
 fn copyFileIntoMappedPages(
     space: *vm.AddressSpace,
     base: u64,
@@ -184,7 +186,8 @@ pub fn mapViewIntoProcess(
     section_offset: u64,
     view_size: *u64,
 ) i32 {
-    if (sec.cow_requested) return STATUS_NOT_IMPLEMENTED;
+    // 文件后备 + 请求真 COW：尚未实现（须 #PF 路径或只读映射 + 写时复制）。
+    if (sec.file_backed and sec.cow_requested) return STATUS_NOT_IMPLEMENTED;
     if (section_offset >= sec.maximum_size) return STATUS_INVALID_PARAMETER;
     const ps: u64 = @intCast(paging.page_size);
     const vs: u64 = if (view_size.* == 0)
@@ -196,13 +199,27 @@ pub fn mapViewIntoProcess(
     const space = proc.address_space orelse return STATUS_NO_MEMORY;
     const num_pages: u32 = @intCast(vs / ps);
     const flags = mapFlagsFromPageProtect(sec.page_protection);
-    if (sec.file_backed and flags.writable and sec.cow_requested) return STATUS_NOT_IMPLEMENTED;
 
     var base = base_address.*;
     if (base == 0) {
         base = pickUserBase(space, num_pages) orelse return STATUS_NO_MEMORY;
     } else {
         if (base & (ps - 1) != 0) return STATUS_INVALID_PARAMETER;
+    }
+
+    if (sec.file_backed) {
+        const end_excl = base + vs;
+        if (!space.vad.insert(base, end_excl, .reserved, sec.page_protection, false)) {
+            return STATUS_NO_MEMORY;
+        }
+        if (!space.recordSectionView(base, num_pages, @intFromPtr(sec), section_offset)) {
+            _ = space.vad.removeExact(base, num_pages);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        sec.active_view_count +%= 1;
+        base_address.* = base;
+        view_size.* = vs;
+        return STATUS_SUCCESS;
     }
 
     var p: u32 = 0;
@@ -216,37 +233,55 @@ pub fn mapViewIntoProcess(
             return STATUS_NO_MEMORY;
         }
     }
-    if (!space.recordSectionView(base, num_pages, @intFromPtr(sec))) {
+
+    if (!space.recordSectionView(base, num_pages, @intFromPtr(sec), 0)) {
         var j: u32 = 0;
         while (j < num_pages) : (j += 1) {
             _ = space.unmapAndFree(base + @as(u64, j) * ps);
         }
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    if (sec.file_backed) {
-        const fo = sec.backing_file orelse {
-            var j: u32 = 0;
-            while (j < num_pages) : (j += 1) {
-                _ = space.unmapAndFree(base + @as(u64, j) * ps);
-            }
-            _ = space.takeSectionView(base);
-            return STATUS_INVALID_PARAMETER;
-        };
-        const cp = copyFileIntoMappedPages(space, base, num_pages, fo, section_offset);
-        if (cp != STATUS_SUCCESS) {
-            var j: u32 = 0;
-            while (j < num_pages) : (j += 1) {
-                _ = space.unmapAndFree(base + @as(u64, j) * ps);
-            }
-            _ = space.takeSectionView(base);
-            return cp;
-        }
-    }
     sec.active_view_count +%= 1;
     vm.recordCommittedVadRange(space, base, num_pages, sec.page_protection);
     base_address.* = base;
     view_size.* = vs;
     return STATUS_SUCCESS;
+}
+
+/// 由 `vm.setSectionLazyCommitFillHook` 注册：惰性提交 PTE 已建立后，自文件视图读入该页。
+pub fn onLazyCommitFillPage(space: *vm.AddressSpace, page_va: u64) bool {
+    const ps: u64 = @intCast(paging.page_size);
+    const page = page_va & ~(ps - 1);
+    var vi: u8 = 0;
+    while (vi < space.section_view_count) : (vi += 1) {
+        const vb = space.section_view_base[vi];
+        const np = space.section_view_pages[vi];
+        if (ps == 0) return false;
+        if (@as(u64, np) > std.math.maxInt(u64) / ps) continue;
+        const span = @as(u64, np) * ps;
+        if (page < vb or page >= vb + span) continue;
+        const sec = @as(*SectionObject, @ptrFromInt(space.section_view_obj[vi]));
+        if (!sec.file_backed) return false;
+        const fo = sec.backing_file orelse return false;
+        const page_idx = (page - vb) / ps;
+        const file_off = space.section_view_file_off[vi] + page_idx * ps;
+        const phys = space.getPhysical(page) orelse return false;
+        var buf: [4096]u8 = undefined;
+        var written: u64 = 0;
+        while (written < ps) {
+            fo.position = file_off + written;
+            const to_read: usize = @intCast(@min(ps - written, @as(u64, buf.len)));
+            const rr = vfs.read(fo, buf[0..to_read]);
+            if (rr.status != .success) return false;
+            const got = rr.bytes_read;
+            const dst: [*]u8 = @ptrFromInt(phys + written);
+            if (got > 0) @memcpy(dst[0..got], buf[0..got]);
+            if (got < to_read) @memset(dst[got..to_read], 0);
+            written += to_read;
+        }
+        return true;
+    }
+    return false;
 }
 
 pub fn unmapViewInProcess(proc: *process.Process, base: u64) i32 {

@@ -2,20 +2,24 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/mm/pool.zig
-// Purpose: 带标签的小型池分配（固定档位 + 空闲链表 + 原子池锁），后备为通用堆 `heap.zig`；对齐 **NonPagedPool** 与 **PagedPool** 的公开语义子集。
+// Purpose: **NonPagedPool / PagedPool** 子集：`zone` 按页切片 + **per-CPU lookaside** + 全局档位链（`pool_gate`）；
+// 大于最大档位仍走 `heap.zig`。对齐 WDK 池类型与 IRQL 语义（clean-room）。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
-// Ref: WDK — Pool Types / ExAllocatePoolWithTag (公开行为描述)
+// Ref: WDK — Pool Types / ExAllocatePoolWithTag / lookaside lists (public behavioral descriptions)
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K1.2
+// PFN / 可用 RAM 过滤与 GOP 保留： [docs/cn/PHYS_ALLOC_AUDIT.md](../../docs/cn/PHYS_ALLOC_AUDIT.md)、[PFN_REFCOUNT_ROADMAP.md](../../docs/cn/PFN_REFCOUNT_ROADMAP.md)
 //
-// IRQL / SMP（与 WDK 目标语义对齐的演进说明）：
-// - **NonPagedPool**：文档要求可在 DISPATCH_LEVEL 及以下安全分配；本模块对档位链表与 tag 统计使用 **原子自旋风格锁**（`pool_gate`），与 `heap` 内锁嵌套顺序为 **先 pool 后 heap**，避免死锁。
-// - 完整 SMP 下仍宜引入 per-CPU 池或 `IrqSpinLock` 包装；见路线图 K1。
-// - **PagedPool**：`paged_bytes_outstanding` 仅作语义占位与泄漏倾向统计；**未** 实现将页体换出到磁盘或修剪工作集（WDK 完整 PagedPool 需分页器 + 后备存储；见 [MM_HEAP_POOL_SLAB.md](../../docs/cn/MM_HEAP_POOL_SLAB.md)）。在接分页器之前，勿依赖「可分页」在高压下的 OOM 行为与真实 NT 一致。
+// IRQL / SMP：
+// - **NonPagedPool**：DISPATCH_LEVEL 及以下；lookaside 为 per-CPU 无锁热路径；全局链与 tag 统计用 `pool_gate`。
+// - **PagedPool**：须 APC_LEVEL 以下（由 `ex_pool` IRQL guard）；阶段一 **无** 真换出，仅 zone 统计与虚拟窗文档常量分离。
+// - SMP：完整正确性依赖 `percpu_index.currentCpuIndex`；当前 BSP 恒 0。
 
 const std = @import("std");
 const heap = @import("heap.zig");
+const lookaside = @import("lookaside.zig");
+const pool_zone = @import("pool_zone.zig");
 
 pub const PoolType = enum(u8) {
     non_paged = 0,
@@ -27,12 +31,15 @@ var paged_trim_placeholder_events: usize = 0;
 
 const SLOT_COUNT: usize = 6;
 const slot_sizes: [SLOT_COUNT]usize = .{ 16, 32, 64, 128, 256, 512 };
+const ZONE_PAGE: usize = 4096;
+
+comptime {
+    std.debug.assert(lookaside.SLOT_COUNT == SLOT_COUNT);
+}
+
+const FreeNode = lookaside.ListNode;
 
 var free_heads: [SLOT_COUNT]?*FreeNode = .{null} ** SLOT_COUNT;
-
-const FreeNode = struct {
-    next: ?*FreeNode,
-};
 
 var pool_gate: std.atomic.Value(u32) = .init(0);
 
@@ -60,7 +67,6 @@ pub const TagStat = struct {
     frees: usize,
 };
 
-/// Tag 统计表容量（Debug 泄漏审计）；满后新 tag 静默不计入直至重启。
 const tag_stat_cap: usize = 64;
 var tag_stats: [tag_stat_cap]TagStat = undefined;
 var tag_stats_len: usize = 0;
@@ -91,7 +97,6 @@ fn recordTagFreeUnlocked(tag: u32) void {
     }
 }
 
-/// 调试：拷贝当前 tag 统计表，返回写入条数。
 pub fn copyTagStats(out: []TagStat) usize {
     lockPool();
     defer unlockPool();
@@ -108,7 +113,6 @@ pub fn tagStatsLenForDebug() usize {
     return tag_stats_len;
 }
 
-/// K1.2：分页器 / 工作集修剪占位。无换出实现时仅统计事件；接 `Mm` 修剪后在此接线。
 pub fn notePagedPoolTrimPlaceholder(bytes_hint: usize) void {
     _ = bytes_hint;
     paged_trim_placeholder_events +|= 1;
@@ -118,25 +122,20 @@ pub fn pagedTrimPlaceholderEventsForDebug() usize {
     return paged_trim_placeholder_events;
 }
 
-/// 逻辑 **PagedPool**：当前与 NonPaged 共用同一后备；`paged_bytes_outstanding` 用于调试统计。
-pub fn allocatePaged(size: usize, tag: u32) ?[*]u8 {
-    lockPool();
-    defer unlockPool();
-    const p = allocateNonPagedLocked(size) orelse return null;
-    recordTagAllocUnlocked(tag);
-    paged_bytes_outstanding += size;
-    return p;
+/// 将新 zone 页切成 `slot_idx` 档位块并挂入全局空闲链（已持锁或仅由 refill 调用）。
+fn refillSlotFromNewPage(slot_idx: usize, kind: pool_zone.ZonePoolKind) bool {
+    const slot = slot_sizes[slot_idx];
+    const page = pool_zone.allocZonePage(kind, @alignOf(FreeNode)) orelse return false;
+    var off: usize = 0;
+    while (off + slot <= ZONE_PAGE) : (off += slot) {
+        const node: *FreeNode = @ptrCast(@alignCast(page + off));
+        node.next = free_heads[slot_idx];
+        free_heads[slot_idx] = node;
+    }
+    return true;
 }
 
-pub fn freePaged(ptr: [*]u8, size: usize, tag: u32) void {
-    lockPool();
-    defer unlockPool();
-    recordTagFreeUnlocked(tag);
-    freeNonPagedImpl(ptr, size);
-    paged_bytes_outstanding = if (paged_bytes_outstanding >= size) paged_bytes_outstanding - size else 0;
-}
-
-fn allocateNonPagedLocked(size: usize) ?[*]u8 {
+fn allocateNonPagedLocked(size: usize, kind: pool_zone.ZonePoolKind) ?[*]u8 {
     const idx = sizeClassIndex(size) orelse {
         return heap.alloc(size, @alignOf(FreeNode));
     };
@@ -145,36 +144,89 @@ fn allocateNonPagedLocked(size: usize) ?[*]u8 {
         free_heads[idx] = n.next;
         return @ptrCast(n);
     }
+    if (!refillSlotFromNewPage(idx, kind)) return null;
+    if (free_heads[idx]) |n| {
+        free_heads[idx] = n.next;
+        return @ptrCast(n);
+    }
     return heap.alloc(slot, @alignOf(FreeNode));
 }
 
-/// 从池或通用堆分配 `size` 字节（向上取到档位）；失败返回 null。
-pub fn allocateNonPaged(size: usize, tag: u32) ?[*]u8 {
+pub fn allocatePaged(size: usize, tag: u32) ?[*]u8 {
+    if (sizeClassIndex(size)) |idx| {
+        if (lookaside.tryPop(idx)) |n| {
+            lockPool();
+            defer unlockPool();
+            recordTagAllocUnlocked(tag);
+            return @ptrCast(n);
+        }
+    }
     lockPool();
     defer unlockPool();
-    const p = allocateNonPagedLocked(size) orelse return null;
+    const p = allocateNonPagedLocked(size, .paged) orelse return null;
+    recordTagAllocUnlocked(tag);
+    paged_bytes_outstanding += size;
+    return p;
+}
+
+pub fn freePaged(ptr: [*]u8, size: usize, tag: u32) void {
+    if (sizeClassIndex(size)) |idx| {
+        const node: *FreeNode = @ptrCast(@alignCast(ptr));
+        if (lookaside.tryPush(idx, node)) {
+            lockPool();
+            defer unlockPool();
+            recordTagFreeUnlocked(tag);
+            paged_bytes_outstanding = if (paged_bytes_outstanding >= size) paged_bytes_outstanding - size else 0;
+            return;
+        }
+    }
+    lockPool();
+    defer unlockPool();
+    recordTagFreeUnlocked(tag);
+    freeNonPagedImplLocked(ptr, size);
+    paged_bytes_outstanding = if (paged_bytes_outstanding >= size) paged_bytes_outstanding - size else 0;
+}
+
+pub fn allocateNonPaged(size: usize, tag: u32) ?[*]u8 {
+    if (sizeClassIndex(size)) |idx| {
+        if (lookaside.tryPop(idx)) |n| {
+            lockPool();
+            defer unlockPool();
+            recordTagAllocUnlocked(tag);
+            return @ptrCast(n);
+        }
+    }
+    lockPool();
+    defer unlockPool();
+    const p = allocateNonPagedLocked(size, .non_paged) orelse return null;
     recordTagAllocUnlocked(tag);
     return p;
 }
 
-fn freeNonPagedImpl(ptr: [*]u8, size: usize) void {
+fn freeNonPagedImplLocked(ptr: [*]u8, size: usize) void {
     const idx = sizeClassIndex(size) orelse {
         heap.free(ptr, size, @alignOf(FreeNode));
         return;
     };
-    const slot = slot_sizes[idx];
-    _ = slot;
     const node: *FreeNode = @ptrCast(@alignCast(ptr));
     node.next = free_heads[idx];
     free_heads[idx] = node;
 }
 
-/// 释放由 `allocateNonPaged` 返回的指针；大于最大档位的块归还 `heap.free`。
 pub fn freeNonPaged(ptr: [*]u8, size: usize, tag: u32) void {
+    if (sizeClassIndex(size)) |idx| {
+        const node: *FreeNode = @ptrCast(@alignCast(ptr));
+        if (lookaside.tryPush(idx, node)) {
+            lockPool();
+            defer unlockPool();
+            recordTagFreeUnlocked(tag);
+            return;
+        }
+    }
     lockPool();
     defer unlockPool();
     recordTagFreeUnlocked(tag);
-    freeNonPagedImpl(ptr, size);
+    freeNonPagedImplLocked(ptr, size);
 }
 
 test "pool slot roundtrip uses heap then freelist" {
@@ -209,4 +261,15 @@ test "PagedPool trim placeholder counter" {
     const before = pagedTrimPlaceholderEventsForDebug();
     notePagedPoolTrimPlaceholder(4096);
     try std.testing.expectEqual(before + 1, pagedTrimPlaceholderEventsForDebug());
+}
+
+test "lookaside absorbs small churn" {
+    heap.init();
+    tag_stats_len = 0;
+    var i: usize = 0;
+    while (i < 40) : (i += 1) {
+        const p = allocateNonPaged(32, 0x1111) orelse return error.Oom;
+        freeNonPaged(p, 32, 0x1111);
+    }
+    try std.testing.expect(lookaside.depthForDebug(0, 1) > 0);
 }

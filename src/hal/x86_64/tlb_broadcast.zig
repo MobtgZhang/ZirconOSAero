@@ -24,6 +24,14 @@ pub fn pendingShootdownHint() u32 {
     return pending_shootdown_hint.load(.monotonic);
 }
 
+/// 用户区 `unmap` / `unmapRange` 后调用：本地已由 `invlpg`/全刷处理当前核，多核时其它逻辑 CPU 仍可能缓存旧 TLB；递增提示计数供诊断，完整 IPI shootdown 见 K2.5。
+pub fn noteUserMappingInvalidatedSmp() void {
+    if (builtin.cpu.arch != .x86_64) return;
+    const madt = @import("madt.zig");
+    if (madt.logical_cpu_count <= 1) return;
+    _ = pending_shootdown_hint.fetchAdd(1, .monotonic);
+}
+
 pub fn flushLocal() void {
     paging.flushTlb();
 }

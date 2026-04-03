@@ -421,6 +421,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
     ob.init();
     ob.initNamespace();
+    @import("mm/section.zig").registerSectionCleanupHook();
     se.init();
     io.init();
 
@@ -670,6 +671,7 @@ fn initDesktopFramebufferFromHandoff(
     display.clearFramebuffer();
 }
 
+/// 内核桌面主循环（阶段 **D-D4** 文档锚点）：每轮 `input_hub.pollAll`；`user32.msgPumpThreadsBlockedApprox` 为真时追加输入轮询以缩短 `GetMessage` 阻塞路径上的投递延迟；`idle_streak` 驱动 `display_flip_journal.extraInputPollBudget` 在空闲时仍保持尾部 `poll`；`need_paint` 为假时跳过 `present`。见 [docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md](../docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md)。
 fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
     const drivers = @import("drivers/mod.zig");
     const display = drivers.video.display;
@@ -690,9 +692,15 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
     const desktop_extra_input_polls: u32 = if (builtin.target.cpu.arch == .loongarch64) 32 else 16;
 
     const panic_ctx = @import("rtl/panic_context.zig");
+    const user32_mod = @import("subsystems/win32/user32.zig");
     while (true) {
         panic_ctx.setPhase(0x0001_0001);
         input_hub.pollAll();
+        // 阶段 D：有线程阻塞在 `GetMessage` 时额外轮询输入，降低「桌面空转、消息迟滞」概率（与 `display_flip_journal` idle 策略互补）。
+        if (user32_mod.msgPumpThreadsBlockedApprox()) {
+            var extra: u32 = 0;
+            while (extra < 8) : (extra += 1) input_hub.pollAll();
+        }
         const nudge = arch.takeCursorNudge();
         if (nudge.dx != 0 or nudge.dy != 0) mouse.injectNudge(nudge.dx, nudge.dy);
 
@@ -1425,6 +1433,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     klog.info("--- Phase 4: Object / Handle / Process Core ---", .{});
     ob.init();
     ob.initNamespace();
+    @import("mm/section.zig").registerSectionCleanupHook();
     se.init();
     io.init();
 

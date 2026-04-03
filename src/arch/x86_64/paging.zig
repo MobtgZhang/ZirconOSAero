@@ -433,6 +433,7 @@ fn releasePdptAll(pdpt_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) voi
 
 /// 释放 PML4 **用户子树**（索引 **0..255**，即 NT/x86_64 典型布局下 canonical **低半区** 的 PML4 槽位）。
 /// 索引 **256..511** 保留给内核共享映射（与内核 `CR3` 可能共享中间页表物理页），此处**绝不**释放，避免误拆内核页表。
+/// 用户态应仅通过 **User** 位置位的叶映射访问低半区；高半区内核映射由各进程页表共享副本提供（与 `docs/cn/VM_ISOLATION.md` 一致）。
 /// 调用后须由调用方释放顶层 `pml4_phys` 页本身（若专属于该进程）。
 pub fn releaseUserHalfAddressSpace(pml4_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) void {
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
@@ -500,4 +501,51 @@ test "x86_64 2MiB identity address recombine" {
     const entry_base: u64 = 0x400000;
     const pa = (entry_base & 0x0000_ffff_ffe0_0000) | (virt & huge_page_mask);
     try std.testing.expectEqual(@as(u64, 0x400000) | (virt & huge_page_mask), pa);
+}
+
+var release_user_half_free_count: usize = 0;
+
+fn releaseUserHalfCountingFree(ctx: ?*anyopaque, phys: u64) void {
+    _ = ctx;
+    _ = phys;
+    release_user_half_free_count += 1;
+}
+
+test "releaseUserHalfAddressSpace frees leaf and page-table pages" {
+    var backing: [5 * 4096]u8 align(4096) = undefined;
+    const pml4_mem = backing[0..4096];
+    const pdpt_mem = backing[4096 .. 2 * 4096];
+    const pd_mem = backing[2 * 4096 .. 3 * 4096];
+    const pt_mem = backing[3 * 4096 .. 4 * 4096];
+    const data_mem = backing[4 * 4096 .. 5 * 4096];
+
+    const pml4_phys = @intFromPtr(pml4_mem.ptr);
+    const pdpt_phys = @intFromPtr(pdpt_mem.ptr);
+    const pd_phys = @intFromPtr(pd_mem.ptr);
+    const pt_phys = @intFromPtr(pt_mem.ptr);
+    const data_phys = @intFromPtr(data_mem.ptr);
+
+    const pml4 = @as(*PageTable, @ptrCast(pml4_mem.ptr));
+    pml4.zero();
+    const pdpt = @as(*PageTable, @ptrCast(pdpt_mem.ptr));
+    pdpt.zero();
+    const pd = @as(*PageTable, @ptrCast(pd_mem.ptr));
+    pd.zero();
+    const pt = @as(*PageTable, @ptrCast(pt_mem.ptr));
+    pt.zero();
+
+    // VA 0x4000_0000：PML4[0] -> PDPT[1] -> PD[0] -> PT[0] -> data
+    pml4.entries[0] = PageTableEntry.fromFrame(pdpt_phys, Present | Write);
+    pml4.entries[0].accessed = true;
+    pdpt.entries[1] = PageTableEntry.fromFrame(pd_phys, Present | Write);
+    pdpt.entries[1].accessed = true;
+    pd.entries[0] = PageTableEntry.fromFrame(pt_phys, Present | Write);
+    pd.entries[0].accessed = true;
+    pt.entries[0] = PageTableEntry.fromFrame(data_phys, Present | Write | User);
+    pt.entries[0].accessed = true;
+
+    release_user_half_free_count = 0;
+    releaseUserHalfAddressSpace(pml4_phys, releaseUserHalfCountingFree, null);
+
+    try std.testing.expectEqual(@as(usize, 4), release_user_half_free_count);
 }

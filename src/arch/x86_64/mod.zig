@@ -170,8 +170,9 @@ pub fn sendEoi(irq: u8) void {
 
 pub fn initTimer() void {
     pit.init();
-    const hpet = @import("../../hal/x86_64/hpet.zig");
-    _ = hpet.initOptional();
+    const lapic_tick = @import("../../hal/x86_64/lapic_timer_tick.zig");
+    lapic_tick.initDeferredSingleTickSource();
+    // HPET 探测在 `main.zig` 绑定内核页表并 `mapDeviceMmioIdentity` 之后调用（0xFED00000 常超出早期 identity 窗口）。
 }
 
 pub fn initPic() void {

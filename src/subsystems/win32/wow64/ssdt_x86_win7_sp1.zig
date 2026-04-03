@@ -22,7 +22,7 @@ pub const NtCreateSection: u32 = 0x54;
 pub const NtCreateThread: u32 = 0x57;
 /// Win7 SP1 x86 服务号 **98**（`j00ru/windows-syscalls` `x86/json/nt-per-system.json` → `Windows 7` / `SP1`）。
 pub const NtDelayExecution: u32 = 0x62;
-/// Win7 SP1 x86 服务号 **57**（`j00ru/windows-syscalls` `nt-per-system.json`）。
+/// Win7 SP1 x86 服务号 **57**（十进制）→ 十六进制 **0x39**；数据源文件：`j00ru/windows-syscalls` 仓库内 `x86/json/nt-per-system.json`（Windows 7 / SP1 条目 `NtDuplicateObject`）。
 pub const NtDuplicateObject: u32 = 0x39;
 pub const NtFreeVirtualMemory: u32 = 0x83;
 pub const NtMapViewOfSection: u32 = 0xA8;

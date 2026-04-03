@@ -11,6 +11,7 @@
 //! **阶段五（路线图 content7.4）**：完整 SysWOW64 / `wow64cpu` 类语义为长期项；回归见 `zig build test`（`wow64_ssdt_x86`、`dwmapi_wow64_host` 等）。
 
 const std = @import("std");
+const builtin = @import("builtin");
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");
 const ntdll = @import("../../libs/ntdll.zig");
@@ -22,6 +23,7 @@ const console_mod = @import("console.zig");
 const types = @import("wow64/types.zig");
 const thunk = @import("wow64/thunk.zig");
 const redirect = @import("wow64/redirect.zig");
+const frame_mod = @import("../../mm/frame.zig");
 pub const ssdt_x86_win7_sp1 = @import("wow64/ssdt_x86_win7_sp1.zig");
 
 pub const WOW64_VERSION = types.WOW64_VERSION;
@@ -53,7 +55,6 @@ pub const noteRegistryWow64Node = redirect.noteRegistryWow64Node;
 
 var wow64_processes: [types.MAX_WOW64_PROCESSES]Wow64Process = [_]Wow64Process{.{}} ** types.MAX_WOW64_PROCESSES;
 var wow64_process_count: usize = 0;
-var next_wow64_pid: u32 = 2000;
 
 var thunk_table: [types.MAX_THUNK_ENTRIES]ThunkEntry = [_]ThunkEntry{.{}} ** types.MAX_THUNK_ENTRIES;
 var thunk_count: usize = 0;
@@ -83,14 +84,18 @@ fn registerThunk(name: []const u8, syscall_id: u32, tt: ThunkType, module: []con
 pub fn createWow64Process(name: []const u8, parent_pid: u32) ?*Wow64Process {
     if (wow64_process_count >= types.MAX_WOW64_PROCESSES) return null;
 
+    const kproc = process.createProcess(frame_mod.kernelFrameAllocatorPtr()) orelse return null;
+    const asp = kproc.address_space orelse {
+        _ = process.terminateProcess(kproc.pid, 0);
+        return null;
+    };
+
     var proc = &wow64_processes[wow64_process_count];
     proc.* = .{};
-    proc.pid = next_wow64_pid;
+    proc.pid = kproc.pid;
     proc.state = .initializing;
     proc.is_active = true;
     proc.parent_pid = parent_pid;
-
-    next_wow64_pid += 1;
 
     const n = @min(name.len, proc.image_name.len);
     @memcpy(proc.image_name[0..n], name[0..n]);
@@ -129,7 +134,37 @@ pub fn createWow64Process(name: []const u8, parent_pid: u32) ?*Wow64Process {
     proc.teb32.peb = types.PEB32_DEFAULT_USER_VA;
     proc.teb32.nt_tib_self = types.TEB32_DEFAULT_USER_VA;
 
+    if (builtin.cpu.arch == .x86_64) {
+        const peb_va: u64 = types.PEB32_DEFAULT_USER_VA;
+        const teb_va: u64 = types.TEB32_DEFAULT_USER_VA;
+        const peb_phys = asp.mapPageAlloc(peb_va, .{
+            .writable = true,
+            .user = true,
+            .executable = false,
+        }) orelse {
+            _ = process.terminateProcess(kproc.pid, 0);
+            return null;
+        };
+        const teb_phys = asp.mapPageAlloc(teb_va, .{
+            .writable = true,
+            .user = true,
+            .executable = false,
+        }) orelse {
+            _ = process.terminateProcess(kproc.pid, 0);
+            return null;
+        };
+        // 恒等/低内存观测：与 `kuser_shared.installInProcessAddressSpace` 相同假设，经物理页基址写入 PEB/TEB 内容。
+        const peb_ptr: *align(1) types.PEB32 = @ptrFromInt(peb_phys);
+        const teb_ptr: *align(1) types.TEB32 = @ptrFromInt(teb_phys);
+        peb_ptr.* = proc.peb32;
+        teb_ptr.* = proc.teb32;
+    }
+
     process.attachWow64IfPresent(proc.pid, types.PEB32_DEFAULT_USER_VA, types.TEB32_DEFAULT_USER_VA);
+
+    const kn = @min(name.len, kproc.name.len);
+    @memcpy(kproc.name[0..kn], name[0..kn]);
+    kproc.name_len = kn;
 
     _ = subsystem.registerProcess(proc.pid, .win32_cui, name, parent_pid);
     _ = subsystem.connectProcess(proc.pid);
@@ -149,6 +184,7 @@ pub fn terminateWow64Process(pid: u32, exit_code: u32) bool {
     proc.state = .inactive;
     proc.is_active = false;
     proc.exit_code = exit_code;
+    _ = process.terminateProcess(pid, exit_code);
     _ = subsystem.terminateWin32Process(pid, exit_code);
     return true;
 }
@@ -367,7 +403,6 @@ fn initWow64Dlls() void {
 
 pub fn init() void {
     wow64_process_count = 0;
-    next_wow64_pid = 2000;
     thunk_count = 0;
     total_thunks = 0;
     thunk.total_syscall_translations = 0;

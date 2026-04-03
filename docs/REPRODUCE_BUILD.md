@@ -49,6 +49,14 @@ zig build zbm-riscv64-uefi -Darch=riscv64
 zig build zbm-loongarch-uefi -Darch=loongarch64
 ```
 
+## UEFI ESP、`kernel.elf` 与 mtools（Makefile / ZBM）
+
+`make run` 在 `BOOT_METHOD=uefi` 时会生成 FAT 镜像 `build/esp-$(ARCH).img`（默认 **256MiB**，变量 `ESP_IMG_MB` 可覆盖），并把 `build/tmp/kernel.elf` 复制到 ESP 上的 `\boot\kernel.elf`（ZBM 固定从此路径加载）。**若 ESP 小于内核 ELF**（常见为 Debug + 桌面特性导致内核约 70MiB+），`mcopy` 会报 “Disk full”；已用 256MiB 默认避免旧版 64MiB 上限。
+
+- **依赖**：**dosfstools**（`mkfs.vfat`，用于把 64MiB 镜像格式化为 FAT32；勿用默认软盘几何的 `mformat ::`，否则易出现 “Disk full”）与 **mtools**（`mmd`、`mcopy`、`mdir`）。Debian/Ubuntu：`apt install dosfstools mtools`；Fedora：`dnf install dosfstools mtools`。
+- **`make build-esp` 失败**：若缺少内核，先执行 `make build`。若 `mcopy` / `mmd` 报错，按提示检查 mtools 是否在 `PATH` 中。
+- **ZBM 报 `kernel.elf not found on ESP` 但构建未报错**：多为旧 ESP 或未重新执行 `build-esp`；执行 `make clean && make build-esp` 后自检：`mdir -i build/esp-x86_64.img ::/boot` 应列出 `kernel.elf`（路径随 `ARCH` 变化）。
+
 ## VirtIO-GPU（可选，x86_64 QEMU）
 
 在标准 GOP/ramfb 之外增加 **virtio-gpu-pci**，用于验证控制队列 `GET_DISPLAY_INFO` 与 **2D 资源 + `TRANSFER_FROM_HOST_2D` / `TRANSFER_TO_HOST_2D`** 自检（[VirtIO 1.2 GPU device](https://docs.oasis-open.org/virtio/virtio-v1.2-csd01/virtio-v1.2-csd01.html)）。

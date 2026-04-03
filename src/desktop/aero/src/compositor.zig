@@ -50,6 +50,8 @@ pub const Surface = struct {
     y: i32 = 0,
     alpha: u8 = 255,
     blur_radius: i32 = 0,
+    /// 离屏表面 / 重定向位图共享计数；`destroySurface` 在减至 0 时移除槽位。
+    ref_count: u32 = 1,
 
     pub fn markDirty(self: *Surface, rect: Rect) void {
         if (self.damage_count < MAX_DAMAGE_RECTS) {
@@ -205,12 +207,23 @@ pub fn createSurface(width: u32, height: u32, flags: SurfaceFlags) u32 {
     return id;
 }
 
+pub fn addSurfaceRef(id: u32) void {
+    if (getSurface(id)) |sfc| {
+        sfc.ref_count +|= 1;
+    }
+}
+
 pub fn destroySurface(id: u32) bool {
     if (id == cursor_layer.surface_id) return false;
 
     var i: usize = 0;
     while (i < surface_count) {
         if (surfaces[i].id == id) {
+            if (surfaces[i].ref_count > 1) {
+                surfaces[i].ref_count -= 1;
+                compositor_dirty = true;
+                return true;
+            }
             var j = i;
             while (j + 1 < surface_count) : (j += 1) {
                 surfaces[j] = surfaces[j + 1];
@@ -490,17 +503,18 @@ fn needsSceneRedraw() bool {
     return false;
 }
 
+/// 稳定插入排序（按 `z_order` 升序）；同键保留数组原有相对顺序。
 fn sortSurfacesByZOrder() void {
-    var i: usize = 0;
-    while (i + 1 < surface_count) : (i += 1) {
-        var j: usize = 0;
-        while (j + 1 < surface_count - i) : (j += 1) {
-            if (surfaces[j].z_order > surfaces[j + 1].z_order) {
-                const tmp = surfaces[j];
-                surfaces[j] = surfaces[j + 1];
-                surfaces[j + 1] = tmp;
-            }
+    if (surface_count <= 1) return;
+    var i: usize = 1;
+    while (i < surface_count) : (i += 1) {
+        const key = surfaces[i];
+        var j: usize = i;
+        while (j > 0 and surfaces[j - 1].z_order > key.z_order) {
+            surfaces[j] = surfaces[j - 1];
+            j -= 1;
         }
+        surfaces[j] = key;
     }
 }
 

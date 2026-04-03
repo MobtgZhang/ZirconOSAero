@@ -239,4 +239,8 @@ pub fn registerBuiltinThemes() void {
 
 pub fn applyThemeConfig(tc: *const ThemeConfig) void {
     theme.setActiveScheme(tc.color_scheme);
+    // 运行时 `tc.glass_blur_radius` / `glass_opacity` 等影响 `ThemeConfig` 展示；与内核 `DwmConfig` 的数值对齐须经
+    // 注册表 / IOCTL 等宿主约定（见 DesktopManagerSpec.md §4 `nt61_aero_defaults` 防双轨）；此处不直接写内核。
+    _ = tc.glass_blur_radius;
+    _ = tc.glass_opacity;
 }

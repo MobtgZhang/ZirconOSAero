@@ -335,9 +335,9 @@ fn deliverMouseEventUncoalesced(event: MouseEvent) void {
     if (mouse_state.acceleration_enabled) {
         const dx64 = @as(i64, dx_scaled);
         const dy64 = @as(i64, dy_scaled);
-        const speed_sq = dx64 * dx64 + dy64 * dy64;
+        const speed_sq: i128 = @as(i128, dx64) * dx64 + @as(i128, dy64) * dy64;
         const thresh = mouse_state.acceleration_threshold;
-        const thresh_sq = @as(i64, thresh) * @as(i64, thresh);
+        const thresh_sq: i128 = @as(i128, thresh) * thresh;
         if (speed_sq > thresh_sq * 9) {
             dx_scaled = clampToI32(dx64 * 3);
             dy_scaled = clampToI32(dy64 * 3);

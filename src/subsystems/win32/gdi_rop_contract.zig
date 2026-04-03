@@ -26,6 +26,13 @@ pub fn isImplementedPatBltRop(rop: u32) bool {
     return rop == PATCOPY or rop == BLACKNESS or rop == WHITENESS or rop == PATINVERT;
 }
 
+/// Ref: Learn — `BLENDFUNCTION` / `AC_SRC_OVER`（`AlphaBlend` 子集）。
+pub const AC_SRC_OVER: u8 = 0x00;
+
+pub fn isImplementedAlphaBlendOp(blend_op: u8) bool {
+    return blend_op == AC_SRC_OVER;
+}
+
 const std = @import("std");
 
 test "BitBlt only SRCCOPY" {
@@ -37,4 +44,9 @@ test "PatBlt subset" {
     try std.testing.expect(isImplementedPatBltRop(PATCOPY));
     try std.testing.expect(isImplementedPatBltRop(BLACKNESS));
     try std.testing.expect(!isImplementedPatBltRop(0x00FB0A09)); // PATPAINT unsupported
+}
+
+test "AlphaBlend AC_SRC_OVER only" {
+    try std.testing.expect(isImplementedAlphaBlendOp(AC_SRC_OVER));
+    try std.testing.expect(!isImplementedAlphaBlendOp(1));
 }

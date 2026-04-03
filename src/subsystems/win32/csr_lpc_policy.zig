@@ -42,6 +42,26 @@ pub fn resolveDwmListenerTid(explicit_tid: u32, client_pid: u32) u32 {
     return explicit_tid;
 }
 
+/// `CsrApiNumber.register_dwm_listener` 载荷 **v1**（小端）：前 4 字节魔数 `0x014D5744`（ASCII `DWM` + `0x01`）；`[4..8]` 为 `DWORD` 线程 id。
+/// 否则（含仅 4 字节有效载荷的旧客户端）按 **旧版**：`[0..4]` 即为 tid（与既有 `subsystem` 行为一致）。
+pub const register_dwm_listener_v1_magic_le: u32 = 0x014D5744;
+pub const register_dwm_listener_v1_min_bytes: usize = 8;
+pub const register_dwm_listener_tid_v1_off: usize = 4;
+
+/// 从 LPC 载荷解析原始 tid（不含 `pid` 回退）；见 `resolveDwmListenerTid`。
+pub fn readRegisterDwmListenerRawTid(data: []const u8) u32 {
+    if (data.len >= register_dwm_listener_v1_min_bytes) {
+        const m = std.mem.readInt(u32, data[0..4], .little);
+        if (m == register_dwm_listener_v1_magic_le) {
+            return std.mem.readInt(u32, data[register_dwm_listener_tid_v1_off..][0..4], .little);
+        }
+    }
+    if (data.len >= 4) {
+        return std.mem.readInt(u32, data[0..4], .little);
+    }
+    return 0;
+}
+
 test "LPC get_message rejects tid 0" {
     try std.testing.expect(resolveGetMessageClientTid(0) == null);
     try std.testing.expectEqual(@as(u32, 9), resolveGetMessageClientTid(9).?);
@@ -55,6 +75,27 @@ test "post_message payload length guard matches subsystem" {
 test "Dwm listener tid 0 falls back to pid" {
     try std.testing.expectEqual(@as(u32, 42), resolveDwmListenerTid(0, 42));
     try std.testing.expectEqual(@as(u32, 7), resolveDwmListenerTid(7, 42));
+}
+
+test "register_dwm_listener v1 payload reads tid at offset 4" {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u32, buf[0..4], register_dwm_listener_v1_magic_le, .little);
+    std.mem.writeInt(u32, buf[4..8], 0x1122_3344, .little);
+    try std.testing.expectEqual(@as(u32, 0x1122_3344), readRegisterDwmListenerRawTid(&buf));
+    try std.testing.expectEqual(@as(u32, 0x1122_3344), resolveDwmListenerTid(readRegisterDwmListenerRawTid(&buf), 99));
+}
+
+test "register_dwm_listener legacy tid 1 not confused with v1" {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u32, buf[0..4], 1, .little);
+    @memset(buf[4..8], 0);
+    try std.testing.expectEqual(@as(u32, 1), readRegisterDwmListenerRawTid(&buf));
+}
+
+test "register_dwm_listener legacy 4-byte payload" {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, buf[0..4], 55, .little);
+    try std.testing.expectEqual(@as(u32, 55), readRegisterDwmListenerRawTid(&buf));
 }
 
 test "LPC payload offsets align with subsystem handleApiCall" {

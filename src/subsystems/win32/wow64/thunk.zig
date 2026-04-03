@@ -2,12 +2,14 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/subsystems/win32/wow64/thunk.zig
-// Purpose: 32→64 系统调用号演示映射与指针/句柄扩宽（与 `ssdt_nt61.zig` 真实表不对齐，见 SyscallABI.md）。
+// Purpose: 32→64 系统调用号映射与指针/句柄扩宽；服务号子集与 `ssdt_x86_win7_sp1.zig`（公开 Win7 SP1 x86 表）对齐。
 //
 // This is an independent clean-room implementation.
+// Ref: https://github.com/j00ru/windows-syscalls (x86 vs x64 namespace); [docs/cn/NT61_CONTRACT_MATRIX.md](../../../../docs/cn/NT61_CONTRACT_MATRIX.md) §9.1
 
 const types = @import("types.zig");
 const ntdll = @import("../../../libs/ntdll.zig");
+const x86 = @import("ssdt_x86_win7_sp1.zig");
 
 pub var total_syscall_translations: u64 = 0;
 pub var total_ptr_conversions: u64 = 0;
@@ -16,25 +18,10 @@ pub fn translateSyscall32to64(wow_proc: *types.Wow64Process, syscall_num: u32) n
     wow_proc.syscall_count += 1;
     total_syscall_translations += 1;
 
-    return switch (syscall_num) {
-        0x0001 => ntdll.STATUS_SUCCESS,
-        0x0002 => ntdll.STATUS_SUCCESS,
-        0x0003 => ntdll.STATUS_SUCCESS,
-        0x0004 => ntdll.STATUS_SUCCESS,
-        0x0006 => ntdll.STATUS_SUCCESS,
-        0x0007 => ntdll.STATUS_SUCCESS,
-        0x0008 => ntdll.STATUS_SUCCESS,
-        0x0009 => ntdll.STATUS_SUCCESS,
-        0x000C => ntdll.STATUS_SUCCESS,
-        0x0011 => ntdll.STATUS_SUCCESS,
-        0x0012 => ntdll.STATUS_SUCCESS,
-        0x0018 => ntdll.STATUS_SUCCESS,
-        0x001A => ntdll.STATUS_SUCCESS,
-        0x001F => ntdll.STATUS_SUCCESS,
-        0x0025 => ntdll.STATUS_SUCCESS,
-        0x0036 => ntdll.STATUS_SUCCESS,
-        else => ntdll.STATUS_NOT_IMPLEMENTED,
-    };
+    if (x86.wow64SyscallStubReturnsSuccess(syscall_num)) {
+        return ntdll.STATUS_SUCCESS;
+    }
+    return ntdll.STATUS_NOT_IMPLEMENTED;
 }
 
 pub fn convertPtr32to64(ptr32: u32) u64 {

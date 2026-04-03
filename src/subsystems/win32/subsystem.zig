@@ -13,6 +13,7 @@ const pe_loader = @import("../../loader/pe.zig");
 const user32 = @import("user32.zig");
 const gdi32 = @import("gdi32.zig");
 const csr_lpc_policy = @import("csr_lpc_policy.zig");
+const csr_dwm_listeners = @import("csr_dwm_listeners.zig");
 const token = @import("../../se/token.zig");
 
 pub const CSRSS_VERSION: []const u8 = "ZirconOSAero CSRSS v1.0";
@@ -237,6 +238,26 @@ pub fn getActiveDesktopIndex() usize {
 }
 
 /// 将活动桌面切换为指定名称（如 `Default`、`Winlogon`）；公开 Win32 桌面切换行为的子集实现。
+/// 在活动窗口站上新建桌面；成功返回 **1-based** `HDESK` 句柄（索引+1），失败返回 0。
+pub fn createUserDesktop(name: []const u8) u32 {
+    const ws = getWindowStation(active_window_station_idx) orelse return 0;
+    const new_index = ws.desktop_count;
+    _ = ws.createDesktop(name) orelse return 0;
+    return @as(u32, @intCast(new_index)) + 1;
+}
+
+/// 按名称打开已存在桌面，返回 1-based 句柄；未找到返回 0。
+pub fn openDesktopByName(name: []const u8) u32 {
+    const ws = getWindowStation(active_window_station_idx) orelse return 0;
+    for (0..ws.desktop_count) |i| {
+        const d = &ws.desktops[i];
+        if (d.name_len == name.len and std.mem.eql(u8, d.name[0..d.name_len], name)) {
+            return @as(u32, @intCast(i)) + 1;
+        }
+    }
+    return 0;
+}
+
 pub fn switchToDesktop(name: []const u8) bool {
     const ws = getWindowStation(active_window_station_idx) orelse return false;
     for (0..ws.desktop_count) |i| {
@@ -339,12 +360,9 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             return -1;
         },
         .register_dwm_listener => {
-            var tid: u32 = 0;
-            if (data_opt) |d| {
-                if (d.len >= 4) tid = std.mem.readInt(u32, d[0..4], .little);
-            }
-            tid = csr_lpc_policy.resolveDwmListenerTid(tid, pid);
-            user32.registerDwmNotificationListener(tid);
+            const tid_raw: u32 = if (data_opt) |d| csr_lpc_policy.readRegisterDwmListenerRawTid(d[0..ipc.MSG_DATA_SIZE]) else 0;
+            const tid = csr_lpc_policy.resolveDwmListenerTid(tid_raw, pid);
+            csr_dwm_listeners.register(tid);
             return 0;
         },
         .post_message => {
@@ -392,7 +410,7 @@ var gui_message_count: u64 = 0;
 pub fn initGuiSubsystem() void {
     gui_subsystem_active = true;
     klog.info("csrss: GUI subsystem activated", .{});
-    user32.registerDwmNotificationListener(3);
+    csr_dwm_listeners.register(3);
     user32.broadcastDwmCompositionChanged(user32.TRUE);
     user32.broadcastDwmColorizationChanged(0xFF_70_90_D0, user32.TRUE);
     user32.broadcastDwmNcRenderingChanged(user32.TRUE);

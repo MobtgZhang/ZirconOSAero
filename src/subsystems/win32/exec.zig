@@ -109,6 +109,9 @@ pub fn createApp(name: []const u8, cmd_line: []const u8, parent_pid: u32) ExecRe
     app.current_dir_len = dir.len;
 
     app.app_type = detectAppType(name);
+    if (app.app_type == .win32_cui and guessWin32GuiFromImageName(name)) {
+        app.app_type = .win32_gui;
+    }
 
     const image = pe_loader.createProcessImage(name, 0x140000000 + @as(u64, app.pid) * 0x10000, 0x140001000, app.pid);
     if (image) |img| {
@@ -122,6 +125,9 @@ pub fn createApp(name: []const u8, cmd_line: []const u8, parent_pid: u32) ExecRe
     app.state = .initializing;
 
     bindSystemDlls(app);
+    if (app.image) |img| {
+        _ = pe_loader.resolveImports(img);
+    }
 
     const subsys_type: subsystem.SubsystemType = switch (app.app_type) {
         .win32_cui => .win32_cui,
@@ -179,13 +185,24 @@ fn detectAppType(name: []const u8) AppType {
 }
 
 fn bindSystemDlls(app: *Win32App) void {
-    const required_dlls = [_][]const u8{
-        "ntdll.dll",
-        "kernel32.dll",
-        "kernelbase.dll",
-    };
+    var required_dlls: [7][]const u8 = undefined;
+    var n: usize = 0;
+    required_dlls[n] = "ntdll.dll";
+    n += 1;
+    required_dlls[n] = "kernel32.dll";
+    n += 1;
+    required_dlls[n] = "kernelbase.dll";
+    n += 1;
+    if (app.app_type == .win32_gui) {
+        required_dlls[n] = "user32.dll";
+        n += 1;
+        required_dlls[n] = "gdi32.dll";
+        n += 1;
+        required_dlls[n] = "dwmapi.dll";
+        n += 1;
+    }
 
-    for (required_dlls) |dll_name| {
+    for (required_dlls[0..n]) |dll_name| {
         if (app.dll_count >= app.loaded_dlls.len) break;
 
         if (pe_loader.getLoadedImage(dll_name)) |_| {
@@ -284,6 +301,21 @@ pub fn runDemoApps() void {
     klog.info("exec: Demo: %u apps launched, %u running", .{
         getTotalLaunched(), getRunningCount(),
     });
+}
+
+fn lastPathSegment(path: []const u8) []const u8 {
+    var i = path.len;
+    while (i > 0) {
+        i -= 1;
+        if (path[i] == '\\' or path[i] == '/') return path[i + 1 ..];
+    }
+    return path;
+}
+
+/// 在尚无 VFS 真 PE 解析时，用基名启发式将壳层 GUI 映像标为 `WINDOWS_GUI`（与 `subsystem` 登记一致）。
+fn guessWin32GuiFromImageName(path: []const u8) bool {
+    const bn = lastPathSegment(path);
+    return strEqlI(bn, "explorer.exe") or strEqlI(bn, "dwm.exe") or strEqlI(bn, "aero.exe");
 }
 
 fn strEqlI(a: []const u8, b: []const u8) bool {

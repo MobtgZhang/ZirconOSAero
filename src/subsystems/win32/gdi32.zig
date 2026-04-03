@@ -177,6 +177,14 @@ pub const LOGBRUSH = struct {
     hatch: u64 = 0,
 };
 
+/// Ref: Learn — `BLENDFUNCTION`（`AlphaBlend`）。
+pub const BLENDFUNCTION = extern struct {
+    BlendOp: u8,
+    BlendFlags: u8,
+    SourceConstantAlpha: u8,
+    AlphaFormat: u8,
+};
+
 pub const BITMAPINFOHEADER = struct {
     size: DWORD = @sizeOf(BITMAPINFOHEADER),
     width: i32 = 0,
@@ -634,6 +642,32 @@ pub fn StretchBlt(
         return FALSE;
     }
     if (!gdi_rop_contract.isImplementedStretchBltRop(rop)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    total_draw_calls += 1;
+    return TRUE;
+}
+
+/// Ref: Learn — `AlphaBlend`；本子集仅 `AC_SRC_OVER`，几何与像素混合为存根（计数 + 成功）。
+pub fn AlphaBlend(
+    hdcDest: HDC,
+    _: i32,
+    _: i32,
+    _: i32,
+    _: i32,
+    hdcSrc: HDC,
+    _: i32,
+    _: i32,
+    _: i32,
+    _: i32,
+    fnSrc: BLENDFUNCTION,
+) BOOL {
+    if (!hdcAcceptsStubDraw(hdcDest) or !hdcAcceptsStubDraw(hdcSrc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    if (!gdi_rop_contract.isImplementedAlphaBlendOp(fnSrc.BlendOp)) {
         kernel32.SetLastError(kernel32.ERROR_INVALID_PARAMETER);
         return FALSE;
     }

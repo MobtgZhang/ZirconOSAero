@@ -48,6 +48,27 @@ test "PM_REMOVE combined bitmask" {
     try std.testing.expect(removeMsgFromQueueOnPeek(PM_REMOVE | PM_NOYIELD));
 }
 
+test "SetWindowPos SWP flag values (Learn anchors)" {
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_SHOWWINDOW: u32 = 0x0040;
+    const SWP_HIDEWINDOW: u32 = 0x0080;
+    const SWP_NOCOPYBITS: u32 = 0x0100;
+    const SWP_NOOWNERZORDER: u32 = 0x0200;
+    const SWP_NOSENDCHANGING: u32 = 0x0400;
+    const SWP_NOREDRAW: u32 = 0x0800;
+    const SWP_DEFERERASE: u32 = 0x2000;
+    const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
+    try std.testing.expect(SWP_NOSIZE != SWP_NOMOVE);
+    try std.testing.expect((SWP_FRAMECHANGED | SWP_NOCOPYBITS) != SWP_NOZORDER);
+    try std.testing.expect(SWP_DEFERERASE > SWP_SHOWWINDOW);
+    try std.testing.expect(SWP_ASYNCWINDOWPOS > SWP_DEFERERASE);
+    try std.testing.expect((SWP_NOACTIVATE | SWP_HIDEWINDOW | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | SWP_NOREDRAW) != 0);
+}
+
 // GetMessage / PeekMessage 的 min/max 过滤与阻塞语义见 user32.zig；此处仅 PM_* 位标志锚点（契约矩阵 §5）。
 test "peek remove flags documented band" {
     try std.testing.expect(PM_NOREMOVE < PM_REMOVE);
@@ -87,4 +108,5 @@ test "min max well-formed" {
 // | `PeekMessage` PM_REMOVE | 置位时从队列移除 | `Window.peekMessage` / 过滤路径一致；纯函数标志见上 |
 // | `PeekMessage` PM_NOYIELD | 置位时不应主动让出调度 | 多线程下仍可能 `blockThread`；以 `allowSchedulerYieldForPeekFlags` 为契约锚点 |
 // | `GetMessage` 阻塞 | 无消息时阻塞至有消息或 WM_QUIT | 协作式：`STATUS_PENDING` + `blockThread`；与真 NT 抢占差异见 syscall 注释 |
+// | `NtUserPeekMessage` | 无消息时 `FALSE` + 清零输出 | 与 Learn 不同：返回 `STATUS_PENDING` 且清零 `MSG*`（见 `user32.ntUserPeekMessageSyscall` 注释） |
 // | 过滤范围 min/max | 仅返回区间内消息 | `getMessageFiltered` 轮转放回非匹配消息（简化语义）；纯函数镜像见 `messageMatchesMinMaxFilter` |

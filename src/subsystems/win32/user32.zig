@@ -17,6 +17,7 @@ const ipc = @import("../../lpc/ipc.zig");
 const pm_sem = @import("msg_pm_semantics.zig");
 const sched_mod = @import("../../ke/scheduler.zig");
 const dwm_nt61_contract = @import("../../config/dwm_nt61_api_contract.zig");
+const csr_dwm_listeners = @import("csr_dwm_listeners.zig");
 
 /// 未绑定 DWM 重定向表面（`dwm_compositor` 未初始化或分配失败）。
 pub const no_compositor_surface: u16 = 0xFFFF;
@@ -45,6 +46,9 @@ pub const HWND_BOTTOM: HWND = 1;
 pub const HWND_TOPMOST: HWND = 0xFFFFFFFFFFFFFFFE;
 pub const HWND_NOTOPMOST: HWND = 0xFFFFFFFFFFFFFFFD;
 pub const HWND_DESKTOP: HWND = 0;
+
+/// 桌面句柄：本内核为 csrss 活动窗口站内桌面索引的 **1-based** 值（0 表示无效）。
+pub const HDESK = u32;
 
 // ── Window Styles ──
 
@@ -84,6 +88,8 @@ pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_ENABLE: u32 = 0x000A;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
+pub const WM_ERASEBKGND: u32 = 0x0014;
+pub const WM_NCPAINT: u32 = 0x0085;
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_KEYDOWN: u32 = 0x0100;
@@ -112,6 +118,14 @@ pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_SHOWWINDOW: u32 = 0x0040;
 pub const SWP_HIDEWINDOW: u32 = 0x0080;
+pub const SWP_DRAWFRAME: u32 = 0x0020;
+pub const SWP_FRAMECHANGED: u32 = SWP_DRAWFRAME;
+pub const SWP_NOCOPYBITS: u32 = 0x0100;
+pub const SWP_NOOWNERZORDER: u32 = 0x0200;
+pub const SWP_NOREDRAW: u32 = 0x0800;
+pub const SWP_NOSENDCHANGING: u32 = 0x0400;
+pub const SWP_DEFERERASE: u32 = 0x2000;
+pub const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
 
 pub const PM_NOREMOVE = pm_sem.PM_NOREMOVE;
 pub const PM_REMOVE = pm_sem.PM_REMOVE;
@@ -326,25 +340,19 @@ fn wakeOneMsgWaiter() void {
     }
 }
 
-/// DWM 状态广播：除各窗口队列外，向登记线程投递 `PostThreadMessage`（NT 6.1 壳层监听路径）。
-const MAX_DWM_LISTENERS: usize = 8;
-var dwm_listener_tids: [MAX_DWM_LISTENERS]u32 = [_]u32{0} ** MAX_DWM_LISTENERS;
-var dwm_listener_count: usize = 0;
-
+/// DWM 状态广播：除各窗口队列外，向登记线程投递 `PostThreadMessage`（权威 tid 表见 `csr_dwm_listeners.zig`）。
+/// **首选**：用户进程经 csrss LPC `CsrApiNumber.register_dwm_listener` 登记（载荷布局见 `csr_lpc_policy` / `LPC_NT61_HANDSHAKE.md`）。
+/// 本函数供内核/bootstrap 同址登记，与 LPC 写入同一表，广播路径一致（`broadcastDwmToListenerThreads`）。
 pub fn registerDwmNotificationListener(tid: u32) void {
-    if (tid == 0) return;
-    for (dwm_listener_tids[0..dwm_listener_count]) |t| {
-        if (t == tid) return;
-    }
-    if (dwm_listener_count >= MAX_DWM_LISTENERS) return;
-    dwm_listener_tids[dwm_listener_count] = tid;
-    dwm_listener_count += 1;
+    csr_dwm_listeners.register(tid);
 }
 
 fn broadcastDwmToListenerThreads(msg: u32, wp: WPARAM, lp: LPARAM) void {
+    var buf: [8]u32 = undefined;
+    const n = csr_dwm_listeners.copyTids(&buf);
     var i: usize = 0;
-    while (i < dwm_listener_count) : (i += 1) {
-        _ = PostThreadMessageA(dwm_listener_tids[i], msg, wp, lp);
+    while (i < n) : (i += 1) {
+        _ = PostThreadMessageA(buf[i], msg, wp, lp);
     }
 }
 
@@ -549,7 +557,7 @@ pub fn getScreenHeight() i32 {
 
 /// 向已创建窗口投递 `WM_DWMCOMPOSITIONCHANGED`（合成启用/关闭）；供 csrss / 壳层在 DWM 状态变化时调用。
 pub fn broadcastDwmCompositionChanged(composition_on: BOOL) void {
-    const wp: WPARAM = if (composition_on != 0) 1 else 0;
+    const wp: WPARAM = dwm_nt61_contract.compositionChangedWParam(composition_on != 0);
     var wi: usize = 0;
     while (wi < window_count) : (wi += 1) {
         if (windows[wi].is_valid) {
@@ -562,7 +570,7 @@ pub fn broadcastDwmCompositionChanged(composition_on: BOOL) void {
 /// `WM_DWMCOLORIZATIONCOLORCHANGED`：`wParam` 为 `COLORREF` 风格 ARGB，`lParam` 非零表示启用混合（简化语义）。
 pub fn broadcastDwmColorizationChanged(argb: u32, blend_enabled: BOOL) void {
     const wp: WPARAM = argb;
-    const lp: LPARAM = if (blend_enabled != 0) 1 else 0;
+    const lp: LPARAM = dwm_nt61_contract.colorizationChangedLParam(blend_enabled != 0);
     var wi: usize = 0;
     while (wi < window_count) : (wi += 1) {
         if (windows[wi].is_valid) {
@@ -573,7 +581,7 @@ pub fn broadcastDwmColorizationChanged(argb: u32, blend_enabled: BOOL) void {
 }
 
 pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
-    const wp: WPARAM = if (policy_enabled != 0) 1 else 0;
+    const wp: WPARAM = dwm_nt61_contract.ncRenderingChangedWParam(policy_enabled != 0);
     var wi: usize = 0;
     while (wi < window_count) : (wi += 1) {
         if (windows[wi].is_valid) {
@@ -585,10 +593,7 @@ pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
 
 /// Ref: Learn — WM_DWMSENDICONICTHUMBNAIL；`lParam` 低 16 位为请求最大宽度、高 16 位为最大高度（与 `MAKELPARAM` 布局一致）。
 pub fn broadcastDwmIconicThumbnailRequested(max_w: u32, max_h: u32) void {
-    const low: u32 = @min(max_w, 0xFFFF);
-    const high: u32 = @min(max_h, 0xFFFF);
-    const packed32: u32 = (high << 16) | low;
-    const lp: LPARAM = @intCast(@as(i32, @bitCast(packed32)));
+    const lp: LPARAM = dwm_nt61_contract.iconicSizeRequestLParam(max_w, max_h);
     var wi: usize = 0;
     while (wi < window_count) : (wi += 1) {
         if (windows[wi].is_valid) {
@@ -596,6 +601,30 @@ pub fn broadcastDwmIconicThumbnailRequested(max_w: u32, max_h: u32) void {
         }
     }
     broadcastDwmToListenerThreads(WM_DWMSENDICONICTHUMBNAIL, 0, lp);
+}
+
+/// Ref: Learn — `WM_DWMWINDOWMAXIMIZEDCHANGE`；`wParam` 非零表示最大化状态。
+pub fn broadcastDwmWindowMaximizedChanged(maximized: BOOL) void {
+    const wp: WPARAM = dwm_nt61_contract.windowMaximizedChangeWParam(maximized != 0);
+    var wi: usize = 0;
+    while (wi < window_count) : (wi += 1) {
+        if (windows[wi].is_valid) {
+            _ = windows[wi].postMessage(WM_DWMWINDOWMAXIMIZEDCHANGE, wp, 0);
+        }
+    }
+    broadcastDwmToListenerThreads(WM_DWMWINDOWMAXIMIZEDCHANGE, wp, 0);
+}
+
+/// Ref: Learn — `WM_DWMSENDICONICLIVEPREVIEWBITMAP`；`lParam` 与缩略图请求相同的宽高打包。
+pub fn broadcastDwmIconicLivePreviewBitmapRequested(max_w: u32, max_h: u32) void {
+    const lp: LPARAM = dwm_nt61_contract.iconicSizeRequestLParam(max_w, max_h);
+    var wi: usize = 0;
+    while (wi < window_count) : (wi += 1) {
+        if (windows[wi].is_valid) {
+            _ = windows[wi].postMessage(WM_DWMSENDICONICLIVEPREVIEWBITMAP, 0, lp);
+        }
+    }
+    broadcastDwmToListenerThreads(WM_DWMSENDICONICLIVEPREVIEWBITMAP, 0, lp);
 }
 
 fn syncWin32kFromUser32() void {
@@ -639,6 +668,14 @@ fn syncWin32kFromUser32() void {
         });
         z += 1;
     }
+}
+
+/// `CreateWindowEx` 与 csrss `register_window`（`onCsrssRegisterGuiWindow`）共用的表面绑定 + 几何 + Z + win32k 同步（DesktopManagerSpec §3.3 单真源）。
+fn refreshGuiWindowCompositorAndTables(w: *Window) void {
+    ensureCompositorSurface(w);
+    notifyCompositorWindowGeometry(w);
+    syncCompositorZOrderForUserWindows();
+    syncWin32kFromUser32();
 }
 
 /// LPC `register_window` 与 `CreateWindowEx` 共用的合成表面分配（问题五 P5-5）：避免两处 `createSurface` 分叉漂移。
@@ -749,6 +786,18 @@ fn findClass(class_name: []const u8) ?*WindowClass {
     return null;
 }
 
+fn findClassByAtom(atom: ATOM) ?*WindowClass {
+    for (window_classes[0..class_count]) |*cls| {
+        if (cls.is_registered and cls.atom == atom) return cls;
+    }
+    return null;
+}
+
+/// 供测试 / 将来 `NtUser` 对齐：窗口类 ATOM 是否仍登记。
+pub fn isClassAtomLive(atom: ATOM) bool {
+    return findClassByAtom(atom) != null;
+}
+
 // ── Window Creation/Destruction ──
 
 fn detachCompositorSurface(w: *Window) void {
@@ -832,7 +881,6 @@ pub fn CreateWindowExA(
 
     wnd.thread_id = kernel32.GetCurrentThreadId();
     wnd.compositor_surface_id = no_compositor_surface;
-    ensureCompositorSurface(wnd);
 
     _ = wnd.postMessage(WM_CREATE, 0, 0);
 
@@ -841,7 +889,7 @@ pub fn CreateWindowExA(
         _ = wnd.postMessage(WM_SHOWWINDOW, 1, 0);
     }
 
-    syncWin32kFromUser32();
+    refreshGuiWindowCompositorAndTables(wnd);
 
     klog.debug("user32: CreateWindow '%s' hwnd=0x%x (%dx%d)", .{
         window_name, wnd.hwnd, actual_w, actual_h,
@@ -1008,6 +1056,8 @@ fn sendHwndToBottom(hw: HWND) void {
 
 pub fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, cx: i32, cy: i32, flags: u32) BOOL {
     const wnd = findWindow(hwnd) orelse return FALSE;
+    // Learn：`SWP_FRAMECHANGED`/`SWP_NOCOPYBITS`/`SWP_NOREDRAW`/`SWP_DEFERERASE`/`SWP_ASYNCWINDOWPOS`/`SWP_NOSENDCHANGING`/`SWP_NOOWNERZORDER` 影响 NC 帧与重绘调度；本子集无完整 GDI 重定向队列，上述位无害忽略。
+    _ = flags & (SWP_DRAWFRAME | SWP_FRAMECHANGED | SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_DEFERERASE | SWP_ASYNCWINDOWPOS | SWP_NOSENDCHANGING | SWP_NOOWNERZORDER);
     const w0 = wnd.rect.width();
     const h0 = wnd.rect.height();
 
@@ -1031,8 +1081,11 @@ pub fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, cx: i32, cy:
             wnd.is_topmost = true;
             bringHwndToTop(hwnd);
         } else if (insert_after == HWND_NOTOPMOST) {
-            wnd.is_topmost = false;
-            bringHwndToTop(hwnd);
+            // Ref: Learn — `HWND_NOTOPMOST` 仅在窗口当前为 topmost 时生效：取消 topmost 并置于所有非 topmost 之上；若已非 topmost 则 **不改变** Z 序。
+            if (wnd.is_topmost) {
+                wnd.is_topmost = false;
+                bringHwndToTop(hwnd);
+            }
         } else if (insert_after == HWND_TOP) {
             bringHwndToTop(hwnd);
         } else if (insert_after == HWND_BOTTOM) {
@@ -1057,8 +1110,10 @@ pub fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, cx: i32, cy:
     notifyCompositorWindowGeometry(wnd);
     if ((flags & SWP_NOZORDER) == 0) {
         syncCompositorZOrderForUserWindows();
+        syncWin32kFromUser32();
+    } else {
+        syncWin32kFromUser32();
     }
-    syncWin32kFromUser32();
     return TRUE;
 }
 
@@ -1140,12 +1195,43 @@ pub fn SwitchDesktopByName(name: []const u8) BOOL {
     return if (subsystem.switchToDesktop(name)) TRUE else FALSE;
 }
 
+/// Ref: Learn — `SwitchDesktop` / `SwitchDesktopA`（本子集与 `SwitchDesktopByName` 同路径）。
+pub fn SwitchDesktopA(name: []const u8) BOOL {
+    return SwitchDesktopByName(name);
+}
+
+/// 子集：`lpszDevice`/`pDevmode`/`lpsa` 未用；与 `subsystem.createUserDesktop` 一致。
+pub fn CreateDesktopA(
+    name: []const u8,
+    _: ?*const anyopaque,
+    _: ?*const anyopaque,
+    flags: DWORD,
+    _: DWORD,
+    _: ?*const anyopaque,
+) HDESK {
+    _ = flags;
+    if (name.len == 0) return 0;
+    return subsystem.createUserDesktop(name);
+}
+
+/// 子集：按名称打开已存在桌面（`openDesktopByName`）。
+pub fn OpenDesktopA(
+    name: []const u8,
+    _: DWORD,
+    _: BOOL,
+    _: DWORD,
+) HDESK {
+    if (name.len == 0) return 0;
+    return subsystem.openDesktopByName(name);
+}
+
 /// 将 Win32 进程绑定到当前窗口站内的桌面索引。
 pub fn SetProcessDesktopByIndex(pid: DWORD, desktop_index: DWORD) BOOL {
     return if (subsystem.setProcessDesktop(pid, desktop_index)) TRUE else FALSE;
 }
 
 // ── Message Loop ──
+// `NtUserGetMessage` / `NtUserPeekMessage`：无消息时返回 `STATUS_PENDING` 且清零 `MSG*`，与 Learn 的 BOOL/`GetMessage` 阻塞语义不同 — 见 [NT61_CONTRACT_MATRIX.md](../../../docs/cn/NT61_CONTRACT_MATRIX.md) §5 与 `msg_pm_semantics.zig` 差距表。
 
 pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
     if (!pm_sem.minMaxRangeWellFormed(min, max)) {
@@ -1381,9 +1467,14 @@ pub fn TranslateMessage(_: *const MSG) BOOL {
     return TRUE;
 }
 
-/// Ref: Learn — `DispatchMessage` 调用窗口 `WndProc`；本仓库 **无** 每类独立 `WndProc` 表时，退化为 `DefWindowProcA`（矩阵 §5 **Partial**，非 Stub）。
+/// Ref: Learn — `DispatchMessage` 调用窗口 `WndProc`；本仓库以 `class_id`（ATOM）解析登记类（`findClassByAtom`），**尚无** 用户态函数指针表时仍转发 `DefWindowProcA`（矩阵 §5）。
 pub fn DispatchMessageA(msg: *const MSG) LRESULT {
     total_messages_processed += 1;
+    if (msg.hwnd != 0) {
+        if (findWindow(msg.hwnd)) |w| {
+            _ = findClassByAtom(@truncate(w.class_id));
+        }
+    }
     return DefWindowProcA(msg.hwnd, msg.message, msg.wparam, msg.lparam);
 }
 
@@ -1741,6 +1832,8 @@ pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRES
             return 0;
         },
         WM_NCMOUSEMOVE => return 0,
+        WM_NCPAINT => return 0,
+        WM_ERASEBKGND => return 1,
         // DWM 通知：应用通常自行处理以刷新主题/缩略图；未处理时 `DefWindowProc` 返回 0 即可（与 Learn「须处理」不冲突——无默认绘制）。
         WM_DWMCOMPOSITIONCHANGED, WM_DWMNCRENDERINGCHANGED, WM_DWMCOLORIZATIONCOLORCHANGED, WM_DWMWINDOWMAXIMIZEDCHANGE, WM_DWMSENDICONICTHUMBNAIL, WM_DWMSENDICONICLIVEPREVIEWBITMAP => return 0,
         WM_CLOSE => return 0,
@@ -1765,6 +1858,13 @@ fn findWindow(hwnd: HWND) ?*Window {
         if (wnd.hwnd == hwnd and wnd.is_valid) return wnd;
     }
     return null;
+}
+
+/// `dwmapi` / 合成路径：有效 HWND 且已绑定 `dwm_compositor` 表面时返回表面 id。
+pub fn tryGetCompositorSurfaceId(hwnd: HWND) ?u16 {
+    const w = findWindow(hwnd) orelse return null;
+    if (w.compositor_surface_id == no_compositor_surface) return null;
+    return w.compositor_surface_id;
 }
 
 fn findWindowIndex(hw: HWND) ?usize {
@@ -1799,17 +1899,16 @@ fn placeHwndAboveInsertAfter(hwnd: HWND, insert_after: HWND) void {
             std.mem.swap(Window, &windows[ib], &windows[ib - 1]);
         }
     }
+    syncCompositorZOrderForUserWindows();
+    syncWin32kFromUser32();
 }
 
 /// csrss `register_window`：刷新该 HWND 的合成脏区与 win32k 表（LPC 负载见 `subsystem.zig` 注释）。
 pub fn onCsrssRegisterGuiWindow(pid: u32, hwnd: HWND) void {
     _ = pid;
     if (findWindow(hwnd)) |w| {
-        ensureCompositorSurface(w);
-        notifyCompositorWindowGeometry(w);
-        syncCompositorZOrderForUserWindows();
+        refreshGuiWindowCompositorAndTables(w);
     }
-    syncWin32kFromUser32();
 }
 
 fn strEqlI(a: []const u8, b: []const u8) bool {

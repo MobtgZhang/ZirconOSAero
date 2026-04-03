@@ -2,12 +2,12 @@
 //! Phase 11: PE32 loading, 32-bit syscall thunking, address space
 //! management, 32-bit ntdll/kernel32 shim, and compatibility testing.
 //!
-//! **与真实 SysWOW64 的差距**：64 位内核侧为 **NT 6.1 SSDT 子集**（`src/arch/x86_64/ssdt_nt61.zig`）；无非 Windows 服务号命名空间。
-//! 本层 `translateSyscall32to64` 仍使用 **32 位 PE 常见 syscall 号** 演示 thunk；与 SysWOW64 转 64 位 `syscall` 的真实映射表不对齐，见 `docs/cn/SyscallABI.md`。
+//! **与真实 SysWOW64 的差距**：64 位内核侧为 **NT 6.1 SSDT 子集**（`src/arch/x86_64/ssdt_nt61.zig`）；32 位 **原生 x86** 服务号与 x64 不同命名空间。
+//! `translateSyscall32to64` 对 `ssdt_x86_win7_sp1.wow64SyscallStubReturnsSuccess` 所列服务返回演示成功；真实参数翻译与 x64 派发仍见 `docs/cn/SyscallABI.md`。
 //!
 //! 模块化：`wow64/types.zig`、`wow64/thunk.zig`、`wow64/redirect.zig`。
-//! **x86 原生服务号**（与 x64 SSDT 不同）公开子集：`wow64/ssdt_x86_win7_sp1.zig`（j00ru x86 `nt-per-system.json` Win7 SP1）。
-//! **路线图**：将 `translateSyscall32to64` 与 x64 `ssdt_nt61` / `syscall_dispatch_mm.zig` 语义逐条对齐（SSDT_Roadmap 阶段 3）。
+//! **x86 原生服务号**（公开 Win7 SP1 表）：`wow64/ssdt_x86_win7_sp1.zig`（j00ru `nt-per-system.json`）。
+//! **路线图**：将 thunk 与 x64 `ssdt_nt61` / `syscall_dispatch_mm.zig` 语义逐条对齐（SSDT_Roadmap 阶段 3）。
 
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");
@@ -156,31 +156,31 @@ pub fn isWow64Process(pid: u32) bool {
 pub fn Wow64NtCreateProcess(proc: *Wow64Process, _: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
-    return translateSyscall32to64(proc, 0x0001);
+    return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtCreateProcess);
 }
 
 pub fn Wow64NtCreateFile(proc: *Wow64Process, _: u32, _: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
-    return translateSyscall32to64(proc, 0x0006);
+    return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtCreateFile);
 }
 
 pub fn Wow64NtAllocateVirtualMemory(proc: *Wow64Process, _: u32, _: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
-    return translateSyscall32to64(proc, 0x0011);
+    return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtAllocateVirtualMemory);
 }
 
 pub fn Wow64NtClose(proc: *Wow64Process, _: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
-    return translateSyscall32to64(proc, 0x000C);
+    return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtClose);
 }
 
 pub fn Wow64NtWaitForSingleObject(proc: *Wow64Process, _: u32) ntdll.NTSTATUS {
     proc.thunk_count += 1;
     total_thunks += 1;
-    return translateSyscall32to64(proc, 0x001A);
+    return translateSyscall32to64(proc, ssdt_x86_win7_sp1.NtWaitForSingleObject);
 }
 
 pub fn getActiveWow64Count() usize {
@@ -274,24 +274,24 @@ pub fn runWow64Demo() void {
 }
 
 fn initThunkTable() void {
-    registerThunk("NtCreateProcess", 0x0001, .syscall_32to64, "ntdll");
-    registerThunk("NtTerminateProcess", 0x0002, .syscall_32to64, "ntdll");
-    registerThunk("NtCreateThread", 0x0003, .syscall_32to64, "ntdll");
-    registerThunk("NtTerminateThread", 0x0004, .syscall_32to64, "ntdll");
-    registerThunk("NtCreateFile", 0x0006, .syscall_32to64, "ntdll");
-    registerThunk("NtOpenFile", 0x0007, .syscall_32to64, "ntdll");
-    registerThunk("NtReadFile", 0x0008, .syscall_32to64, "ntdll");
-    registerThunk("NtWriteFile", 0x0009, .syscall_32to64, "ntdll");
-    registerThunk("NtClose", 0x000C, .syscall_32to64, "ntdll");
-    registerThunk("NtAllocateVirtualMemory", 0x0011, .syscall_32to64, "ntdll");
-    registerThunk("NtFreeVirtualMemory", 0x0012, .syscall_32to64, "ntdll");
-    registerThunk("NtCreateEvent", 0x0018, .syscall_32to64, "ntdll");
-    registerThunk("NtWaitForSingleObject", 0x001A, .syscall_32to64, "ntdll");
-    registerThunk("NtQuerySystemInformation", 0x001F, .syscall_32to64, "ntdll");
-    registerThunk("NtCreatePort", 0x0025, .syscall_32to64, "ntdll");
-    registerThunk("NtQueryInformationProcess", 0x0036, .syscall_32to64, "ntdll");
-    registerThunk("NtCreateSection", 0x0047, .syscall_32to64, "ntdll");
-    registerThunk("NtMapViewOfSection", 0x0048, .syscall_32to64, "ntdll");
+    registerThunk("NtCreateProcess", ssdt_x86_win7_sp1.NtCreateProcess, .syscall_32to64, "ntdll");
+    registerThunk("NtTerminateProcess", ssdt_x86_win7_sp1.NtTerminateProcess, .syscall_32to64, "ntdll");
+    registerThunk("NtCreateThread", ssdt_x86_win7_sp1.NtCreateThread, .syscall_32to64, "ntdll");
+    registerThunk("NtTerminateThread", ssdt_x86_win7_sp1.NtTerminateThread, .syscall_32to64, "ntdll");
+    registerThunk("NtCreateFile", ssdt_x86_win7_sp1.NtCreateFile, .syscall_32to64, "ntdll");
+    registerThunk("NtOpenFile", ssdt_x86_win7_sp1.NtOpenFile, .syscall_32to64, "ntdll");
+    registerThunk("NtReadFile", ssdt_x86_win7_sp1.NtReadFile, .syscall_32to64, "ntdll");
+    registerThunk("NtWriteFile", ssdt_x86_win7_sp1.NtWriteFile, .syscall_32to64, "ntdll");
+    registerThunk("NtClose", ssdt_x86_win7_sp1.NtClose, .syscall_32to64, "ntdll");
+    registerThunk("NtAllocateVirtualMemory", ssdt_x86_win7_sp1.NtAllocateVirtualMemory, .syscall_32to64, "ntdll");
+    registerThunk("NtFreeVirtualMemory", ssdt_x86_win7_sp1.NtFreeVirtualMemory, .syscall_32to64, "ntdll");
+    registerThunk("NtCreateEvent", ssdt_x86_win7_sp1.NtCreateEvent, .syscall_32to64, "ntdll");
+    registerThunk("NtWaitForSingleObject", ssdt_x86_win7_sp1.NtWaitForSingleObject, .syscall_32to64, "ntdll");
+    registerThunk("NtQuerySystemInformation", ssdt_x86_win7_sp1.NtQuerySystemInformation, .syscall_32to64, "ntdll");
+    registerThunk("NtCreatePort", ssdt_x86_win7_sp1.NtCreatePort, .syscall_32to64, "ntdll");
+    registerThunk("NtQueryInformationProcess", ssdt_x86_win7_sp1.NtQueryInformationProcess, .syscall_32to64, "ntdll");
+    registerThunk("NtCreateSection", ssdt_x86_win7_sp1.NtCreateSection, .syscall_32to64, "ntdll");
+    registerThunk("NtMapViewOfSection", ssdt_x86_win7_sp1.NtMapViewOfSection, .syscall_32to64, "ntdll");
 
     registerThunk("POINTER_32TO64", 0xF001, .ptr_32to64, "wow64");
     registerThunk("POINTER_64TO32", 0xF002, .ptr_64to32, "wow64");

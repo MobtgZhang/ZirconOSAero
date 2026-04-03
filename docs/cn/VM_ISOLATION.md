@@ -16,6 +16,13 @@
 - **TSS.RSP0 / 每线程内核栈**：须在上下文切换与 `syscall` 入口与当前线程内核栈顶对齐（见 `src/ps/process.zig` `Thread` 字段与 `hal/x86_64/gdt.zig`）。
 - **自动化测试**：QEMU 下运行故意访问未映射内核 VA 的用例，期望进程终止而非 `KeBugCheck` 式整内核停机（可在 `tests/` 增加脚本化场景）。
 
+## 阶段 A 审计摘要（可重复验证）
+
+- **内核 #PF**：未由用户态 `handleUserDemandOrCowFault` 消化的缺页进入 `ke/bugcheck.zig` `keBugCheckEx`（`PAGE_FAULT_IN_NONPAGED_AREA` 等价码），不再仅 `halt`。
+- **用户 #PF**：`interrupt_x86.zig` 中 error code 位与 `vm.tryLazyCommitFault` / `tryCowWriteFault` 的对应关系见源码注释（Intel SDM）。
+- **CR3**：调度器 `activateCr3ForProcessId` 与 `syscall.zig` 返回用户态前 `AddressSpace.activate` 仍为互补路径；多核完整 TLB shootdown 见上文 K2.5。
+- **自动化**：主机侧 `fork_cow_share_nt61_host`（CoW）；用户越界访问非法内核 VA 的 QEMU 场景见 [MVT_NT61.md](MVT_NT61.md) 门禁扩展位。
+
 ## 参考
 
 - Intel SDM：页级保护、U/S 位、#PF error code。

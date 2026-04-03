@@ -148,7 +148,7 @@
 - `**LOONGARCH64_QEMU_VIRTIO_GPU=1**` 时走 virtio-gpu 与 ramfb 的另一套组合，部分环境下 GTK 主窗口可能未激活，见 `**Makefile**` 中 `**QEMU_LOONGARCH64_***` 注释；Zig ZBM 路径下还可能出现 `**[!] GOP: active mode != build preferred …**`。
 - **ramfb 物理布局**：QEMU `ramfb` 使用固定 GPA `**0x0F000000`**（见 `[src/hal/loongarch64/ramfb.zig](../../src/hal/loongarch64/ramfb.zig)`）。4K 线性约 **32MiB** 连续区；内核在启用 ramfb 前 `**markPhysRangeUsed`**，避免页表帧与扫描缓冲重叠。串口若出现 `**ramfb: large scanout ~… MiB**` 为提示性日志。
 
-#### 4.2.1.1a QEMU 显示对照（DISPI / GOP / ramfb，与仓库根 `[idea1.md](../../idea1.md)` 对齐）
+#### 4.2.1.1a QEMU 显示对照（DISPI / GOP / ramfb）
 
 
 | 概念                        | 在 QEMU LoongArch `virt` 下的含义                      | 与本仓库关系                                                                                                                          |

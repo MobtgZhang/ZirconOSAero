@@ -1,19 +1,23 @@
 # Win32 / Native API 兼容性矩阵（骨架）
 
-本表用于路线图 **C-T09**：随实现推进在 PR 中更新行，不依赖逆向 Windows 二进制。
+本表用于路线图 **C-T09**：随实现推进在 PR 中更新行，不依赖逆向 Windows 二进制。**与契约矩阵分工**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
 
-**边界**：本表仅声明 **子集** 与 **Partial** 语义。完整 GDI（BitBlt ROP、字体光栅化、完整 DC 模型）、完整消息泵与 csrss 协议、完整 WOW64/SysWOW64 等均 **不** 由本表隐含「已完成」——见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §5.1、§9.1–§9.2 与 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
+**边界**：本表仅声明 **子集** 与 **Partial** 语义；完整能力与延后项以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 及 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) 为准。
 
-**回归**：主机侧 `zig build test` 覆盖堆/池/SSDT/安全 DAC 镜像逻辑；Win32 API 行为测试随子系统以 `test` 块或 QEMU 场景追加。
+**回归**：见 [MVT_NT61.md](MVT_NT61.md)。
 
 | 模块        | 代表 API              | 状态     | 备注 |
 |-------------|----------------------|----------|------|
 | ntdll       | LdrInitializeThunk / RtlUserThreadStart | Stub | [`ntdll.zig`](../../src/libs/ntdll.zig)；合成导出见 [`pe.zig`](../../src/loader/pe.zig) |
 | ntdll       | NtAllocateVirtualMemory | Partial | MEM_RESERVE/COMMIT、`#PF` 惰性提交 |
-| ntdll       | NtUserGetMessage / PeekMessage | Partial | SSDT 0x58/0x59，内核消息泵桥接 |
+| ntdll       | NtQuerySystemInformation / NtSetSystemInformation | Partial | 多 `SYSTEM_INFORMATION_CLASS` 子集；**nt61_full_api_backlog_anchors_host** §9 |
+| ntdll       | NtDeviceIoControlFile / Lock+Unlock VM | Partial | SSDT **0x52–0x54**；RTC IOCTL 子集；VM 锁定为桩 |
+| ntdll       | NtOpenProcess / OpenProcessToken / QueryInformationToken | Partial | `CLIENT_ID`；令牌静态浅拷贝槽（8） |
+| ntdll       | NtCreateUserProcess（0xAA）/ NtCreateProcess | Partial | ZOA 参数块 + `NtCreateUserProcessFromPath`；`NtCreateProcess` 仅槽位；见 [PHASE_F_PROCESS_CREATE.md](PHASE_F_PROCESS_CREATE.md) |
+| ntdll       | NtUserGetMessage / PeekMessage | Partial | SSDT 0x58/0x59；`PeekMessage` 空队列 `STATUS_NO_MORE_ENTRIES` |
 | kernelbase  | GetLastError / SetLastError | Partial | [`kernelbase.zig`](../../src/libs/kernelbase.zig)；`kernel32` 转发；TEB+0x68 为长期目标 |
 | kernel32    | CreateFileA          | Partial | 见 VFS |
-| user32      | GetMessage / DefWindowProc | Partial | SC_MOVE 模态环、DWM 广播；`DispatchMessage`/`class_id` 与 `NtUser*`/`STATUS_PENDING` 边界见契约矩阵 §5 |
+| user32      | GetMessage / DefWindowProc / DispatchMessage | Partial | SC_MOVE 模态环、DWM 广播；`DispatchMessage`：`registerKernelWndProc` + `wndproc_id` 子集；`NtUser*`/`STATUS_PENDING` 见契约矩阵 §5 |
 | user32      | SetWindowPos / 桌面切换 | Partial | `HWND_NOTOPMOST` Learn（非 topmost 无 Z 序效果）；`CreateDesktopA`/`OpenDesktopA`/`SwitchDesktopA` ↔ `subsystem`；扩展 `SWP_*` |
 | gdi32       | TextOutA             | Partial | 位图字体；FreeType 为路线图 C-T05 |
 | gdi32       | Rectangle / FillRect | Partial | 矩形填充子集；与 Aero 脏区合成见 `SOFTWARE_COMPOSITOR_WDDM.md` |

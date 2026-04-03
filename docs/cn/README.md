@@ -2,82 +2,111 @@
 
 ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。内核提供最小机制（调度、虚拟内存、IPC、中断、系统调用），复杂系统语义通过用户态服务和子系统实现，兼容 Win32 API 子集。
 
-**英文文档**：[../README.md](../README.md) · **English pages**: [`../en/`](../en/)
+**英文总索引**：[../README.md](../README.md) · **全部分类列表**：[../DOCS_INDEX.md](../DOCS_INDEX.md) · **文档职责划分**：[../DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md) · **可复现构建**：[../REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) · **English pages**：[`../en/`](../en/)
 
-## 文档目录
+## Phase / 路线图命名区分（权威说明）
+
+下文 **阶段 D–G**、**阶段 4** 等文档中的「Phase」与 [Roadmap.md](Roadmap.md) 中 **Phase 0–11** 里程碑 **不是同一套编号**。对应关系与范围以各阶段文档文首一句为准；避免在其它文中重复长段解释。
+
+| 文档中的名称 | 与 Roadmap 的关系（摘要） |
+|--------------|---------------------------|
+| [PHASE_D_WIN32_MSG_PUMP_DWM.md](PHASE_D_WIN32_MSG_PUMP_DWM.md) | 消息泵 / DWM / LPC；≠ PLAN_REMAINING 内「Phase D 合成器」全文 |
+| [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md) | Native / SSDT / ntdll 深度；≠ PLAN_REMAINING「Phase E — Shell」 |
+| [PHASE_F_PROCESS_CREATE.md](PHASE_F_PROCESS_CREATE.md) | `NtCreateUserProcess` 等；≠ PLAN_REMAINING「Phase F — 集成」 |
+| [PHASE_G_WOW64.md](PHASE_G_WOW64.md) | WOW64 可测子集；≠ Roadmap「Phase 11 — WOW64 + 音频」全文 |
+| [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) | 硬件呈现 + csrss + WOW64 + NTFS 等官方范围 |
+
+## 核心三件套（契约 / 验证 / 内核待办）
+
+| 文档 | 用途 |
+|------|------|
+| [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) | 子系统承诺与状态矩阵 |
+| [MVT_NT61.md](MVT_NT61.md) | 可复现验证与 `zig build test` 映射 |
+| [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) | 内核 K0–K8 待办 |
+| [NT61_PR_GATES.md](NT61_PR_GATES.md) | PR 合并前勾选（含文档链接检查） |
+| [API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md) | Win32/Native API 骨架表 |
+| [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) | 长期全量 API 面（非当前交付） |
+| [PROCESS_NT61.md](PROCESS_NT61.md) | 流程与门禁 |
+| [IMPLEMENTATION_STATUS_NT61.md](IMPLEMENTATION_STATUS_NT61.md) | 实现状态摘要 |
+| [BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md) | 二进制兼容缺口优先级 |
+| [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) | 未完成滚动清单 |
+
+## 架构与构建（与 `en/` 成对）
 
 | 文档 | 说明 |
 |------|------|
-| [Architecture.md](Architecture.md) | 总体架构设计：分层模型、设计原则、对象模型、安全模型 |
-| [Kernel.md](Kernel.md) | 内核内部实现：调度器、内存管理、中断、系统调用、IPC、对象管理器 |
-| [Boot.md](Boot.md) | 启动流程：仅 ZBM（BIOS/UEFI）、Multiboot2 handoff、各架构矩阵 (Phase 0–12 说明) |
-| [Servers.md](Servers.md) | 系统服务：Process Server、Session Manager、LPC 端口 |
-| [Subsystems.md](Subsystems.md) | 子系统：Win32 (CMD/user32/gdi32)、WOW64、POSIX |
-| [BuildSystem.md](BuildSystem.md) | 构建系统：build.conf 配置、Makefile、build.zig、run.sh 用法 |
-| [Roadmap.md](Roadmap.md) | 开发路线图：里程碑 Phase 0–11、设计目标与非目标、风险分析 |
-| [PROCESS_NT61.md](PROCESS_NT61.md) | ZirconOSAero（NT 6.1 风格）阶段流程与验证门禁 |
-| [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) | NT 6.1 内核模式分阶段待办（K0–K8，clean-room） |
-| [IMPLEMENTATION_STATUS_NT61.md](IMPLEMENTATION_STATUS_NT61.md) | MM/HAL、syscall、FS/PE 状态摘要与验证命令（诚实里程碑） |
-| [DesktopManagerSpec.md](DesktopManagerSpec.md) | 桌面 / 窗口站 / DWM 职责边界与方案 B 规格 |
-| [DesktopQA.md](DesktopQA.md) | 桌面与合成验证清单；配合 `scripts/desktop-qa.sh` |
-| [AeroDesktopRuntime.md](AeroDesktopRuntime.md) | Aero 内核桌面数据流、鼠标调试判据、QEMU 输入与快捷键 |
-| [Assets.md](Assets.md) | 资源合规：禁微软素材、开源 / 自有 / AI 生成归档要求 |
-| [COPYRIGHT_AND_SOURCES.md](COPYRIGHT_AND_SOURCES.md) | 版权边界与知识来源白名单（与贡献指南一致） |
-| [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) | 未完成项滚动清单（对照实现状态、流程与图形脚手架） |
-| [NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md) | 图形栈脚手架与阶段说明 |
-| [NT61_ShellIcons.md](NT61_ShellIcons.md) | NT 6.1 壳层图标对照、`zircon_shell32_res.dll` 与 Win32 兼容说明 |
-| [BuiltinApps_NT61_Roadmap.md](BuiltinApps_NT61_Roadmap.md) | Windows 7 风格内置应用路线图、实现状态与 clean-room 参考方式 |
-| [DpiDesktop.md](DpiDesktop.md) | 高 DPI 与逻辑像素策略（Aero Shell） |
-| [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md) | 堆 / 池边界与伙伴、slab 演进说明 |
-| [VM_ISOLATION.md](VM_ISOLATION.md) | 用户/内核地址空间隔离现状与 #PF 路径 |
-| [SCHEDULER_API.md](SCHEDULER_API.md) | 调度器 API 与八档优先级文档 |
-| [LPC_USER_SERVERS_CONTRACT.md](LPC_USER_SERVERS_CONTRACT.md) | 用户态 Object/I/O/Security 服务 LPC 契约草案 |
-| [STORAGE_IO_ROADMAP.md](STORAGE_IO_ROADMAP.md) | AHCI/NVMe 与 IRP 集成路线 |
-| [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) | 软件合成器、Aero 与 WDDM 差异说明 |
-| [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) | 阶段 4（硬件呈现 + csrss + WOW64 + NTFS 持久化）官方范围与里程碑 |
-| [ARCH_SMP_NET_MATRIX.md](ARCH_SMP_NET_MATRIX.md) | 多架构 / SMP / 网络状态矩阵 |
+| [Architecture.md](Architecture.md) | 总体架构 |
+| [Kernel.md](Kernel.md) | 内核实现 |
+| [Boot.md](Boot.md) | 启动与 Phase 0–12 |
+| [Servers.md](Servers.md) | 系统服务 |
+| [Subsystems.md](Subsystems.md) | 子系统 |
+| [BuildSystem.md](BuildSystem.md) | **主入口 `zig build`**；`Makefile` / `build.conf` / `run.sh` 为便捷封装 |
+| [Roadmap.md](Roadmap.md) | Phase 0–11 路线图 |
+| [BootPhasesAndNt61Loader.md](BootPhasesAndNt61Loader.md) | 引导与加载器细节 |
+| [TIER2_ARCHITECTURES.md](TIER2_ARCHITECTURES.md) | 次架构 |
+| [COPYRIGHT_AND_SOURCES.md](COPYRIGHT_AND_SOURCES.md) | 版权与知识来源 |
 
-**用户态显示与 DPI 规范（外部索引）**：姊妹仓库中的 Win32 **`desktop-src`** 文档树（路径形如 `ZirconOSFluentRust/references/win32/desktop-src`）仅作 **ChangeDisplaySettings / 高 DPI / 多显示器** 等**用户态**行为与 MSDN 对照的**长期参考**，**不用于** LoongArch UEFI GOP、`ramfb` 或 QEMU 串口排错；后者见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md)。**可检索对照**：**PE #108**（LoongArch UEFI PE 文本重定位讨论）见 [`scripts/tools/PE_LOONGARCH_UEFI.md`](../../scripts/tools/PE_LOONGARCH_UEFI.md) 与 [loongson-community/discussions#108](https://github.com/loongson-community/discussions/issues/108)；与 **`desktop-src`** 无包含关系。
+## 桌面、DWM、消息、图形
 
-## 项目概览
+| 文档 | 说明 |
+|------|------|
+| [DesktopManagerSpec.md](DesktopManagerSpec.md) | 桌面 / 窗口站 / DWM |
+| [DesktopQA.md](DesktopQA.md) | 桌面验证清单 |
+| [AeroDesktopRuntime.md](AeroDesktopRuntime.md) | 数据流、QEMU、输入 |
+| [AeroRendering.md](AeroRendering.md) | Aero 渲染 |
+| [DpiDesktop.md](DpiDesktop.md) | 高 DPI；**外部 desktop-src 索引说明见该文** |
+| [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) | DWM 通知模型 |
+| [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) | 软件合成与 WDDM |
+| [NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md) | 图形脚手架 |
+| [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) | 推迟的表面 / 完整 win32k 等 |
+| [NT61_WINMSG_API_TRACKER.md](NT61_WINMSG_API_TRACKER.md) | 消息 API 跟踪 |
+| [Win32kArchitectureNotes.md](Win32kArchitectureNotes.md) | win32k 路线笔记 |
+| [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) | LPC 握手 |
+| [LPC_USER_SERVERS_CONTRACT.md](LPC_USER_SERVERS_CONTRACT.md) | 用户态服务 LPC 契约 |
+| [VirtioVirglMVP.md](VirtioVirglMVP.md) | VirtIO/VirGL |
 
-```
-ZirconOSAero/
-├── src/                   # 内核源码
-│   ├── main.zig           #   内核入口 (Phase 0-12)
-│   ├── arch/              #   架构相关 (x86_64, aarch64, loongarch64, riscv64, mips64el)
-│   ├── hal/               #   硬件抽象层 (VGA, PIC, PIT, Serial, GDT)
-│   ├── ke/                #   Kernel Executive (调度, 定时, 中断, 同步)
-│   ├── mm/                #   内存管理 (物理帧, 虚拟内存, 堆)
-│   ├── ob/                #   对象管理器 (对象, 句柄表, 命名空间)
-│   ├── ps/                #   进程子系统 (进程, 线程)
-│   ├── se/                #   安全 (Token, SID, 访问检查)
-│   ├── io/                #   I/O 管理器 (设备, 驱动, IRP)
-│   ├── lpc/               #   IPC (LPC Port, 消息队列)
-│   ├── fs/                #   文件系统 (VFS, FAT32, NTFS)
-│   ├── loader/            #   加载器 (PE32, PE32+, ELF)
-│   ├── drivers/           #   设备驱动 (video, audio, input)
-│   ├── libs/              #   用户态 API (ntdll, kernel32)
-│   ├── servers/           #   系统服务 (Process Server, SMSS)
-│   ├── subsystems/win32/  #   Win32 子系统 (csrss, CMD, user32, gdi32)
-│   ├── registry/          #   注册表
-│   ├── rtl/               #   运行时库 (klog)
-│   ├── config/            #   配置解析器 + 嵌入式默认 *.conf（system/boot/desktop）
-│   ├── desktop/           #   桌面主题 Zig 工程（各主题含 resources/）
-│   └── fonts/             #   共享开源字体（make fonts）
-├── boot/                  # 引导代码（ZBM：BIOS 阶段 + UEFI）
-├── link/                  # 各架构链接脚本
-├── gnu-efi/               # LoongArch GNU-EFI 构建输出（gitignore）
-├── scripts/               # 构建辅助脚本（见 scripts/README.md）
-├── tests/                 # 测试套件
-├── build.zig              # Zig 构建配置
-├── Makefile               # Make 入口
-└── run.sh                 # 统一构建运行脚本
-```
+## 内存、调度、syscall、I/O
+
+| 文档 | 说明 |
+|------|------|
+| [MM_ALLOC_PATHS.md](MM_ALLOC_PATHS.md) | 分配路径 |
+| [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md) | 堆 / 池 / slab |
+| [MM_Section_Roadmap.md](MM_Section_Roadmap.md) | 节区 |
+| [VM_ISOLATION.md](VM_ISOLATION.md) | 地址空间隔离 |
+| [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) | VM ABI 笔记 |
+| [PHYS_ALLOC_AUDIT.md](PHYS_ALLOC_AUDIT.md) | 物理分配审计 |
+| [PFN_REFCOUNT_ROADMAP.md](PFN_REFCOUNT_ROADMAP.md) | PFN 引用 |
+| [PointerPolicy_NT61.md](PointerPolicy_NT61.md) | 指针策略 |
+| [SCHEDULER_API.md](SCHEDULER_API.md) | 调度器 API |
+| [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md) | 定时精度 |
+| [SyscallABI.md](SyscallABI.md) | syscall ABI |
+| [SSDT_Roadmap.md](SSDT_Roadmap.md) | SSDT |
+| [STORAGE_IO_ROADMAP.md](STORAGE_IO_ROADMAP.md) | 存储与 IRP |
+| [HAL_USB_NET_ROADMAP.md](HAL_USB_NET_ROADMAP.md) | HAL / USB / 网络 |
+| [ARCH_SMP_NET_MATRIX.md](ARCH_SMP_NET_MATRIX.md) | 多架构 / SMP / 网络 |
+
+## PE、Shell、内置应用、资源
+
+| 文档 | 说明 |
+|------|------|
+| [CORE_DLL_PE_EXPORT_STRATEGY.md](CORE_DLL_PE_EXPORT_STRATEGY.md) | 核心 DLL 导出 |
+| [DWMAPI_PE_EXPORT_STRATEGY.md](DWMAPI_PE_EXPORT_STRATEGY.md) | dwmapi 导出 |
+| [NT61_ShellIcons.md](NT61_ShellIcons.md) | 壳层图标 |
+| [BuiltinApps_NT61_Roadmap.md](BuiltinApps_NT61_Roadmap.md) | 内置应用 |
+| [Assets.md](Assets.md) | 资源合规 |
+
+## 里程碑与驱动
+
+| 文档 | 说明 |
+|------|------|
+| [ExecutivePhase3_Milestones.md](ExecutivePhase3_Milestones.md) | Executive Phase3 |
+| [DriverMilestones_NT61.md](DriverMilestones_NT61.md) | 驱动里程碑 |
+
+**更细的条目与 en/cn 对照**：见 [../DOCS_INDEX.md](../DOCS_INDEX.md)。**仓库目录树与根 README 特性矩阵**：见仓库根目录 [README.md](../../README.md)。
 
 ## 核心技术栈
 
-- **语言**: Zig（无 libc 依赖）
-- **架构**: x86_64（主要）、aarch64、loongarch64、riscv64；mips64el 为试验
-- **引导**: 仅 ZBM（BIOS/MBR 链与 UEFI ESP）；ZBM 向内核递交 Multiboot2 信息块
+- **语言**: Zig（内核构建无 libc 依赖）；**主构建**：`zig build`（`minimum_zig_version` 见 `build.zig.zon`；CI 锁定见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md)）
+- **架构**: x86_64（主要）、aarch64、loongarch64、riscv64；mips64el 试验
+- **引导**: 仅 ZBM；Multiboot2 handoff
 - **运行环境**: QEMU

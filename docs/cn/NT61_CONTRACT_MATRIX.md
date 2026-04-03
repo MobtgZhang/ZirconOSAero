@@ -14,7 +14,7 @@
 
 **图例**：已实现 / 部分 / 未实现 — 以 `src/` 代码为准。
 
-**验证**：阶段完成度须与 `zig build test`、`.github/workflows/ci.yml`、[MVT_NT61.md](MVT_NT61.md) 及 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 中可复现步骤一致；禁止仅凭文档勾选「完成」。
+**验证**：须与 `zig build test`、CI、[MVT_NT61.md](MVT_NT61.md)、[REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 一致；禁止仅凭文档勾选「完成」。**各文档职责**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
 
 ## Win32 兼容层：现实落差与项目边界
 
@@ -34,6 +34,7 @@
 | 物理帧位图 + mmap 过滤 | `src/mm/frame.zig` | 部分 — 见 [PHYS_ALLOC_AUDIT.md](PHYS_ALLOC_AUDIT.md) |
 | 伙伴 + 连续物理页封装 | `buddy.zig` / `phys_buddy.zig` | 部分 — `main.zig` 启动 `initKernelContiguousBuddy`；主机仅 `buddy` 单测（`phys_buddy` + `frame` 联合受模块根限制） |
 | 通用堆 + 统计 / `heap_check` | `src/mm/heap.zig` | 部分 |
+| Ex 池路径 + IRQL + 分配全景 | `src/mm/ex_pool.zig`、`docs/cn/MM_ALLOC_PATHS.md` | 部分 — **Verified**（主机 `pool` / 注释）；Paged **软上限** `setPagedPoolSoftLimitForTest` |
 | Slab cache | `src/mm/slab.zig` | 部分 |
 | VMA 槽位 + `mmFreeVirtualRange` | `src/mm/vm.zig` | 部分 |
 | fork 子集：用户 4Ki 叶 dup + `notePageShared` + 子侧只读 PTE + `#PF` CoW | `vm.zig` / `paging.zig` / `frame.zig` | 部分 — 大页未展开；节区 `PAGE_WRITECOPY`、页文件、Standby/Modified、每 `mapPage` 级全局 PFN 引用仍为延后；主机 **fork_cow_share_nt61_host**（Verified） |
@@ -44,6 +45,9 @@
 | AP 入口 / TLB 广播占位 | `ap_entry.zig` / `tlb_broadcast.zig` / `smp_boot.zig` / `lapic_smp.zig` / `interrupt_x86.zig` / `idt.zig` | 部分 — 多核时 **INIT + SIPI×2**，实模式自旋跳板 phys **`0x8000`**；**IDT 向量 254** = TLB flush IPI 处理（`flushLocal` + `sendLocalEoi`）；**`-Dsmp_tlb_ipi`** 控制是否广播；**`-Dlapic_periodic_tick`** 可选 LAPIC LVT tick（见 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K2.4/K2.5） |
 | 每 CPU 调度与窃取 | `percpu_sched.zig` / `scheduler.zig` | 部分 — 新线程 `home_cpu` 由最短就绪队列选取（`pickBalancedHomeCpu`）；窃取与 **AP 未实跑 tick**（仅 BSP） |
 | 单调时钟 / HPET 只读 | `ke/timekeeping.zig` / `hal/x86_64/hpet.zig` | 部分 — HPET MMIO 探测与主计数器；IRQ0 仍为 PIT |
+| 内核 #PF 结构化 STOP | `src/ke/bugcheck.zig`、`src/ke/interrupt_x86.zig` | 部分 — `keBugCheckEx` + `PAGE_FAULT_IN_NONPAGED_AREA` 等价码；用户态仍走 lazy/CoW 或终止进程 |
+| 节对象句柄末引用回收 | `src/mm/section.zig`、`src/ob/cleanup_hooks.zig`、`src/ob/object.zig` | 部分 — `ref_count==0` 回收 `g_sections`；**映射仍存时关句柄** 为差距 |
+| SEC_IMAGE / 节头布局锚点 | `src/loader/pe.zig`、`sdk/pe64_nt61.zig` | 部分 — `SEC_IMAGE` 常量 + `SectionHeader` 40 字节 `comptime` 测（`pe64_nt61_host` / 内核 `pe` 内测） |
 
 ### 0.1 x86_64 用户 / 内核布局（文档常量）
 
@@ -99,7 +103,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | I/O Manager、IRP | Major/Minor、`NTSTATUS` 完成码、双层完成例程、`IoCallDriver`/`dispatchIrpThroughStack`、卷设备扩展 | `src/io/io.zig`, `src/fs/vfs.zig`；主机验证 `zig build test` → **io_irp_host** |
 | 设备对象与栈 | 设备扩展、附加栈（长期） | `io.zig` |
 | PnP / Power | 即插即用与电源 IRP（长期） | 驱动目录 |
-| IRQL、DPC、APC、等待 | 同步级别约束（简化须在注释声明）；**IRQL/DPC 每 CPU 槽**（`MAX_IRQL_CPUS`，默认 BSP）；子集含 `NtWaitForSingleObject` / `NtWaitForMultipleObjects`（WaitAny，≤64）经 `ke/wait` + alertable；非完整 CR8/设备 IRQL 谱系 | `ke/irql.zig`、`ke/dpc.zig`（每 CPU FIFO + IRQ 出口 `drainAtDispatchLevel`）、`ke/apc.zig`、`ke/wait.zig`、`interrupt_x86.zig`、`syscall.zig` |
+| IRQL、DPC、APC、等待 | 同步级别约束（简化须在注释声明）；**IRQL/DPC 每 CPU 槽**（`MAX_IRQL_CPUS`，默认 BSP）；**等待（阶段 C）**：`ObjectHeader` FIFO 等待队列 + `ke/wait` 与 `blockThread`/`tick` 协同；`NtWaitForSingleObject` / WaitAny（≤64）+ **tick 超时** + **alertable**（`NtAlertThread` → `STATUS_ALERTED`，用户 APC → `STATUS_USER_APC`）；**WaitAll**：**抢占调度关** 时协作式子集；**调度开** 仍为 `STATUS_NOT_IMPLEMENTED`；**事件** 手动/自动复位与 `NtSetEvent`/`onEventSet` 一致。非完整 CR8/设备 IRQL 谱系；用户 APC **例程交付** 仍为 Partial | `ob/object.zig`（`WaitEntry`）、`ke/irql.zig`、`ke/dpc.zig`、`ke/apc.zig`、`ke/wait.zig`、`ke/scheduler.zig`、`interrupt_x86.zig`、`syscall.zig`（返用户前 `deliverKernelApcsForCurrentThread`） |
 | 内存管理器 | 池标签、`Mdl`（长期） | `src/mm/` |
 
 ## 2.1 HAL / 总线与网络（阶段性）
@@ -119,16 +123,24 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `NtQueryInformationThread` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntqueryinformationthread> | 同上 |
 | `NtAllocateVirtualMemory` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntallocatevirtualmemory> | `MEM_*`、`PAGE_*` |
 | `NtProtectVirtualMemory` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntprotectvirtualmemory> | SSDT `0x4D`（Win7 SP1 x64）；`syscall.zig` → `ntdll.zig` → `vm.protectVirtualRange` / `paging.protectLeafPage` |
-| `NtDelayExecution` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntdelayexecution> | SSDT `0x31`；负间隔以 `scheduler.yield` 粗近似；**精度**受 **~100Hz PIT tick** 约束（约 tens of ms 量级），与 [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) §延时一致；高分辨率睡眠见 [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md) |
-| `NtQuerySystemInformation` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation> | `STATUS_INVALID_INFO_CLASS` |
-| `NtOpenKey` / `NtQueryValueKey` / `NtCreateKey` / `NtSetValueKey` / `NtEnumerateKey` / `NtEnumerateValueKey` | WDK/Win32 注册表相关 | `NtOpenKey` `0x0F`；`NtQueryValueKey` `0x14`（`KeyValuePartialInformation` + `KeyValueFullInformation`）；`NtCreateKey` `0x1A`；`NtSetValueKey` `0x5D`（`REG_SZ`/`REG_DWORD`）；`NtEnumerateKey` `0x32`（`KeyBasicInformation` 子集）；`NtEnumerateValueKey` `0x13`（`KeyValueFullInformation` 子集）；`syscall.zig` + `ntdll.zig` + `registry.zig` |
+| `NtDelayExecution` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntdelayexecution> | SSDT `0x31`；**负**间隔以 `scheduler.yield` 粗近似；**正**间隔（NT 绝对 `LARGE_INTEGER`）当前无单调域换算 → 立即 `SUCCESS` 且不睡眠（见 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md)、[TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md)） |
+| `NtQuerySystemInformation` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation> | **Partial** — `SystemBasicInformation` / `SystemProcessorInformation` / `SystemVersionInformation` / `SystemTimeOfDayInformation`（48B 零）/ `SystemProcessInformation`（96B 单进程桩）/ `SystemPerformanceInformation`（128B 零前缀）/ **阶段 E** `SystemInterruptInformation`（32B 零）、`SystemExceptionInformation`（16B 零）；`SystemModuleInformation`/`SystemPoolTagInformation`/`SystemHandleInformation` → `NOT_IMPLEMENTED`；未列 class → `INVALID_INFO_CLASS`；`NtSetSystemInformation` → `NOT_IMPLEMENTED` 或非法 class |
+| `NtOpenKey` / `NtOpenKeyEx` / `NtQueryValueKey` / `NtCreateKey` / `NtSetValueKey` / `NtEnumerateKey` / `NtEnumerateValueKey` | WDK/Win32 注册表相关 | `NtOpenKey` `0x0F`；`NtOpenKeyEx`：`options==0` 等价 `NtOpenKey`，非零事务类 → `STATUS_NOT_IMPLEMENTED`；其余键 API 同上 |
 | `RtlNtStatusToWin32Error` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-rtlntstatustowin32error> | 与 `RtlNtStatusToDosError` 等价名 |
+| `RtlGetVersion` | <https://learn.microsoft.com/windows/win32/sysinfo/nf-sysinfo-rtlgetversion> | 与 [`os_version.zig`](../../src/config/os_version.zig) 单源一致 |
+| `RtlVerifyVersionInfo` | <https://learn.microsoft.com/windows/win32/devnotes/rtlverifyversioninfo> | **Partial** — `VER_EQUAL` / `VER_GREATER_EQUAL` 等条件子集；`verSetConditionMask` 与比较逻辑在 `os_version.zig`；`ntdll.zig` 包装；主机 **rtl_verify_version_info_host** |
+| `NtCreateProcess` | Winternl | SSDT **0x9F**（j00ru Win7 SP1 x64）；`syscall_nt_extras` → `ntdll.NtCreateProcess`（仅分配进程槽；**无** 映像线程，与 `NtCreateUserProcess` 区分） |
+| `NtCreateUserProcess` | Winternl | SSDT **0xAA**；**Partial** — ZOA 参数块、`NtCreateUserProcessFromPath`、PE 桩 + 调度线程；差距见 [PHASE_F_PROCESS_CREATE.md](PHASE_F_PROCESS_CREATE.md) |
+| `NtSetInformationObject` | Winternl | SSDT **0x56**（本仓库专用槽，公开 0x59 与 `NtUserPeekMessage` 冲突）；`STATUS_NOT_IMPLEMENTED` / `INVALID_INFO_CLASS` |
+| `NtSignalAndWaitForSingleObject` | Winternl | SSDT **0x176**；`NtSetEvent` + `NtWaitForSingleObject` 组合 |
 | `NtReadFile` / `NtWriteFile` | <https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-readfile>（行为级对应 Native 层） | x64 syscall 分发：`syscall_nt_extras.zig` → `ntdll.zig` → VFS/IRP |
+| `NtDeviceIoControlFile` | Learn / WDK IOCTL | SSDT **0x52**（与公开表 `0x07` 冲突的折叠槽，见 SyscallABI）；子集：`IOCTL_RTC_GET_TIME`（x86_64 + RTC 已初始化） |
+| `NtLockVirtualMemory` / `NtUnlockVirtualMemory` | Learn | SSDT **0x53 / 0x54**；成功桩，见 [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) |
 | `NtQueryDirectoryFile` | <https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex> 概念层；本内核 `FileNamesInformation` 单条 | `ntdll.zig` + 目录 `FileObject` |
 | `NtDuplicateObject` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntduplicateobject> | 同进程句柄表：`ntdll.zig`；SSDT `0x44`（Win7 SP1 x64 公开表） |
-| `NtRequestWaitReplyPort` | WDK — LPC 端口消息 | 简化 ABI：`syscall_nt_extras.zig`；内核 `lpc/port.zig` |
-| `NtWaitForSingleObject` | <https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject>（用户态包装；Native 语义见 Winternl） | `ke/wait.zig`：事件/互斥/信号量子集 + 超时 + `alertable`（用户 APC 未决则 `STATUS_USER_APC`）；经 `ntdll` / syscall 分发 |
-| `NtWaitForMultipleObjects` | Winternl / synchapi 概念层 | **WaitAny** 子集（`count ≤ 64`）；`WaitAll` 等仍为 `STATUS_NOT_IMPLEMENTED` |
+| `NtRequestWaitReplyPort` / `NtReplyWaitReceivePort` | WDK — LPC 端口消息 | 客户端：`requestWaitReplyPort`；服务端：`port.replyWaitReceivePort` ↔ `ntdll.NtReplyWaitReceivePort` |
+| `NtWaitForSingleObject` | <https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject>（用户态包装；Native 语义见 Winternl） | `ke/wait.zig`：事件 + **互斥/信号量**（静态池、`creation_time` 打包信号量计数）+ 超时 + `alertable`；经 `ntdll` / syscall 分发 |
+| `NtWaitForMultipleObjects` | Winternl / synchapi 概念层 | **WaitAny** 子集（`count ≤ 64`）；SSDT **0x57**；**WaitAll**（`wait_type==1`）：协作式（调度关）；**调度开** → `STATUS_NOT_IMPLEMENTED`（见 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md)） |
 
 （随实现推进在 PR 中增删行并更新状态列。）
 
@@ -137,7 +149,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | 角色 | 路径 | 验证 |
 |------|------|------|
 | x64 公开服务号子集 | [`src/arch/x86_64/ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig) | `zig build test` → **ssdt**（文内 Win7 SP1 参考断言） |
-| 内核 syscall 分发与用户指针探测 | [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig) | 分支配对；扩展时补 `tests/` |
+| 内核 syscall 分发与用户指针探测 | [`src/arch/x86_64/syscall.zig`](../../src/arch/x86_64/syscall.zig)、[`syscall_nt_extras.zig`](../../src/arch/x86_64/syscall_nt_extras.zig) | **阶段 B** + **阶段 F 子集**：`NtCreateUserProcess`（**0xAA**）→ `dispatchNtCreateUserProcess` + `ZirconCreateUserProcessArgs`（见 [PHASE_F_PROCESS_CREATE.md](PHASE_F_PROCESS_CREATE.md)）；ALPC 等仍为 `STATUS_NOT_IMPLEMENTED` |
 | 用户态 `syscall` 薄层（与内核号一致） | [`src/sdk/ntdll_syscall_win64.zig`](../../src/sdk/ntdll_syscall_win64.zig) | **ssdt_stub_parity**（`Ssdt` 与 `ssdt_nt61` 同步子集） |
 | 内核内联 / 桩 Native 调用 | [`src/libs/ntdll.zig`](../../src/libs/ntdll.zig) | 服务号须与 `ssdt_nt61` 一致；未实现路径返回文档化 NTSTATUS |
 
@@ -191,9 +203,9 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `DestroyWindow` | [DestroyWindow function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-destroywindow) | 销毁顺序、`INVALID_HANDLE` | **Implemented**（+ `detachCompositorSurface`） | `user32.zig` |
 | `GetDC` / `ReleaseDC` | [GetDC](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getdc) / [ReleaseDC](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-releasedc) | 配对；`GetDC(NULL)` 屏幕 DC | **Partial**（`HDC==HWND`；`GetDC(0)` 成功返回 `0`） | `user32.zig` |
 | `GetMessage` | [GetMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getmessage) | 空队列阻塞；过滤范围 | **Partial**（`STATUS_PENDING` / 协作式；`min>max`（非 0,0）→ `ERROR_INVALID_PARAMETER`；见 syscall 注释） | `user32.zig`、`syscall.zig` |
-| `PeekMessage` | [PeekMessageA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-peekmessagea) | `PM_REMOVE` / `PM_NOYIELD`；无消息返回 FALSE | **Partial**（`PM_*` 见 `msg_pm_semantics.zig`；Nt 路径 `STATUS_PENDING`；畸形 min/max 同上） | `user32.zig`、`msg_pm_semantics.zig` |
+| `PeekMessage` | [PeekMessageA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-peekmessagea) | `PM_REMOVE` / `PM_NOYIELD`；无消息返回 FALSE | **Partial**（`PM_*` 见 `msg_pm_semantics.zig`；`NtUserPeekMessage` 空队列 **`STATUS_NO_MORE_ENTRIES`** + 清零 `MSG*`；畸形 min/max 同上） | `user32.zig`、`msg_pm_semantics.zig` |
 | `PostMessage` | [PostMessageA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-postmessagea) | 失败 `FALSE` 与 `SetLastError` | **Partial**（无效 HWND → `ERROR_INVALID_HANDLE`；队列满 → `ERROR_NOT_ENOUGH_MEMORY`；`NtUserPostMessage` 映 `STATUS_INVALID_PARAMETER` / `STATUS_NO_MEMORY`） | `user32.zig` |
-| `DispatchMessage` | [DispatchMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-dispatchmessage) | 分派到 `WndProc` | **Partial**（以 `class_id`/`findClassByAtom` 解析登记类；尚无函数指针表时 → **`DefWindowProcA`**） | `user32.zig` |
+| `DispatchMessage` | [DispatchMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-dispatchmessage) | 分派到 `WndProc` | **Partial**：`WindowClass.wndproc_id` + `registerKernelWndProc` 内核表；未命中 → **`DefWindowProcA`**（用户 VA `WndProc` 仍为路线图） | `user32.zig` |
 | `SetWindowPos` | [SetWindowPos function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowpos) | `HWND_*` 与 `SWP_*` | **Partial**（Learn `HWND_NOTOPMOST` 非 topmost 无 Z 序效果；扩展 `SWP_*` 常量；帧/重绘位忽略） | `user32.zig` |
 | `CreateDesktop` / `OpenDesktop` / `SwitchDesktop` | [Desktops](https://learn.microsoft.com/windows/win32/winstation/desktops) | 桌面句柄与切换 | **Partial**（`subsystem.createUserDesktop` / `openDesktopByName` / `switchToDesktop`；`HDESK` 1-based） | `user32.zig`、`subsystem.zig` |
 | `BeginPaint` / `EndPaint` | [BeginPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-beginpaint) / [EndPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-endpaint) | `PAINTSTRUCT` | **Partial**（`BeginPaint` / **`InvalidateRect`** 在有 compositor 表面时 `dwm_comp.markSurfaceDirty`） | `user32.zig` |
@@ -217,7 +229,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | GDI BitBlt | 完整 ROP3、拉伸、颜色格式矩阵、与打印机 DC 的完整交互 | **已实现子集**：`BitBlt`/`StretchBlt` 仅 `SRCCOPY`；`AlphaBlend` 仅 `AC_SRC_OVER` 存根；未支持 ROP 显式失败（主机 **gdi_rop_contract_host**）；完整 ROP 仍为 Planned |
 | 字体 | ClearType/Uniscribe 级排版、完整 GDI 字体链接与回退 | 当前位图字体路径；FreeType 等为路线图项（见 API 矩阵 gdi32 行） |
 | DC / 对象 | 完整 GDI 句柄表、跨进程 DC、元文件、路径 API | 以 `CreateCompatibleDC` / `SelectObject` 子集为主 |
-| user32 消息 | 完整输入法、挂钩链、DDE、剪贴板全语义 | 消息泵与 DWM 广播等为 **Partial**；随契约矩阵增行 |
+| user32 消息 | 完整输入法、挂钩链、DDE、剪贴板全语义 | 消息泵与 DWM 广播等为 **Partial**；随契约矩阵增行；**阶段 D 分解清单**见 [PHASE_D_WIN32_MSG_PUMP_DWM.md](PHASE_D_WIN32_MSG_PUMP_DWM.md) |
 
 **user32**：优先保证 `GetMessage` / `PeekMessage`、`CreateWindowEx` 等与壳路径一致的入口；模态环与 NC 命中等为部分语义，须在 PR 中注明已知差距。
 
@@ -293,11 +305,13 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 
 ### 9.1 WOW64：覆盖与已知缺口
 
+**阶段 G 专文**（与 Roadmap Phase 11 区分）：[PHASE_G_WOW64.md](PHASE_G_WOW64.md)。
+
 | 项目 | 状态说明 | 代码 / 文档 |
 |------|----------|-------------|
-| x86（32 位）原生服务号 **公开子集**（与 x64 表不同号） | **Partial** — 对照 j00ru `x86/json/nt-per-system.json` Win7 SP1 | [`ssdt_x86_win7_sp1.zig`](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)；主机测试 **wow64_ssdt_x86**、**ssdt_x64_x86_namespace** |
-| 64 位内核 SSDT 子集 | **Partial** | [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig) |
-| `translateSyscall32to64` | **Partial** — 对 `ssdt_x86_win7_sp1.wow64SyscallStubReturnsSuccess` 所列 **Win7 SP1 x86 公开服务号** 返回演示成功（含阶段 4 增补 **`NtConnectPort`（59 / 0x3B）**、**`NtRequestWaitReplyPort`（299 / 0x12B）** — csrss/LPC 族）；完整参数封送与 x64 派发仍非 SysWOW64 | [`wow64/thunk.zig`](../../src/subsystems/win32/wow64/thunk.zig)、[`ssdt_x86_win7_sp1.zig`](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)、[SyscallABI.md](SyscallABI.md)、**phase4_host_anchors** |
+| x86（32 位）原生服务号 **公开子集**（与 x64 表不同号） | **Partial** — 对照 j00ru `x86/json/nt-per-system.json` Win7 SP1 | [`ssdt_x86_win7_sp1.zig`](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)；主机测试 **wow64_ssdt_x86**、**ssdt_x64_x86_namespace**；[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
+| 64 位内核 SSDT 子集 | **Partial** | [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)；与 x86 同名 API 对照见 [`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig) |
+| `translateSyscall32to64` | **Partial** — 对 `ssdt_x86_win7_sp1.wow64SyscallStubReturnsSuccess` 所列 **Win7 SP1 x86 公开服务号** 返回演示成功（含阶段 4 增补 **`NtConnectPort`（59 / 0x3B）**、**`NtRequestWaitReplyPort`（299 / 0x12B）** — csrss/LPC 族）；**G2** 写入 `Wow64Process.last_x64_ssdt_alias`（`x64_semantic_alias`）；完整参数封送与 x64 派发仍非 SysWOW64 | [`wow64/thunk.zig`](../../src/subsystems/win32/wow64/thunk.zig)、[`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig)、[SyscallABI.md](SyscallABI.md)、**phase4_host_anchors**、[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
 | 32 位 PEB / TEB 布局 | **Partial** — `PEB32` / `TEB32` 结构与部分字段填充；非完整 NT 6.1 用户态布局验证 | [`wow64/types.zig`](../../src/subsystems/win32/wow64/types.zig) |
 | 地址空间隔离 | **Partial** — WOW64 进程模型与栈/堆基址为简化演示 | `wow64.zig` |
 | `dwmapi` PE32 结构 / HWND 扩展 | **Partial** — `DWM_BLURBEHIND32` 等 ILP32 布局与 `hwnd32ToNative`；完整 thunk 表仍为路线图 | [`dwmapi_wow64.zig`](../../src/subsystems/win32/dwmapi_wow64.zig)；**dwmapi_wow64_host** |

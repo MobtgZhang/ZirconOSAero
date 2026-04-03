@@ -1,12 +1,8 @@
 # ZirconOSAero：NT 6.1 内核实现详细待办清单（Clean-room）
 
-本页为内核模式实现的**分阶段跟踪清单**，与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 交叉引用。实现须遵守 clean-room：**仅** Microsoft Learn、WDK 公开文档与硬件规范；禁止 Windows/ReactOS/Wine 源码。
+本页为内核模式 **K0–K8** 落地清单；**契约状态**见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)，**验证映射**见 [MVT_NT61.md](MVT_NT61.md)，**文档职责**见 [DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。实现须 clean-room：**仅** Microsoft Learn、WDK 与硬件规范；禁止 Windows/ReactOS/Wine 源码。
 
-**与「实施计划 Phase A–K」对齐**：里程碑式扩展（闸门、Mm、调度等待、I/O 闭环、Ob、Ps、LPC、Se、SSDT 模块化、HAL/存储占位、完整 API backlog）见 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md) 与契约矩阵 §3.1；代码落地仍以本页 **K0–K8** 编号为主便于 PR 引用。
-
-**与桌面 / LPC / 显示栈收敛对齐**：在 **不缩小 K1–K8 范围** 的前提下，LPC、`user32`、显示栈的收敛与契约常量见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4.1、`src/config/dwm_nt61_api_contract.zig`、MVT 中 **dwm_zorder_nt61_host** / **csr_lpc_policy_host**；全栈 Aero 用户态仍属 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
-
-**缺口优先级快照（二进制兼容导向）**：[BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md)（与 K1–K8、矩阵 §0/§8 交叉引用）。
+**基线引用**：阶段 A — 契约矩阵 §0、[MM_ALLOC_PATHS.md](MM_ALLOC_PATHS.md)、[VM_ISOLATION.md](VM_ISOLATION.md)；阶段 B — [SyscallABI.md](SyscallABI.md)、[SSDT_Roadmap.md](SSDT_Roadmap.md) 与 `ssdt_nt61.zig` / `syscall.zig`；阶段 C — [SCHEDULER_API.md](SCHEDULER_API.md)、契约矩阵 §2、`wait.zig` / `object.zig` / `scheduler.zig`。长期 API 面见 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md)（非本页交付范围）。桌面 / LPC / DWM 常量见契约矩阵 §4.1、`dwm_nt61_api_contract.zig`、[NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。二进制缺口见 [BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md)。
 
 ## 范围
 
@@ -49,7 +45,21 @@
 | K2.7 | IRQL：`APC_LEVEL` / `DISPATCH_LEVEL` / `DEVICE_IRQL_LOW`；**每 CPU 槽** `MAX_IRQL_CPUS=8`（运行期默认 BSP 槽 0，`setCpuSlotOverrideForTest` 供单测） | `ke/irql.zig`, `interrupt_x86.zig` |
 | K2.8 | 通用 DPC：**每 CPU FIFO**（与 IRQL 槽一致）、`drainAtDispatchLevel`；输入 flush 仍为一类 DPC | `ke/dpc.zig`, `interrupt_x86.zig` |
 | K2.9 | 内核/用户 APC 队列与交付点（syscall 返回用户前内核 APC；alertable 等待与用户 APC）。**进展**：`wait_user_apc_nt61_host` | `ke/apc.zig`, `ke/apc_object.zig`, `scheduler.zig`, `syscall.zig` |
-| K2.10 | `KeWait` 子集：`KeWaitForSingleObject` / `KeWaitForMultipleObjects`（WaitAny）+ 超时 + alertable | `ke/wait.zig`, `libs/ntdll.zig` |
+| K2.10 | `KeWait` 子集：`KeWaitForSingleObject` / `KeWaitForMultipleObjects`（WaitAny）+ 超时 + alertable。**进展（阶段 C）**：`ObjectHeader` 等待队列；`enableScheduling` 后阻塞式等待 + `tick` 超时/APC 扫描；`NtCreateEvent`/`NtSetEvent` 手动·自动复位；WaitAll 仍 `STATUS_NOT_IMPLEMENTED` | `ob/object.zig`, `ke/wait.zig`, `ke/scheduler.zig`, `libs/ntdll.zig` |
+
+## 阶段 D — Win32 消息泵与 DWM 消息对接（与 K 并行跟踪）
+
+**详尽分解表（D0–D5）**：[PHASE_D_WIN32_MSG_PUMP_DWM.md](PHASE_D_WIN32_MSG_PUMP_DWM.md)（消息队列、`NtUserGetMessage`/`PeekMessage`、csrss LPC、`WM_DWM*`、桌面 idle 与测试门禁）。
+
+**说明**：与 [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) 中 **Phase D — 合成器（离屏/模糊）** 编号不同；合成器纵深仍跟该文 D1–D5 与 `dwm_compositor.zig`。
+
+| 汇总块 | 内容 | 主路径 |
+|--------|------|--------|
+| D0 | 完成定义、差距表、MVT 登记 | 矩阵 §4–§5、`msg_pm_semantics.zig` |
+| D1 | 消息泵 syscall 语义、`PM_*`、`WM_QUIT`。**进展**：`NtUserPeekMessage` 空队列 `STATUS_NO_MORE_ENTRIES`；`PostQuitMessage` → 线程队列；`msgPumpThreadsBlockedApprox` + 桌面循环加 poll | `user32.zig`、`syscall.zig`、`main.zig` |
+| D2 | LPC `get_message` tid、`post_message`、DWM listener v1 | `subsystem.zig`、`csr_lpc_policy.zig`、`csr_dwm_listeners.zig` |
+| D3 | `broadcastDwm*`、注册表同步、缩略图消息 | `dwm.zig`、`user32`、`dwm_config_registry_sync.zig` |
+| D4–D5 | 桌面唤醒、主机/QEMU 测、矩阵更新 | `display.zig`、`tests/nt61/*`、`MVT_NT61.md` |
 
 ## Phase K3 — HAL：ACPI、PCIe、中断
 
@@ -88,9 +98,11 @@
 
 ## Phase K7 — SSDT 与 Native 内核语义
 
+**阶段 E（Native 深度补全）**：验收边界与任务表见 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md)（与 [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) 中 Shell **Phase E** 非同里程碑）。
+
 | ID | 任务 | 主要路径 |
 |----|------|----------|
-| K7.1 | SSDT 版本与 ntdll/syscall 双端；**扩展子集**（同步/进程/ALPC 等）+ `STATUS_NOT_IMPLEMENTED` 桩；真源路径 `sdk/nt61_syscall_numbers_x64.zig` | `ssdt_nt61.zig`, `syscall.zig`, `tests/nt61/syscall_numbers_lock_nt61_host.zig`, [SSDT_Roadmap.md](SSDT_Roadmap.md) |
+| K7.1 | SSDT 版本与 ntdll/syscall 双端；**扩展子集**（同步/进程/ALPC 等）+ `STATUS_NOT_IMPLEMENTED` 桩；真源路径 `sdk/nt61_syscall_numbers_x64.zig` | `ssdt_nt61.zig`, `syscall.zig`, `tests/nt61/syscall_numbers_lock_nt61_host.zig`, [SSDT_Roadmap.md](SSDT_Roadmap.md), [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md) |
 | K7.2 | 虚拟内存与系统信息类对齐 | `syscall.zig`, [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) |
 | K7.3 | 注册表内存树与 hive 分阶段 | 路线图 |
 | K7.4 | x64 SEH：`.pdata` / `RUNTIME_FUNCTION` 表驱动展开子集 | `loader/seh_pdata_min.zig`, PE 规范 |

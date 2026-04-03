@@ -1,37 +1,40 @@
 # NT 6.1 最小可验证测试（MVT）索引
 
-本页列出与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、根目录 [README.md](../../README.md) 特性矩阵交叉引用的 **可复现验证** 步骤。状态标签含义见契约矩阵文首「状态标签定义」。
+本页维护 **可复现验证** 步骤及与 `tests/`、`zig build test` 的映射。**子系统承诺与状态列**以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与根 [README.md](../../README.md) 为准；状态标签定义见契约矩阵文首。**文档职责划分**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
 
-**PR 合并前人类勾选**：[NT61_PR_GATES.md](NT61_PR_GATES.md)（K0：矩阵、本表、syscall 注释、合规扫描）。
-
-**内核里程碑清单**（何项应增测/更新本表）：见 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) Phase K0；新增内核能力须在 PR 中说明是否已扩展下表或 `tests/`。
+**PR 门禁**：[NT61_PR_GATES.md](NT61_PR_GATES.md)。**何时扩展本表**： [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) Phase K0。
 
 ## 主机单元测试（无需 QEMU）
 
 | 能力域 | 命令 | 覆盖模块 |
 |--------|------|----------|
 | 内核堆 | `zig build test` → heap | [src/mm/heap.zig](../../src/mm/heap.zig) |
-| 池分配器 | 同上 → pool | [src/mm/pool.zig](../../src/mm/pool.zig) |
+| 池分配器 | 同上 → pool | [src/mm/pool.zig](../../src/mm/pool.zig)（含 **PagedPool 软上限**、`notePagedPoolTrimPlaceholder`） |
+| 池 / 堆分配路径（IRQL、lookaside、heap 回退） | 文档审查 + `ex_pool` 注释 | [MM_ALLOC_PATHS.md](MM_ALLOC_PATHS.md)、[src/mm/ex_pool.zig](../../src/mm/ex_pool.zig) |
 | 伙伴系统（逻辑块） | 同上 → buddy | [src/mm/buddy.zig](../../src/mm/buddy.zig) |
 | Slab | 同上 → slab | [src/mm/slab.zig](../../src/mm/slab.zig) |
 | `PAGE_*` → x86_64 PTE 位（与 `vm.zig` `ntProtectToPteFlags` 同步） | 同上 → **vm_nt_protect_pte_host** | [tests/vm_nt_protect_pte_host.zig](../../tests/vm_nt_protect_pte_host.zig) |
 | TEB / KUSER x64 契约（偏移与 VA） | 同上 → **nt61_abi_layout_host** | [tests/nt61_abi_layout_host.zig](../../tests/nt61_abi_layout_host.zig)、[src/sdk/teb_nt61_x64.zig](../../src/sdk/teb_nt61_x64.zig)、[src/sdk/kuser_shared_nt61.zig](../../src/sdk/kuser_shared_nt61.zig) |
 | SSDT 公开索引 | 同上 → ssdt | [src/arch/x86_64/ssdt_nt61.zig](../../src/arch/x86_64/ssdt_nt61.zig) |
-| 用户态 `Ssdt` 与内核 `ssdt_nt61` 子集一致 | 同上 → ssdt_stub_parity | [tests/ssdt_stub_parity.zig](../../tests/ssdt_stub_parity.zig)、[src/sdk/ntdll_syscall_win64.zig](../../src/sdk/ntdll_syscall_win64.zig) |
+| 用户态 `Ssdt` 与内核 `ssdt_nt61` 子集一致（含 `NtCreateUserProcess` **0xAA**） | 同上 → ssdt_stub_parity | [tests/ssdt_stub_parity.zig](../../tests/ssdt_stub_parity.zig)（`ZirconCreateUserProcessArgs` 32B 布局）、[src/sdk/ntdll_syscall_win64.zig](../../src/sdk/ntdll_syscall_win64.zig) |
 | x64 与 x86（Win7 SP1 公开表）服务号不同命名空间 | 同上 → ssdt_x64_x86_namespace | [tests/ssdt_x64_x86_namespace.zig](../../tests/ssdt_x64_x86_namespace.zig) |
 | WOW64 x86 服务号子集 | 同上 → wow64_ssdt_x86 | [src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig) |
+| WOW64 x86→x64 语义别名映射 | 同上 → wow64_x64_semantic_alias_host | [x64_semantic_alias.zig](../../src/subsystems/win32/wow64/x64_semantic_alias.zig)、[wow64_x64_semantic_alias_host.zig](../../src/wow64_x64_semantic_alias_host.zig) |
+| WOW64 路径/注册表重定向占位 | 同上 → wow64_redirect_host | [src/subsystems/win32/wow64/redirect.zig](../../src/subsystems/win32/wow64/redirect.zig) |
 | 安全令牌 / DAC / `seAccessCheckMask` 镜像 | 同上 → se_token | [tests/se_token.zig](../../tests/se_token.zig)、[src/se/token.zig](../../src/se/token.zig) |
 | SMP 原子占位 | 同上 → smp_atomic_host | [tests/smp_atomic_host.zig](../../tests/smp_atomic_host.zig) |
 | WOW64 类型 | 同上 → wow64_types | [src/subsystems/win32/wow64/types.zig](../../src/subsystems/win32/wow64/types.zig) |
-| 对象句柄表 / 路径规范化 / 单层符号链接 | 同上 → object | [src/zircon_host_ob_test.zig](../../src/zircon_host_ob_test.zig)（导入 `ob/object.zig`；`build_options` 注入以编译 `arch`） |
+| 对象句柄表 / 路径规范化 / 单层符号链接 / **ObjectHeader 等待链 FIFO** | 同上 → object | [src/zircon_host_ob_test.zig](../../src/zircon_host_ob_test.zig)（导入 `ob/object.zig`；`build_options` 注入以编译 `arch`）；**节对象末引用 cleanup hook**；`waitListAppend` / `waitListRemove` 主机用例 |
 | IRP 完成例程与设备栈链镜像 | 同上 → io_irp_host | [tests/io_irp_host.zig](../../tests/io_irp_host.zig)（与 [src/io/io.zig](../../src/io/io.zig) 契约对齐；含 `NOT_IMPLEMENTED` 栈下降镜像） |
 | PCIe ECAM 偏移 | 同上 → ecam_layout | [src/hal/x86_64/ecam_layout.zig](../../src/hal/x86_64/ecam_layout.zig) |
 | HPET GCAP_ID 解码 | 同上 → hpet_id | [src/hal/x86_64/hpet_id.zig](../../src/hal/x86_64/hpet_id.zig) |
 | LPC `PortKind` ABI | 同上 → lpc_portkind_host | [tests/lpc_portkind_host.zig](../../tests/lpc_portkind_host.zig) |
 | LPC `handshake_version`（v2 锚点） | 同上 → **lpc_handshake_version_host** | [tests/lpc_handshake_version_host.zig](../../tests/lpc_handshake_version_host.zig) |
 | `SystemVersionInformation` / `RTL_OSVERSIONINFOEXW` 284 字节 | 同上 → **nt61_os_version_layout_host** | [tests/nt61_os_version_layout_host.zig](../../tests/nt61_os_version_layout_host.zig)、[`os_version.zig`](../../src/config/os_version.zig) |
+| `RtlVerifyVersionInfo` / `VerSetConditionMask` 语义子集 | 同上 → **rtl_verify_version_info_host** | [rtl_verify_version_info_host.zig](../../src/rtl_verify_version_info_host.zig)、[`os_version.zig`](../../src/config/os_version.zig)、[`ntdll.zig`](../../src/libs/ntdll.zig) |
 | ntdll/kernel32/user32 合成导出顺序 | 同上 → **nt61_core_dll_abi_inventory_host** | [`nt61_core_dll_abi_inventory.zig`](../../src/config/nt61_core_dll_abi_inventory.zig)、[CORE_DLL_PE_EXPORT_STRATEGY.md](CORE_DLL_PE_EXPORT_STRATEGY.md) |
 | PE TLS/delay/bound 策略失败码（镜像） | 同上 → **pe_loader_policy_host** | [tests/pe_loader_policy_host.zig](../../tests/pe_loader_policy_host.zig) |
+| `SEC_IMAGE` + `IMAGE_SECTION_HEADER` 40 字节 | 同上 → **pe64_nt61_host** | [sdk/pe64_nt61.zig](../../sdk/pe64_nt61.zig) |
 | fork 子集 dup + 只读子映射 + `tryCowWriteFault` PFN 分离 | 同上 → **fork_cow_share_nt61_host** | [src/fork_cow_share_nt61_host.zig](../../src/fork_cow_share_nt61_host.zig)（模块根在 `src/`，与 `vm.zig` 同模块） |
 | 缺口优先级表（K1–K8 × 二进制兼容） | 文档审查 | [BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md) |
 | IPv4 固定首部 + ARP 首部解析 | 同上 → minimal_net | [src/drivers/net/minimal_stack.zig](../../src/drivers/net/minimal_stack.zig) |
@@ -39,7 +42,7 @@
 | PCI 类码 / VirtIO → 驱动绑定占位 | 同上 → pci_driver_bind_host | [src/drivers/bus/pci_driver_bind.zig](../../src/drivers/bus/pci_driver_bind.zig) |
 | VFS `FileAccessMode` 数值 | 同上 → fs_vfs_constants_host | [tests/fs_vfs_constants_host.zig](../../tests/fs_vfs_constants_host.zig)（与 [src/fs/vfs.zig](../../src/fs/vfs.zig) 同步） |
 | 常见 `NTSTATUS` 与文件打开映射（P6-1 锚点） | 同上 → fs_status_nt_map_host | [tests/fs_status_nt_map_host.zig](../../tests/fs_status_nt_map_host.zig) |
-| FULL_API_BACKLOG §1–§10 分节 CI 锚点 | 同上 → nt61_full_api_backlog_anchors_host | [tests/nt61_full_api_backlog_anchors_host.zig](../../tests/nt61_full_api_backlog_anchors_host.zig) |
+| FULL_API_BACKLOG §1–§10 分节 CI 锚点（导入 `ssdt` 真断言） | 同上 → nt61_full_api_backlog_anchors_host | [tests/nt61_full_api_backlog_anchors_host.zig](../../tests/nt61_full_api_backlog_anchors_host.zig)；阶段 E 清单 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md) |
 | 调度器策略公式（主机） | 同上 → scheduler_policy_host | [tests/scheduler_policy_host.zig](../../tests/scheduler_policy_host.zig) |
 | 互斥继承深度模型（主机） | 同上 → mutex_inherit_depth_host | [tests/mutex_inherit_depth_host.zig](../../tests/mutex_inherit_depth_host.zig) |
 | Phase F 调度差额（文档化占位） | 同上 → nt61_phase_f_scheduler_gap | [tests/nt61_phase_f_scheduler_gap.zig](../../tests/nt61_phase_f_scheduler_gap.zig) |
@@ -66,7 +69,7 @@
 | USB HID Boot 鼠标报告解析 | 同上 → **hid_boot_report_host** | [hid_boot_report.zig](../../src/drivers/usb/hid_boot_report.zig) |
 | 合规短语扫描 | `bash scripts/verify-compliance.sh` | [scripts/verify-compliance.sh](../../scripts/verify-compliance.sh)；CI |
 | 节区对象头 / 池容量 | `zig build test`（`object` 等步导入 `section.zig` 时运行其 `test`） | [src/mm/section.zig](../../src/mm/section.zig) |
-| syscall 扩展：读/写文件、LPC 应答、重复句柄 | QEMU/内核烟测 + 代码审查 | [src/arch/x86_64/syscall_nt_extras.zig](../../src/arch/x86_64/syscall_nt_extras.zig)、[syscall_abi.zig](../../src/arch/x86_64/syscall_abi.zig) |
+| syscall 扩展：读/写文件、**DeviceIoControl**、LPC 应答、重复句柄 | QEMU/内核烟测 + 代码审查 | [syscall_nt_extras.zig](../../src/arch/x86_64/syscall_nt_extras.zig)（`NtDeviceIoControlFile`）、[syscall_dispatch_mm.zig](../../src/arch/x86_64/syscall_dispatch_mm.zig)（Lock/Unlock VM）、[syscall_abi.zig](../../src/arch/x86_64/syscall_abi.zig) |
 | VirtIO-Blk PCI 占位 + `B:\` 探测读 | 启动枚举日志；QEMU 含 `virtio-blk-pci` 时挂载 `B:\PROBE.TXT` | [virtio_blk_pci.zig](../../src/drivers/storage/virtio_blk_pci.zig)、[virtio_blk_scratch_fs.zig](../../src/drivers/storage/virtio_blk_scratch_fs.zig)、[acpi_pci_early.zig](../../src/hal/x86_64/acpi_pci_early.zig) |
 | `seAccessCheckMask`（最小访问掩码门闸） | 主机逻辑见 `se_token` 测试镜像 | [src/se/token.zig](../../src/se/token.zig)、[tests/se_token.zig](../../tests/se_token.zig) |
 | `seAccessActiveDesktopForWin32k`（活动桌面 / TCB 例外） | 同上 → **se_token**（主机镜像 + **se/token** 内 `test`） | [tests/se_token.zig](../../tests/se_token.zig)、[src/se/token.zig](../../src/se/token.zig) |
@@ -96,3 +99,4 @@
 
 - 契约矩阵中标记为「部分」的项，须在 PR 中说明 **本表或 CI 中对应的验证** 是否已更新。
 - 禁止仅改文档勾选「完成」而不增加可运行验证。
+- **阶段 D（Win32 消息泵与 DWM/LPC）**：每落地一项语义，须在本表增列对应 `zig build test` 步或 QEMU 烟测命令；分解清单见 [PHASE_D_WIN32_MSG_PUMP_DWM.md](PHASE_D_WIN32_MSG_PUMP_DWM.md) §D5。

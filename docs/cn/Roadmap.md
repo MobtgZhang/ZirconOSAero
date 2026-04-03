@@ -1,6 +1,6 @@
 # ZirconOSAero 开发路线图
 
-**完成度不以本文件阶段列表为准**。请以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与 [API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md) 为唯一事实来源（`Stub` / `Partial` / `Done` / `Verified`）。
+**完成度不以本文件 Phase 0–11 列表为准**。契约与状态列以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 为准；Win32/Native 骨架表见 [API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)；验证映射 [MVT_NT61.md](MVT_NT61.md)；文档分工 [DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。**字母阶段 D–G / 阶段 4 与本文里程碑非同一编号体系**：[README.md](README.md) 第二节。
 
 ## 1. 设计目标分层
 
@@ -132,7 +132,7 @@
 
 ### Phase 11 — WOW64 + 音频
 
-- WOW64（PE32、thunk、32 位 PEB/TEB）— **Partial**；模块化见 `src/subsystems/win32/wow64/`
+- WOW64（PE32、thunk、32 位 PEB/TEB）— **Partial**；模块化见 `src/subsystems/win32/wow64/`；**可测子集与双表维护**以 **[PHASE_G_WOW64.md](PHASE_G_WOW64.md)**（阶段 G）为专文，本文 Phase 11 仍含音频等并行项。
 - AC97 / 音频 — 占位或部分，非生产级
 
 ## 3. Desktop 阶段 4（硬件呈现 + csrss + WOW64 + NTFS 持久化）

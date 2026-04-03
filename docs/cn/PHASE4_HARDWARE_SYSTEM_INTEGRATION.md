@@ -1,6 +1,6 @@
 # 阶段 4：硬件加速与系统级集成（官方范围）
 
-本文是 ZirconOSAero **Desktop / 显示 / csrss / WOW64 / 持久化** 在「阶段 4」的**唯一权威范围说明**（clean-room；知识来源：OASIS VirtIO、硬件公开手册、Microsoft Learn **行为级**描述）。个人笔记目录（如未入库的 `mdcs/`）**不是**契约来源。
+本文是 ZirconOSAero **Desktop / 显示 / csrss / WOW64 / 持久化** 在「阶段 4」的**唯一权威范围说明**（clean-room；知识来源：OASIS VirtIO、硬件公开手册、Microsoft Learn **行为级**描述）。个人笔记目录（如未入库的 `mdcs/`）**不是**契约来源。**「阶段 4」与 Roadmap / 字母阶段 D–G 的关系**：[README.md](README.md) 第二节。
 
 ## 目标与非目标
 
@@ -11,7 +11,7 @@
 - **WDDM 关系**：仅 **`wddm_abstraction.zig` 概念分层**与 `WddmRuntimePhase` 遥测；**不**实现 Windows KMD/UMD 二进制 IOCTL 协议，不使用 `DxgkDdi*` 作为已实现 DDI 名称对外承诺。
 - **合成器后端（CompositorBackend）**：CPU 全路径合成 + 可选「VirtIO 仅负责 scanout」；**不**把 Aero 盒式模糊默认卸载到 GPU。
 - **csrss + LPC**：窗口站/桌面生命周期走 **`CsrApiNumber` + `LPC_NT61_HANDSHAKE.md` vNext** 固定布局；`user32` 为 API 层，与 `subsystem.handleApiCall` 对齐。
-- **WOW64**：对 **DWM / user32 相关** 的 x86 服务路径给出 **显式** `STATUS_SUCCESS`（演示子集）或 **`STATUS_NOT_IMPLEMENTED`**，并在矩阵登记。
+- **WOW64**：对 **DWM / user32 相关** 的 x86 服务路径给出 **显式** `STATUS_SUCCESS`（演示子集）或 **`STATUS_NOT_IMPLEMENTED`**，并在矩阵登记；**阶段 G** 专文与主机测清单见 [PHASE_G_WOW64.md](PHASE_G_WOW64.md)（与本文「阶段 4」并存）。
 - **NTFS + ZOSH1**：在 **`D:\`** 卷上提供与 **`C:\`** 对称的 **ZOSH1 加载/导出路径常量**（小文件）；完整 RegF 仍为长期项。
 
 ### Phase4-Plus（可选，不与 Core 混为一谈）
@@ -37,3 +37,4 @@
 - [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) — 软件合成与呈现后端  
 - [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) — LPC 载荷与版本  
 - [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) — 完成度唯一事实来源  
+- [PHASE_G_WOW64.md](PHASE_G_WOW64.md) — WOW64 可测子集与 x86/x64 服务号维护  

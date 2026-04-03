@@ -11,6 +11,7 @@
 
 - [ ] 新逻辑有 `tests/` 或现有主机测试扩展（见 [MVT_NT61.md](MVT_NT61.md)）。
 - [ ] 本地 `zig build test` 通过。
+- [ ] 若修改了 `docs/` 下 Markdown：`bash scripts/check-docs-links.sh`（仓库根目录）通过。
 
 ## K0.3 文档注释
 
@@ -26,12 +27,13 @@
 - [ ] 若 README、[docs/en/Subsystems.md](../en/Subsystems.md)、[docs/cn/Subsystems.md](Subsystems.md) 或营销性「功能列表」中**扩大** Win32、WOW64、ntdll、csrss、user32、gdi32 的完成度表述，须**同一 PR** 更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与（如适用）[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)，并在 [MVT_NT61.md](MVT_NT61.md) 或 `tests/` 增加可复现验证，或明确保持 `Stub`/`Partial`。
 - [ ] 实现与文档引用仅限 **Microsoft Learn、WDK、硬件规范、公开发表的 ABI 对照**；行为细节不足时以实验 + 文档迭代，不依赖非白名单逆向代码库。
 
-**分阶段路线图**：Win32/ntdll 差距与 API 覆盖见 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md)、[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)；内核里程碑仍以 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K0–K8 为准。
+**分阶段路线图**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
 
-## 相关索引
+## 相关链接
+
 | 文档 | 用途 |
 |------|------|
+| [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) | 契约与状态 |
+| [MVT_NT61.md](MVT_NT61.md) | 验证映射 |
 | [PROCESS_NT61.md](PROCESS_NT61.md) | 阶段流程 |
-| [MVT_NT61.md](MVT_NT61.md) | 可复现测试表 |
-| [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) | 非阻塞延后项 |
-| [docs/en/Subsystems.md](../en/Subsystems.md)、[Subsystems.md](Subsystems.md) | 子系统状态列（须与契约矩阵同源） |
+| [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) | 延后项 |

@@ -1,8 +1,8 @@
 # NT 6.1 完整 Native / Win32 API 能力 backlog（与「基础迭代」分离）
 
-本文件列出 **长期目标**：在 clean-room 前提下对齐 Microsoft 公开文档中的 **NT 6.1 全量 API 面**（含后续 Win32 子系统、WOW64、注册表全类等）。**当前工程交付**仍以 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 的 K0–K8 与可运行验证（[MVT_NT61.md](MVT_NT61.md)）为闸门；本 backlog **不**表示已实现。
+本文件列出 **长期目标**：在 clean-room 前提下对齐 Microsoft 公开文档中的 **NT 6.1 全量 API 面**（含后续 Win32 子系统、WOW64、注册表全类等）。**当前工程交付**仍以 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 的 K0–K8 与 [MVT_NT61.md](MVT_NT61.md) 为闸门；本 backlog **不**表示已实现。**与契约矩阵 / API 骨架表分工**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
 
-**Phase 7 分节 PR**：`zig build test` → **nt61_full_api_backlog_anchors_host**（每节一条占位测试，提醒后续 PR 同步矩阵与实现）。
+**Phase 7 分节 PR**：`zig build test` → **nt61_full_api_backlog_anchors_host**（每节至少一条与 `ssdt_nt61` / 常量同源的**真断言**；阶段 E 总表见 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md)）。
 
 **版权**：仅 MSDN / WDK / 硬件与 VirtIO 等公开规范；禁止 Windows/ReactOS/Wine 源码。
 
@@ -64,7 +64,7 @@
 | W5-A（已接线） | `NtUserGetMessage` | `0x58` | 已实现 |
 | W5-A | `NtUserPeekMessage` | `0x59` | 已实现 |
 | W5-B（下一批） | `NtUserPostMessage` / `NtUserSendMessage` / `NtUserSetWindowPos` 等 | 查表后逐条填入 `ssdt_nt61.zig` | Planned |
-| WOW64 | 同上名称的 x86 表项 | `wow64/ssdt_x86_win7_sp1.zig` | Partial |
+| WOW64 | 同上名称的 x86 表项 + x64 语义别名 | `wow64/ssdt_x86_win7_sp1.zig`、`wow64/x64_semantic_alias.zig`；[PHASE_G_WOW64.md](PHASE_G_WOW64.md) | Partial |
 
 详细消息/API 与测试 ID 的对应表见 [NT61_WINMSG_API_TRACKER.md](NT61_WINMSG_API_TRACKER.md)。
 

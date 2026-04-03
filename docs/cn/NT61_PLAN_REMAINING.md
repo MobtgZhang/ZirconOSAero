@@ -1,6 +1,6 @@
 # 未完成项滚动清单（对照实现状态与图形脚手架）
 
-本文对照 [IMPLEMENTATION_STATUS_NT61.md](IMPLEMENTATION_STATUS_NT61.md)、[PROCESS_NT61.md](PROCESS_NT61.md)、[NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md) 与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)，列出**尚未按规范完整实现**的能力。已实现部分见契约矩阵与 `zig build test`。
+本文对照 [IMPLEMENTATION_STATUS_NT61.md](IMPLEMENTATION_STATUS_NT61.md)、[PROCESS_NT61.md](PROCESS_NT61.md)、[NT61_GRAPHICS_SCAFFOLD.md](NT61_GRAPHICS_SCAFFOLD.md) 与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)，列出**尚未按规范完整实现**的能力。已实现部分见契约矩阵与 `zig build test`。**本文内 Phase B/C/D/E… 与 [Roadmap.md](Roadmap.md)、阶段 D–G 专文的对照**：[README.md](README.md) 第二节。
 
 **版权**：仅 MSDN/WDK/硬件与 VirtIO 等公开规范；禁止 Windows/ReactOS/Wine 源码。
 
@@ -47,6 +47,8 @@
 ---
 
 ## Phase D — 合成器（DWM 向）
+
+**命名注意**：此处 **Phase D** 指 **GPU/CPU 合成与离屏场景**；**Win32 消息泵 + `WM_DWM*` + csrss LPC** 的阶段 D 清单见 [PHASE_D_WIN32_MSG_PUMP_DWM.md](PHASE_D_WIN32_MSG_PUMP_DWM.md) 与 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md)「阶段 D」节（两套编号并存，避免混淆）。
 
 - **D1–D4** 离屏 surface、场景图、Aero 模糊、动画调度与 [dwm_compositor](../../src/drivers/video/core/dwm_compositor.zig) 对齐。
 - **D5** 桌面循环事件驱动，默认降低对 `desktop_idle_spin` 的依赖（先修 IRQ 路径再改默认）。

@@ -1,5 +1,7 @@
 # ZirconOSAero 构建系统
 
+**主入口**：`zig build` / `zig build test`。CI 锁定的 Zig 版本见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 与 [.github/workflows/ci.yml](../../.github/workflows/ci.yml)。`Makefile`、`build.conf` 为可选封装。
+
 ## 1. 构建工具链
 
 | 工具 | 用途 |

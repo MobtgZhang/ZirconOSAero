@@ -32,6 +32,10 @@
 | 相对延时（负 `DelayInterval` 100ns 单位） | 内核在可抢占路径上睡眠至期满 | 许多路径以 **`scheduler.yield`** 或 tick 驱动等待 **近似**；**未**实现 HPET 级高精度睡眠 |
 | **实际粒度** | NT 上依赖定时器分辨率 | 主路径为 **PIC + PIT ~100Hz**，故可见延时通常为 **约 10ms 量级**（整 tick 对齐），高分辨率路线见 [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md) 与 `ke/timekeeping.zig` |
 
+## NtLockVirtualMemory / NtUnlockVirtualMemory
+
+当前为 **成功返回的桩**（不改变工作集或 MDL）；SSDT 使用折叠槽 **0x53 / 0x54**（见 [SyscallABI.md](SyscallABI.md)）。生产语义与 Working Set 管理为路线图。
+
 ## 版权
 
 实现须遵循仓库 `.cursor/rules` 中的 clean-room 与版权规则；本页只链接 Microsoft Learn 等公开文档。

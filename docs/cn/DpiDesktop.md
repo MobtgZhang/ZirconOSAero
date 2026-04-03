@@ -13,3 +13,9 @@
 ## 后续
 
 - 每监视器 DPI、非客户区缩放与 `GetDpiForWindow` 风格 API 映射到 `Win32Process` / user32（与 [DesktopManagerSpec.md](DesktopManagerSpec.md) 中的子系统表一致）。
+
+## 外部参考索引（用户态显示规范）
+
+姊妹仓库中的 Win32 **`desktop-src`** 文档树（路径形如 `ZirconOSFluentRust/references/win32/desktop-src`）仅作 **ChangeDisplaySettings / 高 DPI / 多显示器** 等**用户态**行为与 MSDN 对照的**长期参考**。**不用于** LoongArch UEFI GOP、`ramfb` 或 QEMU 串口排错；后者见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md)。
+
+**可检索对照**：LoongArch UEFI PE 文本重定位讨论见 [`scripts/tools/PE_LOONGARCH_UEFI.md`](../../scripts/tools/PE_LOONGARCH_UEFI.md) 与 [loongson-community/discussions#108](https://github.com/loongson-community/discussions/issues/108)。与 **`desktop-src`** 无包含关系。

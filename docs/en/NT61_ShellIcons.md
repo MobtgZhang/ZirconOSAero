@@ -56,7 +56,7 @@ Outputs: `src/desktop/aero/resources/win32/ico/*.ico` (gitignored), `zig-out/ass
 
 ## 6. Kernel vs host
 
-The kernel framebuffer path still uses embedded 16×16 fallbacks in `src/drivers/video/icons.zig` plus SVG registration in `resource_loader.zig`. **`pe_icon_resource.zig`** implements PE32+ `.rsrc` lookup from raw bytes (MS PE/COFF spec only). **`pe_icon_loader.loadIconResource`** reads a file on the host and locates `RT_GROUP_ICON` without calling Win32 APIs; pixel decode is still TODO. Manifest **`binary_form`** is parsed in **`shell_icons_manifest.zig`**; **`loadIconFromShellSystem32Dir`** selects ICO bundle vs PE for a `System32`-style directory.
+The kernel framebuffer path still uses embedded 16×16 fallbacks in `src/drivers/video/desktop/icons.zig` plus SVG registration in `resource_loader.zig`. **`pe_icon_resource.zig`** implements PE32+ `.rsrc` lookup from raw bytes (MS PE/COFF spec only). **`pe_icon_loader.loadIconResource`** reads a file on the host and locates `RT_GROUP_ICON` without calling Win32 APIs; pixel decode is still TODO. Manifest **`binary_form`** is parsed in **`shell_icons_manifest.zig`**; **`loadIconFromShellSystem32Dir`** selects ICO bundle vs PE for a `System32`-style directory.
 
 ## 7. See also (Chinese)
 

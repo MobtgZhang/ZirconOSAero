@@ -8,7 +8,7 @@ Offline Microsoft Learn mirror (example path): `ZirconOSFluentRust/references/wi
 
 ## Application platform (host model)
 
-The current desktop is **kernel framebuffer + Aero renderer** (see [AeroDesktopRuntime.md](../cn/AeroDesktopRuntime.md)). Built-in GUIs use **Phase 1-B: in-shell embedded windows** in [`src/drivers/video/builtin_apps.zig`](../../src/drivers/video/builtin_apps.zig). Future **user-mode processes + `CreateProcess`** can coexist; update the status column here when migrating.
+The current desktop is **kernel framebuffer + Aero renderer** (see [AeroDesktopRuntime.md](../cn/AeroDesktopRuntime.md)). Built-in GUIs use **Phase 1-B: in-shell embedded windows** in [`src/drivers/video/desktop/builtin_apps.zig`](../../src/drivers/video/desktop/builtin_apps.zig). Future **user-mode processes + `CreateProcess`** can coexist; update the status column here when migrating.
 
 | Piece | Location | Notes |
 |-------|----------|--------|
@@ -41,7 +41,7 @@ The in-kernel shell **does not** host Sidebar gadgets. Clock/weather-style exten
 
 ## Explorer checklist
 
-Track these against [`shell_strings.zig`](../../src/drivers/video/shell_strings.zig) and `renderer_aero` (replaces vague “deepening”):
+Track these against [`shell_strings.zig`](../../src/drivers/video/desktop/shell_strings.zig) and `renderer_aero` (replaces vague “deepening”):
 
 - [ ] Command bar / Libraries strings match `shell_strings` (en/cn)  
 - [ ] Footer status lines match `explorer_w2k_loc` transitions  

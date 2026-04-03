@@ -7,10 +7,10 @@ const klog = @import("../../rtl/klog.zig");
 const vm = @import("../../mm/vm.zig");
 const pcie = @import("../bus/pcie.zig");
 
-const dids = @import("loongson/dids.zig");
-const types = @import("loongson/types.zig");
-const gen_detect = @import("loongson/gen_detect.zig");
-const display_stub = @import("loongson/display_stub.zig");
+const dids = @import("vendor/loongson/dids.zig");
+const types = @import("vendor/loongson/types.zig");
+const gen_detect = @import("vendor/loongson/gen_detect.zig");
+const display_stub = @import("vendor/loongson/display_stub.zig");
 
 pub const DesktopFb = @import("intel_igpu.zig").DesktopFb;
 

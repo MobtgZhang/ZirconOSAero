@@ -11,11 +11,11 @@ const klog = @import("../../rtl/klog.zig");
 const vm = @import("../../mm/vm.zig");
 const io = @import("../../io/io.zig");
 const pcie = @import("../bus/pcie.zig");
-const hdmi = @import("hdmi.zig");
+const hdmi = @import("legacy/hdmi.zig");
 
-const types = @import("nvidia/types.zig");
-const chip_class = @import("nvidia/chip_class.zig");
-const display_handoff = @import("nvidia/display_handoff_stub.zig");
+const types = @import("vendor/nvidia/types.zig");
+const chip_class = @import("vendor/nvidia/chip_class.zig");
+const display_handoff = @import("vendor/nvidia/display_handoff_stub.zig");
 
 pub const DesktopFb = @import("intel_igpu.zig").DesktopFb;
 

@@ -7,12 +7,12 @@ const klog = @import("../../rtl/klog.zig");
 const vm = @import("../../mm/vm.zig");
 const pcie = @import("../bus/pcie.zig");
 
-const types = @import("intel/types.zig");
-const gen_detect = @import("intel/gen_detect.zig");
-const gtt = @import("intel/gtt.zig");
-const display_engine = @import("intel/display_engine.zig");
-const hdmi_intel = @import("intel/hdmi_intel.zig");
-const rings = @import("intel/render_rings_stub.zig");
+const types = @import("vendor/intel/types.zig");
+const gen_detect = @import("vendor/intel/gen_detect.zig");
+const gtt = @import("vendor/intel/gtt.zig");
+const display_engine = @import("vendor/intel/display_engine.zig");
+const hdmi_intel = @import("vendor/intel/hdmi_intel.zig");
+const rings = @import("vendor/intel/render_rings_stub.zig");
 
 /// 与 multiboot / UEFI handoff 对齐的帧缓冲参数
 pub const DesktopFb = struct {

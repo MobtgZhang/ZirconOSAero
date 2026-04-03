@@ -6,16 +6,16 @@ const build_options = @import("build_options");
 const klog = @import("../../rtl/klog.zig");
 const vm = @import("../../mm/vm.zig");
 const pcie = @import("../bus/pcie.zig");
-const hdmi = @import("hdmi.zig");
+const hdmi = @import("legacy/hdmi.zig");
 
-const amd_types = @import("amd/types.zig");
-const family_detect = @import("amd/family_detect.zig");
-const display_handoff = @import("amd/display_handoff.zig");
-const gmc = @import("amd/gmc.zig");
-const policy = @import("amd/policy.zig");
-const pcie_bars = @import("amd/pcie_bars.zig");
-const pcie_caps = @import("amd/pcie_caps.zig");
-const pci_dump = @import("amd/pci_dump.zig");
+const amd_types = @import("vendor/amd/types.zig");
+const family_detect = @import("vendor/amd/family_detect.zig");
+const display_handoff = @import("vendor/amd/display_handoff.zig");
+const gmc = @import("vendor/amd/gmc.zig");
+const policy = @import("vendor/amd/policy.zig");
+const pcie_bars = @import("vendor/amd/pcie_bars.zig");
+const pcie_caps = @import("vendor/amd/pcie_caps.zig");
+const pci_dump = @import("vendor/amd/pci_dump.zig");
 
 /// 与 multiboot / UEFI handoff 及 Intel 路径共用布局
 pub const DesktopFb = @import("intel_igpu.zig").DesktopFb;

@@ -139,8 +139,21 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
 
     switch (irq) {
         0 => {
-            scheduler.tick();
-            klog.notifyTimerTick();
+            // J10：AP 在 `apProcessorIdleLoop` 中 `currentThreadIndex()==-1` 时尚无每核 `current_thread`；
+            // 仅 BSP（或已绑定调度线程的核）推进全局 `scheduler.tick`，避免 AP 误用 BSP 的 `current_thread`。
+            if (builtin.target.cpu.arch == .x86_64) {
+                const madt = @import("../hal/x86_64/madt.zig");
+                const kpcr = @import("kpcr.zig");
+                if (madt.logical_cpu_count > 1 and kpcr.currentThreadIndex() < 0) {
+                    klog.notifyTimerTick();
+                } else {
+                    scheduler.tick();
+                    klog.notifyTimerTick();
+                }
+            } else {
+                scheduler.tick();
+                klog.notifyTimerTick();
+            }
             if (builtin.target.cpu.arch == .x86_64) {
                 dpc.requestInputFlushDeferred();
             }

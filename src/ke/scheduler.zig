@@ -334,8 +334,9 @@ fn isBspIdleThreadForSteal() bool {
 fn workStealBalanceIfIdleImpl() void {
     const n = schedNumCpus();
     if (n <= 1) return;
+    const here: usize = @intCast(kpcr.currentProcessorNumber());
+    if (here != 0) return; // AP 上 `tick` 已跳过或尚无每核 current_thread；窃取仅 BSP 槽直至全每核调度闭环。
     if (!isBspIdleThreadForSteal()) return;
-    const here: usize = 0;
     if (cpuHasAnyReady(here)) return;
     var best_c: usize = 0;
     var best_len: usize = 0;

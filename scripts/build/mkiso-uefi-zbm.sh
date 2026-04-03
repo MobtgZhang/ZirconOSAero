@@ -59,7 +59,8 @@ UEFI_INFO="$ISO_ROOT/UEFI_BOOT_INFO.txt"
 } >"$UEFI_INFO"
 
 ESP_IMG="$ISO_ROOT/esp.img"
-dd if=/dev/zero of="$ESP_IMG" bs=1M count=64 status=none
+# 与 Makefile ESP 一致：Debug 内核 ELF 可 >64MiB，过小会导致 mcopy 失败。
+dd if=/dev/zero of="$ESP_IMG" bs=1M count=256 status=none
 mkfs.vfat "$ESP_IMG" >/dev/null
 
 mmd -i "$ESP_IMG" ::/EFI ::/EFI/BOOT ::/boot 2>/dev/null || true

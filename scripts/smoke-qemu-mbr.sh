@@ -54,6 +54,10 @@ if [[ -f "$LOG" ]]; then
       echo "[smoke] FAIL: kernel ELF missing embedded 'ZirconOSAero kernel ready' (klog banner)" >&2
       exit 1
     fi
+    if ! grep -aqs "VM: Identity mapping" "$KELF"; then
+      echo "[smoke] FAIL: kernel ELF missing Phase3 'VM: Identity mapping' klog string" >&2
+      exit 1
+    fi
     if [[ "$MIN_SERIAL_BYTES" -gt 0 && "$SZ" -lt "$MIN_SERIAL_BYTES" ]]; then
       echo "[smoke] FAIL: serial log $SZ bytes < --min-serial-bytes=$MIN_SERIAL_BYTES (increase timeout in script or relax CI threshold)" >&2
       exit 1

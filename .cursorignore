@@ -1,0 +1,8 @@
+# Local / out-of-tree material — not part of the shipped project docs or CI inputs.
+mdcs/
+external/
+/build/
+zig-out/
+.zig-cache/
+log.txt
+

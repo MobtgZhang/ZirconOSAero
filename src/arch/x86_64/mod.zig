@@ -51,6 +51,11 @@ pub fn serialWrite(s: []const u8) void {
     serial.write(s);
 }
 
+/// 串口 FIFO 排空（见 `serial.flushTx`）；供 PFN 早期清零等路径在日志后强制落盘。
+pub fn flushDebugSerialOutput() void {
+    serial.flushTx();
+}
+
 pub fn initSerial() void {
     serial.init();
 }
@@ -111,6 +116,10 @@ pub fn consumeWallpaperCycleHotkey() bool {
 
 pub fn consumeFlip3dHotkey() bool {
     return keyboard.consumeFlip3dHotkey();
+}
+
+pub fn consumeFlip3dDismiss() bool {
+    return keyboard.consumeFlip3dDismiss();
 }
 
 pub fn takeCursorNudge() @import("../../drivers/input/cursor_types.zig").CursorNudge {
@@ -189,4 +198,21 @@ pub fn enableInterrupts() void {
 
 pub fn disableInterrupts() void {
     asm volatile ("cli");
+}
+
+/// 读取 RFLAGS.IF 后 `cli`；返回进入前 IF 是否为 1（中断本已允许）。
+/// Ref: Intel SDM — RFLAGS 与 `cli`/`sti`。
+pub fn saveAndDisableInterrupts() bool {
+    const rflags = asm volatile ("pushfq\n\tpop %[r]"
+        : [r] "=r" (-> u64),
+    );
+    asm volatile ("cli" ::: .{ .memory = true });
+    return (rflags & (1 << 9)) != 0;
+}
+
+/// 与 `saveAndDisableInterrupts` 配对；仅当先前 IF=1 时 `sti`（ISR 内持锁结束不得误开中断）。
+pub fn restoreInterrupts(were_enabled: bool) void {
+    if (were_enabled) {
+        asm volatile ("sti" ::: .{ .memory = true });
+    }
 }

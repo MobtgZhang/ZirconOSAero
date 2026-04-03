@@ -94,3 +94,18 @@ pub fn enableInterrupts() void {
 pub fn disableInterrupts() void {
     asm volatile ("csrci sstatus, 0x2");
 }
+
+/// `sstatus.SIE`（bit 1）为 1 表示 S 模式中断曾允许。\n/// Ref: RISC-V Privileged Spec — sstatus。
+pub fn saveAndDisableInterrupts() bool {
+    const s: usize = asm volatile ("csrr %[r], sstatus"
+        : [r] "=r" (-> usize),
+    );
+    asm volatile ("csrci sstatus, 0x2" ::: .{ .memory = true });
+    return (s & 0x2) != 0;
+}
+
+pub fn restoreInterrupts(were_enabled: bool) void {
+    if (were_enabled) {
+        asm volatile ("csrsi sstatus, 0x2" ::: .{ .memory = true });
+    }
+}

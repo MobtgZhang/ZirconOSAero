@@ -128,6 +128,19 @@ pub fn disableInterrupts() void {
     );
 }
 
+/// CRMD.IE（bit 2）为 1 时中断允许。\n/// Ref: LoongArch ABI / CSR CRMD。
+pub fn saveAndDisableInterrupts() bool {
+    const crmd: u64 = asm ("csrrd %[result], 0x0"
+        : [result] "=r" (-> u64),
+    );
+    disableInterrupts();
+    return (crmd & 0x4) != 0;
+}
+
+pub fn restoreInterrupts(were_enabled: bool) void {
+    if (were_enabled) enableInterrupts();
+}
+
 pub fn readInputChar() ?u8 {
     const ev = @import("../../drivers/input/evdev_virtio_bridge.zig");
     if (ev.hasData()) return ev.readChar();

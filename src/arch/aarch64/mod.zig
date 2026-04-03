@@ -76,3 +76,19 @@ pub fn enableInterrupts() void {
 pub fn disableInterrupts() void {
     asm volatile ("msr daifset, #0xF");
 }
+
+/// `mrs daif` 后 `daifset`；DAIF.I（bit 7）为 0 表示 IRQ 未屏蔽即此前允许中断。
+/// Ref: ARM DDI 0487 — DAIF。
+pub fn saveAndDisableInterrupts() bool {
+    const daif: u64 = asm volatile ("mrs %[r], daif"
+        : [r] "=r" (-> u64),
+    );
+    asm volatile ("msr daifset, #0xF" ::: .{ .memory = true });
+    return (daif & (1 << 7)) == 0;
+}
+
+pub fn restoreInterrupts(were_enabled: bool) void {
+    if (were_enabled) {
+        asm volatile ("msr daifclr, #0xF" ::: .{ .memory = true });
+    }
+}

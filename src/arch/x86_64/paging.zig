@@ -3,6 +3,7 @@
 //!
 //! NT 风格：内核提供映射/解映射机制，策略由用户态服务决定
 
+const builtin = @import("builtin");
 const PAGE_SIZE: usize = 4096;
 const PAGE_MASK: usize = PAGE_SIZE - 1;
 
@@ -227,9 +228,26 @@ pub fn mapPage(
     const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
     const pte_idx = v.ptIndex();
     var pte = &pt.entries[pte_idx];
-    if (pte.isPresent()) return false; // 已映射
+    if (pte.isPresent()) {
+        // UEFI/引导器已建立恒等叶映射时须视为成功，否则 `mapIdentityByteRange` 整段失败。
+        if (pte.toFrame() == p.value and leafPteFlagsMatch(pte.*, flags)) {
+            pte.accessed = true;
+            return true;
+        }
+        return false;
+    }
     pte.* = PageTableEntry.fromFrame(p.value, flags | Present);
     pte.accessed = true;
+    return true;
+}
+
+/// 已存在叶项是否与本次 `mapPage` 请求一致（可写/用户/NX）。
+/// `Global`、**PAT/CD/WT** 等与固件/MTRR 可能不一致，不强制相等，避免恒等映射卡在大段 4K 回退。
+fn leafPteFlagsMatch(pte: PageTableEntry, flags: u64) bool {
+    if (!pte.present) return false;
+    if (pte.writable != ((flags & Write) != 0)) return false;
+    if (pte.user != ((flags & User) != 0)) return false;
+    if (pte.no_execute != ((flags & NoExecute) != 0)) return false;
     return true;
 }
 
@@ -363,8 +381,38 @@ pub fn protectLeafPage(
     return true;
 }
 
+/// 将已存在 **4KiB 叶** 的物理帧替换为 `new_phys`（CoW 写分裂）；`flags` 为完整叶标志（含 `Write`）。
+pub fn remapLeafPhysical(
+    pml4_phys: u64,
+    virt: u64,
+    new_phys: u64,
+    flags: u64,
+    alloc_frame: AllocFrameFn,
+    alloc_ctx: ?*anyopaque,
+) bool {
+    if (!split2MiBIdentityPageIfNeeded(pml4_phys, virt, alloc_frame, alloc_ctx)) return false;
+    const v = VirtAddr{ .value = virt };
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    const pml4e = &pml4.entries[v.pml4Index()];
+    if (!pml4e.isPresent()) return false;
+    const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+    const pdpte = &pdpt.entries[v.pdptIndex()];
+    if (!pdpte.isPresent()) return false;
+    const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde2 = &pd.entries[v.pdIndex()];
+    if (!pde2.isPresent()) return false;
+    const pt = @as(*PageTable, @ptrFromInt(pde2.toFrame()));
+    const pte = &pt.entries[v.ptIndex()];
+    if (!pte.isPresent()) return false;
+    const merged = flags | Present | Accessed;
+    pte.* = PageTableEntry.fromFrame(new_phys, merged);
+    invlpg(virt);
+    return true;
+}
+
 /// 加载 CR3
 pub fn loadCr3(phys: u64) void {
+    if (builtin.os.tag != .freestanding) return;
     asm volatile ("mov %[phys], %%cr3"
         :
         : [phys] "r" (phys),
@@ -373,6 +421,7 @@ pub fn loadCr3(phys: u64) void {
 
 /// 读取 CR3
 pub fn readCr3() u64 {
+    if (builtin.os.tag != .freestanding) return 0;
     return asm ("mov %%cr3, %[result]"
         : [result] "=r" (-> u64),
     );
@@ -386,6 +435,7 @@ pub fn invlpg(virt: u64) void {
 
 /// 刷新整个 TLB
 pub fn flushTlb() void {
+    if (builtin.os.tag != .freestanding) return;
     loadCr3(readCr3());
 }
 
@@ -429,6 +479,51 @@ fn releasePdptAll(pdpt_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) voi
         pdpte.* = .{};
     }
     free_frame(ctx, pdpt_phys);
+}
+
+/// 枚举 PML4[0..256) 下 **4KiB 用户叶**（`Present` 且 `User`）。**1GiB / 2MiB 大页**当前跳过（fork 子集不展开大页；见 `duplicateUserMappingsForFork` 注释）。
+/// 回调返回 `false` 时中止遍历并令本函数返回 `false`。
+pub fn forEachUser4KiPresentLeaf(
+    pml4_phys: u64,
+    ctx: ?*anyopaque,
+    cb: *const fn (ctx: ?*anyopaque, virt: u64, phys: u64, pte_raw: u64) bool,
+) bool {
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    var p4: usize = 0;
+    while (p4 < 256) : (p4 += 1) {
+        const pml4e = &pml4.entries[p4];
+        if (!pml4e.isPresent()) continue;
+        const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+        var p3: usize = 0;
+        while (p3 < 512) : (p3 += 1) {
+            const pdpte = &pdpt.entries[p3];
+            if (!pdpte.isPresent()) continue;
+            const pdpte_raw = @as(u64, @bitCast(pdpte.*));
+            if ((pdpte_raw & LargePage) != 0) continue;
+            const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+            var p2: usize = 0;
+            while (p2 < 512) : (p2 += 1) {
+                const pde = &pd.entries[p2];
+                if (!pde.isPresent()) continue;
+                const pde_raw = @as(u64, @bitCast(pde.*));
+                if ((pde_raw & LargePage) != 0) continue;
+                const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
+                var p1: usize = 0;
+                while (p1 < 512) : (p1 += 1) {
+                    const pte = &pt.entries[p1];
+                    if (!pte.isPresent() or !pte.user) continue;
+                    const virt = (@as(u64, @intCast(p4)) << 39) |
+                        (@as(u64, @intCast(p3)) << 30) |
+                        (@as(u64, @intCast(p2)) << 21) |
+                        (@as(u64, @intCast(p1)) << 12);
+                    const phys = pte.toFrame();
+                    const pte_raw = @as(u64, @bitCast(pte.*));
+                    if (!cb(ctx, virt, phys, pte_raw)) return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 /// 释放 PML4 **用户子树**（索引 **0..255**，即 NT/x86_64 典型布局下 canonical **低半区** 的 PML4 槽位）。

@@ -92,3 +92,16 @@ pub fn disableInterrupts() void {
         : [val] "r" (status),
     );
 }
+
+/// Status.IE（bit 0）为 1 时中断允许。\n/// Ref: MIPS Vol.III — Status register。
+pub fn saveAndDisableInterrupts() bool {
+    const status: u32 = asm ("mfc0 %[result], $12"
+        : [result] "=r" (-> u32),
+    );
+    disableInterrupts();
+    return (status & 0x1) != 0;
+}
+
+pub fn restoreInterrupts(were_enabled: bool) void {
+    if (were_enabled) enableInterrupts();
+}

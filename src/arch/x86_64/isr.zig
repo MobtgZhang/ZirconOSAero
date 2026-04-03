@@ -4,8 +4,12 @@
 
 pub const STUB_COUNT: usize = 48;
 
+/// 固定 IPI：TLB shootdown（`tlb_broadcast` / `lapic_smp.broadcastFixedIpiExcludingSelf`）；须在 IDT 登记专用桩。
+pub const ipi_tlb_flush_vector: u8 = 254;
+
 extern const isr_table: [STUB_COUNT]usize;
 extern const isr_default_entry: usize;
+extern fn isr_stub_254() void;
 
 pub fn getStubAddr(idx: usize) usize {
     if (idx < STUB_COUNT) return isr_table[idx];
@@ -14,6 +18,10 @@ pub fn getStubAddr(idx: usize) usize {
 
 pub fn getDefaultAddr() usize {
     return isr_default_entry;
+}
+
+pub fn ipiTlbFlushStubAddr() usize {
+    return @intFromPtr(&isr_stub_254);
 }
 
 const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;

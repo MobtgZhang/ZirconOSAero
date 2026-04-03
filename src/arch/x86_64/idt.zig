@@ -47,6 +47,8 @@ pub fn init() void {
     while (i < 256) : (i += 1) {
         if (i == 128) {
             idt_entries[i] = makeEntry(syscall_addr);
+        } else if (i == isr.ipi_tlb_flush_vector) {
+            idt_entries[i] = makeEntry(isr.ipiTlbFlushStubAddr());
         } else {
             idt_entries[i] = makeEntry(default_addr);
         }

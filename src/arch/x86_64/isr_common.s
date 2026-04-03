@@ -69,6 +69,9 @@ ISR_NOERR 45
 ISR_NOERR 46
 ISR_NOERR 47
 
+# IPI：TLB flush（与 `isr.zig` 中 `ipi_tlb_flush_vector` 一致）
+ISR_NOERR 254
+
 # Default stub for remaining vectors
 .global isr_stub_default
 isr_stub_default:

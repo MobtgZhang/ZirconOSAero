@@ -7,6 +7,7 @@
 //!
 //! 模块化：`wow64/types.zig`、`wow64/thunk.zig`、`wow64/redirect.zig`。
 //! **x86 原生服务号**（与 x64 SSDT 不同）公开子集：`wow64/ssdt_x86_win7_sp1.zig`（j00ru x86 `nt-per-system.json` Win7 SP1）。
+//! **路线图**：将 `translateSyscall32to64` 与 x64 `ssdt_nt61` / `syscall_dispatch_mm.zig` 语义逐条对齐（SSDT_Roadmap 阶段 3）。
 
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");

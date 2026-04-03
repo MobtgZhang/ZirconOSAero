@@ -1573,7 +1573,7 @@ pub fn logVirtioScanoutReadiness() void {
     }
     var entries: [virtio_gpu_spec.max_virtio_backing_mem_entries]VirtioBackingMemEntry = undefined;
     if (fillFrontBufferVirtioBackingEntries(&entries)) |n| {
-        klog.info("VirtIO scanout hints: multi-entry backing ok ({d} virtio_gpu_mem_entry segments)", .{n});
+        klog.info("VirtIO scanout hints: multi-entry backing ok (%u virtio_gpu_mem_entry segments)", .{n});
         return;
     }
     klog.warn("VirtIO scanout hints: cannot derive backing entries (check VM mapping / pitch)", .{});

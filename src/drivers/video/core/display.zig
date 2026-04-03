@@ -216,6 +216,8 @@ var taskmgr_caption_btn_hover: AeroCaptionBtnHover = .none;
 var flip3d_overlay_active: bool = false;
 /// 打开 Flip3D 后首帧需整场景采样；之后冻结背景仅叠光标/覆盖层（见 `renderSceneWithoutSoftwareCursorFlip3dAware`）。
 var flip3d_needs_scene_refresh: bool = false;
+/// `collectShellWindowSurfaceIds` 底栏预览条内高亮索引（仅 shell 槽位；Alt+Tab 连按时递增）。
+var flip3d_shell_tab_index: u32 = 0;
 /// 任务栏 Explorer 磁贴悬停缩略图（`WM_DWMSENDICONICTHUMBNAIL` 壳层可视占位；自帧缓冲降采样）。
 var taskbar_explorer_thumb: [20 * 15]u32 = [_]u32{0} ** (20 * 15);
 var taskbar_explorer_thumb_valid: bool = false;
@@ -860,6 +862,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
             }
         }
     }
+    blitRegisteredDwmThumbnailsToFramebuffer(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
     if (flip3d_overlay_active) {
         panic_ctx.setPhase(0x0002_0067);
         renderFlip3dOverlay(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
@@ -937,10 +940,26 @@ pub fn hideStartMenu() void {
 pub fn handleDesktopHotkeys() bool {
     const arch = @import("../../../arch.zig");
     const nt61_aero = @import("nt61_aero_defaults");
+    if (arch.consumeFlip3dDismiss()) {
+        if (flip3d_overlay_active) {
+            flip3d_overlay_active = false;
+            flip3d_needs_scene_refresh = false;
+            flip3d_shell_tab_index = 0;
+            dwm_comp.notifyFlip3dOverlayKernelActive(false);
+            cursor_plane.invalidate();
+            return true;
+        }
+    }
     // 单消费：`consumeFlip3dHotkey` 仅在键盘 IRQ 路径置位；此处为壳层唯一读取点（与矩阵 §4.1 Flip3D 一致）。
     if (nt61_aero.KernelCompositor.flip3d_enabled and arch.consumeFlip3dHotkey()) {
-        flip3d_overlay_active = !flip3d_overlay_active;
-        flip3d_needs_scene_refresh = flip3d_overlay_active;
+        if (flip3d_overlay_active) {
+            flip3d_shell_tab_index +%= 1;
+            flip3d_needs_scene_refresh = false;
+        } else {
+            flip3d_overlay_active = true;
+            flip3d_shell_tab_index = 0;
+            flip3d_needs_scene_refresh = true;
+        }
         dwm_comp.notifyFlip3dOverlayKernelActive(flip3d_overlay_active);
         cursor_plane.invalidate();
         return true;
@@ -1325,7 +1344,7 @@ fn applyTaskMgrDrag(x: i32, y: i32, scr_w: i32, scr_h: i32) void {
     taskmgr_y = cy;
 }
 
-/// 鼠标移动对桌面合成的提示：`needs_full_scene` 开始菜单悬停等须整场景；`needs_drag_repaint` 拖窗位移（不计入整场景）；`needs_caption_chrome_only` 仅标题栏带；`cursor_shape_changed` 光标快速路径。
+/// 鼠标移动对桌面合成的提示：`needs_full_scene` 当前恒为 false（整场景由 UI 脏/插值/释放路径驱动）；**开始菜单行悬停**走 `needs_startmenu_repaint` → `renderDesktopFrameEx` 的 `startmenu_partial`（壁纸可 patch 时）；`needs_drag_repaint` 拖窗位移；`needs_caption_chrome_only` 仅标题栏带；`cursor_shape_changed` 光标快速路径。
 pub const MouseMovePaintHint = struct {
     needs_full_scene: bool = false,
     /// 开始菜单悬停行变化：仅重绘菜单脏区（避免整屏壁纸+毛玻璃）。
@@ -1779,8 +1798,9 @@ pub fn initAeroDwm() void {
                 virtio_gpu_pci.isScanoutActive(),
                 virtio_gpu_pci.scanoutUsesMultipageBacking(),
                 virtio_gpu_pci.virglContextReady(),
+                virtio_gpu_pci.virglSubmit3dNoopOk(),
             );
-            klog.info("Desktop display phase (WDDM-like runtime): {s} (present_backend={s})", .{
+            klog.info("Desktop display phase (WDDM-like runtime): %s (present_backend=%s)", .{
                 @tagName(ph), @tagName(display_backend.getActiveBackend()),
             });
         }
@@ -1790,7 +1810,7 @@ pub fn initAeroDwm() void {
             const h = @min(@as(u32, 4), fb.getHeight());
             if (w > 0 and h > 0) {
                 if (virtio_gpu_pci.compositorTryRoundTripFramebufferRect(0, 0, w, h)) {
-                    klog.info("VirtIO-GPU: display ↔ scratch TRANSFER round-trip ok ({d}×{d})", .{ w, h });
+                    klog.info("VirtIO-GPU: display ↔ scratch TRANSFER round-trip ok (%ux%u)", .{ w, h });
                 } else {
                     klog.warn("VirtIO-GPU: display ↔ scratch round-trip failed (CPU compositor only; check 32bpp)", .{});
                 }
@@ -3022,6 +3042,78 @@ fn maybeRefreshExplorerTaskbarThumb(px: i32, py: i32, scr_w: i32, scr_h: i32) vo
     taskbar_explorer_thumb_valid = true;
     dwm_comp.enqueueIconicThumbnailRequest(0);
     user32.broadcastDwmIconicThumbnailRequested(dwm_comp.surface_thumb_w, dwm_comp.surface_thumb_h);
+    user32.broadcastDwmIconicLivePreviewBitmapRequested(dwm_comp.surface_thumb_w, dwm_comp.surface_thumb_h);
+}
+
+fn blendThumbOverBackground(fg: u32, bg: u32, alpha: u32) u32 {
+    const a: u32 = @min(alpha, 255);
+    const inv: u32 = 255 - a;
+    const fb_ = fg & 0xFF;
+    const fg_g = (fg >> 8) & 0xFF;
+    const fg_r = (fg >> 16) & 0xFF;
+    const bb = bg & 0xFF;
+    const bg_g = (bg >> 8) & 0xFF;
+    const bg_r = (bg >> 16) & 0xFF;
+    const ob = (fb_ * a + bb * inv) / 255;
+    const og = (fg_g * a + bg_g * inv) / 255;
+    const orv = (fg_r * a + bg_r * inv) / 255;
+    return ob | (og << 8) | (orv << 16);
+}
+
+/// `DwmRegisterThumbnail`：将源表面缩略缓冲缩放贴到 `rcDestination`（目标 HWND 的**客户区坐标**在真 Win32 上；本子集用 `GetWindowRect` 原点 + destination 为 **Partial** 近似）。
+fn blitRegisteredDwmThumbnailsToFramebuffer(scr_w: i32, scr_h: i32) void {
+    if (!dwm_comp.isInitialized()) return;
+    const dnc = @import("../../../config/dwm_nt61_api_contract.zig");
+    var hi: usize = 1;
+    while (hi <= dwm_comp.max_registered_dwm_thumbnails) : (hi += 1) {
+        if (dwm_comp.dwmThumbnailSrcHwnd(hi) == null) continue;
+        const props_ptr = dwm_comp.dwmThumbnailPropsConst(hi) orelse continue;
+        const props = props_ptr.*;
+        if (props.fVisible == 0) continue;
+        if ((props.dwFlags & dnc.DWM_TNP_VISIBLE) == 0) continue;
+        if ((props.dwFlags & dnc.DWM_TNP_RECTDESTINATION) == 0) continue;
+        const dest_hwnd = dwm_comp.dwmThumbnailDestHwnd(hi) orelse continue;
+        const src_hwnd = dwm_comp.dwmThumbnailSrcHwnd(hi) orelse continue;
+        const src_sid = user32.tryGetCompositorSurfaceId(src_hwnd) orelse continue;
+        const px = dwm_comp.getSurfaceThumbPixels(src_sid) orelse continue;
+        const tw = dwm_comp.surface_thumb_w;
+        const th = dwm_comp.surface_thumb_h;
+        if (tw == 0 or th == 0) continue;
+        var wr: user32.RECT = undefined;
+        if (user32.GetWindowRect(dest_hwnd, &wr) == user32.FALSE) continue;
+        const dl = props.rcDestination.left;
+        const dt = props.rcDestination.top;
+        const dr = props.rcDestination.right;
+        const db = props.rcDestination.bottom;
+        const dww = dr - dl;
+        const dhh = db - dt;
+        if (dww <= 0 or dhh <= 0) continue;
+        const sx0 = wr.left + dl;
+        const sy0 = wr.top + dt;
+        const use_opacity = (props.dwFlags & dnc.DWM_TNP_OPACITY) != 0;
+        const alpha: u32 = if (use_opacity) @intCast(props.opacity) else 255;
+        const x_denom: i64 = @max(1, dww - 1);
+        const y_denom: i64 = @max(1, dhh - 1);
+        var dy: i32 = 0;
+        while (dy < dhh) : (dy += 1) {
+            var dx: i32 = 0;
+            while (dx < dww) : (dx += 1) {
+                const px_x: u32 = @intCast(@divTrunc(@as(i64, dx) * @as(i64, @intCast(tw -| 1)), x_denom));
+                const px_y: u32 = @intCast(@divTrunc(@as(i64, dy) * @as(i64, @intCast(th -| 1)), y_denom));
+                const tx = @min(px_x, tw - 1);
+                const ty = @min(px_y, th - 1);
+                var c = px[@as(usize, ty) * tw + @as(usize, tx)];
+                const out_x = sx0 + dx;
+                const out_y = sy0 + dy;
+                if (out_x < 0 or out_y < 0 or out_x >= scr_w or out_y >= scr_h) continue;
+                if (alpha < 255) {
+                    const bg = fb.getPixel32(@intCast(out_x), @intCast(out_y));
+                    c = blendThumbOverBackground(c, bg, alpha);
+                }
+                fb.fillRect(out_x, out_y, 1, 1, c);
+            }
+        }
+    }
 }
 
 fn paintExplorerTaskbarThumbnailPreview(scr_w: i32, scr_h: i32) void {
@@ -3103,10 +3195,19 @@ fn renderFlip3dOverlay(scr_w: i32, scr_h: i32) void {
     const n_shell = dwm_comp.collectShellWindowSurfaceIds(&shell_sids);
     var si: usize = 0;
     const max_preview = @min(dwm_comp.flip3d_shell_thumb_paint_max, n_shell);
+    const focus_si: usize = if (n_shell > 0) @as(usize, @intCast(flip3d_shell_tab_index % n_shell)) else 0;
+    const th_scale: i32 = 2;
+    const tw_px: i32 = @intCast(dwm_comp.surface_thumb_w);
+    const th_px: i32 = @intCast(dwm_comp.surface_thumb_h);
     while (si < max_preview) : (si += 1) {
-        flip3dPaintSurfaceThumb(cx - 70 + @as(i32, @intCast(si * 52)), cy + 118, 2, shell_sids[si]);
+        const x0 = cx - 70 + @as(i32, @intCast(si * 52));
+        const y0 = cy + 118;
+        flip3dPaintSurfaceThumb(x0, y0, th_scale, shell_sids[si]);
+        if (n_shell > 0 and si == focus_si) {
+            fb.drawRect(x0 - 2, y0 - 2, tw_px * th_scale + 4, th_px * th_scale + 4, rgb(0xFF, 0xCC, 0x40));
+        }
     }
-    fb.drawTextTransparentUi(@divTrunc(scr_w, 2) - 60, 24, "Flip3D (Alt+Tab) — CPU preview", rgb(0xE8, 0xF0, 0xFF));
+    fb.drawTextTransparentUi(@divTrunc(scr_w, 2) - 60, 24, "Flip3D (Alt+Tab) — Esc close — CPU preview", rgb(0xE8, 0xF0, 0xFF));
 }
 
 fn hitTestTaskMgrTrayChip(px: i32, py: i32) bool {

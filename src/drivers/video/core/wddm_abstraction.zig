@@ -29,13 +29,17 @@ pub const WddmRuntimePhase = enum {
     virtio_scanout_flat,
     virtio_scanout_multipage,
     virgl_context_up,
+    /// `CMD_SUBMIT_3D` 空提交至少一次成功（MVP；非 WDDM IOCTL、无模糊卸载）。
+    virgl_submit3d_noop_ok,
 };
 
 pub fn classifyVirtioRuntimePhase(
     scanout_active: bool,
     multipage_backing: bool,
     virgl_ctx_ready: bool,
+    submit3d_noop_ok: bool,
 ) WddmRuntimePhase {
+    if (submit3d_noop_ok) return .virgl_submit3d_noop_ok;
     if (virgl_ctx_ready) return .virgl_context_up;
     if (scanout_active and multipage_backing) return .virtio_scanout_multipage;
     if (scanout_active) return .virtio_scanout_flat;

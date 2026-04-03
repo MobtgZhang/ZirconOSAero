@@ -567,6 +567,24 @@ pub fn dwmThumbnailSrcHwnd(handle: usize) ?u64 {
     return thumb_src_hwnd[i];
 }
 
+/// `HTHUMBNAIL` 句柄 1..MAX；未使用槽返回 null。
+pub fn dwmThumbnailDestHwnd(handle: usize) ?u64 {
+    if (handle == 0 or handle > MAX_DWM_THUMBNAILS) return null;
+    const i = handle - 1;
+    if (!thumb_slot_used[i]) return null;
+    return thumb_dest_hwnd[i];
+}
+
+/// 供 `display` 将注册缩略图合成到帧缓冲；无效句柄返回 null。
+pub fn dwmThumbnailPropsConst(handle: usize) ?*const dwm_nt61_abi.DWM_THUMBNAIL_PROPERTIES {
+    if (handle == 0 or handle > MAX_DWM_THUMBNAILS) return null;
+    const i = handle - 1;
+    if (!thumb_slot_used[i]) return null;
+    return &thumb_props_store[i];
+}
+
+pub const max_registered_dwm_thumbnails = MAX_DWM_THUMBNAILS;
+
 /// 单元测试 / 诊断：重置缩略图表。
 pub fn dwmThumbnailResetForTest() void {
     @memset(&thumb_slot_used, false);

@@ -42,8 +42,8 @@
 | 进程页表释放（用户半区） | `arch/x86_64/paging.zig` `releaseUserHalfAddressSpace` | 部分 — `vm.releaseProcessAddressSpace` 前递增 TLB shootdown 提示（`tlb_broadcast`） |
 | 调度切换 CR3 | `src/ke/scheduler.zig` | 部分 — tick 路径 `activateCr3ForProcessId`；`terminateProcess` 前经 `before_release_process_address_space` 拆除该 pid 的调度线程（K2.1） |
 | ACPI MADT / LAPIC / 首 IOAPIC 基址枚举 | `src/hal/x86_64/madt.zig` | 部分 |
-| AP 入口 / TLB 广播占位 | `ap_entry.zig` / `tlb_broadcast.zig` / `smp_boot.zig` / `lapic_smp.zig` / `interrupt_x86.zig` / `idt.zig` | 部分 — 多核时 **INIT + SIPI×2**，实模式自旋跳板 phys **`0x8000`**；**IDT 向量 254** = TLB flush IPI 处理（`flushLocal` + `sendLocalEoi`）；**`-Dsmp_tlb_ipi`** 控制是否广播；**`-Dlapic_periodic_tick`** 可选 LAPIC LVT tick（见 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K2.4/K2.5） |
-| 每 CPU 调度与窃取 | `percpu_sched.zig` / `scheduler.zig` | 部分 — 新线程 `home_cpu` 由最短就绪队列选取（`pickBalancedHomeCpu`）；窃取与 **AP 未实跑 tick**（仅 BSP） |
+| AP 入口 / TLB IPI / LAPIC tick | `ap_entry.zig` / `tlb_broadcast.zig` / `smp_boot.zig` / `lapic_smp.zig` / `lapic_timer_tick.zig` / `interrupt_x86.zig` / `idt.zig` | 部分 — AP 经实模式跳板 **`0x8000`** 进入长模式 `apKernelEntry`；**IDT 向量 254** = TLB flush IPI；**x86_64 默认 `-Dsmp_tlb_ipi=true`**（可显式关）；**`-Dlapic_periodic_tick`** 时 BSP 与 AP 均编程 LVT 周期定时器；IRQ0 上 AP 在 `currentThreadIndex()<0` 时跳过 `scheduler.tick`（见 [VM_ISOLATION.md](VM_ISOLATION.md)） |
+| 每 CPU 调度与窃取 | `percpu_sched.zig` / `scheduler.zig` | 部分 — 新线程 `home_cpu` 由最短就绪队列选取；`workStealBalanceIfIdleImpl` 以 `kpcr.currentProcessorNumber()` 为槽索引，**窃取仍仅 BSP（槽 0）**直至全每核 `current_thread` 闭环 |
 | 单调时钟 / HPET 只读 | `ke/timekeeping.zig` / `hal/x86_64/hpet.zig` | 部分 — HPET MMIO 探测与主计数器；IRQ0 仍为 PIT |
 | 内核 #PF 结构化 STOP | `src/ke/bugcheck.zig`、`src/ke/interrupt_x86.zig` | 部分 — `keBugCheckEx` + `PAGE_FAULT_IN_NONPAGED_AREA` 等价码；用户态仍走 lazy/CoW 或终止进程 |
 | 节对象句柄末引用回收 | `src/mm/section.zig`、`src/ob/cleanup_hooks.zig`、`src/ob/object.zig` | 部分 — `ref_count==0` 回收 `g_sections`；**映射仍存时关句柄** 为差距 |

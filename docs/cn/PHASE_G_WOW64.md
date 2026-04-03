@@ -27,7 +27,7 @@
 
 - **PEB64 / TEB64**：x64 用户进程主线程由加载器与 `kuser_shared` / `teb_nt61_x64` 等路径约束；与 [PHASE_F_PROCESS_CREATE.md](PHASE_F_PROCESS_CREATE.md) 进程创建里程碑对齐。
 - **PEB32 / TEB32**：`types.zig` 中 `extern` 子集 + comptime 偏移测试（Learn `PEB`/`TEB` 公开字段语义）；演示 VA `PEB32_DEFAULT_USER_VA` / `TEB32_DEFAULT_USER_VA`。
-- **内核 `Process` 镜像**：`ps/process.zig` 的 `peb32_user_va` / `teb32_user_va` 与 `is_wow64` 由 `wow64.zig` `attachWow64IfPresent` 填写；**用户页真实映射**（节区提交、`NtAllocateVirtualMemory`）随阶段 F 收紧，见契约矩阵 §9.1。
+- **内核 `Process` 镜像**：`ps/process.zig` 的 `peb32_user_va` / `teb32_user_va` 与 `is_wow64` 由 `wow64.zig` 协同；`createWow64Process` 在 x86_64 上为 **PEB32/TEB32 各映射一页用户可写页** 并写入 `extern` 布局。**节区视图 / `NtAllocateVirtualMemory` 全路径 probe** 仍为 Partial，见契约矩阵 §9.1。
 
 ## stdcall（Win32 x86）实参序 → `marshal` / x64 `ntdll` 桩
 

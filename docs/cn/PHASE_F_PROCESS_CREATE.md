@@ -35,9 +35,9 @@ offset 0:  image_path_unicode  u64   UNICODE_STRING*
 ## 已知差距（诚实边界）
 
 - **映像与 CR3**：`pe_loader.loadImage` 为全局 `LoadedImage` 元数据桩，**未**将节区映射到子进程 `AddressSpace`；调度器线程入口为 **元数据中的 RIP**，与真实 NT 用户态执行模型不同。
-- **PEB/TEB**：子进程 `Process.peb_address` 仍为 **0**（用户 VA 映射未接线）；`NtQueryInformationProcess` 的 `peb_base_address` 与此一致。
+- **PEB/TEB（64 位 Nt 路径）**：子进程 `Process.peb_address` 仍为 **0**（用户 VA 映射未接线）；`NtQueryInformationProcess` 的 `peb_base_address` 与此一致。
 - **CSRSS / 子系统**：无完整子系统握手、无作业对象、无调试对象。
-- **WOW64**：32 位子进程 / SysWOW64 为 **Partial** 路线图；验收边界与测试见 [PHASE_G_WOW64.md](PHASE_G_WOW64.md)（阶段 G 与本文「阶段 F」区分）。
+- **WOW64 演示进程**：`wow64.createWow64Process` 经 `process.createProcess` 获得真实 `AddressSpace`；x86_64 上映射 **PEB32/TEB32** 用户页并写入结构体（默认 VA 见 `wow64/types.zig`）。**完整 SysWOW64 / 节区映射子进程**仍为 **Partial**；验收见 [PHASE_G_WOW64.md](PHASE_G_WOW64.md)。
 
 ## 验收 NTSTATUS（节选）
 

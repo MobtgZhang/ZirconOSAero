@@ -147,7 +147,7 @@
 | USB | XHCI HID，QEMU 键鼠 | 高 |
 | 网络栈 | ARP + IPv4 + UDP 原型；TCP 后续 | 中 |
 | POSIX 子系统 | libc / POSIX API 映射 | 中 |
-| SMP 支持 | 多核调度 (APIC / IOAPIC)；QEMU 冒烟见 `tools/qemu_smp_smoke.sh` | 中 |
+| SMP 支持 | 多核调度 (APIC / IOAPIC)；QEMU 冒烟见 `scripts/qemu_smp_smoke.sh`、[BUILD_SMOKE.md](BUILD_SMOKE.md) |
 | 真正的进程隔离 | 用户态/内核态地址空间完全分离 | 高 |
 | 服务用户态化 | Object/IO/Security Server 迁移到独立进程 | 高 |
 | 磁盘驱动 | AHCI / NVMe 存储驱动 | 中 |

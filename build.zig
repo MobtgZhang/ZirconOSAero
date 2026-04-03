@@ -764,6 +764,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/nt61_full_api_backlog_anchors_host.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "ssdt", .module = ssdt_test_mod },
+        },
     });
     const nt61_backlog_anchors_tests = b.addTest(.{
         .root_module = nt61_backlog_anchors_host_mod,
@@ -1281,6 +1284,28 @@ pub fn build(b: *std.Build) void {
     });
     const run_wow64_ssdt_x86_tests = b.addRunArtifact(wow64_ssdt_x86_tests);
 
+    const wow64_x64_semantic_alias_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/wow64_x64_semantic_alias_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const wow64_x64_semantic_alias_tests = b.addTest(.{
+        .root_module = wow64_x64_semantic_alias_host_mod,
+        .name = "wow64_x64_semantic_alias_host",
+    });
+    const run_wow64_x64_semantic_alias_tests = b.addRunArtifact(wow64_x64_semantic_alias_tests);
+
+    const wow64_redirect_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/subsystems/win32/wow64/redirect.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const wow64_redirect_tests = b.addTest(.{
+        .root_module = wow64_redirect_host_mod,
+        .name = "wow64_redirect_host",
+    });
+    const run_wow64_redirect_tests = b.addRunArtifact(wow64_redirect_tests);
+
     const phase4_host_anchors_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/phase4_host_anchors.zig"),
         .target = b.graph.host,
@@ -1332,6 +1357,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_nt61_os_version_layout_tests = b.addRunArtifact(nt61_os_version_layout_tests);
 
+    const rtl_verify_version_info_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/rtl_verify_version_info_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const rtl_verify_version_info_tests = b.addTest(.{
+        .root_module = rtl_verify_version_info_host_mod,
+        .name = "rtl_verify_version_info_host",
+    });
+    const run_rtl_verify_version_info_tests = b.addRunArtifact(rtl_verify_version_info_tests);
+
     const nt61_core_dll_abi_inventory_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/nt61_core_dll_abi_inventory.zig"),
         .target = b.graph.host,
@@ -1366,7 +1402,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_fork_cow_share_nt61_tests = b.addRunArtifact(fork_cow_share_nt61_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, lpc_handshake_version_host, nt61_os_version_layout_host, nt61_core_dll_abi_inventory_host, pe_loader_policy_host, fork_cow_share_nt61_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, mutex_inherit_depth_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, dwm_nt61_abi_inventory_host, dwmapi_wow64_host, ntfs_hive_minimum_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, startmenu_paint_hint_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, lpc_handshake_version_host, nt61_os_version_layout_host, nt61_core_dll_abi_inventory_host, pe_loader_policy_host, fork_cow_share_nt61_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, mutex_inherit_depth_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, dwm_nt61_abi_inventory_host, dwmapi_wow64_host, ntfs_hive_minimum_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, startmenu_paint_hint_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86, wow64_x64_semantic_alias_host, wow64_redirect_host)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -1432,9 +1468,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_dwm_nt61_integration_tests.step);
     test_step.dependOn(&run_registry_zosh1_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
+    test_step.dependOn(&run_wow64_x64_semantic_alias_tests.step);
+    test_step.dependOn(&run_wow64_redirect_tests.step);
     test_step.dependOn(&run_ssdt_x64_x86_namespace_tests.step);
     test_step.dependOn(&run_lpc_handshake_version_tests.step);
     test_step.dependOn(&run_nt61_os_version_layout_tests.step);
+    test_step.dependOn(&run_rtl_verify_version_info_tests.step);
     test_step.dependOn(&run_nt61_core_dll_abi_inventory_tests.step);
     test_step.dependOn(&run_pe_loader_policy_tests.step);
     test_step.dependOn(&run_fork_cow_share_nt61_tests.step);

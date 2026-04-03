@@ -14,6 +14,7 @@ const syscall_nt_extras = @import("syscall_nt_extras.zig");
 const syscall_mm = @import("syscall_dispatch_mm.zig");
 const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
 const user32 = @import("../../subsystems/win32/user32.zig");
+const wow64_redirect = @import("../../subsystems/win32/wow64/redirect.zig");
 
 fn ntResult(s: ntdll.NTSTATUS) i64 {
     return syscall_abi.ntStatusAsI64(s);
@@ -157,6 +158,7 @@ pub fn dispatch(frame: *InterruptFrame) void {
 }
 
 fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
+    // G-C4（可选）：若需 WOW64/内核复用同一派发核心，可再抽出 `dispatchNtSsdtFromFrame`；现保持单路径以降低 IRQL/重入组合风险。
     const p1 = frame.r10;
     const p2 = frame.rdx;
     const p3 = frame.r8;
@@ -228,6 +230,7 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             const st = ntdll.NtCreateThread(@ptrFromInt(p1), @truncate(p2));
             break :blk ntResult(st);
         },
+        ssdt.NtTerminateThread => ntResult(ntdll.NtTerminateThread(p1, @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
         ssdt.NtProtectVirtualMemory => syscall_mm.dispatchNtProtectVirtualMemory(frame),
         ssdt.NtDelayExecution => blk: {
             const proc_de = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_HANDLE);
@@ -247,7 +250,9 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             var pathbuf: [512]u8 = undefined;
             const raw = readRegPathFromObjectAttributes(p3, &pathbuf) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
             const path_norm = ob.normalizeNtObjectPath(raw);
-            const reg_key_idx = registry.openKeyByNtPath(path_norm) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
+            var redir_buf: [512]u8 = undefined;
+            const path_open = wow64_redirect.applyWow64RegistryMachineSoftwarePath(proc_ok.is_wow64, path_norm, &redir_buf) orelse path_norm;
+            const reg_key_idx = registry.openKeyByNtPath(path_open) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
             const hdr = registry.keyHeaderPtr(reg_key_idx) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
             const h = proc_ok.handle_table.allocHandle(@intFromPtr(hdr), ob.GENERIC_READ, .key) orelse break :blk ntResult(ntdll.STATUS_INSUFFICIENT_RESOURCES);
             @as(*volatile ntdll.HANDLE, @ptrFromInt(p1)).* = h;
@@ -283,7 +288,9 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             var pathbuf: [512]u8 = undefined;
             const raw = readRegPathFromObjectAttributes(p3, &pathbuf) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
             const path_norm = ob.normalizeNtObjectPath(raw);
-            const cr = registry.createKeyFromNtPath(path_norm) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
+            var redir_buf: [512]u8 = undefined;
+            const path_ck = wow64_redirect.applyWow64RegistryMachineSoftwarePath(proc_ck.is_wow64, path_norm, &redir_buf) orelse path_norm;
+            const cr = registry.createKeyFromNtPath(path_ck) orelse break :blk ntResult(ntdll.STATUS_OBJECT_NAME_NOT_FOUND);
             const disp_va = syscall_abi.userStackArg(frame, 16) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
             if (disp_va != 0) {
                 if (!probe.probeUserMemory(asp_ck, disp_va, 4, true)) break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);
@@ -340,6 +347,7 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             break :blk ntResult(st_sv);
         },
         ssdt.NtEnumerateKey => blk: {
+            // WOW64：`KeyHandle` 须在 `NtOpenKey`/`NtCreateKey` 时已走 `Wow6432Node` 逻辑；枚举句柄本身不重写路径。
             const proc_ek = process.getCurrentProcess() orelse break :blk ntResult(ntdll.STATUS_INVALID_HANDLE);
             const asp_ek = proc_ek.address_space orelse break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
             const len_ek = syscall_abi.userStackArg(frame, 0) orelse break :blk ntResult(ntdll.STATUS_ACCESS_VIOLATION);

@@ -104,6 +104,9 @@ pub const NtQueryInformationThread = 0x11;
 pub const NtSetInformationThread = 0x28;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtResumeThread = 0x51;
+/// 与 j00ru `nt.csv` 中 **NtTerminateThread** 在 Win7 SP1 x64 列的公开值 **0x51** 冲突（本仓库 **0x51** 已用于 `NtResumeThread`），
+/// 故使用未占用槽 **0x55** 作为 ZOA 内核索引；`x64_semantic_alias` 将 x86 `NtTerminateThread` 映射至此。
+pub const NtTerminateThread = 0x55;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtSuspendThread = 0x45;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
@@ -205,4 +208,6 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtDeviceIoControlFile == 0x52);
     try std.testing.expect(NtLockVirtualMemory == 0x53);
     try std.testing.expect(NtUnlockVirtualMemory == 0x54);
+    try std.testing.expect(NtResumeThread == 0x51);
+    try std.testing.expect(NtTerminateThread == 0x55);
 }

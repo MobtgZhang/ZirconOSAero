@@ -1,5 +1,7 @@
 # ZirconOSAero build system
 
+**Primary entry**: `zig build` / `zig build test`. CI locks the Zig version in [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) and [.github/workflows/ci.yml](../../.github/workflows/ci.yml). `Makefile` and `build.conf` are optional wrappers (same as [BuildSystem.md](../cn/BuildSystem.md)).
+
 ## 1. Toolchain
 
 | Tool | Role |

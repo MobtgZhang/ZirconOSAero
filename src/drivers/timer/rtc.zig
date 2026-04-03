@@ -5,35 +5,9 @@ const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 
-const portio = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/portio.zig")
-else
-    struct {
-        pub fn outb(_: u16, _: u8) void {}
-        pub fn inb(_: u16) u8 {
-            return 0;
-        }
-    };
+const rtc_cmos = @import("../../hal/x86_64/rtc_cmos.zig");
 
-const CMOS_INDEX: u16 = 0x70;
-const CMOS_DATA: u16 = 0x71;
-
-const REG_SECONDS: u8 = 0x00;
-const REG_MINUTES: u8 = 0x02;
-const REG_HOURS: u8 = 0x04;
-const REG_DAY: u8 = 0x07;
-const REG_MONTH: u8 = 0x08;
-const REG_YEAR: u8 = 0x09;
-const REG_STATUS_A: u8 = 0x0A;
-
-pub const RtcTime = packed struct {
-    second: u8,
-    minute: u8,
-    hour: u8,
-    day: u8,
-    month: u8,
-    year: u8, // 0–99
-};
+pub const RtcTime = rtc_cmos.RtcTime;
 
 pub const IOCTL_RTC_GET_TIME: u32 = 0x000D0000;
 
@@ -41,35 +15,8 @@ var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;
 
-fn bcdToBin(bcd: u8) u8 {
-    return (bcd >> 4) * 10 + (bcd & 0x0F);
-}
-
-fn cmosRead(reg: u8) u8 {
-    portio.outb(CMOS_INDEX, reg);
-    return portio.inb(CMOS_DATA);
-}
-
-/// Waits until RTC update not in progress (UIP, status A bit 7).
-fn waitReady() void {
-    var spins: u32 = 0;
-    while (spins < 1_000_000) : (spins += 1) {
-        portio.outb(CMOS_INDEX, REG_STATUS_A);
-        const a = portio.inb(CMOS_DATA);
-        if (a & 0x80 == 0) return;
-    }
-}
-
 pub fn readTime() RtcTime {
-    waitReady();
-    return .{
-        .second = bcdToBin(cmosRead(REG_SECONDS)),
-        .minute = bcdToBin(cmosRead(REG_MINUTES)),
-        .hour = bcdToBin(cmosRead(REG_HOURS) & 0x7F),
-        .day = bcdToBin(cmosRead(REG_DAY)),
-        .month = bcdToBin(cmosRead(REG_MONTH)),
-        .year = bcdToBin(cmosRead(REG_YEAR)),
-    };
+    return rtc_cmos.readTime();
 }
 
 fn rtcDispatch(irp: *io.Irp) io.NTSTATUS {

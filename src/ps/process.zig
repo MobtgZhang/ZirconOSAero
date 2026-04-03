@@ -95,6 +95,10 @@ var ps_initialized: bool = false;
 var desktop_shell_pid: u32 = 0;
 var desktop_ui_tid: u32 = 0;
 
+/// K2.1：在释放进程 `AddressSpace` / CR3 之前调用，将仍关联该 `pid` 的调度线程标为终止并切回内核 CR3（若当前在受害线程上）。
+/// 由 `ke/scheduler.zig` 在 `init()` 中注册，避免 `process` ↔ `scheduler` 循环依赖。
+pub var before_release_process_address_space: ?*const fn (u32) void = null;
+
 pub fn registerDesktopSession(shell_pid: u32, ui_tid: u32) void {
     desktop_shell_pid = shell_pid;
     desktop_ui_tid = ui_tid;
@@ -208,8 +212,11 @@ pub fn createSystemProcess(frame_alloc: *FrameAllocator, name: []const u8) ?*Pro
 
 pub fn terminateProcess(pid: u32, exit_code: u32) bool {
     const p = findProcess(pid) orelse return false;
+    if (before_release_process_address_space) |hook| {
+        hook(pid);
+    }
     if (p.address_space) |asp| {
-        // `releaseProcessAddressSpace` 清空 VAD / 用户半区页表；调度器须在切换出该 CR3 后调用（见 K2.1）。
+        // `releaseProcessAddressSpace` 清空 VAD / 用户半区页表；须先经 `before_release_process_address_space` 使无线程再以该 CR3 运行（K2.1）。
         vm.releaseProcessAddressSpace(asp);
         freeProcessAddressSpaceSlot(asp);
         p.address_space = null;

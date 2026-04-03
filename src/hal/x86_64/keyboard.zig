@@ -25,6 +25,8 @@ var taskmgr_hotkey_pending: bool = false;
 var wallpaper_cycle_pending: bool = false;
 /// Alt+Tab（make 0x0F）→ Flip3D 近似切换（`consumeFlip3dHotkey`）
 var flip3d_hotkey_pending: bool = false;
+/// Esc（make 0x01，且非 Ctrl+Shift+Esc）→ 关闭 Flip3D 覆盖层（`consumeFlip3dDismiss`）
+var flip3d_dismiss_pending: bool = false;
 
 /// 扩展键前缀（方向键等为 E0 xx）
 var e0_prefix: bool = false;
@@ -254,9 +256,13 @@ pub fn handleScancodeByte(scancode: u8) void {
         else => {},
     }
 
-    // Esc (make code 0x01): Task Manager shortcut when Ctrl+Shift held
-    if (scancode == 0x01 and ctrl_held and shift_held) {
-        taskmgr_hotkey_pending = true;
+    // Esc (make 0x01)：Ctrl+Shift+Esc → 任务管理器；否则 → 关闭 Flip3D（若壳层已打开）
+    if (scancode == 0x01) {
+        if (ctrl_held and shift_held) {
+            taskmgr_hotkey_pending = true;
+        } else {
+            flip3d_dismiss_pending = true;
+        }
     }
 
     if (scancode >= 128) return;
@@ -330,6 +336,14 @@ pub fn consumeWallpaperCycleHotkey() bool {
 pub fn consumeFlip3dHotkey() bool {
     if (flip3d_hotkey_pending) {
         flip3d_hotkey_pending = false;
+        return true;
+    }
+    return false;
+}
+
+pub fn consumeFlip3dDismiss() bool {
+    if (flip3d_dismiss_pending) {
+        flip3d_dismiss_pending = false;
         return true;
     }
     return false;

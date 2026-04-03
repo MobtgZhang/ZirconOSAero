@@ -8,8 +8,16 @@
 // Reference: Intel MP spec / ACPI MADT startup sequence (behavioral only).
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K2.4（INIT-SIPI-SIPI 与每核入口）。
 
+const std = @import("std");
 const klog = @import("../../rtl/klog.zig");
 const lapic_smp = @import("lapic_smp.zig");
+
+/// 已进入 `apKernelEntry`（长模式桩）的 AP 数量；供 TLB IPI 等判断是否可安全广播（默认 AP 仍在实模式自旋时为 0）。
+var g_ap_kernel_entry_count = std.atomic.Value(u32).init(0);
+
+pub fn apKernelEntryCount() u32 {
+    return g_ap_kernel_entry_count.load(.monotonic);
+}
 
 /// BSP 在唤醒 AP 后跳转的 C 约定入口（当前为停机占位）。
 ///
@@ -23,7 +31,8 @@ const lapic_smp = @import("lapic_smp.zig");
 ///
 /// TLB 一致性见 `tlb_broadcast.zig`。
 pub export fn apKernelEntry(cpu_index: u32) callconv(.c) noreturn {
-    klog.info("SMP: AP cpu_index=%u entered (stub idle)", .{cpu_index});
+    _ = g_ap_kernel_entry_count.fetchAdd(1, .monotonic);
+    klog.info("SMP: AP cpu_index=%u entered (stub idle; per-CPU scheduler K2.4)", .{cpu_index});
     while (true) {
         asm volatile ("hlt" ::: .{ .memory = true });
     }

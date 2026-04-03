@@ -37,6 +37,9 @@ pub var local_apic_mmio_phys: u32 = 0xFEE0_0000;
 /// 自 MADT 中 **已启用** 的 Processor Local APIC 条目统计的逻辑 CPU 数（至少为 1）。
 pub var logical_cpu_count: u32 = 1;
 
+/// 首个 **I/O APIC** 的 MMIO 物理基址（MADT type 1）；未找到时为 0。
+pub var ioapic_mmio_phys: u32 = 0;
+
 fn parseMadt(madt_phys: u64) void {
     const h: [*]align(1) const u8 = @ptrFromInt(@as(usize, @truncate(madt_phys)));
     if (!std.mem.eql(u8, h[0..4], "APIC")) return;
@@ -54,6 +57,8 @@ fn parseMadt(madt_phys: u64) void {
         if (typ == 0 and elen >= 8) {
             const flags = readU32(h, off + 4);
             if ((flags & 1) != 0) cpus += 1;
+        } else if (typ == 1 and elen >= 12 and ioapic_mmio_phys == 0) {
+            ioapic_mmio_phys = readU32(h, off + 4);
         }
         off += elen;
     }
@@ -90,5 +95,9 @@ pub fn initFromRsdp(rsdp_phys: usize) void {
     if (!std.mem.eql(u8, rsdp[0..8], rsdp_sig[0..8])) return;
     const root = rootTablePhys(rsdp) orelse return;
     walkRoot(root);
-    klog.info("ACPI MADT: LAPIC MMIO phys=0x%x logical_cpus=%u", .{ local_apic_mmio_phys, logical_cpu_count });
+    klog.info("ACPI MADT: LAPIC MMIO phys=0x%x logical_cpus=%u IOAPIC=0x%x", .{
+        local_apic_mmio_phys,
+        logical_cpu_count,
+        ioapic_mmio_phys,
+    });
 }

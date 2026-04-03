@@ -36,22 +36,28 @@ pub fn flushLocal() void {
     paging.flushTlb();
 }
 
-/// 当前无在线 AP 时等价于 `flushLocal`。SMP 就绪后：在修改**内核共享**页表项后应经 IPI 触发各核 `INVLPG`/全 TLB 刷新（见 Intel SDM TLB 一致性；本函数暂为 BSP 占位）。
+/// 当前无在线 AP 时等价于 `flushLocal`。SMP 就绪后：在修改**内核共享**页表项后应经 IPI 触发各核 `INVLPG`/全 TLB 刷新（见 Intel SDM TLB 一致性；本函数暂为 BSP 占位）。固定投递助手见 `lapic_smp.broadcastFixedIpiExcludingSelf`（须登记专用 IDT 向量并在处理例程中 `flushLocal`）。
 /// `vm.releaseProcessAddressSpace` / `unmapRange` 在拆除用户映射前后会调用 `notePendingGlobalShootdown` 与 `noteUserMappingInvalidatedSmp`（K2.5 与诊断计数）。
 /// `vm.releaseProcessAddressSpace` 在释放他进程页表后调用本函数，避免当前核残留陈旧 global 项（与 PCID/INVPCID 策略见契约矩阵）。
 ///
 /// **K2.5 安全说明（BSP-only 刷新）**：当 `logical_cpu_count > 1` 且 AP 已在实模式/长模式执行时，仅 BSP `flushLocal()` **不能**保证其它逻辑 CPU TLB 与用户页表一致；当前 AP 路径在 `0x8000` 实模式自旋，未加载进程页表，故 **Stale TLB 风险主要限于未来 AP 参与用户映射后**。上线 AP 调度前必须接线 IPI shootdown 或证明全局 TLB 一致性策略。
 pub fn requestGlobalFlushStub() void {
     flushLocal();
-    pending_shootdown_hint.store(0, .monotonic);
-    if (builtin.cpu.arch == .x86_64) {
+    if (builtin.cpu.arch == .x86_64 and @import("build_options").smp_tlb_ipi) {
+        const madt = @import("madt.zig");
+        if (madt.logical_cpu_count > 1) {
+            const isr = @import("../../arch/x86_64/isr.zig");
+            @import("lapic_smp.zig").broadcastFixedIpiExcludingSelf(isr.ipi_tlb_flush_vector);
+        }
+    } else if (builtin.cpu.arch == .x86_64) {
         const madt = @import("madt.zig");
         if (madt.logical_cpu_count > 1 and @import("build_options").debug) {
-            klog.debug("TLB: global flush is BSP-local; SMP IPI shootdown not yet wired (cpus=%u)", .{
-                madt.logical_cpu_count,
+            klog.debug("TLB: global flush BSP-local; set -Dsmp_tlb_ipi=true for IPI vector %u (unsafe if AP lacks IDT)", .{
+                @import("../../arch/x86_64/isr.zig").ipi_tlb_flush_vector,
             });
         }
     }
+    pending_shootdown_hint.store(0, .monotonic);
 }
 
 /// 与 `requestGlobalFlushStub` 同义；供页表释放路径语义化命名（将来可在此插入 IPI 批处理）。

@@ -59,3 +59,10 @@ pub fn write(s: []const u8) void {
         writeByte(c);
     }
 }
+
+/// 等待 THR/移位寄存器空（LSR bit6 TEMT），便于 Phase3 等关键路径在 `klog` 后立刻观测串口。
+pub fn flushTx() void {
+    if (!initialized) return;
+    var timeout: u32 = 1_000_000;
+    while ((portio.inb(COM1 + 5) & 0x40) == 0 and timeout > 0) : (timeout -= 1) {}
+}

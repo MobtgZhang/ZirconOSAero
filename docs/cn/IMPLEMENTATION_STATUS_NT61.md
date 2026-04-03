@@ -20,7 +20,7 @@ GitHub Actions：`.github/workflows/ci.yml`（多架构 `zig build kernel`、ZBM
 | 池与堆 | Bump + 回收 + `mm/pool` 档位；slab/伙伴演进 | [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md) |
 | 分页 / 隔离 | 四级表、恒等映射；每进程 CR3 与缓解见矩阵 | `src/arch/*/paging*`, `mitigations.zig` |
 | 中断 / 定时器 | x86_64：PIC+PIT 主 tick；`ke/timekeeping.zig` 抽象；HPET MMIO 探测/主计数器只读（`hpet.zig`，**未**接 IRQ0）；LAPIC 单源 tick T3；SMP AP 实路径 K2.4 | [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md), [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K2–K3 |
-| 图形 / VirtIO-GPU / NVIDIA | VirtIO：`SET_SCANOUT` + `RESOURCE_FLUSH`；NVIDIA：BAR 日志 + 可选可预取 BAR 4MiB 映射 + `IOCTL_NVIDIA_BAR0_FIRST_U32` | [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §8、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) 第七阶段 |
+| 图形 / VirtIO-GPU / NVIDIA | VirtIO：`SET_SCANOUT` + `RESOURCE_FLUSH`；**阶段 4**：`-Dforce_gop_present`、`CompositorBackend`、`open_desktop` 等 LPC；NVIDIA：BAR 日志 + 可选可预取 BAR 4MiB 映射 + `IOCTL_NVIDIA_BAR0_FIRST_U32` | [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §8、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)、[PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) |
 | 其他架构 | aarch64 / riscv64 / loongarch64：向量、定时器、设备树或固件 handoff 各异 | 各 `src/arch/<arch>/`, [Boot.md](Boot.md) |
 
 **待办锚点**：NT61_KERNEL_TODO **K1、K2、K3**。

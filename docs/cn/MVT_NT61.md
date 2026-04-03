@@ -52,6 +52,7 @@
 | `dwmapi` 导出名表（与 `pe.zig` 合成 DLL 顺序一致） | 同上 → **dwm_nt61_abi_inventory_host** | [dwm_nt61_abi_inventory.zig](../../src/config/dwm_nt61_abi_inventory.zig)；策略 [DWMAPI_PE_EXPORT_STRATEGY.md](DWMAPI_PE_EXPORT_STRATEGY.md) |
 | WOW64 `dwmapi` PE32 布局（`DWM_BLURBEHIND32` / HWND 扩展） | 同上 → **dwmapi_wow64_host** | [dwmapi_wow64.zig](../../src/subsystems/win32/dwmapi_wow64.zig) |
 | NTFS 簇大小与 hive 路线图锚点 | 同上 → **ntfs_hive_minimum_host** | [tests/nt61/ntfs_hive_minimum_host.zig](../../tests/nt61/ntfs_hive_minimum_host.zig) |
+| 阶段 4：窗口站 LPC 操作码、WOW64 x86 `NtConnectPort`/`NtRequestWaitReplyPort`、NTFS `D:\` ZOSH1 路径 | 同上 → **phase4_host_anchors** | [tests/nt61/phase4_host_anchors.zig](../../tests/nt61/phase4_host_anchors.zig)；[PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) |
 | LPC `get_message` 线程 id 策略（禁止 `tid==0`）+ `post_message` 载荷长度 + **`register_dwm_listener` v1** | 同上 → **csr_lpc_policy_host**、**dwm_messages_nt61_host**、**nt61_dual_track_host** | [csr_lpc_policy.zig](../../src/subsystems/win32/csr_lpc_policy.zig)、[LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) |
 | 合成 Z 序两趟模型（普通层→顶层） + 跨 band `SetWindowPos` 对齐 + `HWND_NOTOPMOST` Learn（非 topmost 不重排）叙事锚点 | 同上 → **dwm_zorder_nt61_host** | [tests/nt61/dwm_zorder_nt61_host.zig](../../tests/nt61/dwm_zorder_nt61_host.zig) |
 | 多监视器 DPI 公式（与 framebuffer 一致） | 同上 → **multimon_dpi_nt61_host** | [tests/nt61/multimon_dpi_nt61_host.zig](../../tests/nt61/multimon_dpi_nt61_host.zig) |
@@ -78,6 +79,7 @@
 | 最小 x64 PE（仓库内，`ExitProcess`） | `zig build minimal-pe-nt61` | 输出 `zig-out/bin/zircon_nt61_minimal_pe.exe`；[`tools/minimal_pe_nt61/minimal_pe.zig`](../../tools/minimal_pe_nt61/minimal_pe.zig)；可选 QEMU 加载实验（不依赖微软闭源 DLL） |
 | ZBM / 无头启动 | `bash scripts/ci-qemu-smoke.sh` | MBR 盘、串口可选断言；`CI_SMOKE_DESKTOP=aero` 可走完整壳层（见脚本注释） |
 | CPU 合成性能基线（人工） | `bash scripts/qemu_desktop_perf_baseline.sh` | 记录 `getDesktopComposeTelemetry` / 串口 blur 统计步骤；非硬性 60fps |
+| 阶段 4 呈现 A/B | `zig build` 对比 `-Dforce_gop_present=true` 与默认；QEMU `-device virtio-gpu-pci` | 串口应出现 `present_backend=` / `compositor_backend=` 与 [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) |
 | aarch64 桌面相关编译闸门 | `.github/workflows/ci.yml`：`zig build kernel -Darch=aarch64 -Ddesktop-full=true` | 与 x86_64 **desktop-full** 选项一致 |
 | 分辨率与串口日志 | 改 `build.conf` 的 `RESOLUTION` → `make sync-resolution` → `make build` → QEMU/串口 | 核对 `Config: display=`、`FB tag`、`Framebuffer Driver` 宽高与 `RESOLUTION` 一致（见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §4.2.2） |
 | x86_64 分辨率 **编译**矩阵（不改仓内单行 `RESOLUTION`） | `bash scripts/test_x86_resolution_matrix.sh`；CI：`--quick` | 与 `build.conf` 注释表同款档位；`LoongArch` 见 `scripts/test_loongarch_resolution_matrix.sh`；详 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) |

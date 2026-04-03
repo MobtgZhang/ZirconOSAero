@@ -31,7 +31,7 @@
 ## Phase B — 图形基础（大量待办）
 
 - **B1** 双缓冲、脏矩形、VSync 节拍与现有 `framebuffer`/`display` 深度整合（非仅注释）。
-- **B2** VirtIO-GPU（1af4:1050）最小 2D：**已有** PCI 探测（[virtio_gpu_pci.zig](../../src/drivers/video/virtio/virtio_gpu_pci.zig)）、命令常量与主机单测（[virtio_gpu_spec.zig](../../src/drivers/video/virtio/virtio_gpu_spec.zig)）、后端抽象（[gpu_device.zig](../../src/drivers/video/core/gpu_device.zig)）。**仍待办**：MMIO/virtqueue、`GET_DISPLAY_INFO`～`FLUSH` 等与 ramfb 的真实对接。
+- **B2** VirtIO-GPU（1af4:1050）2D：**已有** PCI/MMIO、队列 bring-up、`SET_SCANOUT`、`RESOURCE_ATTACH_BACKING`（单段或多 mem_entry）、`present` 后 `RESOURCE_FLUSH`、主机单测（[virtio_gpu_spec.zig](../../src/drivers/video/virtio/virtio_gpu_spec.zig)）、呈现后端（[display_backend.zig](../../src/drivers/video/core/display_backend.zig)）。**仍待办 / Phase4-Plus**：第二平面离屏 resource、非空 `SUBMIT_3D` 载荷、用户态提交边界（见 [VirtioVirglMVP.md](VirtioVirglMVP.md)、[PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md)）。
 - **B3** 标量 2D：混合、圆角、box-blur 近似（遵守内核无 SIMD 规则）。
 
 ---

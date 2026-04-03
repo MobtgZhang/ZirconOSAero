@@ -28,7 +28,9 @@
 
 仅 **概念** 对齐 Microsoft Learn 上「DWM 与 GPU 合成」描述；**无** `DxgkDdi*` 二进制契约实现义务。
 
-## 阶段 4 边界（与本计划对齐）
+## 与官方「阶段 4」文档的关系（Phase4-Core / Phase4-Plus）
 
-- **本阶段交付**：VirtIO **2D scanout** + `RESOURCE_FLUSH` 遥测（含 `display_flip_journal.noteVirtioPresentFlushBatch`，为多资源 flush 预留）；CPU 盒式模糊预算不变。
-- **不纳入阶段 4**：`CMD_SUBMIT_3D` 可执行命令流、内核内 VirGL 模糊 — 仍属本文「后续 MVP 切片」，避免与 WDDM  IOCTL 级目标混淆。
+为避免与 [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) 冲突，VirtIO 能力分两层命名：
+
+- **Phase4-Core（必达）**：VirtIO **2D scanout** + `RESOURCE_FLUSH` 遥测（含 `display_flip_journal.noteVirtioPresentFlushBatch`）；**CPU 盒式模糊预算默认不变**；`-Dforce_gop_present` 可强制 GOP 呈现（见 `display_backend.zig`）。
+- **Phase4-Plus（可选）**：`CMD_SUBMIT_3D` **非空** Gallium/VirGL 载荷、内核内 VirGL 模糊卸载 — 属本文「后续 MVP 切片」与 **MM 节区用户态提交**路线；**不**与「阶段 4 核心完成」混称。

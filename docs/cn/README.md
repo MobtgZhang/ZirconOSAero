@@ -34,6 +34,7 @@ ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。�
 | [LPC_USER_SERVERS_CONTRACT.md](LPC_USER_SERVERS_CONTRACT.md) | 用户态 Object/I/O/Security 服务 LPC 契约草案 |
 | [STORAGE_IO_ROADMAP.md](STORAGE_IO_ROADMAP.md) | AHCI/NVMe 与 IRP 集成路线 |
 | [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) | 软件合成器、Aero 与 WDDM 差异说明 |
+| [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) | 阶段 4（硬件呈现 + csrss + WOW64 + NTFS 持久化）官方范围与里程碑 |
 | [ARCH_SMP_NET_MATRIX.md](ARCH_SMP_NET_MATRIX.md) | 多架构 / SMP / 网络状态矩阵 |
 
 **用户态显示与 DPI 规范（外部索引）**：姊妹仓库中的 Win32 **`desktop-src`** 文档树（路径形如 `ZirconOSFluentRust/references/win32/desktop-src`）仅作 **ChangeDisplaySettings / 高 DPI / 多显示器** 等**用户态**行为与 MSDN 对照的**长期参考**，**不用于** LoongArch UEFI GOP、`ramfb` 或 QEMU 串口排错；后者见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md)。**可检索对照**：**PE #108**（LoongArch UEFI PE 文本重定位讨论）见 [`scripts/tools/PE_LOONGARCH_UEFI.md`](../../scripts/tools/PE_LOONGARCH_UEFI.md) 与 [loongson-community/discussions#108](https://github.com/loongson-community/discussions/issues/108)；与 **`desktop-src`** 无包含关系。

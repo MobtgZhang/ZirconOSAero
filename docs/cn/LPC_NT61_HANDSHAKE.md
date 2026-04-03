@@ -10,6 +10,18 @@
 - **客户端连接**：`NtConnectPort` 按名查找已注册端口并建立客户端侧句柄。
 - **请求-应答**：`NtRequestWaitReplyPort`（路线图扩展）须与 **单消息边界**、超时语义一致；当前未实现路径在 syscall 层返回 `STATUS_NOT_IMPLEMENTED`。
 
+## vNext：桌面句柄与切换（阶段 4，`CsrApiNumber` 0x10028–0x1002A）
+
+固定头 **`0x44534B31`**（小端四字节，记作 **DSK1**）置于 `data[0..4]`，用于与未版本化载荷区分。
+
+| Opcode | 名称 | 请求 `data` 布局 | 应答 |
+|--------|------|------------------|------|
+| `0x10028` | `open_desktop` | `0..4` 魔数 `DSK1`；`4` = `name_len`（u8）；`5..5+name_len` = UTF-8 名（`name_len` ≤ 31） | `data[0..4]` = `i32` 状态（0 成功）；成功时 `data[4..8]` = **1-based** `HDESK`（u32 LE，经 `ipc.csr_reply_payload` 合并进 `Message`，与 `get_message` 同机制） |
+| `0x10029` | `switch_desktop` | 同 `open_desktop` 名布局（魔数 `DSK1`） | `data[0..4]` = `i32`（0 成功，-1 未找到） |
+| `0x1002A` | `close_desktop` | `0..4` 魔数 **`0x44534C31`**（**DSL1**）；`4..8` = 1-based `HDESK`（u32 LE） | `data[0..4]` = `i32`（0 成功，-1 失败） |
+
+**安全**：`subsystem.handleApiCall` 在委托前仍经活动桌面校验（与现有 `register_window` 一致）。
+
 ## `register_dwm_listener`（`CsrApiNumber` 0x10027）
 
 - **旧版载荷**（仍支持）：`data[0..4]` 小端 `DWORD` 线程 id；`tid==0` 时 csrss 侧按 [`csr_lpc_policy.resolveDwmListenerTid`](../../src/subsystems/win32/csr_lpc_policy.zig) 回退为客户端 `pid`。

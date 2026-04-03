@@ -16,6 +16,12 @@
 - **Virtio-GPU**：作为可移植的 **非 WDDM** 加速台阶（VirtIO 规范 + 本内核 PCI 枚举）。  
 - 真机 **Intel/AMD/NVIDIA** 的 KMS 类路径为独立里程碑，与 NT 显示驱动 **无源码级对齐义务**。
 
+## 阶段 4：呈现后端与合成器后端（Phase4-Core）
+
+- **`display_backend.BackendKind`**：`gop_linear`（固件/GOP 线性帧缓冲）与 `virtio_scanout`（VirtIO `SET_SCANOUT` 路径）。`syncFromVirtioScanout` 在 bring-up 成功后切换；**`-Dforce_gop_present=true`** 时保持 GOP，便于对照实验（见 [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md)）。
+- **`wddm_abstraction.CompositorBackend`**：`cpu_full` / `cpu_with_virtio_present` / `future_gpu_assist` — 仅描述 **合成责任**划分，**不是** WDDM DDI。
+- **DWM**：盒式模糊仍以 CPU 预算为主；仅当 VirGL 委托路径真实成功（Phase4-Plus）时才可减轻 CPU 模糊。
+
 ## CPU 盒式模糊预算与典型场景（问题三 / `nt61_aero_defaults`）
 
 | 参数 / 行为 | 作用 | 典型触发场景 |

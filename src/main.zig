@@ -451,6 +451,9 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     vfs_mod.init();
     fat32_mod.init();
     ntfs_mod.init();
+    if (builtin.target.cpu.arch == .x86_64) {
+        drivers.storage.ahci.mountVfsProbeIfReady();
+    }
     virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
     if (builtin.target.cpu.arch == .x86_64) {
         const virtio_blk = drivers.storage.virtio_blk_pci;
@@ -1456,6 +1459,9 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     vfs_mod.init();
     fat32_mod.init();
     ntfs_mod.init();
+    if (builtin.target.cpu.arch == .x86_64) {
+        drivers_generic.storage.ahci.mountVfsProbeIfReady();
+    }
     virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
     if (builtin.target.cpu.arch == .x86_64) {
         const virtio_blk = drivers_generic.storage.virtio_blk_pci;

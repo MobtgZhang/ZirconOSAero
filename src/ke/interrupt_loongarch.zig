@@ -51,6 +51,7 @@ fn dispatchFromExcCodeResolved(exc: u32, ew: u32) void {
             : [v] "r" (@as(u64, 1)),
         );
         scheduler.tick();
+        klog.notifyTimerTick();
         const hub = @import("../drivers/input/input_hub.zig");
         hub.pollAll();
         return;

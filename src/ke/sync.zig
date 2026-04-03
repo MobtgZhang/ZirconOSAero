@@ -141,14 +141,15 @@ pub const Semaphore = struct {
 
 pub const SpinLock = struct {
     locked: bool = false,
+    saved_if: bool = false,
 
     pub fn acquire(self: *SpinLock) void {
-        arch.disableInterrupts();
+        self.saved_if = arch.saveAndDisableInterrupts();
         self.locked = true;
     }
 
     pub fn release(self: *SpinLock) void {
         self.locked = false;
-        arch.enableInterrupts();
+        arch.restoreInterrupts(self.saved_if);
     }
 };

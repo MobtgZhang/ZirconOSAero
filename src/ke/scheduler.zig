@@ -16,8 +16,13 @@ const vm_mod = @import("../mm/vm.zig");
 const process_mod = @import("../ps/process.zig");
 const spinlock_mod = @import("spinlock.zig");
 const percpu_sched = @import("percpu_sched.zig");
+const KeApc = @import("apc_object.zig").KeApc;
 
+/// `tick` / `enqueueReady` 等在定时器 IRQ 路径持锁；`IrqSpinLock` 在 `unlock` 时恢复**加锁前** IF，不在 ISR 内误 `sti`。
 var sched_irq_lock: spinlock_mod.IrqSpinLock = .{};
+
+/// 前台会话进程时间片加成（tick；clean-room 常数，可调）。
+const foreground_quantum_bonus_ticks: u32 = 4;
 
 fn activateCr3ForProcessId(pid: u32) void {
     if (builtin.cpu.arch != .x86_64) return;
@@ -116,6 +121,7 @@ fn resetReadyQueues() void {
 }
 
 fn refreshNonEmptyBit(cpu: usize, pri: u8) void {
+    std.debug.assert(pri < NUM_PRI);
     const bit: u32 = @as(u32, 1) << @intCast(pri);
     if (ready_head[cpu][pri] < 0) {
         non_empty[cpu] &= ~bit;
@@ -160,6 +166,7 @@ fn removeFromBucketForTid(tid: usize) void {
 }
 
 fn enqueueToBucket(cpu: usize, pri: u8, tid: usize) void {
+    std.debug.assert(pri < NUM_PRI);
     if (tid >= thread_count) return;
     threads[tid].next_ready = -1;
     threads[tid].in_ready_queue = true;
@@ -221,6 +228,7 @@ fn popHeadBucket(cpu: usize, pri: u8) ?usize {
 }
 
 fn popHeadFairAtPriority(pri: u8) ?usize {
+    std.debug.assert(pri < NUM_PRI);
     const n = schedNumCpus();
     if (n == 0) return null;
     const start: usize = @intCast(rr_cpu_cursor[pri] % n);
@@ -391,7 +399,11 @@ pub fn quantumTicksForClass(class: u8) u32 {
 
 fn quantumTicksForThread(t: *const Thread) u32 {
     const c: usize = @min(@as(usize, t.priority_class), PRIORITY_CLASS_COUNT - 1);
-    return QUANTUM_BY_CLASS[c];
+    var q = QUANTUM_BY_CLASS[c];
+    if (process_mod.findProcess(t.process_id)) |p| {
+        if (p.is_foreground) q +%= foreground_quantum_bonus_ticks;
+    }
+    return q;
 }
 
 pub const Thread = struct {
@@ -420,6 +432,8 @@ pub const Thread = struct {
     /// 并行等待边数量：每有一条「本 mutex 触发的继承边」+1；最后一次 `endMutexInheritance` 时若归零则清零 floor。
     mutex_inherit_depth: u32 = 0,
     name: [16]u8 = [_]u8{0} ** 16,
+    kernel_apc_head: ?*KeApc = null,
+    user_apc_head: ?*KeApc = null,
 };
 
 fn effectivePriority(t: *const Thread) u8 {
@@ -713,6 +727,9 @@ pub fn clearMutexInheritFloor(owner_tid: usize) void {
 pub fn applyMutexInheritFloor(owner_tid: usize, waiter_effective_pri: u8) void {
     updateMutexInheritFloor(owner_tid, waiter_effective_pri);
 }
+
+/// GUI / 输入完成路径可调用此占位钩子，将来接线 `io_boost` 或前台会话（见 `Process.is_foreground`）。
+pub fn noteGuiInputBoostStub() void {}
 
 pub fn isInitialized() bool {
     return initialized;

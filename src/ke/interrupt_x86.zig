@@ -6,6 +6,7 @@ const klog = @import("../rtl/klog.zig");
 const scheduler = @import("scheduler.zig");
 const process = @import("../ps/process.zig");
 const dpc = @import("dpc.zig");
+const irql_mod = @import("irql.zig");
 
 pub const InterruptFrame = extern struct {
     r15: u64,
@@ -69,6 +70,14 @@ const EXCEPTION_NAMES = [_][]const u8{
 pub fn handle(frame: *InterruptFrame) void {
     const vector: u8 = @intCast(frame.vector & 0xFF);
 
+    if (vector == @import("../arch/x86_64/isr.zig").ipi_tlb_flush_vector) {
+        if (builtin.target.cpu.arch == .x86_64) {
+            @import("../hal/x86_64/tlb_broadcast.zig").flushLocal();
+            @import("../hal/x86_64/lapic_smp.zig").sendLocalEoi();
+        }
+        return;
+    }
+
     if (vector < 32) {
         handleException(frame, vector);
     } else if (vector >= 32 and vector < 48) {
@@ -94,7 +103,7 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
             if (process.getCurrentProcess()) |proc| {
                 if (proc.address_space) |asp| {
                     const is_write = (frame.error_code & 2) != 0;
-                    if (@import("../mm/vm.zig").handleLazyCommitFault(asp, cr2, is_write)) {
+                    if (@import("../mm/vm.zig").handleUserDemandOrCowFault(asp, cr2, is_write)) {
                         return;
                     }
                     const pid = proc.pid;
@@ -123,9 +132,14 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
 
 fn handleIrq(frame: *InterruptFrame, irq: u8) void {
     _ = frame;
+    const entry_irql = irql_mod.getCurrentIrql();
+    _ = irql_mod.raiseIrql(irql_mod.DEVICE_IRQL_LOW);
+    defer irql_mod.lowerIrql(entry_irql);
+
     switch (irq) {
         0 => {
             scheduler.tick();
+            klog.notifyTimerTick();
             if (builtin.target.cpu.arch == .x86_64) {
                 dpc.requestInputFlushDeferred();
             }
@@ -146,9 +160,17 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         },
         else => {},
     }
-    arch.sendEoi(irq);
     if (builtin.target.cpu.arch == .x86_64) {
-        dpc.drainPending();
+        const ltt = @import("../hal/x86_64/lapic_timer_tick.zig");
+        if (irq == 0 and ltt.irq0UsesLapicEoi()) {
+            @import("../hal/x86_64/lapic_smp.zig").sendLocalEoi();
+        } else {
+            arch.sendEoi(irq);
+        }
+        irql_mod.lowerIrqlTo(irql_mod.DISPATCH_LEVEL);
+        dpc.drainAtDispatchLevel();
+    } else {
+        arch.sendEoi(irq);
     }
 }
 

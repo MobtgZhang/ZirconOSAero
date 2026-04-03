@@ -75,6 +75,40 @@ pub fn dispatchNtProtectVirtualMemory(frame: *InterruptFrame) i64 {
     return ntResult(st);
 }
 
+pub fn dispatchNtLockVirtualMemory(frame: *InterruptFrame) i64 {
+    const proc = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_HANDLE);
+    const asp = proc.address_space orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    const p2 = frame.rdx;
+    const p3 = frame.r8;
+    if (p2 == 0 or p3 == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    if (!probe.probeUserMemory(asp, p2, @sizeOf(u64), true)) return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    if (!probe.probeUserMemory(asp, p3, @sizeOf(u64), true)) return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const st = ntdll.NtLockVirtualMemory(
+        frame.r10,
+        @ptrFromInt(p2),
+        @ptrFromInt(p3),
+        @truncate(frame.r9),
+    );
+    return ntResult(st);
+}
+
+pub fn dispatchNtUnlockVirtualMemory(frame: *InterruptFrame) i64 {
+    const proc = process.getCurrentProcess() orelse return ntResult(ntdll.STATUS_INVALID_HANDLE);
+    const asp = proc.address_space orelse return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    const p2 = frame.rdx;
+    const p3 = frame.r8;
+    if (p2 == 0 or p3 == 0) return ntResult(ntdll.STATUS_INVALID_PARAMETER);
+    if (!probe.probeUserMemory(asp, p2, @sizeOf(u64), true)) return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    if (!probe.probeUserMemory(asp, p3, @sizeOf(u64), true)) return ntResult(ntdll.STATUS_ACCESS_VIOLATION);
+    const st = ntdll.NtUnlockVirtualMemory(
+        frame.r10,
+        @ptrFromInt(p2),
+        @ptrFromInt(p3),
+        @truncate(frame.r9),
+    );
+    return ntResult(st);
+}
+
 pub fn dispatchNtCreateSection(frame: *InterruptFrame) i64 {
     const out_handle = frame.r10;
     const max_sz_ptr = frame.r9;

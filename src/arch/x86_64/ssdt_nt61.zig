@@ -9,6 +9,8 @@
 // Ref: 公开 syscall 枚举（如社区维护的 NT 构建版本表 j00ru/windows-syscalls）；本文件仅收录本内核已实现或桩实现的服务号。
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K7（扩展须双端 ntdll/syscall + probe）。
 // SDK 路径锚点（勿在本文件外重复硬编码 syscall 号）： [sdk/nt61_syscall_numbers_x64.zig](../../../sdk/nt61_syscall_numbers_x64.zig)
+//
+// **WOW64 / x86 命名空间**：Win7 SP1 x86 服务号子集见 [`subsystems/win32/wow64/ssdt_x86_win7_sp1.zig`](../../subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)；同名 API 的 x86→本表索引对照见 [`subsystems/win32/wow64/x64_semantic_alias.zig`](../../subsystems/win32/wow64/x64_semantic_alias.zig)。验收文档：[`docs/cn/PHASE_G_WOW64.md`](../../../docs/cn/PHASE_G_WOW64.md)。
 
 //! x64 `syscall` 调用约定（与 AMD64 长模式一致）：`RAX`=下表索引；第 1 参在 **`R10`**（因 `RCX` 存返回 RIP）；
 //! 第 2–4 参为 `RDX`、`R8`、`R9`；更多参数在**用户栈**上（相对于 SYSCALL 时 `RSP`，第 5 参常为 `+0x28`）。
@@ -136,11 +138,24 @@ pub const NtOpenFile = 0x33;
 pub const NtFlushBuffersFile = 0x39;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtFsControlFile = 0x09;
+/// Ref: j00ru 表常见 **0x07** 与本仓 `NtReadFile` **0x07** 并存冲突；**0x52** 专用于 `NtDeviceIoControlFile`（见 [SyscallABI.md](../../../docs/cn/SyscallABI.md)）。
+pub const NtDeviceIoControlFile = 0x52;
+/// Ref: 同上折叠策略；**0x53/0x54** 用于 `NtLockVirtualMemory` / `NtUnlockVirtualMemory` 桩。
+pub const NtLockVirtualMemory = 0x53;
+pub const NtUnlockVirtualMemory = 0x54;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtCancelIoFile = 0x35;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtCancelIoFileEx = 0xE9;
-/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64 `NtCreateProcess`（与 `NtCreateUserProcess` 0xAA 区分）。
+pub const NtCreateProcess = 0x9F;
+/// Ref: j00ru Win7 SP1 x64 公开 **0x58**；本仓库 **0x58** 已用于折叠 `NtUserGetMessage`，故 **0x57** 专用于 `NtWaitForMultipleObjects`（见 `docs/cn/SyscallABI.md`）。
+pub const NtWaitForMultipleObjects = 0x57;
+/// Ref: j00ru Win7 SP1 x64 公开 **0x59**；本仓库 **0x59** 为 `NtUserPeekMessage`，故 **0x56** 专用于 `NtSetInformationObject`。
+pub const NtSetInformationObject = 0x56;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64 `NtSignalAndWaitForSingleObject`。
+pub const NtSignalAndWaitForSingleObject = 0x176;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。**已实现** ZOA 子集：`syscall_nt_extras.dispatchNtCreateUserProcess`（参数块见 `ZirconCreateUserProcessArgs`）、[docs/cn/PHASE_F_PROCESS_CREATE.md](../../../docs/cn/PHASE_F_PROCESS_CREATE.md)。
 pub const NtCreateUserProcess = 0xAA;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtCreateThreadEx = 0xA5;
@@ -183,4 +198,11 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtOpenThread == 0x36);
     try std.testing.expect(NtQueryInformationProcess == 0x16);
     try std.testing.expect(NtAlpcConnectPort == 0x2D);
+    try std.testing.expect(NtCreateProcess == 0x9F);
+    try std.testing.expect(NtWaitForMultipleObjects == 0x57);
+    try std.testing.expect(NtSetInformationObject == 0x56);
+    try std.testing.expect(NtSignalAndWaitForSingleObject == 0x176);
+    try std.testing.expect(NtDeviceIoControlFile == 0x52);
+    try std.testing.expect(NtLockVirtualMemory == 0x53);
+    try std.testing.expect(NtUnlockVirtualMemory == 0x54);
 }

@@ -60,12 +60,13 @@ fn cpuidExt80000001_edx() u32 {
 
 /// 若 CPU 支持且 `zircon_x86_64_kernel_rsp0` 已初始化，则启用 `syscall` 入口；`int 0x80`（向量 128）与 `syscall` 共用同一 NT x64 分发（第 1 参在 R10）。
 pub fn initSyscallInstructionPath() void {
-    if (gdt.zircon_x86_64_kernel_rsp0 == 0) return;
+    if (gdt.zircon_x86_64_kernel_rsp0 == 0) {
+        klog.warn("syscall: skipped (kernel RSP0 not set yet)", .{});
+        return;
+    }
     const feat = cpuidExt80000001_edx();
     if ((feat & (1 << 11)) == 0) {
-        if (klog.DEBUG_MODE) {
-            klog.debug("syscall: CPU lacks SYSCALL/SYSRET (cpuid 80000001h.edx.11)", .{});
-        }
+        klog.warn("syscall: CPU lacks SYSCALL/SYSRET (cpuid 80000001h.edx.11); use int 0x80 only", .{});
         return;
     }
 
@@ -85,7 +86,8 @@ pub fn initSyscallInstructionPath() void {
     const percpu = @import("../../hal/x86_64/percpu.zig");
     percpu.syncKernelRsp0(gdt.zircon_x86_64_kernel_rsp0);
 
+    klog.info("syscall/sysret: enabled (IA32_LSTAR=syscall_lstar_entry; int 0x80 vector 128 still valid)", .{});
     if (klog.DEBUG_MODE) {
-        klog.debug("syscall: IA32_LSTAR + per-CPU KERNEL_GS_BASE (SWAPGS) enabled; vector 128 uses same NT SSDT dispatch as syscall", .{});
+        klog.debug("syscall: per-CPU KERNEL_GS_BASE (SWAPGS) synced to RSP0", .{});
     }
 }

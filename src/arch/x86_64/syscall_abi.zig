@@ -11,6 +11,8 @@ const process = @import("../../ps/process.zig");
 const probe = @import("../../mm/probe.zig");
 const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
 
+/// **NtCreateUserProcess（SSDT 0xAA，ZOA 子集）**：无 Win64 五寄存器即可表达的完整 `NtCreateUserProcess` 栈帧；`R10` 指向用户区 [`syscall_nt_extras.ZirconCreateUserProcessArgs`](syscall_nt_extras.zig)（`image_path_unicode`、`process_handle_out`、`thread_handle_out`、`creation_flags`）。须 `probeUserMemory` 该结构与输出 `HANDLE` 槽。详见 [docs/cn/PHASE_F_PROCESS_CREATE.md](../../docs/cn/PHASE_F_PROCESS_CREATE.md)。
+///
 /// 自用户栈读取第 N 个 syscall 扩展参数（N=0 → 第 5 个实参），偏移相对 SYSCALL 时的用户 RSP。
 pub fn userStackArg(frame: *InterruptFrame, nth_stack_arg: u8) ?u64 {
     const proc = process.getCurrentProcess() orelse return null;

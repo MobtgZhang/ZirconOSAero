@@ -5,7 +5,7 @@
 // Purpose: 单调时钟与「中断 tick」读路径抽象；PIT 驱动的 `scheduler.tick` 为默认可见时间轴，HPET 等为可选高分辨率源。
 //
 // This is an independent clean-room implementation.
-// Reference: [docs/cn/TimerPrecisionRoadmap.md](../../docs/cn/TimerPrecisionRoadmap.md)
+// Reference: [docs/cn/TimerPrecisionRoadmap.md](../../docs/cn/TimerPrecisionRoadmap.md)；K2.3：`readMonotonicRaw` 与 `hal/x86_64/hpet.zig` 主计数器接线。
 
 const builtin = @import("builtin");
 const scheduler = @import("scheduler.zig");

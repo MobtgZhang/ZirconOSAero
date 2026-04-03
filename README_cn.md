@@ -41,7 +41,7 @@
 - **Win32 子系统服务器**（**部分**）：csrss 风格进程注册与消息桥接；完整窗口站/桌面生命周期分阶段 — [LPC_NT61_HANDSHAKE.md](docs/cn/LPC_NT61_HANDSHAKE.md)
 - **Win32 执行引擎**（**子集**）：PE 加载、DLL 绑定、进程创建、API 分发（仅已支持路径）
 - **图形子系统**（**部分**）：user32（窗口/消息）与 gdi32（绘图/字体/位图），优先 Aero/壳场景 — **非**完整 GDI（ROP、完整字体光栅化、完整 DC 对象模型）
-- **WOW64**（**部分**）：PE32 加载、32→64 syscall thunk、已实现的 32 位 PEB/TEB；完整 SysWOW64 见 [延后表面](docs/cn/NT61_DEFERRED_SURFACES.md)
+- **WOW64**（**部分**）：PE32 加载、32→64 syscall thunk、已实现的 32 位 PEB/TEB；可测子集与双表维护见 [PHASE_G_WOW64.md](docs/cn/PHASE_G_WOW64.md)；完整 SysWOW64 另见 [延后表面](docs/cn/NT61_DEFERRED_SURFACES.md)
 - **文本 Shell**：内核内为 **CMD**；脚本类宿主计划为 **用户态 .NET**（不在本仓库内核实现）
 - **双文件系统**：FAT32（系统卷）与 NTFS（数据卷）
 - **多架构**：x86_64（主路径）、aarch64、loongarch64、riscv64、mips64el
@@ -179,14 +179,14 @@ Clean-room；矩阵 **Done** = 烟测主路径可演示且与 [契约矩阵](doc
 | 串口 | Done | COM1 |
 | 物理帧分配器 | Partial | 位图 + mmap 过滤；伙伴连续页见 `phys_buddy.zig`（契约矩阵 §0） |
 | 分页 | Partial | 四级表、恒等映射；每进程 CR3/SMEP 见契约矩阵 |
-| 内核堆 | Partial | Bump + 空闲链表回收 + `mm/pool` 档位；完整池化见契约矩阵 |
+| 内核堆 | Partial | Bump 快路径 + 空闲链表 + `mm/pool` 档位；路径见 [MM_ALLOC_PATHS.md](docs/cn/MM_ALLOC_PATHS.md)；契约矩阵 §0 |
 | Section 对象 | Partial | 匿名节 + `ntdll`/`section.zig`；syscall 分发节区 API（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)） |
 | IPC (LPC) | Partial | 队列、端口；连接/通信端口分离雏形、`section_view_handle` 占位 |
-| 系统调用 | Partial | `int 0x80` + `syscall`/`sysret`；SSDT 子集；`NtQuerySystemInformation` 等对用户缓冲 `probe`（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
+| 系统调用 | Partial | `int 0x80` + `syscall`/`sysret`（启动链见 [SyscallABI.md](docs/cn/SyscallABI.md)）；SSDT 含 `NtCreateProcess`、`NtCreateUserProcess`（**0xAA**，ZOA 参数块见 [PHASE_F_PROCESS_CREATE.md](docs/cn/PHASE_F_PROCESS_CREATE.md)）、`NtWaitForMultipleObjects`（**0x57**）、`NtDeviceIoControlFile`（**0x52**）、Lock/Unlock VM（**0x53/0x54**）等；`NtQuerySystemInformation` 多类子集 + `probe`；**ssdt_stub_parity**；阶段 E 见 [PHASE_E_NATIVE_API.md](docs/cn/PHASE_E_NATIVE_API.md) |
 | IDT/ISR | Done | 256 向量 |
 | 调度器 | Partial | 多优先级就绪队列；完整 NT 32 级与饥饿策略见契约矩阵 |
 | 定时器 | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
-| 同步 | Done | Event、mutex、semaphore、spinlock |
+| 同步 | Partial | 内核 `ke/sync.zig` 有 Event/Mutex/Semaphore/SpinLock；**ntdll 句柄路径**：`NtCreateEvent`/`NtWait`/`NtSetEvent`（含手动/自动复位）与 `ObjectHeader` 等待队列一致；`NtCreateMutant`/`NtReleaseSemaphore` 等仍为桩 — 见 [SCHEDULER_API.md](docs/cn/SCHEDULER_API.md)、契约矩阵 §2 |
 | Object Manager | Partial | 类型、句柄表、命名空间子集；主机测试 [zircon_host_ob_test.zig](src/zircon_host_ob_test.zig) |
 | Process Manager | Partial | 进程/线程、Process Server；CR3/隔离见契约矩阵 §0 |
 | Session Manager | Done | SMSS、会话、子系统注册 |
@@ -198,9 +198,9 @@ Clean-room；矩阵 **Done** = 烟测主路径可演示且与 [契约矩阵](doc
 | PE32+ 加载器 | Partial | 头、导入、重定位、PEB/TEB 子集；与 SSDT 持续对齐 |
 | PE32 加载器 | Partial | 32 位 PE + WOW64；与官方 SysWOW64/SSDT 不对齐 |
 | ELF 加载器 | Partial | ELF64 头与加载子集；glibc 动态全兼容非目标 |
-| ntdll | Partial | Native API 子集；服务号见 SSDT 路线图 |
+| ntdll | Partial | Native API 子集；含 `RtlVerifyVersionInfo`（`os_version` 驱动）；服务号见 SSDT 路线图 |
 | kernel32 | Partial | Win32 基础 API 子集 |
-| user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集 |
+| user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集；**下阶段跟踪**：[PHASE_D_WIN32_MSG_PUMP_DWM.md](docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md)（消息泵与 DWM/LPC 详尽待办） |
 | gdi32 | Partial | DC/原语/字体/位图子集；见 `gdi32.zig` 与契约矩阵 |
 | Console | Done | 控制台运行时 |
 | CMD | Done | dir、cd、set、ver、systeminfo、tasklist 等 |

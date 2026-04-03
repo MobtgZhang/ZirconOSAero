@@ -2,7 +2,7 @@
 //! 后续迭代：按芯片族拆分 BAR、VRAM、显示引擎（见 `nvidia_gpu.zig` 顶部注释）。
 
 const types = @import("types.zig");
-const klog = @import("../../../rtl/klog.zig");
+const klog = @import("../../../../rtl/klog.zig");
 
 pub fn familyFromDeviceId(did: u16) types.NvidiaGpuFamily {
     const hi: u8 = @truncate(did >> 8);

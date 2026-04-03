@@ -3,7 +3,7 @@
 const types = @import("types.zig");
 const gen9 = @import("gen9_display.zig");
 const gen11 = @import("gen11_display.zig");
-const klog = @import("../../../rtl/klog.zig");
+const klog = @import("../../../../rtl/klog.zig");
 
 /// `kms_experimental`：`-Dintel_kms_experimental=true` 时允许对显示 MMIO 做可选探测（默认关闭）。
 pub fn initForGeneration(gen: types.IntelGpuGeneration, mmio_base: usize, kms_experimental: bool) types.DisplayInitResult {

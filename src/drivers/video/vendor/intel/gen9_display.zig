@@ -2,7 +2,7 @@
 //! 完整 KMS（CDCLK / DDI / pipe）需对照 SKL/KBL PRM 与 `i915_display.c` 逐步实现。
 
 const types = @import("types.zig");
-const klog = @import("../../../rtl/klog.zig");
+const klog = @import("../../../../rtl/klog.zig");
 
 /// SKL 显示仲裁器/侧带区域附近只读探测（偏移因平台而异；失败不视为致命）
 fn tryReadDisplayId(mmio_base: usize) ?u32 {

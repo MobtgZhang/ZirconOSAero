@@ -1,8 +1,8 @@
 //! PCI 标准能力链表遍历与 ROM BAR 快照（计划 B3–B4，只读配置空间）。
 //! x86_64 I/O CF8/CFC 仅保证 256B 传统配置空间；扩展能力在 ECAM 架构上可读。
 
-const klog = @import("../../../rtl/klog.zig");
-const pcie = @import("../../bus/pcie.zig");
+const klog = @import("../../../../rtl/klog.zig");
+const pcie = @import("../../../bus/pcie.zig");
 
 fn capIdName(id: u8) []const u8 {
     return switch (id) {

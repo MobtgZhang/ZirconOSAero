@@ -4,7 +4,7 @@
 //! **E2** 当前为 GOP handoff **no-op**；后续在此实现页表安装与 TLB flush，与 `GmcHandoffParams` 对齐。
 //! **E3** 若内核引入 IOMMU/ATS，DMA 策略与此模块协同。
 
-const klog = @import("../../../rtl/klog.zig");
+const klog = @import("../../../../rtl/klog.zig");
 
 pub const GmcHandoffParams = struct {
     reg_mmio_phys: u64 = 0,

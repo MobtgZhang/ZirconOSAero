@@ -1,8 +1,8 @@
 //! AMD 显示控制器 PCI BAR 分类（计划 B1–B2）：区分寄存器 MMIO 与 VRAM aperture。
 //! 参考 Linux `amdgpu_device.c` 典型布局：BAR0 非预取小窗口 = 寄存器；大预取 BAR = VRAM。
 
-const klog = @import("../../../rtl/klog.zig");
-const pcie = @import("../../bus/pcie.zig");
+const klog = @import("../../../../rtl/klog.zig");
+const pcie = @import("../../../bus/pcie.zig");
 
 pub const ClassifiedBars = struct {
     /// 编程用 MMIO（非预取、通常为首个较小 memory BAR）

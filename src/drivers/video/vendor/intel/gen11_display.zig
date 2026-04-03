@@ -2,7 +2,7 @@
 
 const types = @import("types.zig");
 const gen9 = @import("gen9_display.zig");
-const klog = @import("../../../rtl/klog.zig");
+const klog = @import("../../../../rtl/klog.zig");
 
 pub fn initPipelineHandoffOnly(mmio_base: usize, kms_experimental: bool) types.DisplayInitResult {
     const r = gen9.initPipelineHandoffOnly(mmio_base, kms_experimental);

@@ -9,7 +9,7 @@
 //!
 //! **A3 多 AMD 显示控制器**：PCI 扫描顺序不保证与「用户主屏」一致；在枚举到多块 1002 显示类设备时，按 `devicePriorityScore` 选取 primary（独显 Polaris/Vega 等优先于典型 APU）。
 
-const pcie = @import("../../bus/pcie.zig");
+const pcie = @import("../../../bus/pcie.zig");
 const types = @import("types.zig");
 
 /// 数值越大越优先作为 `amd_igpu` primary（探测、MMIO 映射、HDMI 元数据）。

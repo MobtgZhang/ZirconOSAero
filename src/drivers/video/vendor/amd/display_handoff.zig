@@ -1,7 +1,7 @@
 //! AMD 显示管道 — GOP handoff；`amd_kms_experimental` 下仅登记与 PCI/MMIO 表面诊断，不写 GPU 寄存器。
 
 const types = @import("types.zig");
-const klog = @import("../../../rtl/klog.zig");
+const klog = @import("../../../../rtl/klog.zig");
 const mmio_probe = @import("mmio_probe.zig");
 const display_dc_stub = @import("display_dc_stub.zig");
 const gfx_pm_stub = @import("gfx_pm_stub.zig");

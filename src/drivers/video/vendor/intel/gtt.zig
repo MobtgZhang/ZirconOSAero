@@ -1,7 +1,7 @@
 //! GGTT / stolen memory — 骨架实现（写入 PTE、完整 stolen 解析见 i915 `gtt.c`）
 
-const pcie = @import("../../bus/pcie.zig");
-const klog = @import("../../../rtl/klog.zig");
+const pcie = @import("../../../bus/pcie.zig");
+const klog = @import("../../../../rtl/klog.zig");
 
 pub const StolenInfo = struct {
     base: u64 = 0,

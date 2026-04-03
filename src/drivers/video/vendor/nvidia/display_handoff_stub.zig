@@ -2,7 +2,7 @@
 
 const types = @import("types.zig");
 const chip_class = @import("chip_class.zig");
-const klog = @import("../../../rtl/klog.zig");
+const klog = @import("../../../../rtl/klog.zig");
 
 pub fn initForFamily(family: types.NvidiaGpuFamily, mmio_virt: usize, kms_experimental: bool) types.DisplayInitResult {
     chip_class.logExperimentalMmioPeek(mmio_virt, kms_experimental);

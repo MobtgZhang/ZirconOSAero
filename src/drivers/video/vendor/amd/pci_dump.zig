@@ -1,7 +1,7 @@
 //! 探测失败时的 BDF + BAR 转储（计划 D3）。
 
-const klog = @import("../../../rtl/klog.zig");
-const pcie = @import("../../bus/pcie.zig");
+const klog = @import("../../../../rtl/klog.zig");
+const pcie = @import("../../../bus/pcie.zig");
 
 pub fn logDeviceDump(dev: *const pcie.DisplayGfxPciInfo, reason: []const u8) void {
     klog.warn("AMD display: %s — BDF %u:%u:%u VID=0x%x DID=0x%x rev=0x%x class=0x%x", .{

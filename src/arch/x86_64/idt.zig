@@ -62,6 +62,15 @@ pub fn init() void {
     loadIdt(&desc);
 }
 
+/// AP 与 BSP 共用同一 `idt_entries` 映像（恒等映射下物理地址一致）。
+pub fn reloadKernelIdt() void {
+    const desc = IdtDescriptor{
+        .limit = @sizeOf(@TypeOf(idt_entries)) - 1,
+        .base = @intFromPtr(&idt_entries),
+    };
+    loadIdt(&desc);
+}
+
 extern fn load_idt(desc: *const IdtDescriptor) void;
 
 fn loadIdt(desc: *const IdtDescriptor) void {

@@ -12,7 +12,7 @@ const subsystem = @import("subsystem.zig");
 const process = @import("../../ps/process.zig");
 const ntdll = @import("../../libs/ntdll.zig");
 const win32k = @import("../win32k/mod.zig");
-const dwm_comp = @import("../../drivers/video/dwm_compositor.zig");
+const dwm_comp = @import("../../drivers/video/root.zig").dwm_compositor;
 const ipc = @import("../../lpc/ipc.zig");
 const pm_sem = @import("msg_pm_semantics.zig");
 const sched_mod = @import("../../ke/scheduler.zig");
@@ -1948,7 +1948,7 @@ pub fn init() void {
 
 /// 桌面 `initDesktopMode` 之后调用，使 GetSystemMetrics 与真实帧缓冲一致。
 pub fn syncScreenFromFramebuffer() void {
-    const fb = @import("../../drivers/video/framebuffer.zig");
+    const fb = @import("../../drivers/video/root.zig").framebuffer;
     const drivers = @import("../../drivers/mod.zig");
     if (!fb.isInitialized()) return;
     const w = fb.getWidth();

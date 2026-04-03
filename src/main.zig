@@ -381,8 +381,12 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
     if (builtin.cpu.arch == .x86_64) {
         const hpet = @import("hal/x86_64/hpet.zig");
-        if (!vm.mapDeviceMmioIdentity(hpet.HPET_MMIO_PHYS_BASE, 4096)) {
-            klog.warn("VM: HPET MMIO identity map failed (0x%x)", .{@as(u32, @truncate(hpet.HPET_MMIO_PHYS_BASE))});
+        const acpi_core = @import("hal/x86_64/acpi_core.zig");
+        const hpet_phys = acpi_core.hpetMmioPhysOrZero();
+        if (hpet_phys != 0) hpet.setMmioPhysBase(hpet_phys);
+        const hpet_page = hpet.activeMmioPhysBase() & ~@as(u64, 0xFFF);
+        if (!vm.mapDeviceMmioIdentity(hpet_page, 4096)) {
+            klog.warn("VM: HPET MMIO identity map failed (page 0x%x)", .{@as(u32, @truncate(hpet_page))});
         }
         _ = hpet.initOptional();
         const smp_boot = @import("hal/x86_64/smp_boot.zig");

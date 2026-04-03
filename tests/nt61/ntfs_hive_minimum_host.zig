@@ -2,7 +2,7 @@
 //!
 //! **已实现**（见 `src/fs/ntfs.zig`）：`open/read/write`、根目录枚举、`createDir`/`createFile`、单簇 `CLUSTER_SIZE` 流式读写。
 //! **hive 长期项**：`registry.zig` ZOSH1 覆盖与 **原生 RegF** 全解析仍为路线图；NTFS 上需 **小文件随机写 + 属性流子集** 方与商业 Win7 hive 规模对齐。
-//! **本测试**：仅固定与 `ntfs.zig` 一致的常量锚点，防静默漂移。
+//! **本测试**：仅固定与 `ntfs.zig` 一致的常量锚点，防静默漂移。NTFS `D:\` ZOSH1 路径见 **`phase4_host_anchors`**。
 
 const std = @import("std");
 

@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/mm/slab.zig
-// Purpose: 固定对象大小的 slab cache（单链 slabs + 位图占用），与 `pool.zig` 档位池互补。
+// Purpose: 固定对象大小的 slab cache（单链 slabs + 位图占用），与 `pool.zig` 档位池互补；LPC `Message` 等热点对象可逐步迁入 `SlabCache`（K1.3）。
 //
 // This is an independent clean-room implementation.
 // Reference: OS textbook slab allocator; MS Learn — pool concepts (behavioral only).

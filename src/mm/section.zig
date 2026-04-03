@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/mm/section.zig
-// Purpose: Section 对象与映射视图（匿名、页对齐）；文件后备为后续里程碑。
+// Purpose: Section 对象与映射视图（匿名、文件后备 eager copy、SEC_IMAGE 标志）；视图 token 登记于 `vm.AddressSpace`。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
@@ -24,7 +24,7 @@ const STATUS_NO_MEMORY: i32 = -1073741801;
 const STATUS_NOT_IMPLEMENTED: i32 = -1073741822;
 const STATUS_INSUFFICIENT_RESOURCES: i32 = -1073741823;
 
-pub const MAX_SECTIONS: usize = 32;
+pub const MAX_SECTIONS: usize = 256;
 
 /// 内核静态池中的节对象（匿名或文件后备只读映射）。
 pub const SectionObject = struct {
@@ -72,8 +72,9 @@ pub fn createAnonymousSection(max_size: u64, page_protection: u32) ?*SectionObje
     return null;
 }
 
-/// 只读文件后备节（`NtCreateSection` + 文件句柄）；`max_size` 0 表示取 `file.file_size`。
-pub fn createFileBackedSection(max_size: u64, page_protection: u32, file: *vfs.FileObject) ?*SectionObject {
+/// 文件后备节（`NtCreateSection` + 文件句柄）；`max_size` 0 表示取 `file.file_size`。
+/// `is_image_section`：`SEC_IMAGE`（PE 映像节）；映射策略仍与只读/可写文件子集共用，完整 PE 加载器对齐见 `loader/pe.zig` 路线图。
+pub fn createFileBackedSection(max_size: u64, page_protection: u32, file: *vfs.FileObject, is_image_section: bool) ?*SectionObject {
     var i: usize = 0;
     while (i < MAX_SECTIONS) : (i += 1) {
         if (!g_section_used[i]) {
@@ -89,7 +90,7 @@ pub fn createFileBackedSection(max_size: u64, page_protection: u32, file: *vfs.F
                 .file_backed = true,
                 .backing_file = file,
                 .active_view_count = 0,
-                .is_image_section = false,
+                .is_image_section = is_image_section,
                 .cow_requested = cow,
             };
             return s;
@@ -139,7 +140,7 @@ fn pickUserBase(space: *vm.AddressSpace, num_pages: u32) ?u64 {
     return null;
 }
 
-/// `NtMapViewOfSection`：匿名页 **或** 只读文件后备（映射时读入内容）；COW/可写文件图为路线图。
+/// `NtMapViewOfSection`：匿名页 **或** 文件后备（映射时读入内容）。可写文件后备为 **整段 eager copy**（非真 COW）；`cow_requested` 仍为路线图。
 fn copyFileIntoMappedPages(
     space: *vm.AddressSpace,
     base: u64,
@@ -195,7 +196,7 @@ pub fn mapViewIntoProcess(
     const space = proc.address_space orelse return STATUS_NO_MEMORY;
     const num_pages: u32 = @intCast(vs / ps);
     const flags = mapFlagsFromPageProtect(sec.page_protection);
-    if (sec.file_backed and flags.writable) return STATUS_NOT_IMPLEMENTED;
+    if (sec.file_backed and flags.writable and sec.cow_requested) return STATUS_NOT_IMPLEMENTED;
 
     var base = base_address.*;
     if (base == 0) {

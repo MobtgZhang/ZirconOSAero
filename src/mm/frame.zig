@@ -3,10 +3,12 @@
 //! NT style: kernel provides physical memory allocation mechanism
 //!
 //! Ref: Multiboot2 memory map; OS textbook free-list / bitmap; Intel SDM physical addressing.
+//! Physical span tracked: `build.zig -Dphys_track_gb=8|16|32|64` → `build_options.phys_track_gb` (default 8).
 
 const std = @import("std");
 const arch = @import("../arch.zig");
 const boot_mod = arch.impl.boot;
+const build_cfg = @import("build_options");
 
 pub const FRAME_SIZE: usize = arch.PAGE_SIZE;
 
@@ -19,9 +21,9 @@ pub fn memsetPhysicalPage(phys: u64) void {
     }
 }
 
-/// 可跟踪的最大 PFN（默认 8GiB / 4KiB）；高于此的 mmap 区间在启动时忽略。
-/// 再扩大须提高此常数并接受 BSS 中 `bitmap` + `pfn_meta` + `pfn_locks` 线性成本。
-pub const MAX_PHYS_FRAMES: usize = (8 * 1024 * 1024 * 1024) / FRAME_SIZE;
+/// 可跟踪的最大 PFN，由构建选项 `phys_track_gb` 决定（8/16/32/64 GiB）；高于此的 mmap 区间在启动时忽略。
+/// BSS 成本随 `phys_track_gb` 线性增长：`bitmap` + `pfn_meta` + `pfn_locks`。
+pub const MAX_PHYS_FRAMES: usize = @as(usize, @intCast(build_cfg.phys_track_gb)) * (1024 * 1024 * 1024) / FRAME_SIZE;
 pub const BITMAP_SIZE: usize = (MAX_PHYS_FRAMES + 63) / 64;
 
 /// DMA：物理地址 &lt; 16MiB（ISA DMA 文档习惯上界）。
@@ -106,6 +108,9 @@ pub const FrameAllocator = struct {
             self.mb_handoff_end_exclusive = info.multiboot_handoff_end_exclusive;
         }
 
+        // Multiboot2 EFI mmap: only type `available` (1) is added to the free bitmap.
+        // Types reserved(2), acpi_reclaimable(3), nvs(4), bad(5) must never be handed to the allocator
+        // (ACPI NVS / firmware reserved — see UEFI/ACPI platform docs; clean-room, no Windows source).
         var i: usize = 0;
         while (i < info.mmap_entry_count) : (i += 1) {
             const entry = info.getMmapEntry(i) orelse break;
@@ -267,6 +272,7 @@ pub const FrameAllocator = struct {
     pub fn free(self: *FrameAllocator, phys: u64) void {
         const frame = phys / FRAME_SIZE;
         if (frame >= MAX_PHYS_FRAMES) return;
+        // MDL / `lockPfnPhys`：锁计数非零时禁止归还帧，避免 DMA 或锁页窗口与空闲链表竞态（WDK 锁页语义子集）。
         if (self.pfn_locks[@intCast(frame)] != 0) return;
         self.setFree(@as(usize, @intCast(frame)));
         if (self.used_frames > 0) self.used_frames -= 1;

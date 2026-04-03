@@ -7,6 +7,7 @@
 // This is an independent clean-room implementation.
 // Reference: textbook buddy system; no Windows/ReactOS code.
 
+const std = @import("std");
 const buddy_mod = @import("buddy.zig");
 const frame_mod = @import("frame.zig");
 
@@ -166,6 +167,30 @@ pub fn kernelFreeContiguousEx(phys: u64, order: u5, source: ContiguousSource) vo
         .frame_bitmap => {
             if (frame_mod.getKernelFrameAllocator()) |fa| fa.freeContiguousRange(phys, n);
         },
+    }
+}
+
+/// 连续页分配：若 `num_pages` 为 2 的幂且内核伙伴 arena 已初始化，优先 `kernelAllocContiguousPhys`；否则回退位图 `allocContiguous`。
+/// 释放须与 [`freeContiguousPagesWithSource`] 使用同一 `source`/`order`（`frame_bitmap` 时 `order` 忽略）。
+pub fn allocContiguousPagesWithSource(fa: *frame_mod.FrameAllocator, num_pages: usize) struct { phys: ?u64, source: ContiguousSource, order: u5 } {
+    if (num_pages == 0) return .{ .phys = null, .source = .frame_bitmap, .order = 0 };
+    if (std.math.isPowerOfTwo(num_pages)) {
+        const order: u5 = @intCast(std.math.log2(num_pages));
+        if (kernelContiguousBuddyReady() and order <= kernelContiguousMaxOrder()) {
+            if (kernelAllocContiguousPhys(order)) |p| {
+                return .{ .phys = p, .source = .buddy, .order = order };
+            }
+        }
+    }
+    const p = fa.allocContiguous(num_pages) orelse return .{ .phys = null, .source = .frame_bitmap, .order = 0 };
+    return .{ .phys = p, .source = .frame_bitmap, .order = 0 };
+}
+
+pub fn freeContiguousPagesWithSource(fa: *frame_mod.FrameAllocator, phys: u64, num_pages: usize, source: ContiguousSource, order: u5) void {
+    if (num_pages == 0) return;
+    switch (source) {
+        .buddy => kernelFreeContiguousPhys(phys, order),
+        .frame_bitmap => fa.freeContiguousRange(phys, num_pages),
     }
 }
 

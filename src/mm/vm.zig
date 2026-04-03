@@ -131,6 +131,7 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     @memset(&space.section_view_base, 0);
     @memset(&space.section_view_pages, 0);
     @memset(&space.section_view_obj, 0);
+    @memset(&space.section_view_token, 0);
     space.vma_len = 0;
     @memset(&space.vma_base, 0);
     @memset(&space.vma_pages, 0);
@@ -332,6 +333,13 @@ pub fn remapIdentityRangeUncached(virt_base: usize, size: usize) bool {
 pub const max_reserved_regions: usize = 32;
 pub const max_section_views: usize = 32;
 
+/// `NtMapViewOfSection` 登记时分配的单调 token（与句柄无关；见 `LPC_NT61_HANDSHAKE.md` section_view 绑定）。
+var g_section_view_token_seq: std.atomic.Value(u32) = .init(1);
+
+pub fn sectionViewTokenSeqNextValue() u32 {
+    return g_section_view_token_seq.load(.monotonic);
+}
+
 /// Win32 内存保护常量子集（`AddressSpace` 方法引用）。
 pub const PAGE_NOACCESS: u32 = 0x01;
 pub const PAGE_READONLY: u32 = 0x02;
@@ -354,6 +362,7 @@ pub const AddressSpace = struct {
     section_view_base: [max_section_views]u64 = @splat(0),
     section_view_pages: [max_section_views]u32 = @splat(0),
     section_view_obj: [max_section_views]u64 = @splat(0),
+    section_view_token: [max_section_views]u32 = @splat(0),
     /// 显式 VMA 记录（与 `reserved_*` 不重复登记：reserve 仅走 `reserved_*`；`vmaInsert` 用于已映射或其它视图）。
     vma_len: u8 = 0,
     vma_base: [max_vma]u64 = @splat(0),
@@ -542,8 +551,17 @@ pub const AddressSpace = struct {
         self.section_view_base[i] = base;
         self.section_view_pages[i] = pages;
         self.section_view_obj[i] = sec_ptr;
+        self.section_view_token[i] = g_section_view_token_seq.fetchAdd(1, .monotonic);
         self.section_view_count += 1;
         return true;
+    }
+
+    pub fn sectionViewTokenAt(self: *const AddressSpace, base: u64) ?u32 {
+        var i: u8 = 0;
+        while (i < self.section_view_count) : (i += 1) {
+            if (self.section_view_base[i] == base) return self.section_view_token[i];
+        }
+        return null;
     }
 
     /// 按视图基址查找并移除记录，返回页数。
@@ -556,6 +574,7 @@ pub const AddressSpace = struct {
                 self.section_view_base[i] = self.section_view_base[last];
                 self.section_view_pages[i] = self.section_view_pages[last];
                 self.section_view_obj[i] = self.section_view_obj[last];
+                self.section_view_token[i] = self.section_view_token[last];
                 self.section_view_count -= 1;
                 return pages;
             }
@@ -675,6 +694,7 @@ pub fn mdlUnlockPagesInFrameAllocator(mdl: *mdl_mod.Mdl, fa: *FrameAllocator) vo
     if (!mdl.flags.pages_locked) return;
     var i: u8 = 0;
     while (i < mdl.pfn_count) : (i += 1) {
+        // 与 `frame.free` 配对：全部 unlock 后 PFN 才可经 VM unmap 归还分配器。
         fa.unlockPfnPhys(mdl.pfns[i] << 12);
     }
     mdl.flags.pages_locked = false;
@@ -815,6 +835,10 @@ pub fn unmapRange(space: *AddressSpace, virt_base: u64, num_pages: usize) void {
             _ = space.unmapAndFree(virt_base + off);
         }
     }
+    if (builtin.cpu.arch == .x86_64 and num_pages > 0) {
+        const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
+        tlb.noteUserMappingInvalidatedSmp();
+    }
 }
 
 /// `MEM_DECOMMIT`：解除 PTE 并将对应 VAD 标回 reserved（子集；须整段落在已提交 VAD 内）。
@@ -833,6 +857,10 @@ pub fn decommitVirtualRange(space: *AddressSpace, virt_base: u64, num_pages: usi
         const off = @as(u64, i) * ps;
         if (virt_base > std.math.maxInt(u64) - off) return false;
         _ = space.unmapAndFree(virt_base + off);
+    }
+    if (builtin.cpu.arch == .x86_64 and num_pages > 0) {
+        const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
+        tlb.noteUserMappingInvalidatedSmp();
     }
     return true;
 }

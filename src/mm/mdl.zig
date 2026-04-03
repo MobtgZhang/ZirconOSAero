@@ -2,7 +2,8 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/mm/mdl.zig
-// Purpose: 内存描述符列表（MDL）内核占位 — 描述「虚拟范围 ↔ 物理页」映射；扩展 PFN 槽位与恒等映射填 PFN（锁页 / 散列 DMA 仍待 K1.7）。
+// Purpose: 内存描述符列表（MDL）内核占位 — 描述「虚拟范围 ↔ 物理页」映射；与 `vm.mdlLockPagesInFrameAllocator` 联动 `FrameAllocator.lockPfnPhys`（WDK 锁页概念子集）。
+// 须在归还物理帧（`FrameAllocator.free` / `unmapAndFree`）之前 `mdlUnlockPagesInFrameAllocator`，否则锁计数非零时帧不会进入空闲位图。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.

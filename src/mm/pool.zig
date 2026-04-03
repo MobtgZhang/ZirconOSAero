@@ -59,7 +59,8 @@ pub const TagStat = struct {
     frees: usize,
 };
 
-const tag_stat_cap: usize = 48;
+/// Tag 统计表容量（Debug 泄漏审计）；满后新 tag 静默不计入直至重启。
+const tag_stat_cap: usize = 64;
 var tag_stats: [tag_stat_cap]TagStat = undefined;
 var tag_stats_len: usize = 0;
 

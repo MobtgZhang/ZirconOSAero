@@ -6,6 +6,10 @@
 //
 // This is an independent clean-room implementation.
 // Ref: WDK — ExAllocatePoolWithTag / ExFreePoolWithTag (public behavior names only).
+//
+// IRQL（与 WDK 描述对齐的子集）：
+// - `exAllocatePoolWithTag` / `free`：走 **NonPagedPool** 路径，须在 **DISPATCH_LEVEL 及以下** 使用（本内核由 `pool` 自旋风格锁保证）。
+// - `exAllocatePoolWithTagType(.paged)`：须 **APC_LEVEL 以下**；由 `main` 注册的 `setPagedPoolIrqlGuard` 在违规时断言（占位换出未接真分页池）。
 
 const pool = @import("pool.zig");
 

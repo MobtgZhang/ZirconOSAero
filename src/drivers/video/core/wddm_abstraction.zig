@@ -12,6 +12,7 @@
 //! - **本文件**：仅文档化策略常量与将来 IOCTL/DDI 挂钩点；不生成 WDDM 用户态驱动协议。
 //! - **`display.zig` / `dwm_compositor.zig`**：CPU 合成与 GOP present。
 //! - **厂商桩**（`amd/`、`intel/`、`nvidia/`）：PCI 探测与 handoff，可逐步接共享表面与 command buffer 契约。
+//! - **`display_backend.zig`**：运行时 `gop_linear` / `virtio_scanout`（与下文 `WddmRuntimePhase` 日志互补，非 WDDM IOCTL）。
 
 pub const WddmPhase = enum(u8) {
     cpu_composite_only = 0,

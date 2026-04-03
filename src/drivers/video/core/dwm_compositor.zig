@@ -69,9 +69,35 @@ pub const surface_thumb_w: u32 = 20;
 pub const surface_thumb_h: u32 = 15;
 pub const surface_thumb_pixels: usize = surface_thumb_w * surface_thumb_h;
 
+/// Per-surface DWM policy (dwmapi / `DWMWINDOWATTRIBUTE` 可映射子集)。
+pub const SurfaceDwmState = struct {
+    extend_margins: dwm_nt61_abi.MARGINS = .{
+        .cxLeftWidth = 0,
+        .cxRightWidth = 0,
+        .cyTopHeight = 0,
+        .cyBottomHeight = 0,
+    },
+    blur_dw_flags: u32 = 0,
+    blur_f_enable: bool = false,
+    blur_transition_on_max: bool = false,
+    nc_rendering_policy: u32 = dwm_nt61_abi.DWMNCRP_USEWINDOWSTYLE,
+    flip3d_policy: u32 = dwm_nt61_abi.DWMFLIP3D_DEFAULT,
+    disallow_peek: bool = false,
+    excluded_from_peek: bool = false,
+    transitions_force_disabled: bool = false,
+    allow_ncpaint: bool = true,
+    force_iconic_representation: bool = false,
+    nonclient_rtl: bool = false,
+    cloak: bool = false,
+    freeze_representation: bool = false,
+    has_iconic_bitmap: bool = false,
+};
+
 var backend: CompositorBackend = .none;
 var state: CompositorState = .uninitialized;
 var surfaces: [MAX_SURFACES]RedirectedSurface = [_]RedirectedSurface{.{}} ** MAX_SURFACES;
+/// 与 `surfaces[id]` 一一对应；`destroySurface` 时清零。
+var surface_dwm: [MAX_SURFACES]SurfaceDwmState = [_]SurfaceDwmState{.{}} ** MAX_SURFACES;
 var surface_count: u16 = 0;
 var frame_number: u64 = 0;
 var vsync_enabled: bool = true;
@@ -133,6 +159,114 @@ pub fn destroySurface(id: u16) void {
     if (id >= surface_count) return;
     surfaces[id].visible = false;
     surfaces[id].owner_pid = 0;
+    surface_dwm[id] = .{};
+}
+
+fn syncDwmPolicyToKernelFlags(id: u16) void {
+    if (id >= surface_count) return;
+    const st = surface_dwm[id];
+    surfaces[id].flags.dwm_blur_behind = st.blur_f_enable;
+    surfaces[id].flags.dwm_ncrendering = st.nc_rendering_policy != dwm_nt61_abi.DWMNCRP_DISABLED;
+}
+
+pub fn getSurfaceDwmState(id: u16) ?SurfaceDwmState {
+    if (id >= surface_count) return null;
+    return surface_dwm[id];
+}
+
+pub fn setSurfaceExtendMargins(id: u16, m: dwm_nt61_abi.MARGINS) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].extend_margins = m;
+}
+
+pub fn setSurfaceBlurBehind(id: u16, bb: dwm_nt61_abi.DWM_BLURBEHIND) void {
+    if (id >= surface_count) return;
+    const st = &surface_dwm[id];
+    st.blur_dw_flags = bb.dwFlags;
+    st.blur_transition_on_max = bb.fTransitionOnMaximized != 0;
+    if ((bb.dwFlags & dwm_nt61_abi.DWM_BB_ENABLE) != 0) {
+        st.blur_f_enable = bb.fEnable != 0;
+    } else {
+        st.blur_f_enable = false;
+    }
+    syncDwmPolicyToKernelFlags(id);
+}
+
+pub fn setSurfaceNcRenderingPolicy(id: u16, policy: u32) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].nc_rendering_policy = policy;
+    syncDwmPolicyToKernelFlags(id);
+}
+
+pub fn setSurfaceFlip3dPolicy(id: u16, policy: u32) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].flip3d_policy = policy & 0xFF;
+}
+
+pub fn getSurfaceFlip3dPolicy(id: u16) u32 {
+    if (id >= surface_count) return dwm_nt61_abi.DWMFLIP3D_DEFAULT;
+    return surface_dwm[id].flip3d_policy;
+}
+
+pub fn surfaceOmittedFromFlip3dSwitcher(id: u16) bool {
+    const fp = getSurfaceFlip3dPolicy(id);
+    return fp == dwm_nt61_abi.DWMFLIP3D_EXCLUDEBELOW or fp == dwm_nt61_abi.DWMFLIP3D_EXCLUDEABOVE;
+}
+
+pub fn setSurfacePeekFlags(id: u16, disallow: bool, excluded: bool) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].disallow_peek = disallow;
+    surface_dwm[id].excluded_from_peek = excluded;
+}
+
+pub fn surfaceDisallowsPeek(id: u16) bool {
+    if (id >= surface_count) return false;
+    return surface_dwm[id].disallow_peek;
+}
+
+pub fn surfaceExcludedFromPeek(id: u16) bool {
+    if (id >= surface_count) return false;
+    return surface_dwm[id].excluded_from_peek;
+}
+
+pub fn surfaceDwmSetTransitionsForceDisabled(id: u16, v: bool) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].transitions_force_disabled = v;
+}
+
+pub fn surfaceDwmSetAllowNcPaint(id: u16, v: bool) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].allow_ncpaint = v;
+}
+
+pub fn surfaceDwmSetNonClientRtl(id: u16, v: bool) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].nonclient_rtl = v;
+}
+
+pub fn surfaceDwmSetForceIconic(id: u16, v: bool) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].force_iconic_representation = v;
+}
+
+pub fn surfaceDwmSetFreezeRepresentation(id: u16, v: bool) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].freeze_representation = v;
+}
+
+pub fn setSurfaceCloak(id: u16, cloak: bool) void {
+    if (id >= surface_count) return;
+    surface_dwm[id].cloak = cloak;
+    if (cloak) {
+        surfaces[id].visible = false;
+    } else {
+        surfaces[id].visible = surfaces[id].owner_pid != 0;
+    }
+}
+
+pub fn surfaceIsCloaked(id: u16) bool {
+    if (id >= surface_count) return false;
+    return surface_dwm[id].cloak;
 }
 
 pub fn moveSurface(id: u16, x: i32, y: i32) void {
@@ -341,6 +475,10 @@ pub fn collectShellWindowSurfaceIds(buf: []u16) usize {
         if (!s.visible or s.owner_pid == 0) continue;
         if (s.width < 16 or s.height < 16) continue;
         if (s.z_order >= 30000) continue;
+        const fp = surface_dwm[i].flip3d_policy;
+        // Ref: Learn — `DWMFLIP3D_*` 将窗口从 Flip3D 切换器中省略；本子集对两种非 DEFAULT 均不收集到底栏预览。
+        if (fp == dwm_nt61_abi.DWMFLIP3D_EXCLUDEBELOW or fp == dwm_nt61_abi.DWMFLIP3D_EXCLUDEABOVE)
+            continue;
         if (n < buf.len) buf[n] = i;
         n += 1;
     }
@@ -364,4 +502,84 @@ pub fn iconicThumbnailSerial() u64 {
 
 pub fn getAeroConfig() *const AeroConfig {
     return &aero_cfg;
+}
+
+// ── dwmapi 缩略图句柄（`HTHUMBNAIL` 语义：本仓库为内核递增槽位 +1） ──
+
+const MAX_DWM_THUMBNAILS: usize = 32;
+
+var thumb_slot_used: [MAX_DWM_THUMBNAILS]bool = [_]bool{false} ** MAX_DWM_THUMBNAILS;
+var thumb_dest_hwnd: [MAX_DWM_THUMBNAILS]u64 = undefined;
+var thumb_src_hwnd: [MAX_DWM_THUMBNAILS]u64 = undefined;
+var thumb_props_store: [MAX_DWM_THUMBNAILS]dwm_nt61_abi.DWM_THUMBNAIL_PROPERTIES = undefined;
+
+fn defaultThumbnailProps() dwm_nt61_abi.DWM_THUMBNAIL_PROPERTIES {
+    return .{
+        .dwFlags = dwm_nt61_abi.DWM_TNP_VISIBLE,
+        ._pad_dwalign = 0,
+        .rcDestination = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+        .rcSource = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+        .opacity = 255,
+        ._pad_opacity = 0,
+        ._pad_opacity2 = 0,
+        ._pad_opacity3 = 0,
+        .fVisible = 1,
+        .fSourceClientAreaOnly = 0,
+    };
+}
+
+/// `handle` 为 1..MAX_DWM_THUMBNAILS；失败返回 null（表满或自引用）。
+pub fn dwmThumbnailRegister(dest_hwnd: u64, src_hwnd: u64) ?usize {
+    if (dest_hwnd == src_hwnd) return null;
+    var i: usize = 0;
+    while (i < MAX_DWM_THUMBNAILS) : (i += 1) {
+        if (!thumb_slot_used[i]) {
+            thumb_slot_used[i] = true;
+            thumb_dest_hwnd[i] = dest_hwnd;
+            thumb_src_hwnd[i] = src_hwnd;
+            thumb_props_store[i] = defaultThumbnailProps();
+            return i + 1;
+        }
+    }
+    return null;
+}
+
+pub fn dwmThumbnailUnregister(handle: usize) bool {
+    if (handle == 0 or handle > MAX_DWM_THUMBNAILS) return false;
+    const i = handle - 1;
+    if (!thumb_slot_used[i]) return false;
+    thumb_slot_used[i] = false;
+    return true;
+}
+
+pub fn dwmThumbnailUpdate(handle: usize, props: *const dwm_nt61_abi.DWM_THUMBNAIL_PROPERTIES) bool {
+    if (handle == 0 or handle > MAX_DWM_THUMBNAILS) return false;
+    const i = handle - 1;
+    if (!thumb_slot_used[i]) return false;
+    thumb_props_store[i] = props.*;
+    return true;
+}
+
+pub fn dwmThumbnailSrcHwnd(handle: usize) ?u64 {
+    if (handle == 0 or handle > MAX_DWM_THUMBNAILS) return null;
+    const i = handle - 1;
+    if (!thumb_slot_used[i]) return null;
+    return thumb_src_hwnd[i];
+}
+
+/// 单元测试 / 诊断：重置缩略图表。
+pub fn dwmThumbnailResetForTest() void {
+    @memset(&thumb_slot_used, false);
+}
+
+// ── Flip3D 覆盖层（内核）↔ 用户态 `flip3d_preview_enabled` 诊断桥 ──
+
+var flip3d_overlay_kernel_active: bool = false;
+
+pub fn notifyFlip3dOverlayKernelActive(active: bool) void {
+    flip3d_overlay_kernel_active = active;
+}
+
+pub fn isFlip3dOverlayKernelActive() bool {
+    return flip3d_overlay_kernel_active;
 }

@@ -30,6 +30,7 @@ pub const dwm_mod = @import("dwm.zig");
 pub const renderer_aero = @import("../desktop/renderer_aero.zig");
 const wallpaper_bitmap = @import("../desktop/wallpaper_bitmap.zig");
 const display_flip_journal = @import("display_flip_journal.zig");
+const display_backend = @import("display_backend.zig");
 
 pub const ThemeColors = theme_mod.ThemeColors;
 
@@ -940,6 +941,7 @@ pub fn handleDesktopHotkeys() bool {
     if (nt61_aero.KernelCompositor.flip3d_enabled and arch.consumeFlip3dHotkey()) {
         flip3d_overlay_active = !flip3d_overlay_active;
         flip3d_needs_scene_refresh = flip3d_overlay_active;
+        dwm_comp.notifyFlip3dOverlayKernelActive(flip3d_overlay_active);
         cursor_plane.invalidate();
         return true;
     }
@@ -1725,12 +1727,14 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     renderAeroTrayFlyout(scr_w, scr_h);
 
     panic_ctx.setPhase(0x0002_0096);
-    const peek_x = clampI32FromI64(@as(i64, scr_w) - @as(i64, peek_w));
-    fb.drawGradientV(peek_x, tb_y, peek_w, tb_h, rgb(0x68, 0x88, 0xA8), rgb(0x30, 0x48, 0x64));
-    fb.drawVLine(peek_x, tb_y, tb_h, rgb(0x90, 0xB0, 0xD0));
-    const right_rail_x = clampI32FromI64(@as(i64, scr_w) - 1);
-    fb.drawVLine(right_rail_x, tb_y, tb_h, rgb(0x20, 0x30, 0x44));
-    paintExplorerTaskbarThumbnailPreview(scr_w, scr_h);
+    if (dwm_config.peek_enabled) {
+        const peek_x = clampI32FromI64(@as(i64, scr_w) - @as(i64, peek_w));
+        fb.drawGradientV(peek_x, tb_y, peek_w, tb_h, rgb(0x68, 0x88, 0xA8), rgb(0x30, 0x48, 0x64));
+        fb.drawVLine(peek_x, tb_y, tb_h, rgb(0x90, 0xB0, 0xD0));
+        const right_rail_x = clampI32FromI64(@as(i64, scr_w) - 1);
+        fb.drawVLine(right_rail_x, tb_y, tb_h, rgb(0x20, 0x30, 0x44));
+        paintExplorerTaskbarThumbnailPreview(scr_w, scr_h);
+    }
 }
 
 pub fn initAeroDwm() void {
@@ -1768,6 +1772,7 @@ pub fn initAeroDwm() void {
         const hz = config.getTickRateHz();
         dwm_comp.thumb_refresh_min_ticks = @max(4, (hz *% 120) / 1000);
         virtio_gpu_pci.bringupMmioIfProbed();
+        display_backend.syncFromVirtioScanout(virtio_gpu_pci.isScanoutActive());
         if (fb.isInitialized()) {
             fb.logVirtioScanoutReadiness();
             const ph = wddm_abs.classifyVirtioRuntimePhase(
@@ -1775,7 +1780,9 @@ pub fn initAeroDwm() void {
                 virtio_gpu_pci.scanoutUsesMultipageBacking(),
                 virtio_gpu_pci.virglContextReady(),
             );
-            klog.info("Desktop display phase (WDDM-like runtime): {s}", .{@tagName(ph)});
+            klog.info("Desktop display phase (WDDM-like runtime): {s} (present_backend={s})", .{
+                @tagName(ph), @tagName(display_backend.getActiveBackend()),
+            });
         }
         // 可选：VirtIO 2D scratch 与帧缓冲子矩形恒等往返（失败仅打日志）。
         if (fb.isInitialized() and virtio_gpu_pci.compositorOffloadAvailable()) {
@@ -3019,6 +3026,9 @@ fn maybeRefreshExplorerTaskbarThumb(px: i32, py: i32, scr_w: i32, scr_h: i32) vo
 
 fn paintExplorerTaskbarThumbnailPreview(scr_w: i32, scr_h: i32) void {
     if (!taskbar_explorer_thumb_valid) return;
+    if (explorer_dwm_surface_id) |sid| {
+        if (dwm_comp.surfaceExcludedFromPeek(sid)) return;
+    }
     const pr = taskbarComputerPillRect(scr_w, scr_h) orelse return;
     const tw: i32 = 20;
     const th: i32 = 15;
@@ -3041,6 +3051,7 @@ fn paintExplorerTaskbarThumbnailPreview(scr_w: i32, scr_h: i32) void {
 fn flip3dPaintSurfaceThumb(dst_x: i32, dst_y: i32, scale: i32, sid_opt: ?u16) void {
     if (scale < 1) return;
     const sid = sid_opt orelse return;
+    if (dwm_comp.surfaceOmittedFromFlip3dSwitcher(sid)) return;
     const px = dwm_comp.getSurfaceThumbPixels(sid) orelse return;
     const tw = dwm_comp.surface_thumb_w;
     const th = dwm_comp.surface_thumb_h;

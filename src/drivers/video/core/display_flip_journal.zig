@@ -13,6 +13,8 @@ const std = @import("std");
 var present_generation: u64 = 0;
 var virtio_resource_flush_full: u64 = 0;
 var virtio_resource_flush_partial: u64 = 0;
+/// 单次 `present` 内发出的 `RESOURCE_FLUSH` 操作累计（多资源策略预留；当前主路径为 1）。
+var virtio_present_flush_ops_total: u64 = 0;
 
 /// Incremented after each successful `present()` flip path (full or dirty).
 pub fn notePresentFlip() void {
@@ -32,8 +34,18 @@ pub fn noteVirtioResourceFlush(is_full_screen: bool) void {
     }
 }
 
+/// 记录本帧 `present` 路径上执行的 flush 次数（单 scanout 资源为 1；未来 overlay 资源可 >1）。
+pub fn noteVirtioPresentFlushBatch(resource_flush_count: u32) void {
+    if (resource_flush_count == 0) return;
+    virtio_present_flush_ops_total +%= resource_flush_count;
+}
+
 pub fn getVirtioFlushTelemetry() struct { full: u64, partial: u64 } {
     return .{ .full = virtio_resource_flush_full, .partial = virtio_resource_flush_partial };
+}
+
+pub fn getVirtioPresentFlushOpsTotal() u64 {
+    return virtio_present_flush_ops_total;
 }
 
 /// When the desktop loop has not painted for many iterations, reduce redundant `input_hub` polls
@@ -58,4 +70,11 @@ test "noteVirtioResourceFlush increments telemetry" {
     noteVirtioResourceFlush(false);
     const b2 = getVirtioFlushTelemetry();
     try std.testing.expect(b2.partial >= b1.partial + 1);
+}
+
+test "noteVirtioPresentFlushBatch accumulates ops" {
+    const t0 = getVirtioPresentFlushOpsTotal();
+    noteVirtioPresentFlushBatch(1);
+    noteVirtioPresentFlushBatch(2);
+    try std.testing.expectEqual(t0 + 3, getVirtioPresentFlushOpsTotal());
 }

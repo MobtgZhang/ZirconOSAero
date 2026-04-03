@@ -171,7 +171,7 @@ pub fn getConfig() *const DwmConfig {
 
 /// 从 `HKLM\SOFTWARE\Microsoft\Windows\DWM` 读常见 DWORD（与 Shell 文档化键名对齐）；未知或缺失则静默跳过。
 /// 与 `registry.populateDefaults` 播种对齐的键：`AccentColor`、`ColorizationColor`、`ColorizationOpaqueBlend`、
-/// `ColorPrevalence`、`EnableAeroPeek`（后者仅 `peek_enabled`）。
+/// `ColorPrevalence`、`EnableAeroPeek`、`Composition`（合成总开关）、`ColorizationGlass`（毛玻璃）。
 ///
 /// **有 HWND 后的差异广播**：同步前后对 `dwm_registry_sync.RegistryVisibleDwmFields` 做快照；若
 /// `user32.getWindowCount() > 0` 且字段相对变化，则按 [DWM_NOTIFY_MODEL_NT61.md](../../docs/cn/DWM_NOTIFY_MODEL_NT61.md)
@@ -201,14 +201,23 @@ pub fn syncPolicyFromRegistry() void {
     if (reg.queryValueDword(k, "EnableAeroPeek")) |peek| {
         config.peek_enabled = (peek != 0);
     }
+    if (reg.queryValueDword(k, "Composition")) |comp| {
+        config.composition_enabled = (comp != 0);
+    }
+    if (reg.queryValueDword(k, "ColorizationGlass")) |gl| {
+        config.glass_enabled = (gl != 0);
+    }
 
     const after = dwm_registry_sync.snapshotFromDwmConfig(config);
     const hints = dwm_registry_sync.broadcastHintsAfterRegistryApply(before, after);
-    if (!hints.colorization and !hints.nc_policy) return;
+    if (!hints.colorization and !hints.nc_policy and !hints.composition) return;
 
     const user32 = @import("../../../subsystems/win32/user32.zig");
     if (user32.getWindowCount() == 0) return;
 
+    if (hints.composition) {
+        user32.broadcastDwmCompositionChanged(if (config.composition_enabled) user32.TRUE else user32.FALSE);
+    }
     if (hints.colorization) {
         const cref = color_nt61.colorrefLow24FromKernelBgr24(config.glass_tint_color);
         user32.broadcastDwmColorizationChanged(cref, user32.TRUE);

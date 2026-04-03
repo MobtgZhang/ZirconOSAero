@@ -7,10 +7,10 @@
 //! a DeviceObject of type .framebuffer.
 
 const builtin = @import("builtin");
-const io = @import("../../io/io.zig");
-const klog = @import("../../rtl/klog.zig");
+const io = @import("../../../io/io.zig");
+const klog = @import("../../../rtl/klog.zig");
 const portio = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/portio.zig")
+    @import("../../../hal/x86_64/portio.zig")
 else
     struct {
         pub fn outb(_: u16, _: u8) void {}

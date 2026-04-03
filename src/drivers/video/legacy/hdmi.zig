@@ -7,8 +7,8 @@
 //! output abstraction including EDID parsing, mode negotiation, and
 //! audio/video signal control.
 
-const io = @import("../../io/io.zig");
-const klog = @import("../../rtl/klog.zig");
+const io = @import("../../../io/io.zig");
+const klog = @import("../../../rtl/klog.zig");
 
 // ── HDMI/Display Connector Types ──
 

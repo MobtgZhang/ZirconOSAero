@@ -107,10 +107,17 @@ pub const NtPeMapViewMilestone = struct {
     pub const DataDirectoryBaseReloc: usize = 5;
 };
 
+/// 与 `src/libs/ntdll.zig` / `src/loader/pe.zig` 中 `SEC_IMAGE` 数值一致（Learn 公开属性名）。
+pub const SEC_IMAGE: u32 = 0x01000000;
+
 test "PE32+ header sizes (public layout)" {
     try std.testing.expectEqual(@as(usize, 64), @sizeOf(IMAGE_DOS_HEADER));
     try std.testing.expectEqual(@as(usize, 20), @sizeOf(IMAGE_FILE_HEADER));
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(IMAGE_DATA_DIRECTORY));
     try std.testing.expectEqual(@as(usize, 240), @sizeOf(IMAGE_OPTIONAL_HEADER64));
     try std.testing.expectEqual(@as(usize, 264), @sizeOf(IMAGE_NT_HEADERS64));
+}
+
+test "SEC_IMAGE constant parity for section milestones" {
+    try std.testing.expectEqual(@as(u32, 0x01000000), SEC_IMAGE);
 }

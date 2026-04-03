@@ -1,24 +1,43 @@
-//! I/O Manager (NT style)
-//! Manages device objects, driver objects, and I/O request dispatch
-//! IRP-style I/O request routing through device stacks
-//!
-//! Phase 3 roadmap (LPC, registry, Nt* alignment): [docs/cn/ExecutivePhase3_Milestones.md](../../docs/cn/ExecutivePhase3_Milestones.md).
-//! 内核 I/O 分阶段待办（设备栈、PnP/Power）：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K4。
-//! VFS file operations: [`vfs.dispatchFileObjectIr`](../fs/vfs.zig) builds a minimal `Irp` for read/write/close from `ntdll`.
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// ZirconOSAero - NT 6.1 Compatible Kernel
+// Module: src/io/io.zig
+// Purpose: I/O Manager — IRP、设备栈、驱动分发表、与 VFS/块设备衔接的最小子集。
+//
+// This is an independent clean-room implementation.
+// No Windows source code or ReactOS source code was referenced.
+// Ref: https://learn.microsoft.com/windows-hardware/drivers/kernel/ — IRP, IoCompleteRequest,
+//      IoCallDriver, device stacks; WDK IRP_MJ_* / IRP_MN_* 公开枚举与行为描述。
 
 const std = @import("std");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
 
-pub const IoStatus = enum(u32) {
-    success = 0,
-    pending = 1,
-    invalid_device = 2,
-    not_implemented = 3,
-    access_denied = 4,
-    buffer_overflow = 5,
-    end_of_file = 6,
-    not_found = 7,
+/// NTSTATUS 子集（与 `ntdll.NTSTATUS` 数值一致；`io` 不依赖 `ntdll` 以避免环引用）。
+pub const NTSTATUS = i32;
+
+pub const STATUS_SUCCESS: NTSTATUS = 0;
+pub const STATUS_PENDING: NTSTATUS = 259;
+pub const STATUS_INVALID_PARAMETER: NTSTATUS = -1073741811;
+pub const STATUS_ACCESS_DENIED: NTSTATUS = -1073741790;
+pub const STATUS_NOT_IMPLEMENTED: NTSTATUS = -1073741822;
+pub const STATUS_BUFFER_TOO_SMALL: NTSTATUS = -1073741789;
+pub const STATUS_END_OF_FILE: NTSTATUS = -1073741807;
+pub const STATUS_OBJECT_NAME_NOT_FOUND: NTSTATUS = -1073741772;
+pub const STATUS_INVALID_DEVICE_REQUEST: NTSTATUS = @bitCast(@as(u32, 0xC0000010));
+pub const STATUS_IO_DEVICE_ERROR: NTSTATUS = @bitCast(@as(u32, 0xC0000185));
+pub const STATUS_DISK_FULL: NTSTATUS = @bitCast(@as(u32, 0xC000007F));
+pub const STATUS_NOT_A_DIRECTORY: NTSTATUS = @bitCast(@as(u32, 0xC0000103));
+pub const STATUS_FILE_IS_A_DIRECTORY: NTSTATUS = @bitCast(@as(u32, 0xC00000BA));
+pub const STATUS_OBJECT_NAME_COLLISION: NTSTATUS = -1073741771;
+pub const STATUS_DEVICE_NOT_READY: NTSTATUS = @bitCast(@as(u32, 0xC00000A3));
+pub const STATUS_CANCELLED: NTSTATUS = @bitCast(@as(u32, 0xC0000120));
+pub const STATUS_INSUFFICIENT_RESOURCES: NTSTATUS = -1073741823;
+
+/// 与用户态/文档 `IO_STATUS_BLOCK` 布局对齐（x64：8+8）。
+pub const IO_STATUS_BLOCK = extern struct {
+    status: NTSTATUS = STATUS_SUCCESS,
+    information: u64 = 0,
 };
 
 pub const IrpMajorFunction = enum(u8) {
@@ -31,9 +50,9 @@ pub const IrpMajorFunction = enum(u8) {
     flush = 6,
     query_info = 7,
     set_info = 8,
-    /// PnP：设备枚举、启动、移除等（WDK `IRP_MJ_PNP` 概念；分发与 PDO/FDO 栈为路线图）。
+    /// WDK `IRP_MJ_PNP`
     pnp = 9,
-    /// 电源：Dx/Ix 状态转换（WDK `IRP_MJ_POWER` 概念；当前占位供驱动注册表对齐）。
+    /// WDK `IRP_MJ_POWER`
     power = 10,
 };
 
@@ -42,42 +61,118 @@ comptime {
     std.debug.assert(@intFromEnum(IrpMajorFunction.power) == 10);
 }
 
+/// WDK `IRP_MN_*` PnP 子集（公开头文件枚举值；clean-room 仅使用文档化常量）。
+pub const IrpMinorPnp = enum(u8) {
+    start_device = 0,
+    query_remove_device = 1,
+    remove_device = 2,
+    cancel_remove_device = 3,
+    stop_device = 4,
+    query_stop_device = 5,
+    cancel_stop_device = 6,
+    query_capabilities = 7,
+    filter_resource_requirements = 8,
+    _,
+};
+
+/// Power minor（占位；与 `DEVICE_POWER_STATE` 全链路线图）。
+pub const IrpMinorPower = enum(u8) {
+    wait_wake = 0,
+    power_sequence = 1,
+    set_power = 2,
+    query_power = 3,
+    _,
+};
+
+pub const IRP_MJ_COUNT: usize = @intFromEnum(IrpMajorFunction.power) + 1;
+
+/// 最多注册两层完成例程（LIFO 调用；完整 NT 链为动态分配，见 WDK）。
+pub const MAX_COMPLETION_ROUTINES: usize = 2;
+
+pub const IrpCompletionRoutine = *const fn (*Irp) void;
+
 pub const Irp = struct {
     major_function: IrpMajorFunction = .create,
     minor_function: u8 = 0,
-    status: IoStatus = .success,
+    status: NTSTATUS = STATUS_SUCCESS,
+    /// 与 `system_buffer` 同义；历史字段名保留供驱动 IOCTL 路径使用。
     buffer_ptr: u64 = 0,
+    /// WDK: `AssociatedIrp.SystemBuffer`（METHOD_BUFFERED 概念）。
+    system_buffer: u64 = 0,
+    /// WDK: `UserBuffer`。
+    user_buffer: u64 = 0,
+    /// WDK: `MdlAddress`；0 表示无 MDL（`mm/mdl.zig` 接线前占位）。
+    mdl_address: u64 = 0,
+    /// 可选：写回 `IO_STATUS_BLOCK`（syscall 代理或测试桩）。
+    io_status_block_ptr: u64 = 0,
     buffer_size: usize = 0,
     bytes_transferred: usize = 0,
     ioctl_code: u32 = 0,
     device_ptr: u64 = 0,
+    /// WDK: `Irp->Flags` 子集。
     flags: u32 = 0,
-    completion_routine: ?IrpCompletionRoutine = null,
+    /// 隧道指针：如 `*vfs.FileObject`（卷栈分发）。
+    tail: u64 = 0,
+    pending: bool = false,
+    cancel: bool = false,
+    completion_depth: u8 = 0,
+    completion_stack: [MAX_COMPLETION_ROUTINES]?IrpCompletionRoutine = .{ null, null },
 
-    pub fn complete(self: *Irp, status: IoStatus, transferred: usize) void {
-        self.status = status;
+    pub fn complete(self: *Irp, nt_status: NTSTATUS, transferred: usize) void {
+        self.status = nt_status;
         self.bytes_transferred = transferred;
+    }
+
+    /// 读路径统一取内核缓冲 VA：`buffer_ptr` 与 `system_buffer` 互填。
+    pub fn syncSystemBuffer(self: *Irp) void {
+        if (self.system_buffer != 0 and self.buffer_ptr == 0) self.buffer_ptr = self.system_buffer;
+        if (self.buffer_ptr != 0 and self.system_buffer == 0) self.system_buffer = self.buffer_ptr;
     }
 };
 
-/// 注册完成例程；在 `IoCompleteRequest` 末尾同步调用一次后自动清除（无多层完成例程链）。
+/// 入栈完成例程（满则忽略；与 WDK 多层完成语义近似，深度固定为 2）。
 pub fn IoSetCompletionRoutine(irp: *Irp, routine: ?IrpCompletionRoutine) void {
-    irp.completion_routine = routine;
+    const r = routine orelse return;
+    if (irp.completion_depth >= MAX_COMPLETION_ROUTINES) return;
+    irp.completion_stack[irp.completion_depth] = r;
+    irp.completion_depth += 1;
 }
 
-/// 与 WDK 中 `IoCompleteRequest` 公开语义对齐的最小子集：写回状态与传输字节数，并可选调用 `completion_routine`。
-pub fn IoCompleteRequest(irp: *Irp, status: IoStatus, transferred: usize) void {
+/// WDK `IoMarkIrpPending` 子集：标记挂起；调用方应返回 `STATUS_PENDING`。
+pub fn IoMarkIrpPending(irp: *Irp) void {
+    irp.pending = true;
+}
+
+/// 子集取消：设置 `cancel`；驱动应在长操作前检查并中止（完整 `IoCancelIrp` 见 WDK）。
+pub fn IoCancelIrp(irp: *Irp) void {
+    irp.cancel = true;
+}
+
+/// WDK `IoCompleteRequest`：写状态、传输长度、可选 `IO_STATUS_BLOCK`、LIFO 调用完成例程。
+pub fn IoCompleteRequest(irp: *Irp, status: NTSTATUS, transferred: usize) void {
     irp.complete(status, transferred);
-    if (irp.completion_routine) |cb| {
-        cb(irp);
-        irp.completion_routine = null;
+    if (irp.io_status_block_ptr != 0) {
+        // SAFETY: 调用方保证指针在内核可写且对齐；syscall 层探测后传入。
+        const iosb: *IO_STATUS_BLOCK = @ptrFromInt(irp.io_status_block_ptr);
+        iosb.status = status;
+        iosb.information = transferred;
+    }
+    while (irp.completion_depth > 0) {
+        irp.completion_depth -= 1;
+        if (irp.completion_stack[irp.completion_depth]) |cb| {
+            irp.completion_stack[irp.completion_depth] = null;
+            cb(irp);
+        }
     }
 }
 
-/// 将 `upper` 设备附加到 `lower` 之下（NT 设备栈方向：I/O 自顶向下）；用于总线 FDO → PDO 最小演示路径。
 pub fn attachDeviceToDeviceStack(upper_idx: u32, lower_idx: u32) bool {
     if (upper_idx >= device_count or lower_idx >= device_count) return false;
     devices[upper_idx].attached_device = lower_idx;
+    devices[upper_idx].stack_size = @max(
+        devices[upper_idx].stack_size,
+        devices[lower_idx].stack_size +| 1,
+    );
     return true;
 }
 
@@ -94,17 +189,15 @@ pub const DeviceType = enum(u32) {
     framebuffer = 7,
     mouse = 8,
     audio = 9,
-    /// PCI/PCIe bus (config space access; NT: bus driver / FDO)
     pci_bus = 10,
-    /// 8254 PIT — kernel tick source (NT: HAL profile timer / profile driver)
     pit_timer = 11,
-    /// MC146818 RTC / CMOS (NT: \Device\Rtc)
     rtc_clock = 12,
-    /// USB xHCI/EHCI root (stub until PnP + MMIO bring-up)
     usb_host = 13,
-    /// USB HID 类占位（完整路径：xHCI MMIO → 枚举 → HID 中断端点；当前指针以 PS/2 + VirtIO-Input 为主）
     usb_hid = 14,
 };
+
+/// 设备扩展区最大长度（`DEVICE_OBJECT.DeviceExtension` 定长子集）。
+pub const MAX_DEVICE_EXTENSION: usize = 128;
 
 pub const DeviceObject = struct {
     header: ob.ObjectHeader = .{ .obj_type = .device },
@@ -114,12 +207,17 @@ pub const DeviceObject = struct {
     flags: u32 = 0,
     driver_idx: u32 = 0,
     attached_device: u32 = 0,
+    /// 栈深度概念（与 WDK `StackSize` 同阶；用于 IRP 栈位置占位）。
+    stack_size: u8 = 1,
+    extension: [MAX_DEVICE_EXTENSION]u8 align(8) = undefined,
 };
 
-pub const DriverDispatchFn = *const fn (*Irp) IoStatus;
+/// WDK `IoGetDeviceExtension` 子集。
+pub fn IoGetDeviceExtension(dev: *DeviceObject) *anyopaque {
+    return @ptrCast(&dev.extension);
+}
 
-/// 与 WDK `PIO_COMPLETION_ROUTINE` 概念对齐的最小子集：在 `IoCompleteRequest` 之后调用一次。
-pub const IrpCompletionRoutine = *const fn (*Irp) void;
+pub const DriverDispatchFn = *const fn (*Irp) NTSTATUS;
 
 pub const MAX_DRIVERS: usize = 24;
 
@@ -128,7 +226,9 @@ pub const DriverObject = struct {
     name: [32]u8 = [_]u8{0} ** 32,
     name_len: usize = 0,
     device_count: usize = 0,
+    /// 未注册 `major_dispatch[major]` 时回退到此例程（兼容单入口驱动）。
     dispatch: ?DriverDispatchFn = null,
+    major_dispatch: [IRP_MJ_COUNT]?DriverDispatchFn = .{null} ** IRP_MJ_COUNT,
 };
 
 var devices: [MAX_DEVICES]DeviceObject = [_]DeviceObject{.{}} ** MAX_DEVICES;
@@ -163,6 +263,11 @@ pub fn registerDriver(name: []const u8, dispatch: ?DriverDispatchFn) ?u32 {
     return @intCast(idx);
 }
 
+pub fn setDriverMajorDispatch(driver_idx: u32, major: IrpMajorFunction, handler: ?DriverDispatchFn) void {
+    if (driver_idx >= driver_count) return;
+    drivers[driver_idx].major_dispatch[@intFromEnum(major)] = handler;
+}
+
 pub fn createDevice(name: []const u8, dev_type: DeviceType, driver_idx: u32) ?u32 {
     if (device_count >= MAX_DEVICES) return null;
 
@@ -174,6 +279,7 @@ pub fn createDevice(name: []const u8, dev_type: DeviceType, driver_idx: u32) ?u3
     dev.name_len = copy_len;
     dev.device_type = dev_type;
     dev.driver_idx = driver_idx;
+    dev.stack_size = 1;
 
     device_count += 1;
 
@@ -187,23 +293,33 @@ pub fn createDevice(name: []const u8, dev_type: DeviceType, driver_idx: u32) ?u3
     return @intCast(idx);
 }
 
-pub fn dispatchIrp(device_idx: u32, irp: *Irp) IoStatus {
-    if (device_idx >= device_count) return .invalid_device;
+pub fn getDeviceObject(idx: u32) ?*DeviceObject {
+    if (idx >= device_count) return null;
+    return &devices[idx];
+}
+
+/// WDK `IoCallDriver` 子集：向指定设备投递 IRP（同步返回 NTSTATUS）。
+pub fn IoCallDriver(device_idx: u32, irp: *Irp) NTSTATUS {
+    return dispatchIrp(device_idx, irp);
+}
+
+pub fn dispatchIrp(device_idx: u32, irp: *Irp) NTSTATUS {
+    if (device_idx >= device_count) return STATUS_INVALID_PARAMETER;
 
     const dev = &devices[device_idx];
     irp.device_ptr = @intFromPtr(dev);
 
-    if (dev.driver_idx < driver_count) {
-        const drv = &drivers[dev.driver_idx];
-        if (drv.dispatch) |dispatch_fn| {
-            return dispatch_fn(irp);
-        }
-    }
-
-    return .not_implemented;
+    if (dev.driver_idx >= driver_count) return STATUS_INVALID_DEVICE_REQUEST;
+    const drv = &drivers[dev.driver_idx];
+    const major = @intFromEnum(irp.major_function);
+    const handler: ?DriverDispatchFn = if (major < IRP_MJ_COUNT)
+        drv.major_dispatch[major]
+    else
+        null;
+    const fn_dispatch = handler orelse drv.dispatch orelse return STATUS_INVALID_DEVICE_REQUEST;
+    return fn_dispatch(irp);
 }
 
-/// 自栈顶（FDO）沿 `attached_device` 链向下找到最底层 PDO 索引。
 pub fn resolveStackBottom(top_idx: u32) u32 {
     var idx = top_idx;
     var guard: usize = 0;
@@ -216,19 +332,18 @@ pub fn resolveStackBottom(top_idx: u32) u32 {
     return top_idx;
 }
 
-/// 将 IRP 先派发到 `top_idx`；若返回 `not_implemented` 则沿栈向下尝试下一设备（K4.2 最小下传模型）。
-pub fn dispatchIrpThroughStack(top_idx: u32, irp: *Irp) IoStatus {
+pub fn dispatchIrpThroughStack(top_idx: u32, irp: *Irp) NTSTATUS {
     var idx = top_idx;
     var guard: usize = 0;
     while (guard < MAX_DEVICES) : (guard += 1) {
-        if (idx >= device_count) return .invalid_device;
+        if (idx >= device_count) return STATUS_INVALID_PARAMETER;
         const st = dispatchIrp(idx, irp);
-        if (st != .not_implemented) return st;
+        if (st != STATUS_NOT_IMPLEMENTED) return st;
         const next = devices[idx].attached_device;
         if (next == 0) return st;
         idx = next;
     }
-    return .not_implemented;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 pub fn getDeviceCount() usize {
@@ -237,4 +352,8 @@ pub fn getDeviceCount() usize {
 
 pub fn getDriverCount() usize {
     return driver_count;
+}
+
+pub fn isInitialized() bool {
+    return io_initialized;
 }

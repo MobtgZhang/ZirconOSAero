@@ -1,10 +1,13 @@
-//! Virtual File System (VFS) - NT style
-//! Provides a unified file system interface and dispatches to registered FS drivers.
-//! Manages mount points, file objects, and directory enumeration.
-//!
-//! 内核 FS 待办与 IRP 桥接：[docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K8；`FileAccessMode` 数值见主机测试 `tests/fs_vfs_constants_host.zig`。
-//! K8.2：`dispatchFileObjectIr` 从文件对象构造最小 `io.Irp`（read/write/close）；PnP 卷栈就绪后应改为经 `io.dispatchIrpThroughStack` 下传（与 K4 设备栈对齐）。
-//! **P6-2 / P6-3**：`readdir` 与目录枚举、备用数据流为路线图；块卷上 `B:\` VirtIO 探测见 `drivers/storage/virtio_blk_scratch_fs.zig`。
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// ZirconOSAero - NT 6.1 Compatible Kernel
+// Module: src/fs/vfs.zig
+// Purpose: 虚拟文件系统挂载、`FileObject`、经卷设备对象的 IRP 分发与 `NTSTATUS` 映射。
+//
+// This is an independent clean-room implementation.
+// No Windows source code or ReactOS source code was referenced.
+// Ref: https://learn.microsoft.com/windows-hardware/drivers/kernel/ — I/O stack, IRP;
+//      Phase K8 / K4 见 docs/cn/NT61_KERNEL_TODO.md。
 
 const ob = @import("../ob/object.zig");
 const io = @import("../io/io.zig");
@@ -113,6 +116,10 @@ pub const FileObject = struct {
     mount_idx: u32 = 0,
     is_open: bool = false,
     fs_data: u64 = 0,
+    /// `FILE_SHARE_*` 子集（与 `ntdll` 打开路径对齐）。
+    share_access: u32 = 0,
+    /// `NtQueryDirectoryFile` 游标（仅目录句柄）。
+    dir_enum_next: u32 = 0,
 };
 
 pub const MountPoint = struct {
@@ -124,6 +131,8 @@ pub const MountPoint = struct {
     is_active: bool = false,
     label: [16]u8 = [_]u8{0} ** 16,
     label_len: usize = 0,
+    /// 卷设备栈顶索引（`io.createDevice`）；0 表示未创建（回退直接 `FsOps`）。
+    volume_device_idx: u32 = 0,
 };
 
 var files: [MAX_OPEN_FILES]FileObject = [_]FileObject{.{}} ** MAX_OPEN_FILES;
@@ -133,14 +142,155 @@ var mounts: [MAX_MOUNT_POINTS]MountPoint = [_]MountPoint{.{}} ** MAX_MOUNT_POINT
 var mount_count: usize = 0;
 
 var vfs_initialized: bool = false;
+var vfs_volume_driver_idx: u32 = 0;
+var vfs_volume_driver_ready: bool = false;
+
+const VolumeDeviceExtension = extern struct {
+    mount_idx: u32 align(1) = 0,
+};
+
+fn volumeDeviceName(mount_idx: usize, out: *[32]u8) []const u8 {
+    const lit = "\\Device\\VFS";
+    var len: usize = lit.len;
+    @memcpy(out[0..len], lit);
+    var n = mount_idx;
+    var rev: [12]u8 = undefined;
+    var r: usize = 0;
+    if (n == 0) {
+        rev[r] = '0';
+        r += 1;
+    } else {
+        while (n > 0) : (n /= 10) {
+            rev[r] = @as(u8, @intCast((n % 10) + '0'));
+            r += 1;
+        }
+    }
+    while (r > 0) {
+        r -= 1;
+        out[len] = rev[r];
+        len += 1;
+    }
+    return out[0..len];
+}
+
+fn driveLetterFromPrefix(prefix: []const u8) ?u8 {
+    if (prefix.len < 2) return null;
+    var c0 = prefix[0];
+    if (!((c0 >= 'A' and c0 <= 'Z') or (c0 >= 'a' and c0 <= 'z'))) return null;
+    if (prefix[1] != ':') return null;
+    if (prefix.len > 2 and prefix[2] != '\\' and prefix[2] != '/') return null;
+    if (c0 >= 'a') c0 = c0 - 32;
+    return c0;
+}
+
+fn registerDosDriveSymlink(letter: u8, dev: *io.DeviceObject) void {
+    var name: [24]u8 = undefined;
+    const p1 = "\\DosDevices\\";
+    @memcpy(name[0..p1.len], p1);
+    name[p1.len] = letter;
+    name[p1.len + 1] = ':';
+    const total = p1.len + 2;
+    _ = ob.insertNamespace(name[0..total], .symbolic_link, @intFromPtr(dev), 0);
+}
+
+fn ensureVfsVolumeDriver() void {
+    if (vfs_volume_driver_ready) return;
+    vfs_volume_driver_idx = io.registerDriver("\\Driver\\VfsVolume", vfsVolumeDispatch) orelse {
+        klog.warn("VFS: registerDriver VfsVolume failed", .{});
+        return;
+    };
+    vfs_volume_driver_ready = true;
+}
+
+fn vfsVolumePnpDispatch(irp: *io.Irp) io.NTSTATUS {
+    switch (irp.minor_function) {
+        0 => {
+            klog.debug("VFS: PnP IRP_MN_START_DEVICE (volume)", .{});
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
+        },
+        7 => {
+            klog.debug("VFS: PnP IRP_MN_QUERY_CAPABILITIES (volume stub)", .{});
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
+        },
+        2 => {
+            klog.debug("VFS: PnP IRP_MN_REMOVE_DEVICE (volume stub)", .{});
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
+        },
+        else => {
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
+        },
+    }
+}
+
+fn vfsVolumePowerDispatch(irp: *io.Irp) io.NTSTATUS {
+    klog.debug("VFS: POWER minor=%u (stub)", .{irp.minor_function});
+    irp.complete(io.STATUS_SUCCESS, 0);
+    return io.STATUS_SUCCESS;
+}
+
+fn vfsVolumeDispatch(irp: *io.Irp) io.NTSTATUS {
+    const dev: *io.DeviceObject = @ptrFromInt(irp.device_ptr);
+    const ext: *align(1) VolumeDeviceExtension = @ptrCast(io.IoGetDeviceExtension(dev));
+    const mp_idx: usize = @intCast(ext.mount_idx);
+    if (mp_idx >= mount_count) return io.STATUS_INVALID_DEVICE_REQUEST;
+
+    switch (irp.major_function) {
+        .pnp => return vfsVolumePnpDispatch(irp),
+        .power => return vfsVolumePowerDispatch(irp),
+        else => {
+            const file: *FileObject = if (irp.tail != 0)
+                @ptrFromInt(irp.tail)
+            else {
+                irp.complete(io.STATUS_INVALID_PARAMETER, 0);
+                return io.STATUS_INVALID_PARAMETER;
+            };
+            return dispatchFileObjectIrpDirect(file, irp);
+        },
+    }
+}
+
+/// `FileStatus` → `NTSTATUS`（与 `ntdll` / MVT 单测一致；公开供文档交叉引用）。
+pub fn fileStatusToNtStatus(s: FileStatus) io.NTSTATUS {
+    return switch (s) {
+        .success => io.STATUS_SUCCESS,
+        .not_found => io.STATUS_OBJECT_NAME_NOT_FOUND,
+        .access_denied => io.STATUS_ACCESS_DENIED,
+        .already_exists => io.STATUS_OBJECT_NAME_COLLISION,
+        .disk_full => io.STATUS_DISK_FULL,
+        .not_directory => io.STATUS_NOT_A_DIRECTORY,
+        .is_directory => io.STATUS_FILE_IS_A_DIRECTORY,
+        .io_error => io.STATUS_IO_DEVICE_ERROR,
+        .invalid_parameter => io.STATUS_INVALID_PARAMETER,
+        .not_implemented => io.STATUS_NOT_IMPLEMENTED,
+        .end_of_file => io.STATUS_END_OF_FILE,
+        .buffer_too_small => io.STATUS_BUFFER_TOO_SMALL,
+        .not_mounted => io.STATUS_DEVICE_NOT_READY,
+    };
+}
+
+/// `FILE_SHARE_*` 冲突检测；完整 NT 共享语义为长期项，当前仅记录 `share_access` 供后续收紧。
+fn shareConflict(path: []const u8, want_write: bool, new_share: u32) bool {
+    _ = path;
+    _ = want_write;
+    _ = new_share;
+    return false;
+}
 
 pub fn init() void {
     file_count = 0;
     mount_count = 0;
     vfs_initialized = true;
+    vfs_volume_driver_ready = false;
+    vfs_volume_driver_idx = 0;
 
     _ = ob.insertNamespace("\\FileSystem", .directory, 0, 0);
     _ = ob.insertNamespace("\\DosDevices", .directory, 0, 0);
+
+    ensureVfsVolumeDriver();
 
     klog.info("VFS: Virtual File System initialized", .{});
 }
@@ -148,7 +298,8 @@ pub fn init() void {
 pub fn mount(prefix: []const u8, fs_type: FsType, ops: FsOps, device_idx: u32, label: []const u8) FileStatus {
     if (mount_count >= MAX_MOUNT_POINTS) return .disk_full;
 
-    var mp = &mounts[mount_count];
+    const idx_this = mount_count;
+    var mp = &mounts[idx_this];
     mp.* = .{};
     const prefix_copy = @min(prefix.len, mp.prefix.len);
     @memcpy(mp.prefix[0..prefix_copy], prefix[0..prefix_copy]);
@@ -164,7 +315,24 @@ pub fn mount(prefix: []const u8, fs_type: FsType, ops: FsOps, device_idx: u32, l
 
     mount_count += 1;
 
-    klog.info("VFS: Mounted '%s' as %s (device=%u)", .{ prefix, label, device_idx });
+    if (vfs_volume_driver_ready) {
+        var nm: [32]u8 = undefined;
+        const dev_name = volumeDeviceName(idx_this, &nm);
+        if (io.createDevice(dev_name, .filesystem, vfs_volume_driver_idx)) |didx| {
+            mp.volume_device_idx = didx;
+            if (io.getDeviceObject(didx)) |dobj| {
+                const ext: *align(1) VolumeDeviceExtension = @ptrCast(io.IoGetDeviceExtension(dobj));
+                ext.* = .{ .mount_idx = @intCast(idx_this) };
+                if (driveLetterFromPrefix(prefix)) |letter| {
+                    registerDosDriveSymlink(letter, dobj);
+                }
+            }
+        }
+    }
+
+    klog.info("VFS: Mounted '%s' as %s (device=%u vol_dev=%u)", .{
+        prefix, label, device_idx, mp.volume_device_idx,
+    });
     return .success;
 }
 
@@ -181,6 +349,7 @@ pub fn unmount(prefix: []const u8) FileStatus {
             }
             if (match) {
                 mp.is_active = false;
+                mp.volume_device_idx = 0;
                 klog.info("VFS: Unmounted '%s'", .{prefix});
                 return .success;
             }
@@ -211,30 +380,47 @@ fn findMount(path: []const u8) ?*MountPoint {
     return best;
 }
 
-pub fn open(path: []const u8, access: FileAccessMode) ?*FileObject {
+pub fn resolvePath(path: []const u8) []const u8 {
+    return ob.normalizeNtObjectPath(path);
+}
+
+pub fn openEx(path: []const u8, access: FileAccessMode, share_access: u32) ?*FileObject {
     if (file_count >= MAX_OPEN_FILES) return null;
 
-    const mp = findMount(path) orelse return null;
+    const norm = resolvePath(path);
+    const mp = findMount(norm) orelse return null;
+
+    const want_write = access == .write or access == .read_write;
+    if (shareConflict(norm, want_write, share_access)) return null;
 
     var f = &files[file_count];
     f.* = .{};
-    const copy_len = @min(path.len, f.path.len);
-    @memcpy(f.path[0..copy_len], path[0..copy_len]);
+    const copy_len = @min(norm.len, f.path.len);
+    @memcpy(f.path[0..copy_len], norm[0..copy_len]);
     f.path_len = copy_len;
     f.access_mode = access;
     f.mount_idx = @intCast(getMountIndex(mp));
     f.is_open = true;
+    f.share_access = share_access;
 
     if (mp.ops.open) |open_fn| {
-        const status = open_fn(f, path, access);
+        const status = open_fn(f, norm, access);
         if (status != .success) {
             f.is_open = false;
             return null;
         }
     }
 
+    f.dir_enum_next = 0;
     file_count += 1;
     return f;
+}
+
+pub fn open(path: []const u8, access: FileAccessMode) ?*FileObject {
+    const FILE_SHARE_READ: u32 = 0x00000001;
+    const FILE_SHARE_WRITE: u32 = 0x00000002;
+    const FILE_SHARE_DELETE: u32 = 0x00000004;
+    return openEx(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
 }
 
 pub fn close(f: *FileObject) FileStatus {
@@ -287,9 +473,10 @@ pub fn readdir(f: *FileObject, entries: []DirEntry) usize {
 }
 
 pub fn stat(path: []const u8, entry: *DirEntry) FileStatus {
-    const mp = findMount(path) orelse return .not_mounted;
+    const norm = resolvePath(path);
+    const mp = findMount(norm) orelse return .not_mounted;
     if (mp.ops.stat) |stat_fn| {
-        return stat_fn(path, entry);
+        return stat_fn(norm, entry);
     }
     return .not_implemented;
 }
@@ -312,51 +499,52 @@ pub fn isInitialized() bool {
     return vfs_initialized;
 }
 
-fn fileStatusToIoStatus(s: FileStatus) io.IoStatus {
-    return switch (s) {
-        .success => .success,
-        .not_found => .not_found,
-        .access_denied => .access_denied,
-        .buffer_too_small => .buffer_overflow,
-        .end_of_file => .end_of_file,
-        .invalid_parameter => .invalid_device,
-        else => .not_implemented,
-    };
-}
-
-/// Route an IRP to `FileObject` operations (I/O manager – VFS bridge; Phase 3).
-pub fn dispatchFileObjectIrp(file: *FileObject, irp: *io.Irp) io.IoStatus {
+fn dispatchFileObjectIrpDirect(file: *FileObject, irp: *io.Irp) io.NTSTATUS {
+    irp.syncSystemBuffer();
     switch (irp.major_function) {
         .read => {
             if (irp.buffer_ptr == 0 or irp.buffer_size == 0) {
-                io.IoCompleteRequest(irp, .invalid_device, 0);
+                io.IoCompleteRequest(irp, io.STATUS_INVALID_PARAMETER, 0);
                 return irp.status;
             }
             const buf: [*]u8 = @ptrFromInt(irp.buffer_ptr);
             const rr = read(file, buf[0..irp.buffer_size]);
-            const st = fileStatusToIoStatus(rr.status);
+            const st = fileStatusToNtStatus(rr.status);
             io.IoCompleteRequest(irp, st, rr.bytes_read);
             return irp.status;
         },
         .write => {
             if (irp.buffer_ptr == 0) {
-                io.IoCompleteRequest(irp, .invalid_device, 0);
+                io.IoCompleteRequest(irp, io.STATUS_INVALID_PARAMETER, 0);
                 return irp.status;
             }
             const buf: [*]const u8 = @ptrFromInt(irp.buffer_ptr);
             const wr = write(file, buf[0..irp.buffer_size]);
-            const st = fileStatusToIoStatus(wr.status);
+            const st = fileStatusToNtStatus(wr.status);
             io.IoCompleteRequest(irp, st, wr.bytes_written);
             return irp.status;
         },
         .close => {
             _ = close(file);
-            io.IoCompleteRequest(irp, .success, 0);
+            io.IoCompleteRequest(irp, io.STATUS_SUCCESS, 0);
             return irp.status;
         },
         else => {
-            io.IoCompleteRequest(irp, .not_implemented, 0);
+            io.IoCompleteRequest(irp, io.STATUS_NOT_IMPLEMENTED, 0);
             return irp.status;
         },
     }
+}
+
+/// 经卷设备栈（若已创建）下传，否则直接 `FsOps`。
+pub fn dispatchFileObjectIrp(file: *FileObject, irp: *io.Irp) io.NTSTATUS {
+    irp.tail = @intFromPtr(file);
+    irp.syncSystemBuffer();
+    if (file.mount_idx < mount_count) {
+        const mp = &mounts[file.mount_idx];
+        if (mp.volume_device_idx != 0) {
+            return io.dispatchIrpThroughStack(mp.volume_device_idx, irp);
+        }
+    }
+    return dispatchFileObjectIrpDirect(file, irp);
 }

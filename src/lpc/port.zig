@@ -7,6 +7,7 @@
 //! **P4-C4**：SMP 下端口队列与 `ipc` 消息环的细粒度锁为长期项；当前假定引导早期单线程初始化路径。
 
 const std = @import("std");
+const arch = @import("../arch.zig");
 const ipc = @import("ipc.zig");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
@@ -247,4 +248,28 @@ pub fn requestWaitReplyPort(
     }
 
     return ipc.receive(client_pid);
+}
+
+/// 服务端：`reply` 非空时先向客户端队列投递 `reply`（`msg_type=.reply`），再自旋等待下一条入站消息（与 `NtRequestWaitReplyPort` 对偶）。
+/// Ref: learn.microsoft.com — LPC `NtReplyWaitReceivePort` 行为级描述（clean-room）。
+pub fn replyWaitReceivePort(
+    server_pid: u32,
+    port_id: u32,
+    reply: ?*const ipc.Message,
+    out_receive: *ipc.Message,
+) bool {
+    const srv = findPortById(port_id) orelse return false;
+    if (srv.owner_pid != server_pid) return false;
+    if (reply) |r| {
+        _ = ipc.sendTyped(server_pid, r.sender, r.opcode, .reply, &r.data);
+    }
+    var n: usize = 0;
+    while (n < 10000) : (n += 1) {
+        if (ipc.receive(server_pid)) |m| {
+            out_receive.* = m;
+            return true;
+        }
+        arch.spinCpuRelax();
+    }
+    return false;
 }

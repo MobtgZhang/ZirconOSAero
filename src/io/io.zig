@@ -12,6 +12,7 @@
 const std = @import("std");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
+const mdl_mod = @import("../mm/mdl.zig");
 
 /// NTSTATUS 子集（与 `ntdll.NTSTATUS` 数值一致；`io` 不依赖 `ntdll` 以避免环引用）。
 pub const NTSTATUS = i32;
@@ -146,6 +147,16 @@ pub fn IoMarkIrpPending(irp: *Irp) void {
 /// 子集取消：设置 `cancel`；驱动应在长操作前检查并中止（完整 `IoCancelIrp` 见 WDK）。
 pub fn IoCancelIrp(irp: *Irp) void {
     irp.cancel = true;
+}
+
+/// WDK `IoAllocateMdl` / `MdlAddress` 接线子集：将已填充/锁页的 `Mdl` 内核指针挂到 IRP（DMA / `METHOD_*` 路径）。
+/// Ref: https://learn.microsoft.com/windows-hardware/drivers/kernel/using-mdls
+pub fn IoAttachMdlToIrp(irp: *Irp, mdl: *mdl_mod.Mdl) void {
+    irp.mdl_address = @intFromPtr(mdl);
+}
+
+pub fn IoDetachMdlFromIrp(irp: *Irp) void {
+    irp.mdl_address = 0;
 }
 
 /// WDK `IoCompleteRequest`：写状态、传输长度、可选 `IO_STATUS_BLOCK`、LIFO 调用完成例程。
@@ -344,6 +355,14 @@ pub fn dispatchIrpThroughStack(top_idx: u32, irp: *Irp) NTSTATUS {
         idx = next;
     }
     return STATUS_NOT_IMPLEMENTED;
+}
+
+/// WDK `IoForwardIrpToDeviceObject` 概念子集：向栈上 **紧邻下层** 设备投递 IRP（无下层则 `STATUS_INVALID_DEVICE_REQUEST`）。
+pub fn IoForwardIrpToNextDevice(upper_idx: u32, irp: *Irp) NTSTATUS {
+    if (upper_idx >= device_count) return STATUS_INVALID_PARAMETER;
+    const next = devices[upper_idx].attached_device;
+    if (next == 0) return STATUS_INVALID_DEVICE_REQUEST;
+    return IoCallDriver(next, irp);
 }
 
 pub fn getDeviceCount() usize {

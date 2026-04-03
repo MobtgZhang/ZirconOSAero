@@ -9,6 +9,7 @@
 // Ref: https://learn.microsoft.com/windows-hardware/drivers/kernel/ — I/O stack, IRP;
 //      Phase K8 / K4 见 docs/cn/NT61_KERNEL_TODO.md。
 
+const std = @import("std");
 const ob = @import("../ob/object.zig");
 const io = @import("../io/io.zig");
 const klog = @import("../rtl/klog.zig");
@@ -272,11 +273,27 @@ pub fn fileStatusToNtStatus(s: FileStatus) io.NTSTATUS {
     };
 }
 
-/// `FILE_SHARE_*` 冲突检测；完整 NT 共享语义为长期项，当前仅记录 `share_access` 供后续收紧。
+/// `FILE_SHARE_*` 子集：与同路径已打开句柄的 **访问 + 共享掩码** 做相容性检测（K8.2；完整 NT 共享语义见 Learn `CreateFile`）。
 fn shareConflict(path: []const u8, want_write: bool, new_share: u32) bool {
-    _ = path;
-    _ = want_write;
-    _ = new_share;
+    const shr_read: u32 = 0x00000001;
+    const shr_write: u32 = 0x00000002;
+    for (files[0..file_count]) |*f| {
+        if (!f.is_open) continue;
+        if (f.path_len != path.len) continue;
+        if (!std.mem.eql(u8, f.path[0..f.path_len], path)) continue;
+
+        const ex_write = f.access_mode == .write or f.access_mode == .read_write;
+        const ex_read = f.access_mode == .read or f.access_mode == .read_write;
+
+        if (want_write) {
+            if (ex_write and (f.share_access & shr_write) == 0) return true;
+            if (ex_read and !ex_write and (f.share_access & shr_write) == 0) return true;
+            if (ex_write and (new_share & shr_write) == 0) return true;
+        } else {
+            if (ex_write and (f.share_access & shr_read) == 0) return true;
+            if (ex_write and (new_share & shr_read) == 0) return true;
+        }
+    }
     return false;
 }
 

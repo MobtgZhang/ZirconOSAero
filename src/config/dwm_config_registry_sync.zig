@@ -5,7 +5,7 @@
 // Purpose: Pure helpers for HKLM\\DWM → `dwm.DwmConfig` 差异检测，驱动 `WM_DWM*` 广播决策（主机可测）。
 //
 // This is an independent clean-room implementation.
-// Reference: docs/cn/DWM_NOTIFY_MODEL_NT61.md, src/drivers/video/dwm.zig `syncPolicyFromRegistry`
+// Reference: docs/cn/DWM_NOTIFY_MODEL_NT61.md, src/drivers/video/core/dwm.zig `syncPolicyFromRegistry`
 
 const std = @import("std");
 

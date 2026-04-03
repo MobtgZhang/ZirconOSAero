@@ -17,6 +17,7 @@ pub const ntdll_exports_nt61: []const []const u8 = &.{
     "NtQuerySystemInformation", "NtQueryInformationProcess", "NtSetInformationProcess",
     "NtOpenFile",               "NtCreateEvent",         "NtWaitForSingleObject",
     "RtlInitUnicodeString",     "RtlCopyMemory",         "RtlZeroMemory",      "RtlGetVersion",
+    "RtlVerifyVersionInfo",
     "LdrInitializeThunk",       "LdrLoadDll",            "LdrGetProcedureAddress",
     "RtlUserThreadStart",
 };
@@ -43,14 +44,14 @@ pub const user32_exports_nt61: []const []const u8 = &.{
 };
 
 comptime {
-    std.debug.assert(ntdll_exports_nt61.len == 25);
+    std.debug.assert(ntdll_exports_nt61.len == 26);
     std.debug.assert(kernel32_exports_nt61.len == 44);
     std.debug.assert(user32_exports_nt61.len == 2);
 }
 
 test "core DLL export inventory matches pe.zig synthetic ordinals span" {
     try std.testing.expectEqualStrings("NtCreateProcess", ntdll_exports_nt61[0]);
-    try std.testing.expectEqualStrings("RtlUserThreadStart", ntdll_exports_nt61[24]);
+    try std.testing.expectEqualStrings("RtlUserThreadStart", ntdll_exports_nt61[25]);
     try std.testing.expectEqualStrings("CreateProcessA", kernel32_exports_nt61[0]);
     try std.testing.expectEqualStrings("RemoveDirectoryA", kernel32_exports_nt61[43]);
     try std.testing.expectEqualStrings("CreateWindowExA", user32_exports_nt61[0]);

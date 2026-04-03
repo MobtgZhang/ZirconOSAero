@@ -36,11 +36,12 @@
 | 通用堆 + 统计 / `heap_check` | `src/mm/heap.zig` | 部分 |
 | Slab cache | `src/mm/slab.zig` | 部分 |
 | VMA 槽位 + `mmFreeVirtualRange` | `src/mm/vm.zig` | 部分 |
+| fork 子集：用户 4Ki 叶 dup + `notePageShared` + 子侧只读 PTE + `#PF` CoW | `vm.zig` / `paging.zig` / `frame.zig` | 部分 — 大页未展开；节区 `PAGE_WRITECOPY`、页文件、Standby/Modified、每 `mapPage` 级全局 PFN 引用仍为延后；主机 **fork_cow_share_nt61_host**（Verified） |
 | 用户指针探测 | `src/mm/probe.zig` | 部分 — `syscall*.zig` 已覆盖主路径；K1.5 以契约矩阵 + 代码审查为闸门 |
 | 进程页表释放（用户半区） | `arch/x86_64/paging.zig` `releaseUserHalfAddressSpace` | 部分 — `vm.releaseProcessAddressSpace` 前递增 TLB shootdown 提示（`tlb_broadcast`） |
 | 调度切换 CR3 | `src/ke/scheduler.zig` | 部分 — tick 路径 `activateCr3ForProcessId`；`terminateProcess` 前经 `before_release_process_address_space` 拆除该 pid 的调度线程（K2.1） |
-| ACPI MADT / LAPIC 枚举 | `src/hal/x86_64/madt.zig` | 部分 |
-| AP 入口 / TLB 广播占位 | `ap_entry.zig` / `tlb_broadcast.zig` / `smp_boot.zig` / `lapic_smp.zig` | 部分 — 多核时 **INIT + SIPI×2**，实模式自旋跳板 phys **`0x8000`**；长模式 AP 入口与 IPI **TLB shootdown** 仍为 K2.4/K2.5（见 [BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md)） |
+| ACPI MADT / LAPIC / 首 IOAPIC 基址枚举 | `src/hal/x86_64/madt.zig` | 部分 |
+| AP 入口 / TLB 广播占位 | `ap_entry.zig` / `tlb_broadcast.zig` / `smp_boot.zig` / `lapic_smp.zig` / `interrupt_x86.zig` / `idt.zig` | 部分 — 多核时 **INIT + SIPI×2**，实模式自旋跳板 phys **`0x8000`**；**IDT 向量 254** = TLB flush IPI 处理（`flushLocal` + `sendLocalEoi`）；**`-Dsmp_tlb_ipi`** 控制是否广播；**`-Dlapic_periodic_tick`** 可选 LAPIC LVT tick（见 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K2.4/K2.5） |
 | 每 CPU 调度与窃取 | `percpu_sched.zig` / `scheduler.zig` | 部分 — 新线程 `home_cpu` 由最短就绪队列选取（`pickBalancedHomeCpu`）；窃取与 **AP 未实跑 tick**（仅 BSP） |
 | 单调时钟 / HPET 只读 | `ke/timekeeping.zig` / `hal/x86_64/hpet.zig` | 部分 — HPET MMIO 探测与主计数器；IRQ0 仍为 PIT |
 
@@ -98,7 +99,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | I/O Manager、IRP | Major/Minor、`NTSTATUS` 完成码、双层完成例程、`IoCallDriver`/`dispatchIrpThroughStack`、卷设备扩展 | `src/io/io.zig`, `src/fs/vfs.zig`；主机验证 `zig build test` → **io_irp_host** |
 | 设备对象与栈 | 设备扩展、附加栈（长期） | `io.zig` |
 | PnP / Power | 即插即用与电源 IRP（长期） | 驱动目录 |
-| IRQL、DPC | 同步级别约束（简化实现须在注释声明） | `src/ke/dpc.zig`, `interrupt_x86.zig` | 最小 DPC：输入轮询延后至 IRQ 出口 |
+| IRQL、DPC、APC、等待 | 同步级别约束（简化须在注释声明）；**IRQL/DPC 每 CPU 槽**（`MAX_IRQL_CPUS`，默认 BSP）；子集含 `NtWaitForSingleObject` / `NtWaitForMultipleObjects`（WaitAny，≤64）经 `ke/wait` + alertable；非完整 CR8/设备 IRQL 谱系 | `ke/irql.zig`、`ke/dpc.zig`（每 CPU FIFO + IRQ 出口 `drainAtDispatchLevel`）、`ke/apc.zig`、`ke/wait.zig`、`interrupt_x86.zig`、`syscall.zig` |
 | 内存管理器 | 池标签、`Mdl`（长期） | `src/mm/` |
 
 ## 2.1 HAL / 总线与网络（阶段性）
@@ -126,7 +127,8 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `NtQueryDirectoryFile` | <https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex> 概念层；本内核 `FileNamesInformation` 单条 | `ntdll.zig` + 目录 `FileObject` |
 | `NtDuplicateObject` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntduplicateobject> | 同进程句柄表：`ntdll.zig`；SSDT `0x44`（Win7 SP1 x64 公开表） |
 | `NtRequestWaitReplyPort` | WDK — LPC 端口消息 | 简化 ABI：`syscall_nt_extras.zig`；内核 `lpc/port.zig` |
-| `NtWaitForSingleObject` | <https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject>（用户态包装；Native 语义见 Winternl） | 事件对象池 + `scheduler.yield` 轮询超时（简化 wall-clock） |
+| `NtWaitForSingleObject` | <https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject>（用户态包装；Native 语义见 Winternl） | `ke/wait.zig`：事件/互斥/信号量子集 + 超时 + `alertable`（用户 APC 未决则 `STATUS_USER_APC`）；经 `ntdll` / syscall 分发 |
+| `NtWaitForMultipleObjects` | Winternl / synchapi 概念层 | **WaitAny** 子集（`count ≤ 64`）；`WaitAll` 等仍为 `STATUS_NOT_IMPLEMENTED` |
 
 （随实现推进在 PR 中增删行并更新状态列。）
 
@@ -153,6 +155,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `WM_DWMCOLORIZATIONCOLORCHANGED` | 部分 / 规则 Verified | `user32.zig`（`broadcastDwmColorizationChanged`） | `setColorizationTint`；**及** `dwm.syncPolicyFromRegistry` 在 **已有 HWND** 且染色 dword 相对变化时（`dwm_config_registry_sync`） |
 | `WM_DWMNCRENDERINGCHANGED` | 部分 / 规则 Verified | `user32.zig`（`broadcastDwmNcRenderingChanged`） | `setGlass`；**及** `syncPolicyFromRegistry` 在 **已有 HWND** 且不透明度 / 任务栏染色 / Peek 相对变化时 |
 | 缩略图 / `WM_DWMSENDICONICTHUMBNAIL` | 部分 / 规则 Verified | 每表面 `dwm_compositor` 缓冲 + `user32.broadcastDwmIconicThumbnailRequested`（`max_w/max_h` 钳位 `0xFFFF`）；`enqueueIconicThumbnailRequest` 拒无效 `surface_id`；零宽/零高表面不刷新缩略；**同 `thumb_refresh_min_ticks` 节流**（与 `notifyFramePresented` 路径一致） | 节流：`thumb_refresh_min_ticks`（`initAeroDwm` 按 tick_hz 换算 ≈120ms）；主机 **dwm_nt61_integration_host** |
+| Live Preview / `WM_DWMSENDICONICLIVEPREVIEWBITMAP` | 部分 / 规则 Verified | `user32.broadcastDwmIconicLivePreviewBitmapRequested` 与 iconic 相同 `lParam` 打包；任务栏 Explorer 磁贴悬停采样路径与 iconic 同步广播 | 主机 **dwm_nt61_integration_host** |
 | GPU / WDDM 离屏纹理合成 | 未 | `display_backend.zig`（`gop_linear` / `virtio_scanout` 观测）、`wddm_abstraction.zig` | 长期项；**非** IOCTL 级 WDDM；VirtIO 2D scanout 为呈现台阶（与 Win7 Aero 性能模型不同） |
 
 ### 4.1 DWM / 桌面壳层 backlog（与实现 PR 同步）
@@ -162,16 +165,17 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | 内核 `KernelCompositorSurfaceFlags` ↔ 用户态 `SurfaceFlags` 语义映射 | **Verified**（主机 **aero_flag_mapping_host**） | [aero_flag_mapping.zig](../../src/config/aero_flag_mapping.zig)；桌面 `compositor.zig` `comptime` 布局锁 |
 | 颜色 COLORREF ↔ 内核 `theme.rgb` | **Partial / 规则 Verified** | [color_nt61.zig](../../src/config/color_nt61.zig)：`KernelBgr888Low24` / `ColorrefLow24` 语义别名；`comptime` 往返；**BGR 低 24 与 COLORREF 同 RGB 三元组下数值必不等**（主机 **color_nt61_host**）；跨界须经本模块；`dwm.syncPolicyFromRegistry` 经转换后若 HWND 已存在则补发 `WM_DWMCOLORIZATIONCOLORCHANGED`（见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md)） |
 | 装饰性铬色 `rgb(...)`（非 DWM 染色契约） | **允许（矩阵登记例外）** | `dwm.zig` 标题栏/任务栏铬线、`startmenu.zig` 内层面板 tint、`display.renderHarmonyStyleWallpaper` 壁纸渐变等；**权威 DWM 玻璃染色 dword** 仍以 `nt61_aero_defaults` + `color_nt61` + `setColorizationTint` / 注册表为准 |
-| 用户态 `flip3d_preview_enabled` ↔ 内核 Flip3D | **Partial（语义对照）** | Aero [`compositor.zig`](../../src/desktop/aero/src/compositor.zig) 与内核 `nt61_aero_defaults.KernelCompositor.flip3d_enabled`、`display.flip3d_overlay_active` 均为 **CPU 预览**，非 WDDM Flip3D；Shell 开关不自动映射内核位（避免跨边界臆测） |
+| 用户态 `flip3d_preview_enabled` ↔ 内核 Flip3D | **Partial（语义对照 + 文档化桥接约定）** | 内核不链接用户态 `compositor.zig`；**宿主桥接**时应在获知 `flip3d_overlay_active` 后调用 `setFlip3dPreviewEnabled`（见 `compositor.zig` 文档注释）。二者均为 **CPU 预览**，非 WDDM Flip3D |
 | HWND ↔ `RedirectedSurface` / csrss `register_window` | **Partial / 子集 Verified** | **Verified 子集（可主机/串口锚点）**：(1) `CreateWindowEx` ↔ **`refreshGuiWindowCompositorAndTables`**（与 `ensureCompositorSurface` 同路径）；(2) `DestroyWindow` ↔ `detachCompositorSurface`；(3) LPC `register_window` ↔ `onCsrssRegisterGuiWindow`（同上单函数）；(4) **Shell 内联** `display.zig` 对 Explorer/任务管理器 `createSurface` 为壳层占位，**不**经 `user32` HWND 表；(5) `SetWindowPos`：`HWND_TOPMOST` / `HWND_NOTOPMOST` 维护 `Window.is_topmost` 并与 **`syncCompositorZOrderForUserWindows` 两趟序**一致；**Learn**：`HWND_NOTOPMOST` 在窗口**已非** topmost 时 **不**调整 Z 序；`HWND_TOP` / `HWND_BOTTOM` 仅在 **同 band** 内调整；**另一有效 HWND 之后**：跨 band 对齐 `is_topmost` 后插入（`placeHwndAboveInsertAfter`；主机 **`dwm_zorder_nt61_host`**）；(6) `hWndInsertAfter==0` 且未置 `SWP_NOZORDER` 时不改 Z 序数组顺序（位置/尺寸仍更新）；`SWP_FRAMECHANGED` 等重绘位当前忽略。LPC `get_message`：**线程 id 不得为 0**（`csr_lpc_policy.resolveGetMessageClientTid`）；GUI LPC 经 **`seAccessActiveDesktopForWin32k`**（当前占位 `createUserToken`）与活动桌面一致。**非 Verified**：跨进程 HWND、CSRSS 独立建窗。见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.4–§3.5；主机 **`dwm_nt61_integration_host`**、**`dwm_zorder_nt61_host`**、**`csr_lpc_policy_host`**、**`nt61_dual_track_host`** |
 | 方案 A：Present 脏区 / 帧节拍 API | **Partial** | `display.submitCompositorPresentHints`、`getPresentTelemetry`、`getDesktopComposeTelemetry`；[DesktopManagerSpec.md](DesktopManagerSpec.md) §1.1 |
 | 多监视器 / DPI（单 GOP 扩展点） | **Partial** | `framebuffer.MonitorLayoutNt61`、`getVirtualDesktopBounds`、`physicalToLogicalPx`；`display.getDesktopMonitorLayout*`；主机 **multimon_dpi_nt61_host** |
 | Aero Peek 竖条命中（Shell） | **Partial** | `taskbar.isClickOnShowDesktopPeek` / `setAeroPeekActive`；主机 **taskbar_peek_hit_nt61_host** |
 | CPU 盒式模糊预算（`w×h×passes`） | **Verified（公式）/ Partial（帧级观测）** | [dwm_blur_budget.zig](../../src/config/dwm_blur_budget.zig) 与 `dwm.tryConsumeBlurBudget` 同源；**`zig build test` → dwm_blur_budget_host**；`-Ddwm_blur_stats=true` 每帧 `klog.debug` 统计（见 [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)） |
 | `WM_DWM*` 广播 + 线程监听 `register_dwm_listener` | **Partial（有 HWND 才泵注册表差异；监听表在 csr 侧；LPC v1 载荷）** | `csr_dwm_listeners.zig` + LPC `0x10027`（**v1** 魔数 `0x014D5744` + tid@4，见 [`LPC_NT61_HANDSHAKE.md`](LPC_NT61_HANDSHAKE.md)、`csr_lpc_policy`）+ 内核 `registerDwmNotificationListener` 同表；`user32.broadcastDwm*`（`dwm_nt61_api_contract` 打包器）；**`dwm_messages_nt61_host`** / **`csr_lpc_policy_host`** / **`dwm_nt61_integration_host`** / **`dwm_config_registry_sync_host`** |
-| Flip3D（Alt+Tab）CPU 近似 | **Partial / 规则 Verified** | `flip3d_needs_scene_refresh` + `collectShellWindowSurfaceIds`：**缓冲** `flip3d_shell_sid_buffer_cap=6`、**最多绘制** `flip3d_shell_thumb_paint_max=4`（`dwm_nt61_api_contract.zig`，截断取前 N 张）；过滤：`visible`、`owner_pid!=0`、`w/h≥16`、`z_order<30000`。热键 **`consumeFlip3dHotkey`** 仅在 `display` 主循环单点消费（与 `keyboard.zig` 配对）；[DesktopManagerSpec.md](DesktopManagerSpec.md) §8；主机 **dwm_zorder_nt61_host**、**win32k_api_semantics_host** |
-| 开始菜单悬停局部重绘 | **Partial** | `redrawStartMenuRegionOnly` + 飞出/所有程序/搜索行级脏区；搜索开启时 **50ms hover 节流**（`startmenu.zig`）；`-Ddesktop_bisect` + `mouse_debug` 看 `startmenu_partial` |
-| VirtIO-GPU 2D / scanout | **Partial** | **SET_SCANOUT**：`RESOURCE_ATTACH_BACKING` **单段或** 按页多段 mem_entry + `display.present` 后 `RESOURCE_FLUSH`；`display_flip_journal.noteVirtioPresentFlushBatch` 累计单次 present 内 flush 次数（多资源策略预留）。**光标队列** `CMD_MOVE_CURSOR`。`display.initAeroDwm` 后 `display_backend.syncFromVirtioScanout`。**VirGL**：见 [VirtioVirglMVP.md](VirtioVirglMVP.md)「阶段 4 边界」。**CPU 仍负责** memcpy 与 Aero 盒式模糊。见 `virtio_gpu_pci.zig`、`framebuffer.zig`、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) |
+| Flip3D（Alt+Tab）CPU 近似 | **Partial / 规则 Verified** | **Alt+Tab**：首次打开覆盖层，再次 **轮转** `flip3d_shell_tab_index`（底栏 shell 卡高亮）；**Esc**（非 Ctrl+Shift+Esc）**`consumeFlip3dDismiss`** 关闭。`flip3d_needs_scene_refresh` + `collectShellWindowSurfaceIds`：**缓冲** `flip3d_shell_sid_buffer_cap=6`、**最多绘制** `flip3d_shell_thumb_paint_max=4`；过滤同矩阵前文。热键 **`consumeFlip3dHotkey`** 仅在 `display.handleDesktopHotkeys` 消费；[DesktopManagerSpec.md](DesktopManagerSpec.md) §8；主机 **dwm_zorder_nt61_host**、**win32k_api_semantics_host** |
+| 开始菜单悬停局部重绘 | **Partial / 子集 Verified** | `handleMouseMove`：**不**将菜单行悬停升为 `needs_full_scene`；走 `needs_startmenu_repaint` → `startmenu_partial`（嵌入壁纸 `presetSupportsPartialRedraw` 时）。`redrawStartMenuRegionOnly` + 行级脏区；搜索 **50ms** 节流（`startmenu.zig`）；**主机** **startmenu_paint_hint_nt61_host**；`-Ddesktop_bisect` + `mouse_debug` 看 `startmenu_partial` |
+| `DwmRegisterThumbnail` / `DwmUpdateThumbnailProperties` 像素合成 | **Partial** | `dwm_compositor` 槽位 + `display.blitRegisteredDwmThumbnailsToFramebuffer`：`DWM_TNP_VISIBLE`+`DWM_TNP_RECTDESTINATION` 时将源 HWND 表面缩略缓冲 **最近邻缩放** 到目标矩形；`GetWindowRect`+`rcDestination` 为 **Learn 客户区坐标** 的 **Partial** 近似；`DWM_TNP_OPACITY` 子集 |
+| VirtIO-GPU 2D / scanout | **Partial** | **SET_SCANOUT**：`RESOURCE_ATTACH_BACKING` **单段或** 按页多段 mem_entry + `display.present` 后 `RESOURCE_FLUSH`；`display_flip_journal.noteVirtioPresentFlushBatch` 累计单次 present 内 flush 次数（多资源策略预留）。**光标队列** `CMD_MOVE_CURSOR`。`display.initAeroDwm` 后 `display_backend.syncFromVirtioScanout`。**VirGL**：`CMD_SUBMIT_3D` **size=0** bring-up（`virtio_gpu_spec` / `virtio_gpu_pci`）；`WddmRuntimePhase.virgl_submit3d_noop_ok`；**不接** 可执行 Gallium 流、**不**卸载 Aero 模糊。见 [VirtioVirglMVP.md](VirtioVirglMVP.md)。**CPU 仍负责** memcpy 与盒式模糊 |
 | x86_64 PS/2 与 VirtIO 双源 | **Partial** | [arch/x86_64/mod.zig](../../src/arch/x86_64/mod.zig) `handleMouseIrq`：VirtIO-Input 活跃且未 `-Dps2_mouse_with_virtio` 时 **跳过 IRQ12**；无 VirtIO 真机可编 `-Dps2_mouse_with_virtio=true` 或仅用 PS/2 |
 | USB HID 鼠标 | **Partial（M1–M3 文档化）** | **M1**：`-Dusb_xhci=true` 枚举 + xHCI 桩，串口 **`USB: xhci_mvt`**；**M2**：`hid_boot_report.zig` Boot 报告 → `hid.zig` 注入；**M3**：`input_hub.pollAll` 顺序（USB → VirtIO → PS/2）见 `input_hub.zig` 与 PointerPolicy §4。主机 **hid_boot_report_host** |
 | 注册表 `Mouse` / `DWM` → 壳层 | **Partial / 通知规则 Verified** | `dwm_config_registry_sync.hklm_dwm_policy_dword_names` 与 `registry.populateDefaults` / `dwm.syncPolicyFromRegistry` 同源；应用后按差异在 **已有窗口** 时补 `WM_DWM*`（无 HWND 启动豁免）；**`dwm_config_registry_sync_host`** |

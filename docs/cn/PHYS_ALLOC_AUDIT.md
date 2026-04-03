@@ -6,15 +6,17 @@
 
 | 组件 | 路径 | 职责 |
 |------|------|------|
-| 位图帧分配器 | [`src/mm/frame.zig`](../../src/mm/frame.zig) | 自 Multiboot2 `mmap`（`BootInfo`）初始化可用帧；`alloc` / `free` / `allocContiguous`；可跟踪物理跨度由构建选项 **`-Dphys_track_gb=8\|16\|32\|64`** 决定（默认 8） |
+| 位图帧分配器 | [`src/mm/frame.zig`](../../src/mm/frame.zig) | 自 Multiboot2 `mmap`（`BootInfo`）初始化可用帧；`alloc` / `free` / `allocContiguous`；可跟踪物理跨度由 **`-Dphys_track_gb=8\|16\|32\|64`** 决定（默认 **8**；大内存/Win7 Ultimate x64 档请显式 **16/32/64**，并注意 PFN 元数据 BSS 与主机单测栈占用） |
 | 伙伴（逻辑） | [`src/mm/buddy.zig`](../../src/mm/buddy.zig) | 主机单元测试与算法参考 |
 | 物理伙伴封装 | [`src/mm/phys_buddy.zig`](../../src/mm/phys_buddy.zig) | 从 `FrameAllocator.allocContiguous` carve `2^max_order` 页；`allocContiguousPagesWithSource` 对 **2 的幂**页数优先伙伴、否则回退位图（帧缓冲等释放须配对 `source`） |
 | 虚拟映射回调 | [`src/mm/vm.zig`](../../src/mm/vm.zig) `allocFrameCb` | 页表页与匿名页均经 `FrameAllocator.allocZeroed` |
 
 ## 内存图（Multiboot2）
 
-- 解析入口：[`src/boot/multiboot2_parse.zig`](../../src/boot/multiboot2_parse.zig)（`MmapEntryType.available` 以外类型不得进入空闲链）。
-- `FrameAllocator.init` 跳过：`< 1MiB`、内核映像、`mb_handoff` 区间、位图自身占用的物理页（见 `isReserved`）。
+- 解析入口：[`src/boot/multiboot2_parse.zig`](../../src/boot/multiboot2_parse.zig)（仅 `MmapEntryType.available` 作为候选 RAM）。
+- `FrameAllocator.init` 跳过：`< 1MiB`、内核映像、`mb_handoff` 区间、位图自身占用的物理页（见 `isReserved`）。另将 **reserved / ACPI reclaim / NVS / bad** 等条目的物理区间合并后，对「available」页做 **孔洞剔除**，减轻固件把设备内存标为 available 时 `memsetPhysicalPage` 写挂死的风险。
+- **GOP 帧缓冲**：`BootInfo.fb_info` 经 `multiboot2_parse.gopPhysicalReserveRange` 得到页对齐区间，在 `isReserved` 中剔除，避免 `allocZeroed`→`memsetPhysicalPage` 误写显存（QEMU/实机常见 GPA 如 `0x80000000`）。
+- **零页性能**：`memsetPhysicalPage` / `memcpyPhysicalPage` 在 x86_64 使用 `rep stosq` / `rep movsq`（无 SIMD），与 NT 6.1 API 无关、仅影响内核内部页清零耗时。
 
 ## 调用方（须经 `FrameAllocator`）
 

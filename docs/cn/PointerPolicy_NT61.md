@@ -18,7 +18,7 @@
 
 - **子步插值**：`interpolation_enabled` / `interpolation_steps`（默认开启、3 步）减轻单 tick 内大跳变；与 [`display.renderDesktopFrameEx`](../../src/drivers/video/core/display.zig) 中 `isInterpolating()` 协同。
 - **单轮合并**：`input_hub.pollAll` 包裹 `beginMotionCoalesce` / `endMotionCoalesce`，同一轮内多条 REL 合并后再缩放入队。
-- **壳层重绘 vs 光标层**：[`display.handleMouseMove`](../../src/drivers/video/core/display.zig) 返回 `MouseMovePaintHint`：`needs_full_scene`（开始菜单项高亮、拖动窗体位移等）走整壁纸+壳层；`needs_caption_chrome_only` 仅调用 [`renderer_aero.redrawCaptionBandsOnly`](../../src/drivers/video/desktop/renderer_aero.zig) 重画 Explorer/任务管理器**标题栏带**（最小化/最大化/关闭热态），避免整屏；**仅** `desktop_cursor_kind` 变化走 `cursor_plane` 快速路径。
+- **壳层重绘 vs 光标层**：[`display.handleMouseMove`](../../src/drivers/video/core/display.zig) 返回 `MouseMovePaintHint`：**开始菜单项行悬停**走 `needs_startmenu_repaint`（`renderer_aero.redrawStartMenuRegionOnly`，壁纸预设支持 `patchHarmonyWallpaperRegion` 时）；**拖窗位移**走 `needs_drag_repaint`；`handleMouseMove` 不把指针移动升为 `needs_full_scene`（整场景由 UI 脏、插值、`handleMouseRelease` 边框缩放等路径驱动）。`needs_caption_chrome_only` 仅调用 [`renderer_aero.redrawCaptionBandsOnly`](../../src/drivers/video/desktop/renderer_aero.zig) 重画 Explorer/任务管理器**标题栏带**；**仅** `desktop_cursor_kind` 变化走 `cursor_plane` 快速路径。
 - **地址栏 I-beam 迟滞**：`pointInExplorerAddressBarEx` / `pointInExplorerAddressBarHysteresis`（约 2px）减少箭头/I-beam 在边界上的抖动。
 - **标题栏三键迟滞**：[`hitTestAeroCaptionButtonsHysteresis`](../../src/drivers/video/core/display.zig)（约 2px 粘性区）减少三键边界上悬停状态翻转频率。
 
@@ -35,7 +35,7 @@ Win32 文档中，非客户区鼠标移动与按钮 **hot tracking** 通常对�
 | D1 | 鼠标移动与共合 | `inputdev/wm-mousemove.md`、`LearnWin32/mouse-movement.md` | 高频移动可在系统侧合并；本机对应 REL 合并、插值与 VirtIO 排空，见 `mouse.zig` / `virtio_input_pci.zig`。 |
 | D2 | 非客户区 vs 客户区 | `inputdev/wm-ncmousemove.md`、`wm-ncmousehover.md` | 标题栏/客户区命中与将来 `WM_NC*` 消息语义一致；`hitTestAeroCaptionButtons` / `hitTestAeroCaptionButtonsHysteresis` 与 `needs_caption_chrome_only` 合成路径对齐「NC 热态局部刷新」预期。 |
 | D3 | 光标与 WM_SETCURSOR | `inputdev/about-mouse-input.md`、`mouse-input-functions.md`（索引） | Win32 下由窗口过程与默认处理决定光标；本机 **合成器** 在 `updateDesktopCursorKind` 中根据命中设置 `desktop_cursor_kind`，等价于「谁拥有输入命中谁设定指针形态」。 |
-| D4 | 悬停与离开 | `inputdev/wm-mousehover.md`、`wm-mouseleave.md` | 文档中的 HOVER 时间/矩形；开始菜单项高亮仍走 **`needs_full_scene`**（整屏重绘），局部菜单 blit 为 backlog；标题栏三键热态已走 `caption_partial`。 |
+| D4 | 悬停与离开 | `inputdev/wm-mousehover.md`、`wm-mouseleave.md` | 文档中的 HOVER 时间/矩形；开始菜单项行高亮走 **`needs_startmenu_repaint`** → `startmenu_partial`（嵌入壁纸可局部 patch 时；否则回退整场景路径）；标题栏三键热态走 `caption_partial`。 |
 | D5 | 滚轮与顺序 | `inputdev/wm-mousewheel.md` | 滚轮应触发内容更新；本机 `main` 中 `event.scroll != 0` → `needs_ui_paint`，避免与纯指针移动混淆。 |
 
 ## 4. x86_64：PS/2 与 VirtIO 双源（真机 vs QEMU，问题六）

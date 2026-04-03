@@ -46,7 +46,8 @@
 |------|-----------------|--------|
 | 就绪组织 | 多级反馈 + 动态调整 | 32 分桶 FIFO + 显式 boost/饥饿/继承钩子 |
 | NUMA / 公平份额 | 有 | **Explicitly out of scope（短期）** — 不在本里程碑假装「完整调度器」；见契约矩阵 §0 |
-| IRQL / 抢占边界 | 严格（DISPATCH_LEVEL 等） | **简化模型**：未完整建模 WDK IRQL 与 DPC 队列；抢占主要绑定在 **timer IRQ** 路径；后续接线点见 `ke/irql.zig` 与中断入口注释 |
+| IRQL / 抢占边界 | 严格（DISPATCH_LEVEL 等） | **子集**：`ke/irql.zig` 提供 PASSIVE / APC / DISPATCH 与 raise/lower；x86 IRQ 出口提升至 DISPATCH 后 `dpc.drainAtDispatchLevel`；**无** 完整 CR8/设备 IRQL 3–26 模型 |
+| 前台量子 / GUI boost | 前台略长量子、输入路径提升 | `Process.is_foreground`、`quantumTicksForThread` 略增；`noteGuiInputBoostStub` 占位（可接消息泵/input 完成） |
 
 ## 公开入口
 

@@ -147,7 +147,8 @@
 - **`renderGlassTintOnly`**：无 `boxBlur`，用于拖窗标题栏、右键菜单、开始菜单首帧大面板等，优先帧率。
 - **壳层打开时** `setGlassLiteBlurEnabled(true)` 仍生效；**任务栏**在上下文菜单 / 开始菜单 / 托盘飞出打开时额外走 **`renderGlassTintOnly`**（`display.renderDesktopAeroTaskbar`），避免与场景模糊叠乘。
 - **取证**：`framebuffer.logDesktopGopSummary()` 在 `initDesktopMode` 打 **`DesktopGOP:`**；`-Ddesktop_bisect=true` 时在 `main.zig` 桌面循环输出 **`renderDesktopFrameEx` 前后 scheduler tick 差** 与 `fb_w`；与 `drivers/input/mouse_debug.zig` 联用时关注开始菜单打开场景下 **`startmenu_partial`** 占比告警阈值（回归局部重绘是否退化成全场景）。
-- **Flip3D / Alt+Tab（`display.flip3d_overlay_active`）**：`arch.consumeFlip3dHotkey`（x86_64 → `keyboard.consumeFlip3dHotkey`）与 `display` 内切换覆盖层消费 **同一热键**；首帧打开置 `flip3d_needs_scene_refresh=true` 以刷新冻结前的壁纸/窗景，随后在 `flip3d_needs_scene_refresh==false` 时 `renderSceneWithoutSoftwareCursorFlip3dAware` **冻结背景采样**，仅叠 Flip3D 层与光标以降低每帧 CPU。卡片缩略数据源：`dwm_compositor.collectShellWindowSurfaceIds`（多 surface，有数量与 z 过滤）及每表面 `refreshSurfaceThumbFromFramebuffer`（2×2 盒滤）；任务栏 Explorer 按钮悬停仍走 `maybeRefreshExplorerTaskbarThumb` 的帧缓冲采样路径（与 HWND→surface 映射说明见契约矩阵 §4.1）。
+- **Flip3D / Alt+Tab（`display.flip3d_overlay_active`）**：`arch.consumeFlip3dHotkey`（x86_64 → `keyboard.consumeFlip3dHotkey`）与 `display` 内切换覆盖层消费 **同一热键**；**再次 Alt+Tab** 在已打开时 **轮转** `flip3d_shell_tab_index`（底栏 shell 预览高亮）；**Esc**（非 Ctrl+Shift+Esc）经 `consumeFlip3dDismiss` 关闭覆盖层。首帧打开置 `flip3d_needs_scene_refresh=true` 以刷新冻结前的壁纸/窗景，随后在 `flip3d_needs_scene_refresh==false` 时 `renderSceneWithoutSoftwareCursorFlip3dAware` **冻结背景采样**，仅叠 Flip3D 层与光标以降低每帧 CPU。卡片缩略数据源：`dwm_compositor.collectShellWindowSurfaceIds`（多 surface，有数量与 z 过滤）及每表面 `refreshSurfaceThumbFromFramebuffer`（2×2 盒滤）；任务栏 Explorer 按钮悬停仍走 `maybeRefreshExplorerTaskbarThumb` 的帧缓冲采样路径（与 HWND→surface 映射说明见契约矩阵 §4.1）。
+- **`flip3d_preview_enabled`（用户态 `compositor.zig`）与内核**：内核帧缓冲循环 **不** 自动写用户态变量；若宿主桥接，应在获知覆盖层开关时调用 `setFlip3dPreviewEnabled`；二者均为 **CPU 预览语义**，非 WDDM Flip3D。
 
 调参时只改 `nt61_aero_defaults.zig`（单一数值源），避免与 `display.initAeroDwm` 漂移。
 

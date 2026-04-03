@@ -10,7 +10,7 @@
 |------|------|
 | 设备特性 low 位 **VIRGL**（bit0）协商 | `virtio_gpu_pci.tryGpuBringup` 内读 `device_feature_select=0` 并写回 `driver_feature` |
 | `CMD_CTX_CREATE`（0x0200） | 2D bring-up 成功后发送；成功则 `virgl_ctx_alive` |
-| `CMD_SUBMIT_3D` + Gallium/VirGL 命令流 | **未接**；`tryVirglBlurBoxDelegation` 恒 `false`，`dwm.boxBlurRectBudgeted` 仍走 CPU |
+| `CMD_SUBMIT_3D` + Gallium/VirGL 命令流 | **MVP**：bring-up 在 `CMD_CTX_CREATE` 成功后尝试 **size=0** 空提交（`virtio_gpu_spec.writeSubmit3dHdr`）；成功则 `virglSubmit3dNoopOk` 与 `WddmRuntimePhase.virgl_submit3d_noop_ok`。**不接** 可执行 Gallium 载荷；`tryVirglBlurBoxDelegation` 仍恒 `false`，`dwm.boxBlurRectBudgeted` 仍走 CPU |
 | 用户态渲染器 / IOCTL 边界 | 规划中；见 `wddm_abstraction.zig` 的 `WddmRuntimePhase.virgl_context_up` 与 `display` 日志 |
 
 ## QEMU 验证建议
@@ -20,7 +20,7 @@
 
 ## 后续 MVP 切片（不承诺排期）
 
-1. **最小 `SUBMIT_3D`**：向已创建 context 提交 **noop** 或 **glClear** 类 VirGL 封装（自主编码，不复制 Mesa 源码）。
+1. ~~**最小 `SUBMIT_3D`**~~：**已做 bring-up**：`CMD_SUBMIT_3D` **size=0** 空提交（`virtio_gpu_spec.writeSubmit3dHdr`）；下一步才是带载荷的 noop / **glClear** 类 VirGL 封装（自主编码，不复制 Mesa 源码）。
 2. **全屏纹理 resource**：与 scanout 或离屏 `RESOURCE_CREATE_2D` 绑定，作为模糊输入。
 3. **用户态**：将命令提交迁出内核，仅保留 **能力协商 + 共享页 DMA 描述**（与 `MM_Section_Roadmap.md` 对齐）。
 

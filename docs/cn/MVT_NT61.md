@@ -32,6 +32,7 @@
 | `SystemVersionInformation` / `RTL_OSVERSIONINFOEXW` 284 字节 | 同上 → **nt61_os_version_layout_host** | [tests/nt61_os_version_layout_host.zig](../../tests/nt61_os_version_layout_host.zig)、[`os_version.zig`](../../src/config/os_version.zig) |
 | ntdll/kernel32/user32 合成导出顺序 | 同上 → **nt61_core_dll_abi_inventory_host** | [`nt61_core_dll_abi_inventory.zig`](../../src/config/nt61_core_dll_abi_inventory.zig)、[CORE_DLL_PE_EXPORT_STRATEGY.md](CORE_DLL_PE_EXPORT_STRATEGY.md) |
 | PE TLS/delay/bound 策略失败码（镜像） | 同上 → **pe_loader_policy_host** | [tests/pe_loader_policy_host.zig](../../tests/pe_loader_policy_host.zig) |
+| fork 子集 dup + 只读子映射 + `tryCowWriteFault` PFN 分离 | 同上 → **fork_cow_share_nt61_host** | [src/fork_cow_share_nt61_host.zig](../../src/fork_cow_share_nt61_host.zig)（模块根在 `src/`，与 `vm.zig` 同模块） |
 | 缺口优先级表（K1–K8 × 二进制兼容） | 文档审查 | [BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md) |
 | IPv4 固定首部 + ARP 首部解析 | 同上 → minimal_net | [src/drivers/net/minimal_stack.zig](../../src/drivers/net/minimal_stack.zig) |
 | MDL 子集（PFN 槽、恒等映射填 PFN） | 同上 → mdl_host | [src/mm/mdl.zig](../../src/mm/mdl.zig) |
@@ -46,7 +47,7 @@
 | Win32k 窗口骨架 | 同上 → win32k_host | [src/subsystems/win32k/mod.zig](../../src/subsystems/win32k/mod.zig) |
 | Aero 标志映射（内核 ↔ 用户态 `SurfaceFlags`） | 同上 → **aero_flag_mapping_host** | [src/config/aero_flag_mapping.zig](../../src/config/aero_flag_mapping.zig) |
 | COLORREF ↔ 内核 BGR（与 Aero `theme.rgb` 字节序对照） | 同上 → **color_nt61_host** | [color_nt61.zig](../../src/config/color_nt61.zig) |
-| DWM 消息常量 + `WM_DWMSENDICONICTHUMBNAIL` lParam 烟测 + 打包器（`compositionChangedWParam` 等）+ `DWM_E_COMPOSITIONDISABLED` / `DWM_THUMBNAIL_PROPERTIES` 布局锚点 + 注册表 `Composition` 广播提示 | 同上 → **dwm_messages_nt61_host**、**dwm_nt61_integration_host** | [tests/nt61/dwm_messages_nt61.zig](../../tests/nt61/dwm_messages_nt61.zig)、[tests/nt61/dwm_nt61_integration_host.zig](../../tests/nt61/dwm_nt61_integration_host.zig) |
+| DWM 消息常量 + `WM_DWMSENDICONICTHUMBNAIL` / **`WM_DWMSENDICONICLIVEPREVIEWBITMAP`** lParam 烟测 + 打包器 + `classifyVirtioRuntimePhase`（含 `submit3d_noop_ok`）+ `DWM_E_COMPOSITIONDISABLED` / `DWM_THUMBNAIL_PROPERTIES` 布局锚点 + 注册表 `Composition` 广播提示 | 同上 → **dwm_messages_nt61_host**、**dwm_nt61_integration_host** | [tests/nt61/dwm_messages_nt61.zig](../../tests/nt61/dwm_messages_nt61.zig)、[tests/nt61/dwm_nt61_integration_host.zig](../../tests/nt61/dwm_nt61_integration_host.zig) |
 | DWM 公开契约常量 / 结构布局（`dwm_nt61_api_contract`） | 同上 → **dwm_nt61_api_contract_host** | [src/config/dwm_nt61_api_contract.zig](../../src/config/dwm_nt61_api_contract.zig)（含 `iconicSizeRequestLParam` 等主机 `test`） |
 | `dwmapi` 导出名表（与 `pe.zig` 合成 DLL 顺序一致） | 同上 → **dwm_nt61_abi_inventory_host** | [dwm_nt61_abi_inventory.zig](../../src/config/dwm_nt61_abi_inventory.zig)；策略 [DWMAPI_PE_EXPORT_STRATEGY.md](DWMAPI_PE_EXPORT_STRATEGY.md) |
 | WOW64 `dwmapi` PE32 布局（`DWM_BLURBEHIND32` / HWND 扩展） | 同上 → **dwmapi_wow64_host** | [dwmapi_wow64.zig](../../src/subsystems/win32/dwmapi_wow64.zig) |
@@ -55,6 +56,7 @@
 | 合成 Z 序两趟模型（普通层→顶层） + 跨 band `SetWindowPos` 对齐 + `HWND_NOTOPMOST` Learn（非 topmost 不重排）叙事锚点 | 同上 → **dwm_zorder_nt61_host** | [tests/nt61/dwm_zorder_nt61_host.zig](../../tests/nt61/dwm_zorder_nt61_host.zig) |
 | 多监视器 DPI 公式（与 framebuffer 一致） | 同上 → **multimon_dpi_nt61_host** | [tests/nt61/multimon_dpi_nt61_host.zig](../../tests/nt61/multimon_dpi_nt61_host.zig) |
 | Aero Peek / Show Desktop 条命中 | 同上 → **taskbar_peek_hit_nt61_host** | [tests/nt61/taskbar_peek_hit_nt61_host.zig](../../tests/nt61/taskbar_peek_hit_nt61_host.zig) |
+| 开始菜单 `needs_startmenu_repaint` 不与 `needs_full_scene` 合并升全屏（主机镜像） | 同上 → **startmenu_paint_hint_nt61_host** | [tests/nt61/startmenu_paint_hint_nt61_host.zig](../../tests/nt61/startmenu_paint_hint_nt61_host.zig) |
 | 内核路径审计提醒（手动矩阵同步） | 同上 → **kernel_stub_audit_anchor_host** | [tests/nt61/kernel_stub_audit_anchor_host.zig](../../tests/nt61/kernel_stub_audit_anchor_host.zig) |
 | ZOSH1 引导覆盖字节布局（与 `registry.mergeFromZosh1Bytes` 同步） | 同上 → **registry_zosh1_host** | [tests/nt61/registry_zosh1_host.zig](../../tests/nt61/registry_zosh1_host.zig) |
 | `PeekMessage` `PM_REMOVE` / `PM_NOYIELD`；`NtUserPeekMessage`/`GetMessage` 与 Learn 差距表；`SetWindowPos` `SWP_*` 数值锚点 | 同上 → **msg_pm_semantics_host** | [msg_pm_semantics.zig](../../src/subsystems/win32/msg_pm_semantics.zig) |
@@ -83,7 +85,7 @@
 | PS/2 + VirtIO 并存 | `zig build -Dps2_mouse_with_virtio=true`（真机单指针源）；默认 QEMU 仍避免双源 | [arch/x86_64/mod.zig](../../src/arch/x86_64/mod.zig) `handleMouseIrq`；[PointerPolicy_NT61.md](PointerPolicy_NT61.md) §4 |
 | USB HID 鼠标里程碑（问题六 / 可执行拆分） | **M1**：`-Dusb_xhci=true` 枚举 + xHCI 桩；串口检索 **`USB: xhci_mvt`**（与 **`USB: xHCI active`** 同次初始化）；**M2**：**hid_boot_report_host** + `hid.zig`；**M3**：`input_hub.zig` 轮询顺序 + PointerPolicy §4 | 契约矩阵 §4.1「USB HID 鼠标」行 |
 | Flip3D shell 过滤与 Z 序模型 | 主机 **dwm_zorder_nt61_host** | [tests/nt61/dwm_zorder_nt61_host.zig](../../tests/nt61/dwm_zorder_nt61_host.zig) |
-| （可选 nightly）Flip3D 打开 | 串口人工检索 `flip3d_overlay` / 热键切换日志 | 非 CI 硬性 |
+| （可选 nightly）Flip3D：Alt+Tab 打开/轮转、`Esc` 关闭、`Desktop display phase` 含 `virgl_submit3d_noop_ok`（VirGL+QEMU） | 串口人工检索 **Flip3D (Alt+Tab)**、`CMD_SUBMIT_3D size=0 ok` | 非 CI 硬性 |
 | DWM 盒式模糊预算成本（`w×h×passes`） | `zig build test` → **dwm_blur_budget_host** | [dwm_blur_budget.zig](../../src/config/dwm_blur_budget.zig)、[dwm.zig](../../src/drivers/video/core/dwm.zig) |
 | Aero 每帧模糊统计 | `zig build -Ddwm_blur_stats=true`；串口检索关键字 **`dwm blur frame:`**（`box_blur_calls` / `budget_denials` / `tint_only_calls`）。相对基线表见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §3.0 | [display.zig](../../src/drivers/video/core/display.zig) `renderDesktopFrameEx` 末尾、`dwm.flushBlurFrameStatsDebug` |
 | 节区 / 映射（用户态 API） | 运行依赖 `ntdll` 内 `NtCreateSection` / `NtMapViewOfSection` 的用例（随子系统扩展） | 内核实现见 [src/mm/section.zig](../../src/mm/section.zig)；x64 syscall 见 [src/arch/x86_64/syscall.zig](../../src/arch/x86_64/syscall.zig) |

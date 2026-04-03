@@ -4,15 +4,17 @@
 
 | 组件 | 路径 | 职责 |
 |------|------|------|
-| 通用堆 | `src/mm/heap.zig` | bump 高水位；每块带 `FreeBlock` 头；`alloc` / `kfree`；空闲块 **按地址有序插入并与相邻块合并**；可选 **可增长 arena**（`initGrowable` + `heap_boot.zig` 通过 `mapPageAlloc` 映射）；`usedBytes`/`freeBytes` 基于 **live 计数** |
+| 通用堆 | `src/mm/heap.zig` | bump 为 arena 内优化；**空闲链表合并**为主路径；可增长 arena（`heap_boot.zig`）；大块与池 zone 优先 |
 | VM 接线 | `src/mm/heap_boot.zig` | 引导后把堆接到 `AddressSpace`；保持 `heap.zig` 不直接 `import vm`（便于主机 `zig test`） |
+| 池 zone | `src/mm/pool_zone.zig` | 按页 backing（可接 `setZoneBackingHooks`）；NonPaged/Paged 统计与虚拟窗文档常量 |
+| Lookaside | `src/mm/lookaside.zig` + `percpu_index.zig` | per-CPU 小对象链；BSP 下标 0 |
 | Ex 池封装 | `src/mm/ex_pool.zig` | `exAllocatePoolWithTag` / `exFreePoolWithTag` → `pool.zig`（NT 公开名，行为子集） |
-| 档位池 | `src/mm/pool.zig` | 16–512 字节固定档 + 每档空闲链表 + **pool_gate 锁**；**tag 调试统计**（`copyTagStats`）；超大档回退 `heap` |
+| 档位池 | `src/mm/pool.zig` | lookaside 热路径 + zone 页切片 + 全局档链 + **pool_gate**；tag 统计；超大档回退 `heap` |
 | 伙伴（索引级） | `src/mm/buddy.zig` | `Buddy(max_order)`：按 `2^order` 连续块分配/合并；主机单测 |
 | 物理伙伴封装 | `src/mm/phys_buddy.zig` | 自 `allocContiguous` carve arena；**`initKernelContiguousBuddy`** 在内核启动接线；`kernelAllocContiguousPhys` / `kernelFreeContiguousPhys` |
 | Slab（小对象） | `src/mm/slab.zig` | 固定 `Obj` × `objects_per_slab`；单测经 **ex_pool** + `slab_pool_tag` |
-| 物理帧位图 | `src/mm/frame.zig` | 全机物理页位图 + `alloc` / `allocContiguous`；审计见 [PHYS_ALLOC_AUDIT.md](PHYS_ALLOC_AUDIT.md) |
-| 虚拟内存 | `src/mm/vm.zig` | 地址空间、映射/取消映射、lazy commit；堆增长依赖其 `mapPageAlloc` |
+| 物理 PFN | `src/mm/frame.zig` | **Free/Zeroed** 按 zone 双链表 O(1) 单页；位图 + 扫描用于连续块；`pfn_share_count` 供 CoW |
+| 虚拟内存 | `src/mm/vm.zig` | 地址空间、lazy commit、`setSectionLazyCommitFillHook`、`tryCowWriteFault`（x86 `remapLeafPhysical`） |
 
 ## 伙伴 / slab 与通用堆分工
 

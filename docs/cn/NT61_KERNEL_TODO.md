@@ -28,12 +28,12 @@
 
 | ID | 任务 | 主要路径 |
 |----|------|----------|
-| K1.1 | 物理帧与伙伴/连续页全路径接线 | `src/mm/frame.zig`, `buddy.zig`, `phys_buddy.zig` |
-| K1.2 | 非分页/分页池语义与 IRQL 注释与 WDK 对齐 | `src/mm/pool.zig`, [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md) |
+| K1.1 | PFN 链表（Free/Zeroed/Active）+ 位图连续分配；伙伴/连续页接线 | `src/mm/frame.zig`, `buddy.zig`, `phys_buddy.zig` |
+| K1.2 | 池：`pool_zone.zig` + `lookaside.zig` + `pool.zig` / `ex_pool.zig`；IRQL 与 WDK 对齐 | [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md), `src/mm/percpu_index.zig` |
 | K1.3 | Slab/堆统计与不变量 | `slab.zig`, `heap.zig` |
-| K1.4 | VMA 释放与泄漏回归 | `vm.zig`, `arch/x86_64/paging.zig` |
+| K1.4 | VMA 释放与泄漏回归；VAD AVL、惰性提交、文件视图 demand、`remapLeafPhysical` CoW、**`duplicateUserMappingsForFork`**（fork 子集） | `vm.zig`, `vad.zig`, `section.zig`, `arch/x86_64/paging.zig`；主机 **fork_cow_share_nt61_host** |
 | K1.5 | syscall 用户缓冲 probe 审计 | `probe.zig`, `syscall.zig` |
-| K1.6 | 节区对象与 VM 生命周期 | [MM_Section_Roadmap.md](MM_Section_Roadmap.md), `section.zig` |
+| K1.6 | 节区对象与 VM 生命周期；**匿名 `PAGE_WRITECOPY`** 已按私有 RW 映射（fork CoW）；**文件后备 WRITECOPY** 仍 `STATUS_NOT_IMPLEMENTED` | [MM_Section_Roadmap.md](MM_Section_Roadmap.md), `section.zig`, [PFN_REFCOUNT_ROADMAP.md](PFN_REFCOUNT_ROADMAP.md) |
 | K1.7 | MDL 最小抽象（DMA 前置） | `src/mm/mdl.zig` |
 
 ## Phase K2 — 调度、定时器、SMP
@@ -43,9 +43,13 @@
 | K2.1 | CR3 切换与进程销毁顺序 | `src/ke/scheduler.zig` |
 | K2.2 | 调度模型文档与可选 32 级优先级 | [SCHEDULER_API.md](SCHEDULER_API.md) |
 | K2.3 | HPET/单调时钟接计时 | [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md), `hal/x86_64/hpet.zig` |
-| K2.4 | AP INIT + **SIPI×2** + 低 1MiB 实模式跳板（`lapic_smp` 0x8000）；长模式 AP + 每核调度 | `ap_entry.zig`, `smp_boot.zig`, `lapic_smp.zig`, `madt.zig` |
-| K2.5 | TLB IPI 或可证 BSP 策略 | `tlb_broadcast.zig` |
+| K2.4 | AP INIT + **SIPI×2** + 低 1MiB 实模式跳板（`lapic_smp` 0x8000）；长模式 AP + 每核调度。**进展**：`ensureLocalApicSoftwareEnabled`、`broadcastFixedIpiExcludingSelf`；**IDT 向量 254** = TLB flush IPI 桩；**`-Dlapic_periodic_tick`** 可选 LAPIC LVT 周期 tick（mask PIC IRQ0）；`apKernelEntry` 计数器 | `ap_entry.zig`, `smp_boot.zig`, `lapic_smp.zig`, `madt.zig`, `lapic_timer_tick.zig`, `interrupt_x86.zig`, `idt.zig` |
+| K2.5 | TLB IPI 或可证 BSP 策略。**进展**：`requestGlobalFlushStub` 在 **`-Dsmp_tlb_ipi=true`** 且多 CPU 时广播向量 **254**（AP 须已加载 IDT；默认关闭） | `tlb_broadcast.zig` |
 | K2.6 | 每 CPU 就绪队列与 `home_cpu` | `percpu_sched.zig` |
+| K2.7 | IRQL：`APC_LEVEL` / `DISPATCH_LEVEL` / `DEVICE_IRQL_LOW`；**每 CPU 槽** `MAX_IRQL_CPUS=8`（运行期默认 BSP 槽 0，`setCpuSlotOverrideForTest` 供单测） | `ke/irql.zig`, `interrupt_x86.zig` |
+| K2.8 | 通用 DPC：**每 CPU FIFO**（与 IRQL 槽一致）、`drainAtDispatchLevel`；输入 flush 仍为一类 DPC | `ke/dpc.zig`, `interrupt_x86.zig` |
+| K2.9 | 内核/用户 APC 队列与交付点（syscall 返回用户前内核 APC；alertable 等待与用户 APC）。**进展**：`wait_user_apc_nt61_host` | `ke/apc.zig`, `ke/apc_object.zig`, `scheduler.zig`, `syscall.zig` |
+| K2.10 | `KeWait` 子集：`KeWaitForSingleObject` / `KeWaitForMultipleObjects`（WaitAny）+ 超时 + alertable | `ke/wait.zig`, `libs/ntdll.zig` |
 
 ## Phase K3 — HAL：ACPI、PCIe、中断
 
@@ -53,7 +57,7 @@
 |----|------|----------|
 | K3.1 | ACPI 表遍历与错误路径 | `acpi_pci_early.zig`, `multiboot2_parse.zig` |
 | K3.2 | ECAM 枚举扩展 | `ecam_layout.zig` |
-| K3.3 | IOAPIC 与 IRQ 路由 | `hal/x86_64/` |
+| K3.3 | IOAPIC 与 IRQ 路由。**进展**：MADT type1 记录首 IOAPIC MMIO（`madt.ioapic_mmio_phys`）；`ioapic_route.zig` 诊断里程碑；重定向表与 MSI 仍待 | `hal/x86_64/madt.zig`, `hal/x86_64/ioapic_route.zig` |
 | K3.4 | AML 解释器（独立里程碑） | ACPI spec，延后项 |
 
 ## Phase K4 — I/O 管理器、IRP、PnP/电源
@@ -80,15 +84,16 @@
 | K6.1 | 命名空间与符号链接子集 | `ob/object.zig` |
 | K6.2 | 句柄表 teardown | `ob/` |
 | K6.3 | ACL/模拟 | `se/token.zig` |
-| K6.4 | LPC 与 csrss 契约 | `lpc/port.zig`, [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) |
+| K6.4 | LPC 与 csrss 契约；**ALPC 占位** `lpc/alpc_min.zig`；**csrss 骨架** `servers/csrss_skeleton.zig` | `lpc/port.zig`, [LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md) |
 
 ## Phase K7 — SSDT 与 Native 内核语义
 
 | ID | 任务 | 主要路径 |
 |----|------|----------|
-| K7.1 | SSDT 版本与 ntdll/syscall 双端 | `ssdt_nt61.zig`, [SSDT_Roadmap.md](SSDT_Roadmap.md) |
+| K7.1 | SSDT 版本与 ntdll/syscall 双端；**扩展子集**（同步/进程/ALPC 等）+ `STATUS_NOT_IMPLEMENTED` 桩；真源路径 `sdk/nt61_syscall_numbers_x64.zig` | `ssdt_nt61.zig`, `syscall.zig`, `tests/nt61/syscall_numbers_lock_nt61_host.zig`, [SSDT_Roadmap.md](SSDT_Roadmap.md) |
 | K7.2 | 虚拟内存与系统信息类对齐 | `syscall.zig`, [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) |
 | K7.3 | 注册表内存树与 hive 分阶段 | 路线图 |
+| K7.4 | x64 SEH：`.pdata` / `RUNTIME_FUNCTION` 表驱动展开子集 | `loader/seh_pdata_min.zig`, PE 规范 |
 
 ## Phase K8 — 文件系统内核层
 
@@ -96,6 +101,14 @@
 |----|------|----------|
 | K8.1 | NTFS/FAT 边界与错误码 | `src/fs/` |
 | K8.2 | VFS–IRP 桥接与共享访问标志 | `vfs.zig` |
+
+### K1 内存：明确延后（相对 NT 6.1 全语义）
+
+下列项在月报/矩阵中应标为**未声称完成**，避免与商业内核等价表述混淆：
+
+- 节区 **`PAGE_WRITECOPY` / `SEC_*` 全语义**：**文件后备**真 COW 仍为 `STATUS_NOT_IMPLEMENTED`；**匿名** WRITECOPY 已按私有 RW + fork CoW 近似。
+- **每映射一次的全局 PFN 引用计数**：当前以 `shareCount`/CoW 路径为主，未在每条 `mapPage`/`unmap` 上维护与 Windows 一致的统一 refcnt；路线图见 [PFN_REFCOUNT_ROADMAP.md](PFN_REFCOUNT_ROADMAP.md)。
+- **页文件、Standby/Modified 链表、真换出**：未实现；伙伴/Active PFN 与惰性 section 不替代页文件子系统。
 
 ## 执行顺序建议
 

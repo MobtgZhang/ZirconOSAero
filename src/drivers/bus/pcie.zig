@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 const vm = @import("../../mm/vm.zig");
+const pci_bind = @import("pci_driver_bind.zig");
 
 const portio = if (builtin.target.cpu.arch == .x86_64)
     @import("../../hal/x86_64/portio.zig")
@@ -48,7 +49,11 @@ pub fn readConfigDword(bus: u8, dev: u8, func: u8, offset: u16) u32 {
     if (!supports_pci_config) return 0xFFFFFFFF;
     switch (builtin.target.cpu.arch) {
         .x86_64 => {
-            // I/O CF8/CFC：仅保证 256B 传统配置空间
+            const acpi_pci = @import("../../hal/x86_64/acpi_pci_early.zig");
+            // ACPI MCFG/ECAM 可用时优先 MMIO，覆盖 PCIe 扩展配置（能力链表、MSI-X 表指针等）；否则回退 0xCF8/0xCFC（256B）。
+            if (acpi_pci.hasEcam() and offset <= 0xFFC) {
+                return acpi_pci.configRead32(bus, dev, func, offset);
+            }
             const off = @min(offset, 0xFF);
             const aligned: u8 = @truncate(off & 0xFC);
             const addr: u32 = 0x80000000 |
@@ -82,6 +87,11 @@ pub fn writeConfigDword(bus: u8, dev: u8, func: u8, offset: u16, value: u32) voi
     if (!supports_pci_config) return;
     switch (builtin.target.cpu.arch) {
         .x86_64 => {
+            const acpi_pci = @import("../../hal/x86_64/acpi_pci_early.zig");
+            if (acpi_pci.hasEcam() and offset <= 0xFFC) {
+                acpi_pci.configWrite32(bus, dev, func, offset, value);
+                return;
+            }
             const off = @min(offset, 0xFF);
             const aligned: u8 = @truncate(off & 0xFC);
             const addr: u32 = 0x80000000 |
@@ -142,6 +152,55 @@ pub const PCI_VENDOR_AMD_ATI: u16 = 0x1002;
 pub const PCI_VENDOR_LOONGSON: u16 = 0x0014;
 /// NVIDIA PCI vendor id（显示类 0x03；公开 PCI 枚举事实，本内核默认 GOP handoff）
 pub const PCI_VENDOR_NVIDIA: u16 = 0x10DE;
+
+/// PCI 配置空间 **标准**能力 ID（PCI / PCIe 公开枚举值）。
+pub const PciStandardCapId = struct {
+    pub const msi: u8 = 0x05;
+    pub const msix: u8 = 0x11;
+    pub const pci_express: u8 = 0x10;
+};
+
+/// 自 capability pointer（配置 0x34）遍历链表，查找 `cap_id`；无能力表或越环则 `null`。
+pub fn findPciStandardCapabilityOffset(bus: u8, dev: u8, func: u8, cap_id: u8) ?u8 {
+    if (!supports_pci_config) return null;
+    const st = readConfigWord(bus, dev, func, 0x06);
+    if ((st & (1 << 4)) == 0) return null;
+    var ptr: u8 = readConfigByte(bus, dev, func, 0x34) & 0xFC;
+    var iter: u32 = 0;
+    while (ptr != 0 and iter < 64) : (iter += 1) {
+        const cid = readConfigByte(bus, dev, func, ptr);
+        const next = readConfigByte(bus, dev, func, ptr + 1);
+        if (cid == cap_id) return ptr;
+        ptr = next & 0xFC;
+    }
+    return null;
+}
+
+/// MSI 能力寄存器子域摘要（offset 由 `findPciStandardCapabilityOffset(..., PciStandardCapId.msi)` 得到）。
+pub const PciMsiCapsSummary = struct {
+    cap_offset: u8 = 0,
+    /// Message Control bit 7：64-bit address capable
+    bit64_addr: bool = false,
+    /// Message Control bit 8：per-vector masking capable
+    per_vector_mask_capable: bool = false,
+};
+
+pub fn summarizeMsiCapability(bus: u8, dev: u8, func: u8) ?PciMsiCapsSummary {
+    const off = findPciStandardCapabilityOffset(bus, dev, func, PciStandardCapId.msi) orelse return null;
+    const ctl = readConfigWord(bus, dev, func, @as(u16, off) + 2);
+    return .{
+        .cap_offset = off,
+        .bit64_addr = (ctl & (1 << 7)) != 0,
+        .per_vector_mask_capable = (ctl & (1 << 8)) != 0,
+    };
+}
+
+/// 当前 x86_64 配置访问路径（诊断用）：有 MCFG 且已解析则为 `ecam`，否则为传统 I/O。
+pub fn x86_64ConfigAccessKind() enum { unknown, legacy_cf8, ecam_mcfg } {
+    if (builtin.target.cpu.arch != .x86_64) return .unknown;
+    const acpi_pci = @import("../../hal/x86_64/acpi_pci_early.zig");
+    return if (acpi_pci.hasEcam()) .ecam_mcfg else .legacy_cf8;
+}
 
 /// Decoded PCI BAR (memory or I/O)
 pub const PciBarResource = struct {
@@ -542,4 +601,52 @@ pub fn init() void {
 
 pub fn isInitialized() bool {
     return driver_initialized;
+}
+
+/// PCI 能力链表：MSI（0x05）/MSI-X（0x11）配置空间偏移；无能力表或未实现时返回 `null`。
+/// Ref: PCI-SIG PCI Local Bus Specification — Capability List。
+pub fn pciCapabilityMsiMsixOffsets(bus: u8, dev: u8, func: u8) struct { msi: ?u8, msix: ?u8 } {
+    var msi: ?u8 = null;
+    var msix: ?u8 = null;
+    const st = readConfigDword(bus, dev, func, 0x04);
+    if ((st & (@as(u32, 1) << (16 + 4))) == 0)
+        return .{ .msi = msi, .msix = msix };
+    var ptr: u8 = @truncate(readConfigDword(bus, dev, func, 0x34) & 0xFF);
+    var guard: u32 = 0;
+    while (ptr != 0 and ptr != 0xFF and guard < 48) : (guard += 1) {
+        const c = readConfigDword(bus, dev, func, ptr);
+        const id = @as(u8, @truncate(c & 0xFF));
+        const next = @as(u8, @truncate((c >> 8) & 0xFF));
+        if (id == 0x05) msi = ptr;
+        if (id == 0x11) msix = ptr;
+        ptr = next;
+    }
+    return .{ .msi = msi, .msix = msix };
+}
+
+/// H1：总线 0 枚举 + `pci_driver_bind` + MSI/MSI-X 偏移诊断（单入口，供启动路径调用）。
+pub fn logPciEnumerationBindAndCapabilitiesBus0() void {
+    if (!supports_pci_config) return;
+    const max_bus: u8 = 0;
+    var b: u8 = 0;
+    while (b <= max_bus) : (b += 1) {
+        var d: u8 = 0;
+        while (d < 32) : (d += 1) {
+            var f: u8 = 0;
+            while (f < 8) : (f += 1) {
+                const id = readConfigDword(b, d, f, 0);
+                if (id == 0xFFFFFFFF) continue;
+                const vid: u16 = @truncate(id);
+                const did: u16 = @truncate(id >> 16);
+                const cls = readConfigDword(b, d, f, 0x08);
+                const bind = pci_bind.lookupFromConfigClassWord(vid, did, cls);
+                const caps = pciCapabilityMsiMsixOffsets(b, d, f);
+                const mo = caps.msi orelse 0xFF;
+                const xo = caps.msix orelse 0xFF;
+                klog.info("PCI: %u:%u.%u vid=%x did=%x bind=%s msi_off=%u msix_off=%u", .{
+                    b, d, f, vid, did, @tagName(bind), mo, xo,
+                });
+            }
+        }
+    }
 }

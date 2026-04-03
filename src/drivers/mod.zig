@@ -19,6 +19,10 @@ const klog = @import("../rtl/klog.zig");
 
 const is_x86 = (builtin.target.cpu.arch == .x86_64);
 
+comptime {
+    _ = @import("storage/block_dev_common.zig").BlockDevVTable;
+}
+
 pub const bus = if (is_x86) struct {
     pub const pcie = @import("bus/pcie.zig");
     pub const i2c = @import("bus/i2c.zig");
@@ -38,6 +42,8 @@ pub const timer = if (is_x86) struct {
 pub const storage = if (is_x86) struct {
     pub const ata = @import("storage/ata.zig");
     pub const virtio_blk_pci = @import("storage/virtio_blk_pci.zig");
+    pub const ahci = @import("storage/ahci.zig");
+    pub const nvme_pci = @import("storage/nvme_pci.zig");
 } else struct {};
 
 pub const video = struct {
@@ -81,6 +87,8 @@ pub const usb = @import("usb/usb.zig");
 
 pub const net = struct {
     pub const ndis = @import("net/ndis.zig");
+    pub const minimal_stack = @import("net/minimal_stack.zig");
+    pub const virtio_net_pci = @import("net/virtio_net_pci.zig");
 };
 
 var drivers_initialized: bool = false;
@@ -90,6 +98,7 @@ pub fn init() void {
 
     if (bus.pcie.supports_pci_config) {
         bus.pcie.init();
+        bus.pcie.logPciEnumerationBindAndCapabilitiesBus0();
         video.virtio_gpu_pci.probe();
     }
 
@@ -110,6 +119,12 @@ pub fn init() void {
     if (is_x86) {
         bus.serial_bus.init();
         storage.ata.init();
+        if (bus.pcie.supports_pci_config) {
+            storage.ahci.probeAndLog(1);
+            storage.ahci.noteVfsVolumeIntentAfterProbe(1);
+            storage.nvme_pci.probeAndLog(1);
+            net.virtio_net_pci.probeAndLog(1);
+        }
         timer.pit_timer.init();
         timer.rtc.init();
     }

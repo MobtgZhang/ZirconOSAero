@@ -25,18 +25,39 @@ pub const BoundDriver = enum(u8) {
     virtio_blk = 5,
     /// 显示类 0x03：由 vendor 再分派至 AMD/Intel/NVIDIA 探测链（非本表唯一键）
     display_class = 6,
+    /// SATA AHCI（class 0x01 / subclass 0x06 / prog-if 0x01）
+    ahci = 7,
+    /// NVM Express 控制器（0x01 / 0x08 / 0x02）
+    nvme = 8,
 };
 
 /// 标准 PCI 类（基类，偏移 0x0B 高 8 位于 header type0）。
 pub const ClassCode = struct {
+    pub const mass_storage: u8 = 0x01;
     pub const serial_bus: u8 = 0x0C;
     pub const display: u8 = 0x03;
     pub const network: u8 = 0x02;
 };
 
+pub const MassStorageSubclass = struct {
+    pub const sata_ahci: u8 = 0x06;
+    pub const nvme: u8 = 0x08;
+};
+
+pub const MassStorageProgIf = struct {
+    pub const ahci: u8 = 0x01;
+    pub const nvme: u8 = 0x02;
+};
+
 /// `class_code` = PCI 配置 class 字节；`subclass` / `prog_if` 与 `pcie.zig` 中 0x08 双字布局一致。
 /// `prog_if`: programming interface byte (e.g. xHCI = 0x30).
 pub fn lookupByClassProgIf(class_code: u8, subclass: u8, prog_if: u8) BoundDriver {
+    if (class_code == ClassCode.mass_storage and subclass == MassStorageSubclass.sata_ahci and prog_if == MassStorageProgIf.ahci) {
+        return .ahci;
+    }
+    if (class_code == ClassCode.mass_storage and subclass == MassStorageSubclass.nvme and prog_if == MassStorageProgIf.nvme) {
+        return .nvme;
+    }
     if (class_code == ClassCode.serial_bus and subclass == 0x03) {
         if (prog_if == 0x30) return .xhci;
         if (prog_if == 0x20) return .ehci;
@@ -101,4 +122,12 @@ test "pci bind config dword xhci matches pcie layout" {
     const cw: u32 = 0x0C03_3000; // rev=0, PI=30, sub=03, class=0c
     const d = lookupFromConfigClassWord(0x8086, 0x1234, cw);
     try std.testing.expect(d == .xhci);
+}
+
+test "pci bind AHCI and NVMe class triplet" {
+    // `lookupFromConfigClassWord`：rev + (prog_if<<8) + (subclass<<16) + (class<<24)
+    const ahci_dw: u32 = (@as(u32, 0x01) << 8) | (@as(u32, 0x06) << 16) | (@as(u32, 0x01) << 24);
+    try std.testing.expect(lookupFromConfigClassWord(0x8086, 0x2922, ahci_dw) == .ahci);
+    const nvme_dw: u32 = (@as(u32, 0x02) << 8) | (@as(u32, 0x08) << 16) | (@as(u32, 0x01) << 24);
+    try std.testing.expect(lookupFromConfigClassWord(0x8086, 0x2525, nvme_dw) == .nvme);
 }

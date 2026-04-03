@@ -19,6 +19,11 @@ pub fn phase() NetStackPhase {
     return .arp_udp;
 }
 
+/// H4：VirtIO-Net 已枚举时登记与 `parseIpv4Header` / ARP 子集接线的占位（环驱动就绪后填回调）。
+pub fn noteVirtioNetPciEnumerated(count: usize) void {
+    _ = count;
+}
+
 /// RFC 826 ARP 以太网帧内操作码（线上 big-endian）。
 pub const ARP_OP_REQUEST: u16 = 1;
 pub const ARP_OP_REPLY: u16 = 2;
@@ -92,6 +97,43 @@ pub const IPPROTO_ICMP: u8 = 1;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 
+/// RFC 792 ICMP 首部前 4 字节；`checksum` 为线上 big-endian。
+pub const IcmpHeader = struct {
+    icmp_type: u8,
+    code: u8,
+    checksum: u16,
+};
+
+pub const ICMP_ECHO_REPLY: u8 = 0;
+pub const ICMP_ECHO_REQUEST: u8 = 8;
+
+pub fn parseIcmpHeader(bytes: []const u8) ?IcmpHeader {
+    if (bytes.len < 4) return null;
+    return .{
+        .icmp_type = bytes[0],
+        .code = bytes[1],
+        .checksum = std.mem.readInt(u16, bytes[2..4], .big),
+    };
+}
+
+/// RFC 768 UDP 首部；端口与长度、校验和为 **big-endian** 解码后的主机值。
+pub const UdpHeader = struct {
+    src_port: u16,
+    dst_port: u16,
+    length: u16,
+    checksum: u16,
+};
+
+pub fn parseUdpHeader(bytes: []const u8) ?UdpHeader {
+    if (bytes.len < 8) return null;
+    return .{
+        .src_port = std.mem.readInt(u16, bytes[0..2], .big),
+        .dst_port = std.mem.readInt(u16, bytes[2..4], .big),
+        .length = std.mem.readInt(u16, bytes[4..6], .big),
+        .checksum = std.mem.readInt(u16, bytes[6..8], .big),
+    };
+}
+
 test "parseIpv4Header rejects IHL greater than 5 (options not implemented)" {
     var wire: [20]u8 = [_]u8{0} ** 20;
     wire[0] = 0x46; // version 4, IHL 6 — 解析器仅接受 IHL=5
@@ -129,4 +171,26 @@ test "parseIpv4Header decodes RFC791 fixed header (big-endian fields)" {
     try std.testing.expectEqual(IPPROTO_UDP, h.protocol);
     try std.testing.expectEqual(@as(u32, 0x0a000001), h.src);
     try std.testing.expectEqual(@as(u32, 0x0a000002), h.dst);
+}
+
+test "parseIcmpHeader echo request" {
+    var b: [4]u8 = undefined;
+    b[0] = ICMP_ECHO_REQUEST;
+    b[1] = 0;
+    std.mem.writeInt(u16, b[2..4], 0xABCD, .big);
+    const ic = parseIcmpHeader(&b) orelse return error.Bad;
+    try std.testing.expectEqual(ICMP_ECHO_REQUEST, ic.icmp_type);
+    try std.testing.expectEqual(@as(u16, 0xABCD), ic.checksum);
+}
+
+test "parseUdpHeader ports and length" {
+    var b: [8]u8 = undefined;
+    std.mem.writeInt(u16, b[0..2], 12345, .big);
+    std.mem.writeInt(u16, b[2..4], 53, .big);
+    std.mem.writeInt(u16, b[4..6], 16, .big);
+    std.mem.writeInt(u16, b[6..8], 0, .big);
+    const u = parseUdpHeader(&b) orelse return error.Bad;
+    try std.testing.expectEqual(@as(u16, 12345), u.src_port);
+    try std.testing.expectEqual(@as(u16, 53), u.dst_port);
+    try std.testing.expectEqual(@as(u16, 16), u.length);
 }

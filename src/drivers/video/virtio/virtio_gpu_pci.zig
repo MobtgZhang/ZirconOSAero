@@ -74,6 +74,8 @@ var gpu_attach_blob: [spec.max_attach_backing_wire_bytes]u8 align(4096) = undefi
 var device_features_low: u32 = 0;
 var virgl_feature_negotiated: bool = false;
 var virgl_ctx_alive: bool = false;
+/// `CMD_SUBMIT_3D` 空载荷至少一次得到 `RESP_OK_NODATA`（VirGL MVP；不表示可用模糊卸载）。
+var virgl_submit3d_noop_ok: bool = false;
 const virgl_gpu_ctx_id: u32 = 1;
 var scanout_multipage_backing: bool = false;
 
@@ -689,15 +691,28 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
     if (!tryGpuScratch2dValidate()) return false;
 
     virgl_ctx_alive = false;
+    virgl_submit3d_noop_ok = false;
     if (virgl_feature_negotiated) {
         var cbuf: [spec.ctx_create_req_len]u8 = undefined;
         spec.writeCtxCreate(&cbuf, virgl_gpu_ctx_id, "zircon");
         if (submitControl(&cbuf, 64)) |rt_ctx| {
             if (rt_ctx == spec.RESP_OK_NODATA) {
                 virgl_ctx_alive = true;
-                klog.info("VirtIO-GPU: CMD_CTX_CREATE ok (ctx_id=%u); SUBMIT_3D blur 仍待接線", .{virgl_gpu_ctx_id});
+                klog.info("VirtIO-GPU: CMD_CTX_CREATE ok (ctx_id=%u); attempting SUBMIT_3D MVP noop", .{virgl_gpu_ctx_id});
+                var s3d: [spec.submit_3d_hdr_len]u8 = undefined;
+                spec.writeSubmit3dHdr(&s3d, virgl_gpu_ctx_id, 0);
+                if (submitControl(&s3d, 64)) |rt_s3| {
+                    if (rt_s3 == spec.RESP_OK_NODATA) {
+                        virgl_submit3d_noop_ok = true;
+                        klog.info("VirtIO-GPU: CMD_SUBMIT_3D size=0 ok (VirGL MVP noop)", .{});
+                    } else {
+                        klog.debug("VirtIO-GPU: CMD_SUBMIT_3D size=0 rsp=0x%x (non-fatal)", .{rt_s3});
+                    }
+                } else {
+                    klog.debug("VirtIO-GPU: CMD_SUBMIT_3D noop transport skip", .{});
+                }
             } else {
-                klog.warn("VirtIO-GPU: CMD_CTX_CREATE unexpected rsp=0x{x}", .{rt_ctx});
+                klog.warn("VirtIO-GPU: CMD_CTX_CREATE unexpected rsp=0x%x", .{rt_ctx});
             }
         } else {
             klog.warn("VirtIO-GPU: CMD_CTX_CREATE timeout or transport fail (non-fatal)", .{});
@@ -721,6 +736,10 @@ pub fn virglFeatureNegotiated() bool {
 
 pub fn virglContextReady() bool {
     return virgl_ctx_alive;
+}
+
+pub fn virglSubmit3dNoopOk() bool {
+    return virgl_submit3d_noop_ok;
 }
 
 pub fn scanoutUsesMultipageBacking() bool {
@@ -749,7 +768,7 @@ pub fn syncHardwareCursorFromPresent(cursor_x: i32, cursor_y: i32) void {
     }
 }
 
-/// VirGL 上下文已就绪时尝试将盒式模糊交给 GPU；**当前**尚未发送 `SUBMIT_3D`，恒为 `false`（占位回退 CPU）。
+/// VirGL 上下文已就绪时尝试将盒式模糊交给 GPU；**不接** VirGL 命令流，`SUBMIT_3D` 仅在 bring-up 时空提交探测（`virglSubmit3dNoopOk`）；模糊仍 CPU。
 pub fn tryVirglBlurBoxDelegation(
     x: i32,
     y: i32,

@@ -33,6 +33,8 @@ pub const CMD_TRANSFER_FROM_HOST_2D: u32 = 0x0206;
 
 /// 3D / VirGL：与 Linux `uapi/linux/virtio_gpu.h` 中 `VIRTIO_GPU_CMD_CTX_CREATE` 数值一致（BSD 许可头文件，仅常量）。
 pub const CMD_CTX_CREATE: u32 = 0x0200;
+/// `VIRTIO_GPU_CMD_SUBMIT_3D`：向 `ctx_id` 提交 VirGL/Gallium 命令流（公开常量；载荷编码须 clean-room）。
+pub const CMD_SUBMIT_3D: u32 = 0x0207;
 
 /// 光标队列：`VIRTIO_GPU_CMD_MOVE_CURSOR`（仅更新位置，不提交新位图）。
 pub const CMD_MOVE_CURSOR: u32 = 0x0301;
@@ -82,6 +84,11 @@ test "set_scanout and flush wire sizes" {
 test "ctx create and move cursor wire sizes" {
     try std.testing.expectEqual(@as(usize, 96), ctx_create_req_len);
     try std.testing.expectEqual(@as(usize, 56), move_cursor_req_len);
+}
+
+test "SUBMIT_3D id and empty header length" {
+    try std.testing.expect(CMD_SUBMIT_3D != CMD_CTX_CREATE);
+    try std.testing.expectEqual(@as(usize, 28), submit_3d_hdr_len);
 }
 
 /// Wire size of `virtio_gpu_resource_create_2d` (hdr + resource_id + format + width + height).
@@ -195,6 +202,16 @@ pub const ctx_create_req_len: usize = @sizeOf(CtrlHdr) + 4 + 4 + 64;
 pub const move_cursor_req_len: usize = @sizeOf(CtrlHdr) + 16 + 4 + 4 + 4 + 4;
 
 /// Build `VIRTIO_GPU_CMD_CTX_CREATE`：`ctx_id` 写入 hdr；`debug_name` 截断至 63 字节 + NUL。
+/// `virtio_gpu_cmd_submit_3d` 固定前缀：`hdr`（`type=CMD_SUBMIT_3D`，`ctx_id` 有效）+ `__le32 size`（后续 `data` 字节数，可为 0）。
+pub const submit_3d_hdr_len: usize = @sizeOf(CtrlHdr) + 4;
+
+pub fn writeSubmit3dHdr(out: []u8, ctx_id: u32, payload_len: u32) void {
+    std.debug.assert(out.len >= submit_3d_hdr_len);
+    writeCtrlHdrType(out[0..24], CMD_SUBMIT_3D);
+    std.mem.writeInt(u32, out[16..20], ctx_id, .little);
+    std.mem.writeInt(u32, out[24..28], payload_len, .little);
+}
+
 pub fn writeCtxCreate(out: []u8, ctx_id: u32, debug_name: []const u8) void {
     std.debug.assert(out.len >= ctx_create_req_len);
     @memset(out[0..ctx_create_req_len], 0);

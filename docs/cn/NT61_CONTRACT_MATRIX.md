@@ -110,7 +110,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 
 | 主题 | 状态 | 仓库位置 / 说明 |
 |------|------|------------------|
-| ACPI RSDP（Multiboot2 tag 14/15）→ XSDT/RSDT → MCFG | 部分 | `src/boot/multiboot2_parse.zig`、`src/hal/x86_64/acpi_pci_early.zig`；无 AML 解释器 |
+| ACPI RSDP（Multiboot2 tag 14/15）→ XSDT/RSDT → MCFG/FACP/HPET/MADT | 部分 | `acpi_core.zig`（RSDP/表头校验和、分发）、`acpi_pci_early.zig`（ECAM）、`acpi_tables_parse.zig`（主机黄金测）；DSDT 指针仅记录；无 AML 解释器 |
 | PCIe ECAM MMIO `configRead32` | 部分 | 同上；启动时探测总线 0 设备 0 |
 | USB XHCI / HID | 未 | 路线图：[HAL_USB_NET_ROADMAP.md](HAL_USB_NET_ROADMAP.md) |
 | IPv4 / ARP / UDP 原型 | 部分 | `minimal_stack.zig`：IPv4 固定头 + ARP 首部 8 字节解析；收发与 TCP 仍为路线图 |
@@ -311,8 +311,9 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 |------|----------|-------------|
 | x86（32 位）原生服务号 **公开子集**（与 x64 表不同号） | **Partial** — 对照 j00ru `x86/json/nt-per-system.json` Win7 SP1 | [`ssdt_x86_win7_sp1.zig`](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)；主机测试 **wow64_ssdt_x86**、**ssdt_x64_x86_namespace**；[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
 | 64 位内核 SSDT 子集 | **Partial** | [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)；与 x86 同名 API 对照见 [`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig) |
-| `translateSyscall32to64` | **Partial** — 对 `ssdt_x86_win7_sp1.wow64SyscallStubReturnsSuccess` 所列 **Win7 SP1 x86 公开服务号** 返回演示成功（含阶段 4 增补 **`NtConnectPort`（59 / 0x3B）**、**`NtRequestWaitReplyPort`（299 / 0x12B）** — csrss/LPC 族）；**G2** 写入 `Wow64Process.last_x64_ssdt_alias`（`x64_semantic_alias`）；完整参数封送与 x64 派发仍非 SysWOW64 | [`wow64/thunk.zig`](../../src/subsystems/win32/wow64/thunk.zig)、[`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig)、[SyscallABI.md](SyscallABI.md)、**phase4_host_anchors**、[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
-| 32 位 PEB / TEB 布局 | **Partial** — `PEB32` / `TEB32` 结构与部分字段填充；非完整 NT 6.1 用户态布局验证 | [`wow64/types.zig`](../../src/subsystems/win32/wow64/types.zig) |
+| `translateSyscall32to64` / `WithArgs` | **Partial** — stub 列表 + `last_x64_ssdt_alias`；`marshal.zig` 另覆盖 `NtAllocateVirtualMemory` / `NtFreeVirtualMemory` / `NtDuplicateObject`（x86 **0x39**）/ `NtReadFile` / `NtWriteFile`（用户 `IO_STATUS_BLOCK` 回写）；`userVaFromWow64Ptr32` 与 `thunk` 导出对齐；x86 **win32k**（`≥0x1000`）仍 `STATUS_NOT_IMPLEMENTED`；`NtTerminateThread` x64 索引 ZOA **0x55** 注释见 `ssdt_nt61` | [`wow64/thunk.zig`](../../src/subsystems/win32/wow64/thunk.zig)、[`marshal.zig`](../../src/subsystems/win32/wow64/marshal.zig)、[`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig)、`syscall.zig`、[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
+| 32 位 PEB / TEB 布局 | **Partial** — `PEB32`/`TEB32` 为 `extern` 子集 + comptime 偏移测试；演示 VA 与 `ProcessWow64Information`；用户页真实映射仍依阶段 F | [`wow64/types.zig`](../../src/subsystems/win32/wow64/types.zig)、[`ps/process.zig`](../../src/ps/process.zig)、[`ntdll.zig`](../../src/libs/ntdll.zig) |
+| 文件 / 注册表重定向 | **Partial** — UTF-16LE `System32`→`SysWOW64`（`ntdll` `NtCreateFile`/`NtOpenFile`）；`\Registry\Machine\SOFTWARE\`→`Wow6432Node`（`syscall` `NtOpenKey`/`NtCreateKey`）；**反重定向**（system32 下 native 工具）等为后续项 | [`wow64/redirect.zig`](../../src/subsystems/win32/wow64/redirect.zig)、[`registry/registry.zig`](../../src/registry/registry.zig) |
 | 地址空间隔离 | **Partial** — WOW64 进程模型与栈/堆基址为简化演示 | `wow64.zig` |
 | `dwmapi` PE32 结构 / HWND 扩展 | **Partial** — `DWM_BLURBEHIND32` 等 ILP32 布局与 `hwnd32ToNative`；完整 thunk 表仍为路线图 | [`dwmapi_wow64.zig`](../../src/subsystems/win32/dwmapi_wow64.zig)；**dwmapi_wow64_host** |
 

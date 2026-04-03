@@ -8,10 +8,11 @@
 |--------|------|
 | 完整 WDDM / GPU 离屏合成 | 当前为 CPU 帧缓冲与软件合成演示路径；不声称与 Windows 7 显示驱动模型等价；可选里程碑见 `virtio_gpu` / `HAL_USB_NET_ROADMAP.md` 中的显示加速条目。 |
 | 完整 Win32 / user32 / gdi32 | 子系统与壳在 `src/subsystems/win32/`、`src/desktop/aero/`；在内核对象与 VM 语义收紧后扩展。 |
-| 完整 WOW64 | 32→64 服务表与 SysWOW64 对齐为长期项；见 `wow64/` 与 `ssdt_nt61.zig`。 |
+| 完整 WOW64 / `wow64cpu` 类语义 | 阶段 G 已落地 **可测子集**（thunk、`marshal`、UTF-16 文件与 HKLM\SOFTWARE 重定向、`ProcessWow64Information`、ZOA 槽 `NtTerminateThread`）；**仍延后**：x86 用户态指令级仿真与 SEH32、商业 `ntdll32` 加载、**HKCR/HKCU** 等逻辑视图的完整镜像、`NtEnumerateKey`/`NtQueryValueKey` 相对 **OpenKey** 的额外重解析策略、与商业 SysWOW64 **逐 API 全量等价**。见 `wow64/`、`ssdt_nt61.zig`、`PHASE_G_WOW64.md`。 |
 | NT 32 级优先级与完整 boost | 调度器为文档语义的近似；见 [SCHEDULER_API.md](SCHEDULER_API.md)。 |
 | 完整 TCP / 生产级网络栈 | IPv4/UDP 等为路线图原型；见 [HAL_USB_NET_ROADMAP.md](HAL_USB_NET_ROADMAP.md)。 |
 | ACPI AML 解释器 | 无 AML 时依赖静态表与 QEMU 路径；引入 AML 须单独里程碑与审计。 |
+| ACPI S1–S4、`_PTS`/`_WAK`、嵌入式控制器（EC）全量睡眠 | **I10**：关机/复位可走 FADT 固定寄存器子集；**深度睡眠与 AML 状态机**与本里程碑解耦，不阻塞 I7/I8。 |
 
 ## 跨进程 HWND 与共享表面（非当前目标）
 

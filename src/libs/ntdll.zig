@@ -1,6 +1,12 @@
 //! ntdll - Native API Runtime Library
 //! Phase 8 Enhanced: Complete Native API set with file/memory/section/sync APIs,
 //! system information queries, RTL utilities, and debug support.
+//!
+//! ## NT 6.1 x86_64 系统调用约定（里程碑）
+//! - 用户态经 `syscall` 进入内核时，内核入口由 `LSTAR`（等效）指向 syscall 分派；`STAR`/`SFMASK` 与 `syscall` 指令语义见 Intel SDM。
+//! - 编号与参数寄存器约定与 Windows NT 6.1 x64 一致（公开 ABI）；具体数值见本仓库 `syscall_numbers*` / `ssdt` 测试锚点。
+//! - 完整 PE 进程上下文需与 `Process.peb_address` / `image_base_address` 及 `sdk/pe64_nt61.zig` 映射闭环衔接（后续里程碑）。
+//! Reference: https://learn.microsoft.com/en-us/cpp/build/overview-of-x64-calling-conventions
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -17,6 +23,7 @@ const token = @import("../se/token.zig");
 const section_mm = @import("../mm/section.zig");
 const probe = @import("../mm/probe.zig");
 const scheduler = @import("../ke/scheduler.zig");
+const wait_mod = @import("../ke/wait.zig");
 
 pub const NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
@@ -37,6 +44,8 @@ pub const STATUS_TIMEOUT: NTSTATUS = 258;
 pub const STATUS_WAIT_0: NTSTATUS = 0;
 pub const STATUS_ABANDONED_WAIT_0: NTSTATUS = 128;
 pub const STATUS_ALERTED: NTSTATUS = 257;
+/// `STATUS_USER_APC`（0xC0000012）— 可告警等待见挂起用户 APC。
+pub const STATUS_USER_APC: NTSTATUS = @bitCast(@as(u32, 0xC0000012));
 pub const STATUS_INFO_LENGTH_MISMATCH: NTSTATUS = -1073741820;
 /// 0xC0000003 — invalid `SYSTEM_INFORMATION_CLASS` / info class.
 pub const STATUS_INVALID_INFO_CLASS: NTSTATUS = -1073741821;
@@ -698,7 +707,6 @@ fn timeout100nsToExtraTicks(v_100ns: u64) u64 {
 }
 
 pub fn NtWaitForSingleObject(handle: HANDLE, alertable: bool, timeout: ?*const i64) NTSTATUS {
-    _ = alertable;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const asp = proc.address_space orelse return STATUS_INVALID_HANDLE;
 
@@ -726,20 +734,52 @@ pub fn NtWaitForSingleObject(handle: HANDLE, alertable: bool, timeout: ?*const i
                 // 正数：绝对到期时间（NT `LARGE_INTEGER`）；本阶段未接单调时钟绝对域，按无限等待处理。
                 break :blk null;
             };
-            while (true) {
-                if (hdr.signal_state) return STATUS_WAIT_0;
-                if (deadline) |d| {
-                    if (scheduler.getTicks() >= d) return STATUS_TIMEOUT;
-                }
-                scheduler.yield();
-            }
+            return wait_mod.keWaitForSingleObject(hdr, alertable, deadline);
         },
         else => return STATUS_WAIT_0,
     }
 }
 
-pub fn NtWaitForMultipleObjects(_: u32, _: []const HANDLE, _: u32, _: bool, _: ?*const i64) NTSTATUS {
-    return STATUS_WAIT_0;
+/// `wait_type`：`0` = WaitAny（已实现）；`WaitAll` 等为后续里程碑。
+pub fn NtWaitForMultipleObjects(count: u32, handles: []const HANDLE, wait_type: u32, alertable: bool, timeout: ?*const i64) NTSTATUS {
+    if (wait_type != 0) return STATUS_NOT_IMPLEMENTED;
+    if (count == 0 or count > 64) return STATUS_INVALID_PARAMETER;
+    if (handles.len < count) return STATUS_INVALID_PARAMETER;
+
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const asp = proc.address_space orelse return STATUS_INVALID_HANDLE;
+
+    var timeout_val: ?i64 = null;
+    if (timeout) |tp| {
+        const tva = @intFromPtr(tp);
+        if (!probe.probeUserMemory(asp, tva, @sizeOf(i64), false)) return STATUS_ACCESS_VIOLATION;
+        timeout_val = @as(*const volatile i64, @ptrFromInt(tva)).*;
+    }
+
+    var hdr_buf: [64]*ob.ObjectHeader = undefined;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const h: ob.Handle = @truncate(handles[i]);
+        const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+        switch (ent.obj_type) {
+            .event, .mutex, .semaphore => {
+                hdr_buf[i] = @ptrFromInt(ent.object_ptr);
+            },
+            else => return STATUS_INVALID_PARAMETER,
+        }
+    }
+
+    const now0 = scheduler.getTicks();
+    const deadline: ?u64 = blk: {
+        const tv = timeout_val orelse break :blk null;
+        if (tv == 0) break :blk now0;
+        if (tv < 0) {
+            const rel = @as(u64, @intCast(-tv));
+            break :blk now0 + timeout100nsToExtraTicks(rel);
+        }
+        break :blk null;
+    };
+    return wait_mod.keWaitForMultipleObjectsWaitAny(hdr_buf[0..count], alertable, deadline);
 }
 
 // ── Section (Memory-mapped) APIs ──

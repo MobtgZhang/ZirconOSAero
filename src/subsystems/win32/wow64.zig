@@ -8,6 +8,7 @@
 //! 模块化：`wow64/types.zig`、`wow64/thunk.zig`、`wow64/redirect.zig`。
 //! **x86 原生服务号**（公开 Win7 SP1 表）：`wow64/ssdt_x86_win7_sp1.zig`（j00ru `nt-per-system.json`）。
 //! **路线图**：将 thunk 与 x64 `ssdt_nt61` / `syscall_dispatch_mm.zig` 语义逐条对齐（SSDT_Roadmap 阶段 3）。
+//! **阶段五（路线图 content7.4）**：完整 SysWOW64 / `wow64cpu` 类语义为长期项；回归见 `zig build test`（`wow64_ssdt_x86`、`dwmapi_wow64_host` 等）。
 
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");

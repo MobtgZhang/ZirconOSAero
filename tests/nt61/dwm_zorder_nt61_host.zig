@@ -79,3 +79,12 @@ test "HWND_NOTOPMOST Learn no-op when window not topmost" {
     try std.testing.expect(!notopmostShouldReorderZ(false));
     try std.testing.expect(notopmostShouldReorderZ(true));
 }
+
+test "Flip3D shell tab index wraps modulo n_shell" {
+    const n_shell: u32 = 3;
+    var tab: u32 = 0;
+    tab +%= 1;
+    try std.testing.expectEqual(@as(u32, 1), tab % n_shell);
+    tab = 5;
+    try std.testing.expectEqual(@as(u32, 2), tab % n_shell);
+}

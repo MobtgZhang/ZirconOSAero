@@ -158,7 +158,7 @@ def test_key_symbols(symbols, result):
 
     optional = ['_start64', 'boot_pml4', 'boot_pdpt', 'boot_pd',
                 'boot_gdt', 'boot_gdt_desc', 'load_gdt_flush', 'load_tss_reg',
-                'multiboot2_header', 'multiboot2_header_end']
+                'multiboot2_header', 'multiboot2_header_end', '_kernel_end']
     for sym in optional:
         if sym in symbols:
             result.ok(f"Symbol '{sym}' at 0x{symbols[sym]['value']:x}")

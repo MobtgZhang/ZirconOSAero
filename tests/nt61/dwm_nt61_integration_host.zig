@@ -8,8 +8,10 @@ const std = @import("std");
 const dwm_registry_sync = @import("dwm_config_registry_sync");
 const dwm_blur_budget = @import("dwm_blur_budget");
 const dnc = @import("dwm_nt61_api_contract");
+const wddm = @import("wddm_abstraction");
 
 const WM_DWMSENDICONICTHUMBNAIL: u32 = 0x0323;
+const WM_DWMSENDICONICLIVEPREVIEWBITMAP: u32 = 0x0326;
 
 test "compositor z-order stride matches user32 syncCompositorZOrderForUserWindows" {
     // user32.zig: var zi: i16 = 10; per valid window with surface: setSurfaceZOrder(..., zi); zi += 10;
@@ -25,6 +27,19 @@ test "destroySurface visibility model (spec: visible=false)" {
     var visible: bool = true;
     visible = false; // dwm_compositor.destroySurface sets surfaces[id].visible = false
     try std.testing.expect(!visible);
+}
+
+test "WM_DWMSENDICONICLIVEPREVIEWBITMAP id and same lParam packing as iconic thumbnail" {
+    try std.testing.expectEqual(@as(u32, 0x0326), WM_DWMSENDICONICLIVEPREVIEWBITMAP);
+    const lp = dnc.iconicSizeRequestLParam(20, 15);
+    const packed32: u32 = @bitCast(@as(i32, @truncate(lp)));
+    try std.testing.expectEqual(@as(u32, 20), packed32 & 0xFFFF);
+    try std.testing.expectEqual(@as(u32, 15), (packed32 >> 16) & 0xFFFF);
+}
+
+test "classifyVirtioRuntimePhase submit3d noop ranks above ctx-only" {
+    try std.testing.expectEqual(wddm.WddmRuntimePhase.virgl_submit3d_noop_ok, wddm.classifyVirtioRuntimePhase(false, false, true, true));
+    try std.testing.expectEqual(wddm.WddmRuntimePhase.virgl_context_up, wddm.classifyVirtioRuntimePhase(false, false, true, false));
 }
 
 test "WM_DWMSENDICONICTHUMBNAIL lParam MAKELPARAM-style width height" {

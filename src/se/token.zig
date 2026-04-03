@@ -114,6 +114,23 @@ pub fn seAccessCheckMask(tok: *const Token, desired: ob.ACCESS_MASK, object_gran
     return (object_grants & desired) == desired;
 }
 
+/// 无 DACL（`dacl_present == false`）时，有效允许掩码视为「全开」子集（与公开文档中 Null DACL / 无 SACL 行为 **概念** 对齐的占位，非完整 `SeAccessCheck`）。
+pub fn effectiveGrantsFromDaclPresent(dacl_present: bool, aggregated_allow: ob.ACCESS_MASK) ob.ACCESS_MASK {
+    if (!dacl_present) return 0xFFFF_FFFF;
+    return aggregated_allow;
+}
+
+/// K6.3：`aggregated_allow` 为对象侧 DACL 聚合出的允许位（简化单 DWORD）；与 `seAccessCheckMask` 组合。
+pub fn seAccessCheckWithDacl(
+    tok: *const Token,
+    desired: ob.ACCESS_MASK,
+    dacl_present: bool,
+    aggregated_allow: ob.ACCESS_MASK,
+) bool {
+    const grants = effectiveGrantsFromDaclPresent(dacl_present, aggregated_allow);
+    return seAccessCheckMask(tok, desired, grants);
+}
+
 /// K6.3 子集：进程绑定桌面与**活动桌面**不一致时拒绝对话级 GUI（与 csrss `handleApiCall` 门闸一致）。
 /// 系统 SID 或 **已提升且含 TCB** 的令牌可跨桌面（服务路径占位；完整 DACL 见路线图）。
 /// Ref: https://learn.microsoft.com/windows/win32/winstation/window-stations-and-desktops

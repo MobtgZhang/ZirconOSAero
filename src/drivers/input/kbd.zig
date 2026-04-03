@@ -26,38 +26,38 @@ var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;
 
-fn kbdDispatch(irp: *io.Irp) io.IoStatus {
+fn kbdDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => {
             switch (irp.ioctl_code) {
                 IOCTL_KBD_READ_CHAR => {
                     if (hal_kbd.readChar()) |ch| {
                         irp.buffer_ptr = ch;
-                        irp.complete(.success, 1);
+                        irp.complete(io.STATUS_SUCCESS, 1);
                     } else {
                         irp.buffer_ptr = 0;
-                        irp.complete(.end_of_file, 0);
+                        irp.complete(io.STATUS_END_OF_FILE, 0);
                     }
-                    return .success;
+                    return io.STATUS_SUCCESS;
                 },
                 IOCTL_KBD_QUERY_DATA => {
                     irp.buffer_ptr = if (hal_kbd.hasData()) @as(u64, 1) else 0;
-                    irp.complete(.success, @sizeOf(u8));
-                    return .success;
+                    irp.complete(io.STATUS_SUCCESS, @sizeOf(u8));
+                    return io.STATUS_SUCCESS;
                 },
                 else => {
-                    irp.complete(.not_implemented, 0);
-                    return .not_implemented;
+                    irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                    return io.STATUS_NOT_IMPLEMENTED;
                 },
             }
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

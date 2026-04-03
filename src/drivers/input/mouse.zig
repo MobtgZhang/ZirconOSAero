@@ -536,31 +536,31 @@ pub fn isRightPressed() bool {
     return mouse_state.right_pressed;
 }
 
-fn mouseDispatch(irp: *io.Irp) io.IoStatus {
+fn mouseDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => return handleIoctl(irp),
         .read => {
             if (popEvent()) |event| {
                 irp.buffer_ptr = @as(u64, @intCast(@as(u32, @bitCast([2]u16{ @bitCast(event.dx), @bitCast(event.dy) }))));
                 irp.bytes_transferred = @intCast(event.buttons);
-                irp.complete(.success, 1);
+                irp.complete(io.STATUS_SUCCESS, 1);
             } else {
-                irp.complete(.success, 0);
+                irp.complete(io.STATUS_SUCCESS, 0);
             }
-            return .success;
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
 
-fn handleIoctl(irp: *io.Irp) io.IoStatus {
+fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
     switch (irp.ioctl_code) {
         IOCTL_MOUSE_GET_STATE => {
             irp.buffer_ptr = @bitCast([2]u32{
@@ -568,15 +568,15 @@ fn handleIoctl(irp: *io.Irp) io.IoStatus {
                 @bitCast(mouse_state.y),
             });
             irp.bytes_transferred = mouse_state.buttons;
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_MOUSE_SET_BOUNDS => {
             const w: i32 = @intCast(@as(u32, @truncate(irp.buffer_ptr & 0xFFFF)));
             const h: i32 = @intCast(@as(u32, @truncate((irp.buffer_ptr >> 16) & 0xFFFF)));
             setScreenBounds(w, h);
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_MOUSE_RESET => {
             const sw = mouse_state.screen_width;
@@ -591,12 +591,12 @@ fn handleIoctl(irp: *io.Irp) io.IoStatus {
             mouse_state.y = @divTrunc(sh, 2);
             mouse_state.raw_x = mouse_state.x;
             mouse_state.raw_y = mouse_state.y;
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

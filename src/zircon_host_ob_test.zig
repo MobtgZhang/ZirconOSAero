@@ -9,6 +9,11 @@
 const std = @import("std");
 const ob = @import("ob/object.zig");
 
+var g_section_cleanup_test_ptr: u64 = 0;
+fn sectionCleanupTestHook(p: u64) void {
+    g_section_cleanup_test_ptr = p;
+}
+
 test "handle table alloc increments ref_count and handle_count" {
     var hdr = ob.ObjectHeader{ .obj_type = .event, .ref_count = 1 };
     var table = ob.HandleTable.init(1);
@@ -49,6 +54,22 @@ test "normalizeNtObjectPathResolveSymlinks follows up to 8 symlink hops" {
     try std.testing.expectEqualStrings("\\Devices\\Final", ob.normalizeNtObjectPathResolveSymlinks("\\HopA"));
 }
 
+test "section last reference invokes cleanup hook" {
+    const hooks = @import("ob/cleanup_hooks.zig");
+    g_section_cleanup_test_ptr = 0;
+    hooks.section_last_reference = sectionCleanupTestHook;
+    defer hooks.section_last_reference = null;
+
+    var hdr = ob.ObjectHeader{ .obj_type = .section, .ref_count = 0, .handle_count = 0 };
+    var table = ob.HandleTable.init(1);
+    const ptr: u64 = @intFromPtr(&hdr);
+    const h = table.allocHandle(ptr, ob.GENERIC_ALL, .section) orelse return error.AllocHandle;
+    try std.testing.expectEqual(@as(u32, 1), hdr.ref_count);
+    try std.testing.expectEqual(@as(u64, 0), g_section_cleanup_test_ptr);
+    try std.testing.expect(table.closeHandle(h));
+    try std.testing.expectEqual(ptr, g_section_cleanup_test_ptr);
+}
+
 test "handle table lookup and checkAccess" {
     var table = ob.HandleTable.init(99);
     var hdr = ob.ObjectHeader{ .obj_type = .mutex, .ref_count = 0, .handle_count = 0 };
@@ -59,4 +80,28 @@ test "handle table lookup and checkAccess" {
     try std.testing.expect(table.checkAccess(h, ob.GENERIC_READ));
     try std.testing.expect(!table.checkAccess(h, 0x0000_0001)); // P4-B3：未授予的访问位须失败
     try std.testing.expect(table.closeHandle(h));
+}
+
+test "ObjectHeader wait list FIFO append and idempotent remove" {
+    var hdr = ob.ObjectHeader{ .obj_type = .event };
+    var e0: ob.WaitEntry = .{ .thread_index = 10, .hdr = &hdr };
+    var e1: ob.WaitEntry = .{ .thread_index = 20, .hdr = &hdr };
+    var e2: ob.WaitEntry = .{ .thread_index = 30, .hdr = &hdr };
+
+    ob.waitListAppend(&hdr, &e0);
+    ob.waitListAppend(&hdr, &e1);
+    ob.waitListAppend(&hdr, &e2);
+    try std.testing.expect(hdr.wait_list_head == &e0);
+    try std.testing.expect(hdr.wait_list_tail == &e2);
+
+    ob.waitListRemove(&e1);
+    try std.testing.expect(e0.next == &e2);
+    try std.testing.expect(e2.prev == &e0);
+    ob.waitListRemove(&e1); // 幂等
+    try std.testing.expect(e0.next == &e2);
+
+    ob.waitListRemove(&e0);
+    ob.waitListRemove(&e2);
+    try std.testing.expect(hdr.wait_list_head == null);
+    try std.testing.expect(hdr.wait_list_tail == null);
 }

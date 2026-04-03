@@ -212,6 +212,7 @@ pub fn createSystemProcess(frame_alloc: *FrameAllocator, name: []const u8) ?*Pro
 
 pub fn terminateProcess(pid: u32, exit_code: u32) bool {
     const p = findProcess(pid) orelse return false;
+    // K2.1：须先终止/切离仍关联该 EPROCESS 的线程，避免 `releaseProcessAddressSpace` 时其他核仍 CR3=受害进程。
     if (before_release_process_address_space) |hook| {
         hook(pid);
     }

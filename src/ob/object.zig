@@ -267,6 +267,9 @@ pub const NamespaceEntry = struct {
     obj_type: ObjectType = .directory,
     object_ptr: u64 = 0,
     parent_idx: u32 = 0,
+    /// `obj_type == .symbolic_link` 时有效：目标路径（UTF-8 字节，非以 NUL 结尾的 C 串）。
+    link_target: [64]u8 = [_]u8{0} ** 64,
+    link_target_len: usize = 0,
 };
 
 var namespace: [MAX_NAMESPACE_ENTRIES]NamespaceEntry = [_]NamespaceEntry{.{}} ** MAX_NAMESPACE_ENTRIES;
@@ -320,6 +323,23 @@ pub fn insertNamespace(name: []const u8, obj_type: ObjectType, object_ptr: u64, 
     entry.obj_type = obj_type;
     entry.object_ptr = object_ptr;
     entry.parent_idx = parent;
+    namespace_count += 1;
+    return true;
+}
+
+/// 在对象命名空间中登记 **单层** 符号链接（K6.1 子集）；`target` 为规范化后的内部路径片段。
+pub fn insertSymbolicLink(name: []const u8, target: []const u8, parent: u32) bool {
+    if (namespace_count >= MAX_NAMESPACE_ENTRIES) return false;
+    if (name.len == 0 or target.len == 0) return false;
+    if (name.len > 64 or target.len > 64) return false;
+    var entry = &namespace[namespace_count];
+    entry.* = .{};
+    @memcpy(entry.name[0..name.len], name);
+    entry.name_len = name.len;
+    entry.obj_type = .symbolic_link;
+    entry.parent_idx = parent;
+    @memcpy(entry.link_target[0..target.len], target);
+    entry.link_target_len = target.len;
     namespace_count += 1;
     return true;
 }
@@ -405,7 +425,15 @@ pub fn normalizeNtObjectPath(path: []const u8) []const u8 {
     return p;
 }
 
-/// 符号链接多跳解析为路线图项（Phase P4-A2）；当前与 `normalizeNtObjectPath` 等价。
+/// 剥前缀后沿已登记符号链接解析，**最多 8 跳**（与常见 `MAX_SYMLINKS` 级策略同阶；防环靠跳数上限）。
 pub fn normalizeNtObjectPathResolveSymlinks(path: []const u8) []const u8 {
-    return normalizeNtObjectPath(path);
+    var current = normalizeNtObjectPath(path);
+    var hop: u32 = 0;
+    const max_symlink_hops = 8;
+    while (hop < max_symlink_hops) : (hop += 1) {
+        const e = lookupNamespace(current) orelse break;
+        if (e.obj_type != .symbolic_link or e.link_target_len == 0) break;
+        current = normalizeNtObjectPath(e.link_target[0..e.link_target_len]);
+    }
+    return current;
 }

@@ -14,7 +14,7 @@ const klog = @import("../../rtl/klog.zig");
 
 pub const decodeGcapId = hpet_id.decodeGcapId;
 
-/// 常见 ACPI HPET MMIO 物理基址（若固件未映射则由 `vm.mapDeviceMmioIdentity` 接入）。
+/// 常见 ACPI HPET MMIO 物理基址（**ACPI HPET 表**解析优先策略见 `acpi_pci_early` / `timekeeping.zig` 注释；此处为 IA-PC 约定回退）。
 pub const HPET_MMIO_PHYS_BASE: u64 = 0xFED0_0000;
 
 /// MMIO 中 Main Counter 寄存器偏移（64 位）。
@@ -25,9 +25,22 @@ pub var hpet_usable: bool = false;
 /// 由 GCAP_ID 高半部推算的计数器频率（Hz）；`period_fs==0` 时按规范假定为 10MHz。
 pub var hpet_counter_hz_approx: u64 = 0;
 
+/// 由 **ACPI HPET 表** GAS 解析得到时写入；否则为 `HPET_MMIO_PHYS_BASE`（I4：表优先、常量回退）。
+var g_mmio_phys_base: u64 = HPET_MMIO_PHYS_BASE;
+
+pub fn setMmioPhysBase(phys: u64) void {
+    if (phys != 0) g_mmio_phys_base = phys;
+}
+
+pub fn activeMmioPhysBase() u64 {
+    return g_mmio_phys_base;
+}
+
+// I5（可选增强）：将 HPET 比较器经 IOAPIC 固定向量接到调度 tick — 与 `ioapic_route.zig` 协同；当前仍 **仅** 读主计数器。
+
 fn readMmioU64(phys_off: u64) u64 {
-    // SAFETY: `phys_off` 为 HPET 规范固定偏移；调用前须已 identity 映射 `HPET_MMIO_PHYS_BASE` 所在页（见 `main.zig`）。
-    const p = HPET_MMIO_PHYS_BASE + phys_off;
+    // SAFETY: `phys_off` 为 HPET 规范固定偏移；调用前须已 identity 映射 `g_mmio_phys_base` 所在页（见 `main.zig`）。
+    const p = g_mmio_phys_base + phys_off;
     return @as(*const volatile u64, @ptrFromInt(p)).*;
 }
 

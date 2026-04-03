@@ -8,9 +8,9 @@
 // Reference: PCI Express Base Specification — Enhanced Configuration Access Mechanism; ACPI MCFG.
 
 /// 段内总线号 `bus_within_segment` 须已减去 MCFG 条目的 `StartBusNumber`（与 `acpi_pci_early.configRead32` 一致）。
-/// `register` 为 PCI 配置空间字节偏移；返回值为相对 ECAM 物理基址的字节偏移（dword 对齐）。
-pub fn pciConfigDwordOffset(bus_within_segment: u8, device: u8, function: u8, register: u8) u64 {
-    const r = register & 0xfc;
+/// `register` 为 PCI 配置空间字节偏移（PCIe 每功能至多 4KiB，见 ECAM 规范）；返回值为相对 ECAM 物理基址的字节偏移（dword 对齐）。
+pub fn pciConfigDwordOffset(bus_within_segment: u8, device: u8, function: u8, register: u16) u64 {
+    const r = register & 0xFFC;
     return (@as(u64, bus_within_segment) << 20) |
         (@as(u64, device & 0x1f) << 15) |
         (@as(u64, function & 7) << 12) |

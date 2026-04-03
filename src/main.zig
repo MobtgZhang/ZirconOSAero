@@ -50,6 +50,8 @@ comptime {
     _ = @import("mm/pool.zig");
     _ = @import("mm/section.zig");
     _ = @import("ke/apc.zig");
+    _ = @import("ke/wait.zig");
+    _ = @import("ke/apc_object.zig");
     _ = @import("ke/roadmap_hooks.zig");
     _ = @import("mm/slab.zig");
     _ = @import("mm/phys_buddy.zig");
@@ -60,9 +62,13 @@ comptime {
     _ = @import("ke/irql.zig");
     _ = @import("ke/spinlock.zig");
     _ = @import("ke/percpu_sched.zig");
+    _ = @import("servers/csrss_skeleton.zig");
+    _ = @import("lpc/alpc_min.zig");
+    _ = @import("loader/seh_pdata_min.zig");
     if (builtin.cpu.arch == .x86_64) {
         _ = @import("hal/x86_64/ap_entry.zig");
         _ = @import("hal/x86_64/tlb_broadcast.zig");
+        _ = @import("hal/x86_64/ioapic_route.zig");
     }
 }
 
@@ -170,8 +176,15 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     klog.info("x86_64: SMAP available via mitigations.enableSmapIfAvailable() after user-page access audit (stac/clac)", .{});
 
     const stack_top_addr = @intFromPtr(&stack_top);
-    const kernel_end = ((stack_top_addr + (4 * 1024 * 1024) - 1) / (4 * 1024 * 1024)) * (4 * 1024 * 1024);
-    klog.info("Kernel end estimated: 0x%x (stack_top=0x%x)", .{ kernel_end, stack_top_addr });
+    // `stack_top` 在 start.s 的 .bss 前段；大块 Zig BSS（如 FrameAllocator）可在其后。必须用链接脚本
+    // `_kernel_end`（与 startGeneric 非 LoongArch 路径一致），否则 PFN 种子会把仍在使用的内核页标为空闲 → Phase3 memset 破坏映像。
+    const linker_end_excl = @intFromPtr(&_kernel_end);
+    const kernel_end = std.mem.alignForward(usize, linker_end_excl, paging.page_size);
+    klog.info("Kernel image end: _kernel_end exclusive=0x%x stack_top=0x%x PFN reserve below 0x%x", .{
+        linker_end_excl,
+        stack_top_addr,
+        kernel_end,
+    });
     const boot_info = boot.parse(magic, info_addr);
 
     // Save framebuffer info for later use; do NOT enable the framebuffer
@@ -197,8 +210,30 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     }
 
     frame.initGlobalKernelFrames(boot_info, kernel_end);
-    klog.info("Frame allocator: total_frames=%u, frame_size=%u", .{
-        frame.kernelFrameAllocatorPtr().total_frames, frame.FRAME_SIZE,
+    {
+        const fa = frame.kernelFrameAllocatorPtr();
+        if (fa.fb_reserve_end_exclusive > fa.fb_reserve_start) {
+            klog.info("Frame: GOP framebuffer excluded from PFN allocator GPA 0x%x-0x%x", .{
+                fa.fb_reserve_start,
+                fa.fb_reserve_end_exclusive,
+            });
+        } else if (boot_info) |bi| {
+            if (bi.fb_info) |fbi| {
+                klog.info("Frame: no linear GOP excluded from PFN (fb_type=%u addr=0x%x); hole punch uses mmap non-RAM only", .{
+                    fbi.fb_type,
+                    @as(usize, @truncate(fbi.addr)),
+                });
+            } else {
+                klog.info("Frame: no framebuffer tag in boot info; PFN hole punch uses mmap non-RAM only", .{});
+            }
+        } else {
+            klog.info("Frame: no boot info; PFN reserves may be incomplete", .{});
+        }
+    }
+    klog.info("Frame allocator: total_frames=%u, frame_size=%u phys_track_gb=%u (QEMU -m should be ≤ this GiB span)", .{
+        frame.kernelFrameAllocatorPtr().total_frames,
+        frame.FRAME_SIZE,
+        @import("build_options").phys_track_gb,
     });
 
     // Parse boot mode and desktop theme from multiboot2 command line.
@@ -224,6 +259,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     klog.info("--- Phase 2: Trap / Timer / Scheduler ---", .{});
 
     scheduler.init();
+    @import("ke/apc.zig").init();
 
     if (@import("build_options").enable_idt) {
         const idt = @import("arch/x86_64/idt.zig");
@@ -248,22 +284,45 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     // ═══ Phase 3: VM + Page Tables ═══
     klog.info("--- Phase 3: VM + Page Tables ---", .{});
 
-    var kernel_space = vm.createAddressSpace(frame.kernelFrameAllocatorPtr()) orelse {
-        klog.err("Failed to create kernel address space", .{});
-        arch.halt();
+    const panic_ctx_vm = @import("rtl/panic_context.zig");
+    panic_ctx_vm.setPhase(0x0003_0005);
+    if (builtin.cpu.arch == .x86_64) {
+        // 自有 CR3 生效前，`allocFrameCb`→`memsetPhysicalPage` 依赖固件恒等映射；页表帧须取自低 GPA。
+        vm.setPagingAllocPhysCeilingExclusive(512 * 1024 * 1024);
+    }
+    var kernel_space = blk: {
+        // Phase 2 可能已开中断；首帧 PML4 的 allocZeroed/memset 与 tick 交错曾导致串口乱流，此处短暂关中断。
+        const irq_were_on = arch.saveAndDisableInterrupts();
+        defer arch.restoreInterrupts(irq_were_on);
+        klog.info("VM: creating kernel address space (PML4)...", .{});
+        break :blk vm.createAddressSpace(frame.kernelFrameAllocatorPtr()) orelse {
+            panic_ctx_vm.setPhase(0);
+            klog.err("Failed to create kernel address space", .{});
+            arch.restoreInterrupts(irq_were_on);
+            arch.halt();
+        };
     };
+    panic_ctx_vm.setPhase(0);
+    klog.info("VM: kernel address space OK (pml4_phys=0x%x)", .{kernel_space.pml4_phys});
 
-    const min_pages = (kernel_end / paging.page_size) + 4096;
+    const kernel_reserve_pages = (kernel_end / paging.page_size) + 4096;
     const min_512mb: usize = 131072; // 512MB / 4KB = 131072 pages
-    const identity_pages: usize = if (min_pages < min_512mb) min_512mb else if (min_pages < 262144) min_pages else 262144;
+    const pages_per_gib: usize = (1024 * 1024 * 1024) / paging.page_size;
+    const track_pages: usize = @as(usize, @intCast(@import("build_options").phys_track_gb)) * pages_per_gib;
+    var identity_pages: usize = min_512mb;
+    identity_pages = @max(identity_pages, kernel_reserve_pages);
+    identity_pages = @max(identity_pages, track_pages);
     const id_bytes: u64 = @as(u64, @intCast(identity_pages)) * @as(u64, @intCast(paging.page_size));
     klog.info("VM: Identity mapping %u pages (%uMB)", .{
         identity_pages, identity_pages * paging.page_size / (1024 * 1024),
     });
+    panic_ctx_vm.setPhase(0x0003_0010);
     const id_st = vm.mapIdentityByteRange(&kernel_space, 0, id_bytes, .{ .writable = true, .executable = true }) orelse {
+        panic_ctx_vm.setPhase(0);
         klog.err("VM: Identity map failed (mapIdentityByteRange)", .{});
         arch.halt();
     };
+    panic_ctx_vm.setPhase(0);
     klog.info("VM: Identity 0-%uMB OK (huge2m=%u leaf=%u)", .{
         identity_pages * paging.page_size / (1024 * 1024),
         id_st.x86_huge_2m,
@@ -277,6 +336,10 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
                 const madt = @import("hal/x86_64/madt.zig");
                 acpi_pci.initFromRsdp(bi.acpi_rsdp_phys);
                 madt.initFromRsdp(bi.acpi_rsdp_phys);
+                const lapic_tt = @import("hal/x86_64/lapic_timer_tick.zig");
+                lapic_tt.tryAttachPeriodicFromPhase3();
+                const ioapic_rt = @import("hal/x86_64/ioapic_route.zig");
+                ioapic_rt.logIoApicRedirectionMilestone();
             }
         }
     }
@@ -308,8 +371,12 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
         }
     }
 
+    if (builtin.cpu.arch == .x86_64) {
+        vm.setPagingAllocPhysCeilingExclusive(null);
+    }
     kernel_space.activate();
     vm.bindKernelAddressSpace(&kernel_space);
+    vm.setSectionLazyCommitFillHook(@import("mm/section.zig").onLazyCommitFillPage);
     klog.info("VM: Kernel page tables loaded", .{});
 
     if (builtin.cpu.arch == .x86_64) {
@@ -1097,6 +1164,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             }
             kernel_space.activate();
             vm.bindKernelAddressSpace(kernel_space);
+            vm.setSectionLazyCommitFillHook(@import("mm/section.zig").onLazyCommitFillPage);
             klog.info("VM: LoongArch identity map 0-2GB (covers GOP fb; BAR>2G via mapDeviceMmioIdentity)", .{});
         }
         const has_gop_fb = if (boot_info) |b| (b.fb_info != null and b.fb_info.?.addr != 0) else false;
@@ -1191,6 +1259,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             }
             ksp.activate();
             vm.bindKernelAddressSpace(ksp);
+            vm.setSectionLazyCommitFillHook(@import("mm/section.zig").onLazyCommitFillPage);
             klog.info("VM: AArch64 identity map 0-2GiB (PCI ECAM / VirtIO / RAM)", .{});
         }
         // UEFI GOP 在 QEMU AArch64+virtio-gpu 上常为 BLT-only，ZBM 不传 FB tag → 桌面永不启动；用 ramfb 补全。
@@ -1268,6 +1337,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
             }
             ksp.activate();
             vm.bindKernelAddressSpace(ksp);
+            vm.setSectionLazyCommitFillHook(@import("mm/section.zig").onLazyCommitFillPage);
             klog.info("VM: RISC-V64 identity map low 2GiB + RAM@0x80000000 (512MiB); fw_cfg for ramfb @0x10100000 mapped in low 2GiB", .{});
         }
         if (boot_info) |*bi| {
@@ -1342,6 +1412,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
 
     klog.info("--- Phase 2: Scheduler + Timer ---", .{});
     scheduler.init();
+    @import("ke/apc.zig").init();
     if (builtin.target.cpu.arch == .loongarch64) {
         @import("arch/loongarch64/traps.zig").init();
     }

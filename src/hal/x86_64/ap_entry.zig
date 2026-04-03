@@ -81,6 +81,9 @@ export fn apTrampolineIntermediate() callconv(.c) noreturn {
     // J4d：LAPIC software enable。IF：此处仍 cli；在 `apKernelEntry` 经 `scheduler.apProcessorIdleLoop` 再 sti，
     // 避免在 per-CPU GS/TSS 未绑定时响应向量 IPI。
     lapic_smp.ensureLocalApicSoftwareEnabled();
+    if (@import("build_options").enable_idt) {
+        @import("lapic_timer_tick.zig").attachPeriodicOnApplicationProcessor();
+    }
 
     var block = &percpu_mod.ap_percpu_blocks[slot];
     block.* = .{};

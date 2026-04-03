@@ -12,6 +12,7 @@ const build_options = @import("build_options");
 const madt = @import("madt.zig");
 const lapic_smp = @import("lapic_smp.zig");
 const pic = @import("pic.zig");
+const kpcr = @import("../../ke/kpcr.zig");
 
 /// LVT Timer（Intel SDM Table 10-8）；bit 17 = Periodic。
 const REG_LVT_TIMER: u32 = 0x320;
@@ -43,13 +44,25 @@ pub fn tryAttachPeriodicFromPhase3() void {
     // 禁止 8259 IRQ0 与 PIT 边沿再触发向量 32（与 OSDev / ACPI 常见迁移顺序一致）。
     pic.maskIrq(0);
 
-    // Divide = 16（TDCR 低 4 位 = 3）；Initial count 为经验值（QEMU 上约数百 Hz 量级，非精确 100Hz）。
+    programPeriodicTickRegisters();
+    g_lapic_periodic_tick = true;
+    klog.info("Timer: LAPIC LVT periodic (vector %u, PIC IRQ0 masked; -Dlapic_periodic_tick)", .{timer_vector});
+}
+
+fn programPeriodicTickRegisters() void {
     lapicW(REG_TIMER_DIV, 3);
     lapicW(REG_TICR, 0x20000);
     lapicW(REG_LVT_TIMER, timer_vector | 0x20000);
+}
 
+/// J10a：AP 在线后编程本核 LAPIC LVT 周期定时器（与 BSP 相同计数值）；**不**重复 mask 8259（仅 BSP 在 Phase3 执行）。
+pub fn attachPeriodicOnApplicationProcessor() void {
+    if (!build_options.lapic_periodic_tick) return;
+    if (madt.local_apic_mmio_phys == 0) return;
+    lapic_smp.ensureLocalApicSoftwareEnabled();
+    programPeriodicTickRegisters();
     g_lapic_periodic_tick = true;
-    klog.info("Timer: LAPIC LVT periodic (vector %u, PIC IRQ0 masked; -Dlapic_periodic_tick)", .{timer_vector});
+    klog.info("Timer: LAPIC LVT periodic on AP cpu_index=%u", .{kpcr.currentProcessorNumber()});
 }
 
 /// 仍由 `arch.initTimer` / `ke/timer.init` 调用：使能 SVR；若未开 `lapic_periodic_tick` 则 tick 仍为 PIC+PIT。

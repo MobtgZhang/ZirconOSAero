@@ -16,7 +16,7 @@
 //! would map to HLSL/SPIR-V compute shaders running in the DWM composition pass.
 
 const std = @import("std");
-const fb = @import("framebuffer.zig");
+const fb = @import("../core/framebuffer.zig");
 
 fn clampCoordI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));

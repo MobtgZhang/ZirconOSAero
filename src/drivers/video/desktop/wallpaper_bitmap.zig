@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/wallpaper_bitmap.zig
+// Module: src/drivers/video/desktop/wallpaper_bitmap.zig
 // Purpose: Draw build-embedded RGBA wallpaper presets (cover scaling) into the framebuffer.
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 
 const std = @import("std");
-const fb = @import("framebuffer.zig");
+const fb = @import("../core/framebuffer.zig");
 const wd = @import("wallpaper_data");
 
 /// Kernel framebuffer color packing: low=B, mid=G, high=R (see `theme.rgb` / `nt61_aero_defaults`).

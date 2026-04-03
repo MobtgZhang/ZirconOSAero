@@ -1,7 +1,7 @@
 //! Desktop icons — Windows 7 Aero（`src/desktop/aero/resources/icons/`）
 
 const std = @import("std");
-const fb = @import("framebuffer.zig");
+const fb = @import("../core/framebuffer.zig");
 
 fn clampIconCoordToI32(v: i64) i32 {
     return @intCast(std.math.clamp(v, @as(i64, std.math.minInt(i32)), @as(i64, std.math.maxInt(i32))));

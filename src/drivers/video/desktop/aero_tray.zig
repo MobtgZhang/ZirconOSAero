@@ -92,7 +92,7 @@ pub fn layout(scr_w: i32, scr_h: i32, tb_h: i32) TrayLayout {
 
     const line_time = "12:00 PM";
     const line_date = "3/21/2026";
-    const fb = @import("framebuffer.zig");
+    const fb = @import("../core/framebuffer.zig");
     const tw_time = fb.textWidth(line_time);
     const tw_date = fb.textWidth(line_date);
     const clock_block_w = @max(tw_time, tw_date);

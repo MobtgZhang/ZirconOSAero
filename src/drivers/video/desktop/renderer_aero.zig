@@ -12,14 +12,14 @@
 //! 单进程内等价：`renderFrame` 顺序绘制背景 → 图标 → 小工具 → 壳窗口 → 任务栏；
 //! 毛玻璃：`dwm.renderGlassEffect`（backdrop 采样区 boxBlur → blendTint → 高光边）。
 
-const fb = @import("framebuffer.zig");
+const fb = @import("../core/framebuffer.zig");
 const theme = @import("theme.zig");
-const dwm = @import("dwm.zig");
+const dwm = @import("../core/dwm.zig");
 const icons = @import("icons.zig");
 const startmenu = @import("startmenu.zig");
-const dwm_comp = @import("dwm_compositor.zig");
+const dwm_comp = @import("../core/dwm_compositor.zig");
 const mat = @import("material.zig");
-const display = @import("display.zig");
+const display = @import("../core/display.zig");
 const builtin_apps = @import("builtin_apps.zig");
 const shell_strings = @import("shell_strings.zig");
 const wallpaper_bitmap = @import("wallpaper_bitmap.zig");
@@ -212,7 +212,7 @@ fn redrawTaskMgrCaptionBand(win_x: i32, win_y: i32, tm_w: i32, th: i32, t: *cons
 }
 
 fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_cursor: bool) void {
-    const panic_ctx = @import("../../rtl/panic_context.zig");
+    const panic_ctx = @import("../../../rtl/panic_context.zig");
     panic_ctx.setPhase(0x0002_0080);
     renderBackground(w, h);
     panic_ctx.setPhase(0x0002_0081);
@@ -309,7 +309,7 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     }
 
     if (paint_taskbar) {
-        const panic_ctx = @import("../../rtl/panic_context.zig");
+        const panic_ctx = @import("../../../rtl/panic_context.zig");
         panic_ctx.setPhase(0x0002_00A0);
         renderTaskbar(w, h, t, tb_h);
         const tb_y = display.clampI32FromI64(@as(i64, h) - @as(i64, tb_h));

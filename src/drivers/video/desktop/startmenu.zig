@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/startmenu.zig
+// Module: src/drivers/video/desktop/startmenu.zig
 // Purpose: Windows 7-style Start Menu (two columns, search, power flyout, optional All Programs panel).
 //
 // This is an independent clean-room implementation.
@@ -11,14 +11,14 @@
 //! Windows 7 风格开始菜单（NT 6.1 Shell 布局）
 
 const std = @import("std");
-const fb = @import("framebuffer.zig");
+const fb = @import("../core/framebuffer.zig");
 const icons = @import("icons.zig");
-const klog = @import("../../rtl/klog.zig");
-const dwm = @import("dwm.zig");
+const klog = @import("../../../rtl/klog.zig");
+const dwm = @import("../core/dwm.zig");
 const shell_strings = @import("shell_strings.zig");
-const app_cfg = @import("../../config/config.zig");
+const app_cfg = @import("../../../config/config.zig");
 const builtin_apps = @import("builtin_apps.zig");
-const kernel32 = @import("../../libs/kernel32.zig");
+const kernel32 = @import("../../../libs/kernel32.zig");
 
 fn drawMenuIcon(id: icons.IconId, x: i32, y: i32, scale: u32) void {
     icons.drawThemedIcon(id, x, y, scale, .aero);
@@ -170,7 +170,7 @@ fn menuItemMatchesSearch(label: []const u8) bool {
 
 pub fn feedSearchFromKeyboard() bool {
     if (!menu_visible) return false;
-    const arch = @import("../../arch.zig");
+    const arch = @import("../../../arch.zig");
     var dirty = false;
     while (arch.readInputChar()) |c| {
         if (c == 0x08 or c == 127) {

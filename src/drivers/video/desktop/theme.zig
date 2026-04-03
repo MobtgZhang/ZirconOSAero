@@ -76,7 +76,7 @@ pub fn setTheme(id: ThemeId) void {
     active_theme = &THEME_AERO;
     // 所有架构：关闭驱动侧插值/平滑。插值与主循环节拍错位时会出现「坐标看似未变 →
     // 不重绘」的死锁；VirtIO-Input 与 PS/2 路径均适用。
-    const mouse = @import("../input/mouse.zig");
+    const mouse = @import("../../input/mouse.zig");
     mouse.setInterpolation(false, 1);
     mouse.setSmoothing(false);
     mouse.setSensitivity(10);

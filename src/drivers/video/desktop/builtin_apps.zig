@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/builtin_apps.zig
+// Module: src/drivers/video/desktop/builtin_apps.zig
 // Purpose: Shell-hosted built-in app windows (Win7-style) — launch, hit-test, minimal clients.
 //
 // This is an independent clean-room implementation.
@@ -10,13 +10,13 @@
 // See docs/cn/BuiltinApps_NT61_Roadmap.md
 
 const std = @import("std");
-const fb = @import("framebuffer.zig");
+const fb = @import("../core/framebuffer.zig");
 const theme = @import("theme.zig");
 const icons = @import("icons.zig");
-const klog = @import("../../rtl/klog.zig");
-const vfs = @import("../../fs/vfs.zig");
-const hdmi = @import("hdmi.zig");
-const mouse = @import("../input/mouse.zig");
+const klog = @import("../../../rtl/klog.zig");
+const vfs = @import("../../../fs/vfs.zig");
+const hdmi = @import("../legacy/hdmi.zig");
+const mouse = @import("../../input/mouse.zig");
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme.rgb(r, g, b);
@@ -1015,7 +1015,7 @@ fn msClick(cx: i32, cy: i32, px: i32, py: i32) void {
 }
 
 fn oskClick(cx: i32, cy: i32, px: i32, py: i32) void {
-    const arch_mod = @import("../../arch.zig");
+    const arch_mod = @import("../../../arch.zig");
     const keys = "1234567890QWERTYUIOPASDFGHJKLZXCVBNM";
     const kw: i32 = 22;
     const kh: i32 = 20;
@@ -1138,7 +1138,7 @@ pub fn launch(id: BuiltinAppId) void {
 
 /// 从 PS/2 / VirtIO 环取字符，写入聚焦记事本类窗口。
 pub fn pollKeyboardToFocused() bool {
-    const arch_mod = @import("../../arch.zig");
+    const arch_mod = @import("../../../arch.zig");
     var dirty = false;
     while (arch_mod.readInputChar()) |c| {
         if (focused_slot >= slots.len or !slots[focused_slot].open) continue;
@@ -1187,7 +1187,7 @@ pub fn renderShellHostedApps(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors
 fn renderOneWindowLight(w: *WinSlot, t: *const theme.ThemeColors) void {
     const wx = w.x;
     const wy = w.y;
-    const dwm = @import("dwm.zig");
+    const dwm = @import("../core/dwm.zig");
     if (dwm.isInitialized() and dwm.getConfig().shadow_enabled) {
         fb.fillRect(wx + 4, wy + 4, DEF_W, DEF_H, rgb(0x28, 0x28, 0x30));
     } else {
@@ -1213,7 +1213,7 @@ fn renderOneWindowLight(w: *WinSlot, t: *const theme.ThemeColors) void {
 fn renderOneWindow(w: *WinSlot, t: *const theme.ThemeColors) void {
     const wx = w.x;
     const wy = w.y;
-    const dwm = @import("dwm.zig");
+    const dwm = @import("../core/dwm.zig");
     if (dwm.isInitialized() and dwm.getConfig().shadow_enabled) {
         fb.fillRect(wx + 4, wy + 4, DEF_W, DEF_H, rgb(0x28, 0x28, 0x30));
     }

@@ -12,6 +12,7 @@ pub const display = @import("core/display.zig");
 pub const dwm = @import("core/dwm.zig");
 pub const dwm_compositor = @import("core/dwm_compositor.zig");
 pub const display_flip_journal = @import("core/display_flip_journal.zig");
+pub const display_backend = @import("core/display_backend.zig");
 pub const gpu_device = @import("core/gpu_device.zig");
 pub const wddm_abstraction = @import("core/wddm_abstraction.zig");
 pub const desktop_fb_resolve = @import("core/desktop_fb_resolve.zig");

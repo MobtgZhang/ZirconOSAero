@@ -1800,8 +1800,13 @@ pub fn initAeroDwm() void {
                 virtio_gpu_pci.virglContextReady(),
                 virtio_gpu_pci.virglSubmit3dNoopOk(),
             );
-            klog.info("Desktop display phase (WDDM-like runtime): %s (present_backend=%s)", .{
-                @tagName(ph), @tagName(display_backend.getActiveBackend()),
+            const cbe = wddm_abs.classifyCompositorBackend(
+                @import("build_options").force_gop_present,
+                virtio_gpu_pci.isScanoutActive(),
+                virtio_gpu_pci.virglSubmit3dNoopOk(),
+            );
+            klog.info("Desktop display phase (WDDM-like runtime): %s (present_backend=%s compositor_backend=%s)", .{
+                @tagName(ph), @tagName(display_backend.getActiveBackend()), @tagName(cbe),
             });
         }
         // 可选：VirtIO 2D scratch 与帧缓冲子矩形恒等往返（失败仅打日志）。

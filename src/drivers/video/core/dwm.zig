@@ -25,6 +25,8 @@ const nt61_aero = @import("nt61_aero_defaults");
 const color_nt61 = @import("../../../config/color_nt61.zig");
 const dwm_blur_budget = @import("../../../config/dwm_blur_budget.zig");
 const virtio_gpu_pci = @import("../virtio/virtio_gpu_pci.zig");
+const wddm_abs = @import("wddm_abstraction.zig");
+const build_options = @import("build_options");
 const dwm_registry_sync = @import("../../../config/dwm_config_registry_sync.zig");
 const rgb = theme.rgb;
 
@@ -118,7 +120,14 @@ fn tryConsumeBlurBudget(w: i32, h: i32, passes: u32) bool {
 }
 
 fn boxBlurRectBudgeted(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) void {
-    if (virtio_gpu_pci.tryVirglBlurBoxDelegation(x, y, w, h, radius, passes)) return;
+    const cbe = wddm_abs.classifyCompositorBackend(
+        build_options.force_gop_present,
+        virtio_gpu_pci.isScanoutActive(),
+        virtio_gpu_pci.virglSubmit3dNoopOk(),
+    );
+    if (cbe != .cpu_full) {
+        if (virtio_gpu_pci.tryVirglBlurBoxDelegation(x, y, w, h, radius, passes)) return;
+    }
     if (w <= 0 or h <= 0 or radius == 0 or passes == 0) return;
     if (blur_rect_calls_remaining == 0) return;
     const area64 = @as(u64, @intCast(w)) *% @as(u64, @intCast(h));

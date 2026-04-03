@@ -45,3 +45,24 @@ pub fn classifyVirtioRuntimePhase(
     if (scanout_active) return .virtio_scanout_flat;
     return .cpu_composite_only;
 }
+
+/// **非 WDDM**：合成责任划分（阶段 4 / `SOFTWARE_COMPOSITOR_WDDM.md`）。与 `display_backend.BackendKind` 互补 — 后者仅描述 **像素从哪送出**。
+pub const CompositorBackend = enum(u8) {
+    /// GOP/线性帧缓冲；或未协商 VirtIO scanout。
+    cpu_full = 0,
+    /// CPU 合成 + VirtIO `SET_SCANOUT` 呈现（盒式模糊仍在 CPU，除非 Phase4-Plus 委托成功）。
+    cpu_with_virtio_present = 1,
+    /// VirGL 空/非空提交已 bring-up；允许尝试 `tryVirglBlurBoxDelegation`（当前仍恒返回 false）。
+    future_gpu_assist = 2,
+};
+
+/// `force_gop` 来自 `-Dforce_gop_present`：`true` 时视为 **cpu_full**（与 `display_backend.syncFromVirtioScanout` 一致）。
+pub fn classifyCompositorBackend(
+    force_gop: bool,
+    scanout_active: bool,
+    submit3d_noop_ok: bool,
+) CompositorBackend {
+    if (submit3d_noop_ok) return .future_gpu_assist;
+    if (!force_gop and scanout_active) return .cpu_with_virtio_present;
+    return .cpu_full;
+}

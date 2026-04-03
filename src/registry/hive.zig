@@ -18,8 +18,14 @@ const ntdll = @import("../libs/ntdll.zig");
 /// 与 SMSS/未来配置路径叙事一致；见 `registry.zig` 顶部说明。
 pub const default_user_overlay_vfs_path = "C:\\System32\\Config\\ZirconUser.zosh";
 
+/// NTFS `D:\` 上对称路径（阶段 4：DWM/Mouse ZOSH1 持久化）；后加载，可覆盖 `C:\` 同名键。
+pub const default_ntfs_dwm_overlay_vfs_path = "D:\\System32\\Config\\ZirconUser.zosh";
+
 /// 可选导出路径（管理员保存 Mouse/DWM 子集快照）。
 pub const default_user_export_vfs_path = "C:\\System32\\Config\\ZirconUser.export.zosh";
+
+/// NTFS 卷导出路径（与 `saveBootstrapSnapshot` 共用序列化逻辑）。
+pub const default_ntfs_dwm_export_vfs_path = "D:\\System32\\Config\\ZirconUser.export.zosh";
 
 /// RegF 基块魔数（仅识别；**本阶段不解析** NK/VK/lh bin 单元格链）。
 /// 公开资料仅描述 hive 为二进制文件；单元格布局属实现细节，完整解析为长期项。
@@ -32,6 +38,7 @@ pub const zosh1_magic = "ZOSH1";
 pub fn tryLoadBootstrapOverlays() void {
     if (!vfs.isInitialized()) return;
     tryLoadBootstrapFromPath(default_user_overlay_vfs_path);
+    tryLoadBootstrapFromPath(default_ntfs_dwm_overlay_vfs_path);
 }
 
 fn tryLoadBootstrapFromPath(path: []const u8) void {

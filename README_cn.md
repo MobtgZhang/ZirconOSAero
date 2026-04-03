@@ -31,7 +31,7 @@
 
 [![CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml/badge.svg)](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
 
-**CI / 本地**：`zig build test`；`bash scripts/ci-qemu-smoke.sh`；Zig **0.15.2**（见 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)、[.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试索引：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
+**CI / 本地**：`zig build test`；`bash scripts/ci-qemu-smoke.sh`；多架构编译与 SMP/AHCI 烟测步骤见 [docs/cn/BUILD_SMOKE.md](docs/cn/BUILD_SMOKE.md)。Zig **0.15.2**（见 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)、[.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试索引：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
 
 ## 设计理念
 

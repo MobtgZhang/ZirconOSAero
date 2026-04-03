@@ -149,3 +149,108 @@ fn writeU16(buf: []u8, value: u16) void {
     buf[0] = @truncate(value & 0xFF);
     buf[1] = @truncate((value >> 8) & 0xFF);
 }
+
+// ── RtlVerifyVersionInfo / VerSetConditionMask（公开头文件语义子集）──
+// Ref: https://learn.microsoft.com/windows/win32/devnotes/rtlverifyversioninfo
+// Ref: https://learn.microsoft.com/windows/win32/sysinfo/verifying-the-system-version
+
+/// `type_mask` 位（与公开 `VER_*` 名称对应）。
+pub const VER_MINORVERSION: u32 = 0x00000001;
+pub const VER_MAJORVERSION: u32 = 0x00000002;
+pub const VER_BUILDNUMBER: u32 = 0x00000004;
+pub const VER_PLATFORMID: u32 = 0x00000008;
+pub const VER_SERVICEPACKMAJOR: u32 = 0x00000020;
+pub const VER_PRODUCT_TYPE: u32 = 0x00000080;
+
+pub const VER_EQUAL: u8 = 1;
+pub const VER_GREATER: u8 = 2;
+pub const VER_GREATER_EQUAL: u8 = 3;
+pub const VER_LESS: u8 = 4;
+pub const VER_LESS_EQUAL: u8 = 5;
+
+/// 与 `VerSetConditionMask` 等价的条件合并（每类 `type` 在 `condition_mask` 占 3 bit，索引为 `type` 标志的 bit 位）。
+pub fn verSetConditionMask(initial_mask: u64, type_mask: u32, condition: u8) u64 {
+    var m = initial_mask;
+    var t = type_mask;
+    while (t != 0) {
+        const b: u32 = @ctz(t);
+        const flag: u32 = @as(u32, 1) << @truncate(b);
+        t ^= flag;
+        const shift: u6 = @truncate(b * 3);
+        m &= ~(@as(u64, 7) << shift);
+        m |= @as(u64, condition & 7) << shift;
+    }
+    return m;
+}
+
+fn verGetCondition(condition_mask: u64, type_flag: u32) u8 {
+    const b: u32 = @ctz(type_flag);
+    const shift: u6 = @truncate(b * 3);
+    return @truncate((condition_mask >> shift) & 7);
+}
+
+fn cmpCondU32(actual: u32, required: u32, cond: u8) bool {
+    return switch (cond) {
+        VER_EQUAL => actual == required,
+        VER_GREATER => actual > required,
+        VER_GREATER_EQUAL => actual >= required,
+        VER_LESS => actual < required,
+        VER_LESS_EQUAL => actual <= required,
+        else => false,
+    };
+}
+
+fn cmpCondU16(actual: u16, required: u16, cond: u8) bool {
+    return switch (cond) {
+        VER_EQUAL => actual == required,
+        VER_GREATER => actual > required,
+        VER_GREATER_EQUAL => actual >= required,
+        VER_LESS => actual < required,
+        VER_LESS_EQUAL => actual <= required,
+        else => false,
+    };
+}
+
+fn cmpCondU8(actual: u8, required: u8, cond: u8) bool {
+    return switch (cond) {
+        VER_EQUAL => actual == required,
+        VER_GREATER => actual > required,
+        VER_GREATER_EQUAL => actual >= required,
+        VER_LESS => actual < required,
+        VER_LESS_EQUAL => actual <= required,
+        else => false,
+    };
+}
+
+/// 将**当前** OS 版本（本模块单源）与调用方要求的字段比较；返回 `0`、`STATUS_NOT_EQUAL` 或 `STATUS_INVALID_PARAMETER`。
+pub fn rtlVerifyVersionInfo(
+    dw_major: u32,
+    dw_minor: u32,
+    dw_build: u32,
+    dw_platform_id: u32,
+    w_service_pack_major: u16,
+    b_product_type: u8,
+    type_mask: u32,
+    condition_mask: u64,
+) i32 {
+    var tm = type_mask;
+    while (tm != 0) {
+        const b: u32 = @ctz(tm);
+        const flag: u32 = @as(u32, 1) << @truncate(b);
+        tm ^= flag;
+        const cond = verGetCondition(condition_mask, flag);
+        if (cond == 0 or cond > 5) return -1073741811; // STATUS_INVALID_PARAMETER
+
+        const ok: bool = switch (flag) {
+            VER_MINORVERSION => cmpCondU32(minor(), dw_minor, cond),
+            VER_MAJORVERSION => cmpCondU32(major(), dw_major, cond),
+            VER_BUILDNUMBER => cmpCondU32(buildNumber(), dw_build, cond),
+            VER_PLATFORMID => cmpCondU32(platformId(), dw_platform_id, cond),
+            VER_SERVICEPACKMAJOR => cmpCondU16(servicePackMajor(), w_service_pack_major, cond),
+            VER_PRODUCT_TYPE => cmpCondU8(productType(), b_product_type, cond),
+            else => false,
+        };
+        if (!ok) return @bitCast(@as(u32, 0xC0000159)); // STATUS_NOT_EQUAL
+    }
+    return 0;
+}

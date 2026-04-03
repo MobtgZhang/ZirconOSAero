@@ -35,6 +35,20 @@ test "normalizeNtObjectPathResolveSymlinks matches normalizeNtObjectPath until P
     try std.testing.expectEqualStrings(ob.normalizeNtObjectPath(s), ob.normalizeNtObjectPathResolveSymlinks(s));
 }
 
+test "normalizeNtObjectPathResolveSymlinks resolves one registered symbolic link" {
+    ob.initNamespace();
+    try std.testing.expect(ob.insertSymbolicLink("\\ZLink", "\\Devices\\ZDev", 0));
+    try std.testing.expectEqualStrings("\\Devices\\ZDev", ob.normalizeNtObjectPathResolveSymlinks("\\ZLink"));
+}
+
+test "normalizeNtObjectPathResolveSymlinks follows up to 8 symlink hops" {
+    // 不重复 `initNamespace()`：与其它用例共享同一主机测试进程内的命名空间表，仅用唯一路径前缀避免冲突。
+    try std.testing.expect(ob.insertSymbolicLink("\\HopA", "\\HopB", 0));
+    try std.testing.expect(ob.insertSymbolicLink("\\HopB", "\\HopC", 0));
+    try std.testing.expect(ob.insertSymbolicLink("\\HopC", "\\Devices\\Final", 0));
+    try std.testing.expectEqualStrings("\\Devices\\Final", ob.normalizeNtObjectPathResolveSymlinks("\\HopA"));
+}
+
 test "handle table lookup and checkAccess" {
     var table = ob.HandleTable.init(99);
     var hdr = ob.ObjectHeader{ .obj_type = .mutex, .ref_count = 0, .handle_count = 0 };

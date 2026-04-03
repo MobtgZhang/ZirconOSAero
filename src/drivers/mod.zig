@@ -41,26 +41,28 @@ pub const storage = if (is_x86) struct {
 } else struct {};
 
 pub const video = struct {
-    pub const wddm_policy = @import("video/wddm_abstraction.zig");
-    pub const vga = @import("video/vga.zig");
-    pub const hdmi = @import("video/hdmi.zig");
-    pub const framebuffer = @import("video/framebuffer.zig");
-    pub const display = @import("video/display.zig");
-    pub const intel_igpu = @import("video/intel_igpu.zig");
-    pub const nvidia_gpu = @import("video/nvidia_gpu.zig");
-    pub const amd_igpu = @import("video/amd_igpu.zig");
-    pub const loongson_igpu = @import("video/loongson_igpu.zig");
-    pub const desktop_fb_resolve = @import("video/desktop_fb_resolve.zig");
+    /// 聚合导出：`drivers.video.*` 与 `video/root.zig` 子模块一一对应。
+    const vroot = @import("video/root.zig");
+    pub const wddm_policy = vroot.wddm_abstraction;
+    pub const vga = vroot.vga;
+    pub const hdmi = vroot.hdmi;
+    pub const framebuffer = vroot.framebuffer;
+    pub const display = vroot.display;
+    pub const intel_igpu = vroot.intel_igpu;
+    pub const nvidia_gpu = vroot.nvidia_gpu;
+    pub const amd_igpu = vroot.amd_igpu;
+    pub const loongson_igpu = vroot.loongson_igpu;
+    pub const desktop_fb_resolve = vroot.desktop_fb_resolve;
     /// Shell UI strings (English default); future MUI/language packs extend `shell_strings.zig`.
-    pub const shell_strings = @import("video/shell_strings.zig");
-    pub const icons = @import("video/icons.zig");
-    pub const startmenu = @import("video/startmenu.zig");
-    pub const dwm_compositor = @import("video/dwm_compositor.zig");
-    pub const material = @import("video/material.zig");
-    pub const gpu_device = @import("video/gpu_device.zig");
-    pub const virtio_gpu_spec = @import("video/virtio_gpu_spec.zig");
-    pub const virtio_gpu_pci = @import("video/virtio_gpu_pci.zig");
-    pub const display_flip_journal = @import("video/display_flip_journal.zig");
+    pub const shell_strings = vroot.shell_strings;
+    pub const icons = vroot.icons;
+    pub const startmenu = vroot.startmenu;
+    pub const dwm_compositor = vroot.dwm_compositor;
+    pub const material = vroot.material;
+    pub const gpu_device = vroot.gpu_device;
+    pub const virtio_gpu_spec = vroot.virtio_gpu_spec;
+    pub const virtio_gpu_pci = vroot.virtio_gpu_pci;
+    pub const display_flip_journal = vroot.display_flip_journal;
 };
 
 pub const audio = struct {

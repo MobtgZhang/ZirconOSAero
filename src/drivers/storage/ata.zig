@@ -90,24 +90,24 @@ pub fn tryIdentify() bool {
     return true;
 }
 
-fn ataDispatch(irp: *io.Irp) io.IoStatus {
+fn ataDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => {
             if (irp.ioctl_code != IOCTL_ATA_IDENTIFY) {
-                irp.complete(.not_implemented, 0);
-                return .not_implemented;
+                irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                return io.STATUS_NOT_IMPLEMENTED;
             }
             irp.buffer_ptr = if (present) identify_word0 else 0;
-            irp.complete(if (present) .success else .not_found, @sizeOf(u16));
-            return .success;
+            irp.complete(if (present) io.STATUS_SUCCESS else io.STATUS_OBJECT_NAME_NOT_FOUND, @sizeOf(u16));
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

@@ -24,33 +24,33 @@ var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;
 
-fn pitDispatch(irp: *io.Irp) io.IoStatus {
+fn pitDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => {
             switch (irp.ioctl_code) {
                 IOCTL_PIT_GET_PROGRAMMED_HZ => {
                     irp.buffer_ptr = pit_hal.getProgrammedHz();
-                    irp.complete(.success, @sizeOf(u32));
-                    return .success;
+                    irp.complete(io.STATUS_SUCCESS, @sizeOf(u32));
+                    return io.STATUS_SUCCESS;
                 },
                 IOCTL_PIT_GET_KERNEL_HZ => {
                     irp.buffer_ptr = ke_timer.getHz();
-                    irp.complete(.success, @sizeOf(u32));
-                    return .success;
+                    irp.complete(io.STATUS_SUCCESS, @sizeOf(u32));
+                    return io.STATUS_SUCCESS;
                 },
                 else => {
-                    irp.complete(.not_implemented, 0);
-                    return .not_implemented;
+                    irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                    return io.STATUS_NOT_IMPLEMENTED;
                 },
             }
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

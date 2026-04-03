@@ -72,16 +72,16 @@ pub fn readTime() RtcTime {
     };
 }
 
-fn rtcDispatch(irp: *io.Irp) io.IoStatus {
+fn rtcDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => {
             if (irp.ioctl_code != IOCTL_RTC_GET_TIME) {
-                irp.complete(.not_implemented, 0);
-                return .not_implemented;
+                irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                return io.STATUS_NOT_IMPLEMENTED;
             }
             const t = readTime();
             const packed_time: u64 = @as(u64, t.second) |
@@ -91,12 +91,12 @@ fn rtcDispatch(irp: *io.Irp) io.IoStatus {
                 (@as(u64, t.month) << 32) |
                 (@as(u64, t.year) << 40);
             irp.buffer_ptr = packed_time;
-            irp.complete(.success, @sizeOf(RtcTime));
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, @sizeOf(RtcTime));
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

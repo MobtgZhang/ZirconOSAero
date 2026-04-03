@@ -73,6 +73,7 @@ pub fn mountIfVirtioBlkDetected() void {
     if (mount_done) return;
     mount_done = true;
     if (!virtio_blk_pci.isVirtioBlkPciPresent()) return;
-    _ = vfs.mount("B:\\", .devfs, getScratchOps(), 2, "VirtIO-Blk-Scratch");
+    const dev_ix = if (virtio_blk_pci.isVirtioBlkPciPresent()) virtio_blk_pci.getStubDeviceIndex() else 0;
+    _ = vfs.mount("B:\\", .devfs, getScratchOps(), dev_ix, "VirtIO-Blk-Scratch");
     klog.info("VFS: VirtIO-Blk scratch volume B:\\ (open PROBE.TXT for read smoke)", .{});
 }

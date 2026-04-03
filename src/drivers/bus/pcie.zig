@@ -140,7 +140,7 @@ pub const PCI_VENDOR_INTEL: u16 = 0x8086;
 pub const PCI_VENDOR_AMD_ATI: u16 = 0x1002;
 /// Loongson PCI vendor id (display class 0x03 on LS2K/7A 等，见 `video/loongson/dids.zig`)
 pub const PCI_VENDOR_LOONGSON: u16 = 0x0014;
-/// NVIDIA PCI vendor id（显示类 0x03；与 Linux `nouveau` 枚举范围一致，本内核默认 GOP handoff）
+/// NVIDIA PCI vendor id（显示类 0x03；公开 PCI 枚举事实，本内核默认 GOP handoff）
 pub const PCI_VENDOR_NVIDIA: u16 = 0x10DE;
 
 /// Decoded PCI BAR (memory or I/O)
@@ -336,6 +336,26 @@ pub fn firstMmioBar(info: *const DisplayGfxPciInfo) ?PciBarResource {
     return null;
 }
 
+/// 最大 MMIO BAR（按 size），常用于启发式定位 VRAM aperture（须结合 `prefetchable` 再判断）。
+pub fn largestMmioBar(info: *const DisplayGfxPciInfo) ?PciBarResource {
+    var best: ?PciBarResource = null;
+    for (info.bars) |bar| {
+        if (bar.is_io or bar.size == 0 or bar.base == 0) continue;
+        if (best == null or bar.size > best.?.size) best = bar;
+    }
+    return best;
+}
+
+/// 最大 **可预取** MMIO BAR（离散 GPU 上常为显存窗口；仍可能为 MMIO 陷阱区，映射须 cap）。
+pub fn largestPrefetchableMmioBar(info: *const DisplayGfxPciInfo) ?PciBarResource {
+    var best: ?PciBarResource = null;
+    for (info.bars) |bar| {
+        if (bar.is_io or !bar.prefetchable or bar.size == 0 or bar.base == 0) continue;
+        if (best == null or bar.size > best.?.size) best = bar;
+    }
+    return best;
+}
+
 /// PCI base class Serial Bus Controller（0x0C）下的 USB 主机控制器种类
 pub const UsbHostKind = enum(u8) {
     uhci = 0, // prog_if 0x00
@@ -468,16 +488,16 @@ pub fn collectVirtioInputDevicesPci0(out: []PciLoc) usize {
     return collectVirtioInputDevices(out, 0);
 }
 
-fn pciDispatch(irp: *io.Irp) io.IoStatus {
+fn pciDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => {
             if (irp.ioctl_code != IOCTL_PCI_READ_CONFIG_DWORD) {
-                irp.complete(.not_implemented, 0);
-                return .not_implemented;
+                irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                return io.STATUS_NOT_IMPLEMENTED;
             }
             const packed_req: u32 = @truncate(irp.buffer_ptr);
             const bus: u8 = @truncate(packed_req >> 24);
@@ -486,12 +506,12 @@ fn pciDispatch(irp: *io.Irp) io.IoStatus {
             const off: u8 = @truncate(packed_req & 0xFF);
             const val = readConfigDword(bus, dev, func, off);
             irp.buffer_ptr = val;
-            irp.complete(.success, @sizeOf(u32));
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, @sizeOf(u32));
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

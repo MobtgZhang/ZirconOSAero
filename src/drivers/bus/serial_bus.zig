@@ -28,17 +28,17 @@ var driver_idx: u32 = 0;
 var device_idx: u32 = 0;
 var driver_initialized: bool = false;
 
-fn serialDispatch(irp: *io.Irp) io.IoStatus {
+fn serialDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .read => {
             if (irp.buffer_size == 0 or irp.buffer_ptr == 0) {
                 irp.bytes_transferred = 0;
-                irp.complete(.success, 0);
-                return .success;
+                irp.complete(io.STATUS_SUCCESS, 0);
+                return io.STATUS_SUCCESS;
             }
             const buf: [*]u8 = @ptrFromInt(irp.buffer_ptr);
             var n: usize = 0;
@@ -51,14 +51,14 @@ fn serialDispatch(irp: *io.Irp) io.IoStatus {
                 }
             }
             irp.bytes_transferred = n;
-            irp.complete(.success, n);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, n);
+            return io.STATUS_SUCCESS;
         },
         .write => {
             if (irp.buffer_size == 0 or irp.buffer_ptr == 0) {
                 irp.bytes_transferred = 0;
-                irp.complete(.success, 0);
-                return .success;
+                irp.complete(io.STATUS_SUCCESS, 0);
+                return io.STATUS_SUCCESS;
             }
             const buf: [*]const u8 = @ptrFromInt(irp.buffer_ptr);
             var n: usize = 0;
@@ -66,30 +66,30 @@ fn serialDispatch(irp: *io.Irp) io.IoStatus {
                 serial.writeByte(buf[n]);
             }
             irp.bytes_transferred = n;
-            irp.complete(.success, n);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, n);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => {
             switch (irp.ioctl_code) {
                 IOCTL_SERIAL_GET_READY => {
                     irp.bytes_transferred = if (serial.isReady()) 1 else 0;
-                    irp.complete(.success, irp.bytes_transferred);
-                    return .success;
+                    irp.complete(io.STATUS_SUCCESS, irp.bytes_transferred);
+                    return io.STATUS_SUCCESS;
                 },
                 IOCTL_SERIAL_RX_PENDING => {
                     irp.bytes_transferred = if (serial.hasData()) 1 else 0;
-                    irp.complete(.success, irp.bytes_transferred);
-                    return .success;
+                    irp.complete(io.STATUS_SUCCESS, irp.bytes_transferred);
+                    return io.STATUS_SUCCESS;
                 },
                 else => {
-                    irp.complete(.not_implemented, 0);
-                    return .not_implemented;
+                    irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                    return io.STATUS_NOT_IMPLEMENTED;
                 },
             }
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

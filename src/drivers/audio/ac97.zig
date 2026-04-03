@@ -219,64 +219,64 @@ pub fn isInitialized() bool {
     return state.initialized;
 }
 
-fn ac97Dispatch(irp: *io.Irp) io.IoStatus {
+fn ac97Dispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => return handleIoctl(irp),
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
 
-fn handleIoctl(irp: *io.Irp) io.IoStatus {
+fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
     switch (irp.ioctl_code) {
         IOCTL_AC97_GET_STATE => {
             irp.buffer_ptr = @as(u64, state.sample_rate);
             irp.bytes_transferred = state.master_volume;
-            irp.complete(.success, if (state.playing) @as(usize, 1) else 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, if (state.playing) @as(usize, 1) else 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_AC97_SET_VOLUME => {
             const vol: u8 = @truncate(irp.buffer_ptr & 0xFF);
             setMasterVolume(vol);
             setPcmVolume(vol);
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_AC97_SET_SAMPLE_RATE => {
             const rate: u32 = @truncate(irp.buffer_ptr & 0xFFFFFFFF);
             const ok = setSampleRate(rate);
-            irp.complete(if (ok) .success else .not_implemented, 0);
-            return .success;
+            irp.complete(if (ok) io.STATUS_SUCCESS else io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_AC97_START_PLAYBACK => {
             startPlayback();
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_AC97_STOP_PLAYBACK => {
             stopPlayback();
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_AC97_SET_MUTE => {
             setMute(irp.buffer_ptr != 0);
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_AC97_RESET => {
             resetController();
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

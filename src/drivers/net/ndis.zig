@@ -15,39 +15,39 @@ var device_idx: u32 = 0;
 var driver_initialized: bool = false;
 var link_up: bool = true;
 
-fn netDispatch(irp: *io.Irp) io.IoStatus {
+fn netDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => {
             switch (irp.ioctl_code) {
                 IOCTL_NET_GET_STATUS => {
                     irp.bytes_transferred = if (link_up) 1 else 0;
-                    irp.complete(.success, @sizeOf(u32));
-                    return .success;
+                    irp.complete(io.STATUS_SUCCESS, @sizeOf(u32));
+                    return io.STATUS_SUCCESS;
                 },
                 IOCTL_NET_GET_MAC => {
                     if (irp.buffer_size >= 6 and irp.buffer_ptr != 0) {
                         const dst: [*]u8 = @ptrFromInt(irp.buffer_ptr);
                         @memcpy(dst[0..6], stub_mac[0..6]);
                         irp.bytes_transferred = 6;
-                        irp.complete(.success, 6);
+                        irp.complete(io.STATUS_SUCCESS, 6);
                     } else {
-                        irp.complete(.invalid_device, 0);
+                        irp.complete(io.STATUS_INVALID_PARAMETER, 0);
                     }
-                    return .success;
+                    return io.STATUS_SUCCESS;
                 },
                 else => {
-                    irp.complete(.not_implemented, 0);
-                    return .not_implemented;
+                    irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                    return io.STATUS_NOT_IMPLEMENTED;
                 },
             }
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

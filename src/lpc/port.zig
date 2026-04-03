@@ -43,7 +43,9 @@ pub const Port = struct {
     name: [32]u8 = [_]u8{0} ** 32,
     name_len: usize = 0,
     connected_port: u32 = 0,
-    /// 与 `mm/vm.zig` `AddressSpace.section_view_*` 登记配套的 **用户态句柄/索引** 占位；`mapViewIntoProcess` 成功时由会话层写入，供 LPC 大块传输绑定。
+    /// 与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 固定头变更时递增。
+    handshake_version: u8 = 1,
+    /// 与 `mm/vm.zig` `AddressSpace.section_view_token` 等登记配套；`NtMapViewOfSection` 后可写 `vm.sectionViewTokenAt`。
     section_view_handle: u32 = 0,
 
     pub fn init(id: u32, owner_pid: u32) Port {
@@ -56,6 +58,7 @@ pub const Port = struct {
             .name = [_]u8{0} ** 32,
             .name_len = 0,
             .connected_port = 0,
+            .handshake_version = 1,
             .section_view_handle = 0,
         };
     }
@@ -184,6 +187,7 @@ pub fn requestWaitReplyPort(
     data: ?*const [ipc.MSG_DATA_SIZE]u8,
 ) ?ipc.Message {
     const client_port = findPortById(port_id) orelse return null;
+    if (client_port.owner_pid != client_pid) return null;
     if (client_port.connected_port == 0) return null;
     const server_port = findPortById(client_port.connected_port) orelse return null;
     _ = ipc.send(client_pid, server_port.owner_pid, opcode, data);

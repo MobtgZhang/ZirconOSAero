@@ -78,6 +78,25 @@ pub const FILE_DIRECTORY_FILE: u32 = 0x00000001;
 pub const FILE_NON_DIRECTORY_FILE: u32 = 0x00000040;
 pub const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x00000020;
 
+pub const FILE_SHARE_READ: u32 = 0x00000001;
+pub const FILE_SHARE_WRITE: u32 = 0x00000002;
+pub const FILE_SHARE_DELETE: u32 = 0x00000004;
+
+pub const FILE_SUPERSEDE: u32 = 0;
+pub const FILE_OPEN: u32 = 1;
+pub const FILE_CREATE: u32 = 2;
+pub const FILE_OPEN_IF: u32 = 3;
+pub const FILE_OVERWRITE: u32 = 4;
+pub const FILE_OVERWRITE_IF: u32 = 5;
+
+/// `FILE_INFORMATION_CLASS` 子集 — Ref: learn.microsoft.com `NtQueryDirectoryFile`.
+pub const FileNamesInformation: u32 = 12;
+
+/// 目录枚举结束（warning NTSTATUS，公开头文件值）。
+pub const STATUS_NO_MORE_FILES: NTSTATUS = @bitCast(@as(u32, 0x80000006));
+pub const STATUS_NOT_A_DIRECTORY: NTSTATUS = @bitCast(@as(u32, 0xC0000103));
+pub const STATUS_FILE_IS_A_DIRECTORY: NTSTATUS = @bitCast(@as(u32, 0xC00000BA));
+
 pub const SystemBasicInformation: u32 = 0;
 pub const SystemProcessorInformation: u32 = 1;
 pub const SystemPerformanceInformation: u32 = 2;
@@ -180,16 +199,17 @@ fn desiredAccessToObMask(access: u32) ob.ACCESS_MASK {
     return m;
 }
 
-fn ioStatusFromVfsIo(s: io.IoStatus) NTSTATUS {
-    return switch (s) {
-        .success => STATUS_SUCCESS,
-        .not_found => STATUS_OBJECT_NAME_NOT_FOUND,
-        .access_denied => STATUS_ACCESS_DENIED,
-        .buffer_overflow => STATUS_BUFFER_TOO_SMALL,
-        .end_of_file => STATUS_END_OF_FILE,
-        .not_implemented => STATUS_NOT_IMPLEMENTED,
-        else => STATUS_INVALID_PARAMETER,
-    };
+fn desiredAccessToFileAccess(access: u32) vfs.FileAccessMode {
+    const r = (access & 0x80000000) != 0;
+    const w = (access & 0x40000000) != 0;
+    if (r and w) return .read_write;
+    if (w) return .write;
+    return .read;
+}
+
+/// `Irp.status` 已为 `NTSTATUS`（与 `io.NTSTATUS` 同值）；保留此别名供审计与旧注释引用。
+fn ioStatusFromIrpNtStatus(s: io.NTSTATUS) NTSTATUS {
+    return s;
 }
 
 // ── Process APIs ──
@@ -324,9 +344,6 @@ pub fn NtCreateFile(
 ) NTSTATUS {
     _ = allocation_size;
     _ = file_attributes;
-    _ = share_access;
-    _ = create_disposition;
-    _ = create_options;
     _ = ea_buffer;
     _ = ea_length;
 
@@ -344,7 +361,50 @@ pub fn NtCreateFile(
     if (obj_attrs) |attrs| {
         if (attrs.object_name) |name| {
             const path = name.buffer[0..name.length];
-            const f = vfs.open(path, .read_write) orelse {
+            const resolved = vfs.resolvePath(path);
+            const faccess = desiredAccessToFileAccess(access);
+            var de: vfs.DirEntry = undefined;
+            const stat_st = vfs.stat(resolved, &de);
+
+            if (create_disposition == FILE_CREATE) {
+                if (stat_st == .success) {
+                    io_status.status = STATUS_OBJECT_NAME_COLLISION;
+                    return STATUS_OBJECT_NAME_COLLISION;
+                }
+                io_status.status = STATUS_NOT_IMPLEMENTED;
+                return STATUS_NOT_IMPLEMENTED;
+            }
+            if (create_disposition == FILE_OPEN_IF) {
+                if (stat_st != .success) {
+                    io_status.status = STATUS_NOT_IMPLEMENTED;
+                    return STATUS_NOT_IMPLEMENTED;
+                }
+            } else if (create_disposition == FILE_OPEN) {
+                if (stat_st != .success) {
+                    io_status.status = STATUS_OBJECT_NAME_NOT_FOUND;
+                    return STATUS_OBJECT_NAME_NOT_FOUND;
+                }
+            }
+
+            if ((create_options & FILE_DIRECTORY_FILE) != 0) {
+                if (stat_st == .success and de.file_type != .directory) {
+                    io_status.status = STATUS_NOT_A_DIRECTORY;
+                    return STATUS_NOT_A_DIRECTORY;
+                }
+            }
+            if ((create_options & FILE_NON_DIRECTORY_FILE) != 0) {
+                if (stat_st == .success and de.file_type == .directory) {
+                    io_status.status = STATUS_FILE_IS_A_DIRECTORY;
+                    return STATUS_FILE_IS_A_DIRECTORY;
+                }
+            }
+
+            const sh = if (share_access == 0)
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+            else
+                share_access;
+
+            const f = vfs.openEx(resolved, faccess, sh) orelse {
                 io_status.status = STATUS_OBJECT_NAME_NOT_FOUND;
                 return STATUS_OBJECT_NAME_NOT_FOUND;
             };
@@ -354,7 +414,7 @@ pub fn NtCreateFile(
                 return STATUS_INSUFFICIENT_RESOURCES;
             };
             file_handle.* = h;
-            io_status.information = 1; // FILE_CREATED / FILE_OPENED — simplified
+            io_status.information = 1;
             return STATUS_SUCCESS;
         }
     }
@@ -370,7 +430,6 @@ pub fn NtOpenFile(
     share_access: u32,
     open_options: u32,
 ) NTSTATUS {
-    _ = share_access;
     _ = open_options;
     io_status.status = STATUS_SUCCESS;
     io_status.information = 0;
@@ -386,7 +445,12 @@ pub fn NtOpenFile(
     if (obj_attrs) |attrs| {
         if (attrs.object_name) |name| {
             const path = name.buffer[0..name.length];
-            const f = vfs.open(path, .read) orelse {
+            const resolved = vfs.resolvePath(path);
+            const sh = if (share_access == 0)
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+            else
+                share_access;
+            const f = vfs.openEx(resolved, .read, sh) orelse {
                 io_status.status = STATUS_OBJECT_NAME_NOT_FOUND;
                 return STATUS_OBJECT_NAME_NOT_FOUND;
             };
@@ -431,7 +495,7 @@ pub fn NtReadFile(
         .buffer_size = length,
     };
     _ = vfs.dispatchFileObjectIrp(f, &irp);
-    io_status.status = ioStatusFromVfsIo(irp.status);
+    io_status.status = ioStatusFromIrpNtStatus(irp.status);
     io_status.information = irp.bytes_transferred;
     return io_status.status;
 }
@@ -463,7 +527,7 @@ pub fn NtWriteFile(
         .buffer_size = length,
     };
     _ = vfs.dispatchFileObjectIrp(f, &irp);
-    io_status.status = ioStatusFromVfsIo(irp.status);
+    io_status.status = ioStatusFromIrpNtStatus(irp.status);
     io_status.information = irp.bytes_transferred;
     return io_status.status;
 }
@@ -484,21 +548,69 @@ pub fn NtClose(handle: HANDLE) NTSTATUS {
     return STATUS_SUCCESS;
 }
 
+/// Ref: learn.microsoft.com `NtQueryDirectoryFile` — `FILE_NAMES_INFORMATION` 最小单条目。
 pub fn NtQueryDirectoryFile(
-    _: HANDLE,
+    file_handle: HANDLE,
     _: HANDLE,
     _: u64,
     _: u64,
     io_status: *IO_STATUS_BLOCK,
-    _: ?*anyopaque,
-    _: u32,
-    _: u32,
+    file_information: ?*anyopaque,
+    length: u32,
+    file_information_class: u32,
     _: ?*u32,
-    _: bool,
+    restart_scan: bool,
 ) NTSTATUS {
-    io_status.status = STATUS_NOT_IMPLEMENTED;
     io_status.information = 0;
-    return STATUS_NOT_IMPLEMENTED;
+    if (file_information_class != FileNamesInformation) {
+        io_status.status = STATUS_INVALID_INFO_CLASS;
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(file_handle);
+    const ent = proc.handle_table.lookupHandle(h) orelse {
+        io_status.* = .{ .status = STATUS_INVALID_HANDLE, .information = 0 };
+        return STATUS_INVALID_HANDLE;
+    };
+    if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
+    const f: *vfs.FileObject = @ptrFromInt(ent.object_ptr);
+    if (f.file_type != .directory) {
+        io_status.status = STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (restart_scan) f.dir_enum_next = 0;
+
+    var ents: [64]vfs.DirEntry = undefined;
+    const n = vfs.readdir(f, &ents);
+    if (f.dir_enum_next >= n) {
+        io_status.status = STATUS_NO_MORE_FILES;
+        return STATUS_NO_MORE_FILES;
+    }
+    const e = ents[f.dir_enum_next];
+    f.dir_enum_next += 1;
+
+    const buf = file_information orelse return STATUS_INVALID_PARAMETER;
+    const base: [*]u8 = @ptrCast(@alignCast(buf));
+    const name_utf16_bytes: u32 = @intCast(e.name_len * 2);
+    const need: u32 = 12 + name_utf16_bytes;
+    if (length < need) {
+        io_status.status = STATUS_INFO_LENGTH_MISMATCH;
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    @as(*align(1) u32, @ptrCast(base)).* = 0;
+    @as(*align(1) u32, @ptrCast(base + 4)).* = 0;
+    @as(*align(1) u32, @ptrCast(base + 8)).* = name_utf16_bytes;
+
+    const name_dst: [*]align(1) u16 = @ptrCast(base + 12);
+    var i: usize = 0;
+    while (i < e.name_len) : (i += 1) {
+        name_dst[i] = @as(u16, e.name[i]);
+    }
+
+    io_status.status = STATUS_SUCCESS;
+    io_status.information = need;
+    return STATUS_SUCCESS;
 }
 
 pub fn NtDeleteFile(_: ?*OBJECT_ATTRIBUTES) NTSTATUS {
@@ -651,15 +763,12 @@ pub fn NtCreateSection(
     const max_sz = if (maximum_size) |p| p.* else return STATUS_INVALID_PARAMETER;
 
     if (file_handle != 0) {
-        if ((allocation_attributes & SEC_IMAGE) != 0) return STATUS_NOT_IMPLEMENTED;
-        const plain_write = (page_protect & 0x44) != 0;
-        const is_cow = (page_protect & 0x88) != 0;
-        if (plain_write and !is_cow) return STATUS_NOT_IMPLEMENTED;
+        const is_image = (allocation_attributes & SEC_IMAGE) != 0;
         const fh: ob.Handle = @truncate(file_handle);
         const ent = proc.handle_table.lookupHandle(fh) orelse return STATUS_INVALID_HANDLE;
         if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
         const fo = @as(*vfs.FileObject, @ptrFromInt(ent.object_ptr));
-        const sec = section_mm.createFileBackedSection(max_sz, page_protect, fo) orelse return STATUS_NO_MEMORY;
+        const sec = section_mm.createFileBackedSection(max_sz, page_protect, fo, is_image) orelse return STATUS_NO_MEMORY;
         const h = proc.handle_table.allocHandle(@intFromPtr(sec), ob.GENERIC_ALL, .section) orelse {
             section_mm.releaseSectionObject(sec);
             return STATUS_NO_MEMORY;

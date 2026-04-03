@@ -4,9 +4,22 @@
 //!
 //! Phase P4-C2：`NtRequestWaitReplyPort` 大消息/超时与 `syscall_nt_extras` 对齐为路线图；本模块保留进程内队列占位。
 
+const std = @import("std");
 const arch = @import("../arch.zig");
 
 pub const MSG_DATA_SIZE: usize = 64;
+
+var ipc_queue_gate: std.atomic.Value(u32) = .init(0);
+
+fn lockIpcQueues() void {
+    while (ipc_queue_gate.cmpxchgStrong(0, 1, .acquire, .monotonic)) |_| {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn unlockIpcQueues() void {
+    ipc_queue_gate.store(0, .release);
+}
 
 pub const MessageType = enum(u8) {
     request = 0,
@@ -118,6 +131,8 @@ fn pidToIndex(pid: u32) ?usize {
 
 pub fn send(sender_pid: u32, receiver_pid: u32, opcode: u32, data: ?*const [MSG_DATA_SIZE]u8) i64 {
     ensureQueues();
+    lockIpcQueues();
+    defer unlockIpcQueues();
     const recv_idx = pidToIndex(receiver_pid) orelse return -1;
 
     var msg = Message.init(sender_pid, receiver_pid, opcode);
@@ -136,6 +151,8 @@ pub fn send(sender_pid: u32, receiver_pid: u32, opcode: u32, data: ?*const [MSG_
 
 pub fn sendTyped(sender_pid: u32, receiver_pid: u32, opcode: u32, msg_type: MessageType, data: ?*const [MSG_DATA_SIZE]u8) i64 {
     ensureQueues();
+    lockIpcQueues();
+    defer unlockIpcQueues();
     const recv_idx = pidToIndex(receiver_pid) orelse return -1;
 
     var msg = Message.init(sender_pid, receiver_pid, opcode);
@@ -155,6 +172,8 @@ pub fn sendTyped(sender_pid: u32, receiver_pid: u32, opcode: u32, msg_type: Mess
 
 pub fn receive(receiver_pid: u32) ?Message {
     ensureQueues();
+    lockIpcQueues();
+    defer unlockIpcQueues();
     const idx = pidToIndex(receiver_pid) orelse return null;
     return message_queues[idx].pop();
 }
@@ -165,12 +184,16 @@ pub fn tryReceive(receiver_pid: u32) ?Message {
 
 pub fn peek(receiver_pid: u32) ?*const Message {
     ensureQueues();
+    lockIpcQueues();
+    defer unlockIpcQueues();
     const idx = pidToIndex(receiver_pid) orelse return null;
     return message_queues[idx].peek();
 }
 
 pub fn getQueueCount(pid: u32) usize {
     ensureQueues();
+    lockIpcQueues();
+    defer unlockIpcQueues();
     const idx = pidToIndex(pid) orelse return 0;
     return message_queues[idx].count;
 }

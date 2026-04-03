@@ -311,6 +311,16 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     vm.bindKernelAddressSpace(&kernel_space);
     klog.info("VM: Kernel page tables loaded", .{});
 
+    if (builtin.cpu.arch == .x86_64) {
+        const hpet = @import("hal/x86_64/hpet.zig");
+        if (!vm.mapDeviceMmioIdentity(hpet.HPET_MMIO_PHYS_BASE, 4096)) {
+            klog.warn("VM: HPET MMIO identity map failed (0x%x)", .{@as(u32, @truncate(hpet.HPET_MMIO_PHYS_BASE))});
+        }
+        _ = hpet.initOptional();
+        const smp_boot = @import("hal/x86_64/smp_boot.zig");
+        smp_boot.tryStartApplicationProcessorsStub();
+    }
+
     const heap_kb_x86: u64 = @min(sys_config.getHeapSizeKb(), @as(u64, 512 * 1024));
     const heap_kb32: u32 = @truncate(@min(heap_kb_x86, @as(u64, std.math.maxInt(u32))));
     heap_boot.initKernelHeapAfterVm(&kernel_space, heap_kb32);
@@ -369,6 +379,15 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     fat32_mod.init();
     ntfs_mod.init();
     virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
+    if (builtin.target.cpu.arch == .x86_64) {
+        const virtio_blk = drivers.storage.virtio_blk_pci;
+        if (virtio_blk.isVirtioBlkPciPresent()) {
+            var head: [32]u8 = undefined;
+            if (virtio_blk.submitReadSectors(0, &head) == io.STATUS_SUCCESS) {
+                klog.info("STORAGE: VirtIO-blk IRP sector0 read OK", .{});
+            }
+        }
+    }
 
     registry.init();
     @import("registry/hive.zig").tryLoadBootstrapOverlays();
@@ -1350,6 +1369,15 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     fat32_mod.init();
     ntfs_mod.init();
     virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
+    if (builtin.target.cpu.arch == .x86_64) {
+        const virtio_blk = drivers_generic.storage.virtio_blk_pci;
+        if (virtio_blk.isVirtioBlkPciPresent()) {
+            var head: [32]u8 = undefined;
+            if (virtio_blk.submitReadSectors(0, &head) == io.STATUS_SUCCESS) {
+                klog.info("STORAGE: VirtIO-blk IRP sector0 read OK", .{});
+            }
+        }
+    }
 
     registry.init();
     @import("registry/hive.zig").tryLoadBootstrapOverlays();

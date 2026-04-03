@@ -14,6 +14,7 @@
 // - 持有自旋锁期间不得调用会触发调度的例程；当前 `pollAll` 路径须在注释中声明是否满足该约束。
 // - **I/O**：异步 IRP 在 `IoMarkIrpPending` 后可在本排空点或工作线程上下文调用 `io.IoCompleteRequest`
 //   （WDK：完成例程 IRQL ≤ DISPATCH_LEVEL）；当前仓库仍以同步 `dispatchIrp` 为主，此条为接线契约。
+// - **PnP/Power**：`IRP_MJ_PNP` / `IRP_MJ_POWER` 完成路径亦须遵守上述 IRQL 约束（K4.3/K4.4）；见 `src/io/io.zig` 与 [DriverMilestones_NT61.md](../../docs/cn/DriverMilestones_NT61.md)。
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K4.4（完整 IRQL 状态机为长期项）。
 
 const builtin = @import("builtin");

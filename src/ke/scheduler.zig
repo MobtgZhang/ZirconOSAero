@@ -8,6 +8,7 @@
 // This is an independent clean-room implementation.
 // Reference: MS Learn — scheduling (conceptual); OS textbook MLQ; Intel SDM for syscall path elsewhere.
 
+const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const klog = @import("../rtl/klog.zig");
@@ -280,6 +281,38 @@ fn cpuHasAnyReady(cpu: usize) bool {
     return non_empty[cpu] != 0;
 }
 
+/// K2.6：统计某 CPU 槽上就绪链中的线程数（供新线程 `home_cpu` 负载均衡）。
+fn readyThreadCountOnCpu(cpu: usize) usize {
+    var len: usize = 0;
+    var pri: u8 = 0;
+    while (pri < NUM_PRI) : (pri += 1) {
+        var t = ready_head[cpu][pri];
+        while (t >= 0) {
+            len += 1;
+            t = threads[@intCast(t)].next_ready;
+        }
+    }
+    return len;
+}
+
+/// 在可见逻辑 CPU 中选择 **当前就绪队列最短** 的槽位，降低偏斜（SMP 下与窃取协同）。
+fn pickBalancedHomeCpu() u32 {
+    const n = schedNumCpus();
+    if (n <= 1) return 0;
+    var best_c: u32 = 0;
+    var best_len: usize = std.math.maxInt(usize);
+    var c: u32 = 0;
+    while (c < n) : (c += 1) {
+        const slot: usize = @intCast(c);
+        const len = readyThreadCountOnCpu(slot);
+        if (len < best_len) {
+            best_len = len;
+            best_c = c;
+        }
+    }
+    return best_c;
+}
+
 fn isBspIdleThreadForSteal() bool {
     return current_thread < thread_count and
         threads[current_thread].id == 0 and
@@ -478,7 +511,7 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
     threads[idx] = .{};
     threads[idx].id = idx;
     threads[idx].process_id = process_id;
-    threads[idx].home_cpu = percpu_sched.assignCpuForNewThread();
+    threads[idx].home_cpu = pickBalancedHomeCpu();
     threads[idx].affinity_mask = 0;
     threads[idx].state = .ready;
     threads[idx].priority = PRIORITY_NORMAL;

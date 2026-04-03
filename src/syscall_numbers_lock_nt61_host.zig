@@ -27,4 +27,5 @@ test "Win7 SP1 x64 syscall index anchors (locked)" {
     try std.testing.expectEqual(@as(u32, 0x2A), ssdt.NtUnmapViewOfSection);
     try std.testing.expectEqual(@as(u32, 0x23), ssdt.NtOpenProcess);
     try std.testing.expectEqual(@as(u32, 0x44), ssdt.NtDuplicateObject);
+    try std.testing.expectEqual(@as(u32, 0xAA), ssdt.NtCreateUserProcess);
 }

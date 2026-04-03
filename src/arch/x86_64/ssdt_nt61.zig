@@ -8,6 +8,7 @@
 // No Windows source code or ReactOS source code was referenced.
 // Ref: 公开 syscall 枚举（如社区维护的 NT 构建版本表 j00ru/windows-syscalls）；本文件仅收录本内核已实现或桩实现的服务号。
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K7（扩展须双端 ntdll/syscall + probe）。
+// SDK 路径锚点（勿在本文件外重复硬编码 syscall 号）： [sdk/nt61_syscall_numbers_x64.zig](../../../sdk/nt61_syscall_numbers_x64.zig)
 
 //! x64 `syscall` 调用约定（与 AMD64 长模式一致）：`RAX`=下表索引；第 1 参在 **`R10`**（因 `RCX` 存返回 RIP）；
 //! 第 2–4 参为 `RDX`、`R8`、`R9`；更多参数在**用户栈**上（相对于 SYSCALL 时 `RSP`，第 5 参常为 `+0x28`）。
@@ -82,6 +83,74 @@ pub const NtOpenProcess = 0x23;
 /// Ref: 公开 Windows 7 x64 syscall 列表（如 OpenRCE / j00ru 对照表）；与 SP1 构建对齐。
 pub const NtDuplicateObject = 0x44;
 
+// ── 扩展子集（VM/进程/同步/IO；分发器暂返回 `STATUS_NOT_IMPLEMENTED`，与 ntdll 桩渐进接线）──
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCreateMutant = 0x0B;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtOpenMutant = 0x0D;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtReleaseMutant = 0x1E;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtQueryMutant = 0x0E;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtQueryInformationProcess = 0x16;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtSetInformationProcess = 0x1C;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtQueryInformationThread = 0x11;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtSetInformationThread = 0x28;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtResumeThread = 0x51;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtSuspendThread = 0x45;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtAlertThread = 0x22;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtTestAlert = 0x42;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCreateSemaphore = 0x4F;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtOpenSemaphore = 0x15;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtReleaseSemaphore = 0x1D;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCreateEvent = 0x4A;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtOpenEvent = 0x3F;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtSetEvent = 0x0A;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtResetEvent = 0x50;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtPulseEvent = 0x3C;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtClearEvent = 0x3B;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtOpenThread = 0x36;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtQueryObject = 0x10;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtOpenFile = 0x33;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtFlushBuffersFile = 0x39;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtFsControlFile = 0x09;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCancelIoFile = 0x35;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCancelIoFileEx = 0xE9;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCreateUserProcess = 0xAA;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtCreateThreadEx = 0xA5;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtAlpcConnectPort = 0x2D;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtAlpcCreatePort = 0x6D;
+/// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
+pub const NtAlpcSendWaitReceivePort = 0x6E;
+
 const std = @import("std");
 
 test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
@@ -110,4 +179,8 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtReadVirtualMemory == 0x3D);
     try std.testing.expect(NtWriteVirtualMemory == 0x3E);
     try std.testing.expect(NtUserDispatchMessage == 0x5E);
+    try std.testing.expect(NtCreateMutant == 0x0B);
+    try std.testing.expect(NtOpenThread == 0x36);
+    try std.testing.expect(NtQueryInformationProcess == 0x16);
+    try std.testing.expect(NtAlpcConnectPort == 0x2D);
 }

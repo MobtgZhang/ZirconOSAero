@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/arch/x86_64/syscall_dispatch_mm.zig
-// Purpose: 虚拟内存与节区相关 SSDT 分发（从 `syscall.zig` 拆出以降低单文件体积）。
+// Purpose: 虚拟内存与节区相关 SSDT 分发（从 `syscall.zig` 拆出以降低单文件体积）；与 `section.zig` / VAD / CoW 闭环见 K1.6、阶段四 Section syscall 里程碑。
 //
 // This is an independent clean-room implementation.
 // Ref: docs/cn/SyscallABI.md, docs/cn/MM_Section_Roadmap.md

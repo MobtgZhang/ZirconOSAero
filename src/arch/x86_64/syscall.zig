@@ -148,6 +148,7 @@ pub fn dispatch(frame: *InterruptFrame) void {
     const syscall_no = frame.rax;
     const result: i64 = dispatchNtSsdt(frame, @truncate(syscall_no));
     frame.rax = @bitCast(result);
+    @import("../../ke/apc.zig").deliverKernelApcsForCurrentThread();
     // 返回用户态前确保当前线程 CR3 与所属进程一致（与调度器 `activateCr3ForProcessId` 互补；见 docs/cn/VM_ISOLATION.md）。
     if (process.getCurrentProcess()) |proc| {
         if (proc.address_space) |asp| asp.activate();
@@ -477,6 +478,40 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
             @as(*volatile ntdll.HANDLE, @ptrFromInt(p1)).* = local;
             break :blk 0;
         },
+        ssdt.NtCreateMutant,
+        ssdt.NtOpenMutant,
+        ssdt.NtReleaseMutant,
+        ssdt.NtQueryMutant,
+        ssdt.NtQueryInformationProcess,
+        ssdt.NtSetInformationProcess,
+        ssdt.NtQueryInformationThread,
+        ssdt.NtSetInformationThread,
+        ssdt.NtResumeThread,
+        ssdt.NtSuspendThread,
+        ssdt.NtAlertThread,
+        ssdt.NtTestAlert,
+        ssdt.NtCreateSemaphore,
+        ssdt.NtOpenSemaphore,
+        ssdt.NtReleaseSemaphore,
+        ssdt.NtCreateEvent,
+        ssdt.NtOpenEvent,
+        ssdt.NtSetEvent,
+        ssdt.NtResetEvent,
+        ssdt.NtPulseEvent,
+        ssdt.NtClearEvent,
+        ssdt.NtOpenThread,
+        ssdt.NtQueryObject,
+        ssdt.NtOpenFile,
+        ssdt.NtFlushBuffersFile,
+        ssdt.NtFsControlFile,
+        ssdt.NtCancelIoFile,
+        ssdt.NtCancelIoFileEx,
+        ssdt.NtCreateUserProcess,
+        ssdt.NtCreateThreadEx,
+        ssdt.NtAlpcConnectPort,
+        ssdt.NtAlpcCreatePort,
+        ssdt.NtAlpcSendWaitReceivePort,
+        => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
         else => blk: {
             klog.warn("Unknown NT syscall idx 0x%x", .{idx});
             break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);

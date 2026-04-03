@@ -8,6 +8,8 @@
 // No Windows source code or ReactOS source code was referenced.
 // Reference: docs/cn/SOFTWARE_COMPOSITOR_WDDM.md
 
+const build_options = @import("build_options");
+
 /// 与合成器输出对接的呈现路径（阶段 4：软/硬切换观测点）。
 pub const BackendKind = enum(u8) {
     gop_linear = 0,
@@ -24,7 +26,11 @@ pub fn getActiveBackend() BackendKind {
     return active_backend;
 }
 
-/// 在 `display` / VirtIO bringup 之后调用：`scanout_active` 为真时使用 `virtio_scanout`。
+/// 在 `display` / VirtIO bringup 之后调用：`scanout_active` 为真时使用 `virtio_scanout`（除非 `-Dforce_gop_present`）。
 pub fn syncFromVirtioScanout(scanout_active: bool) void {
+    if (build_options.force_gop_present) {
+        active_backend = .gop_linear;
+        return;
+    }
     active_backend = if (scanout_active) .virtio_scanout else .gop_linear;
 }

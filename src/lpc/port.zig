@@ -11,6 +11,19 @@ const ipc = @import("ipc.zig");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
 
+/// P4-C4：端口表与 `port_count` 的细粒度锁；与 `ipc` 队列锁独立，避免与消息环死锁嵌套顺序混乱。
+var port_gate: std.atomic.Value(u32) = .init(0);
+
+fn lockPorts() void {
+    while (port_gate.cmpxchgStrong(0, 1, .acquire, .monotonic)) |_| {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn unlockPorts() void {
+    port_gate.store(0, .release);
+}
+
 /// csrss Win32 子系统：`opcode` 在 `0x10000..0x1FFFF` 时由 `subsystem` 注册的回调同步处理（同内核占位模型）。
 var csr_lpc_handler: ?*const fn (client_pid: u32, opcode: u32, data: ?*const [ipc.MSG_DATA_SIZE]u8) i32 = null;
 
@@ -43,8 +56,8 @@ pub const Port = struct {
     name: [32]u8 = [_]u8{0} ** 32,
     name_len: usize = 0,
     connected_port: u32 = 0,
-    /// 与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 固定头变更时递增。
-    handshake_version: u8 = 1,
+    /// 与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 固定头变更时递增（v2：大消息/超时单一真源演进，载荷仍向后兼容 v1）。
+    handshake_version: u8 = 2,
     /// 与 `mm/vm.zig` `AddressSpace.section_view_token` 等登记配套；`NtMapViewOfSection` 后可写 `vm.sectionViewTokenAt`。
     section_view_handle: u32 = 0,
 
@@ -58,7 +71,7 @@ pub const Port = struct {
             .name = [_]u8{0} ** 32,
             .name_len = 0,
             .connected_port = 0,
-            .handshake_version = 1,
+            .handshake_version = 2,
             .section_view_handle = 0,
         };
     }
@@ -94,6 +107,8 @@ pub fn createConnectionListenerPort(owner_pid: u32, name: []const u8) ?*Port {
 
 fn createPortWithKind(owner_pid: u32, name: []const u8, kind: PortKind) ?*Port {
     ensureInit();
+    lockPorts();
+    defer unlockPorts();
     if (port_count >= MAX_PORTS) return null;
 
     const id = port_count + 1;
@@ -125,6 +140,8 @@ pub fn bindSectionViewToPort(port_id: u32, view_token: u32) void {
 
 pub fn findPort(name: []const u8) ?*Port {
     ensureInit();
+    lockPorts();
+    defer unlockPorts();
     for (ports[0..port_count]) |*p| {
         if (p.state == .inactive or p.state == .closed) continue;
         if (nameMatch(p.name[0..p.name_len], name)) return p;
@@ -134,32 +151,50 @@ pub fn findPort(name: []const u8) ?*Port {
 
 pub fn findPortById(id: u32) ?*Port {
     ensureInit();
+    lockPorts();
+    defer unlockPorts();
     if (id == 0 or id > port_count) return null;
     return &ports[id - 1];
 }
 
 pub fn connectPort(client_pid: u32, name: []const u8) ?*Port {
     ensureInit();
+    lockPorts();
+    defer unlockPorts();
 
-    const server = findPort(name) orelse return null;
+    const server = blk: {
+        for (ports[0..port_count]) |*p| {
+            if (p.state == .inactive or p.state == .closed) continue;
+            if (nameMatch(p.name[0..p.name_len], name)) break :blk p;
+        }
+        return null;
+    };
     if (server.state != .listening) return null;
 
-    const client = createPort(client_pid, name) orelse return null;
+    if (port_count >= MAX_PORTS) return null;
+    const id = port_count + 1;
+    var client = &ports[port_count];
+    client.* = Port.init(id, client_pid);
     client.state = .connected;
     client.connected_port = server.id;
-
-    if (server.connected_port == 0) {
-        server.connected_port = client.id;
-    }
+    const copy_len = @min(name.len, client.name.len);
+    @memcpy(client.name[0..copy_len], name[0..copy_len]);
+    client.name_len = copy_len;
+    port_count += 1;
 
     klog.debug("LPC: Port connected (client=%u -> server=%u)", .{
         client.id, server.id,
     });
+    if (server.connected_port == 0) {
+        server.connected_port = client.id;
+    }
     return client;
 }
 
 pub fn closePort(port_id: u32) bool {
     ensureInit();
+    lockPorts();
+    defer unlockPorts();
     if (port_id == 0 or port_id > port_count) return false;
     var port = &ports[port_id - 1];
     port.state = .closed;

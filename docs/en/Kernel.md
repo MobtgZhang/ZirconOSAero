@@ -19,6 +19,7 @@ src/
 │   └── aarch64/       #   gic, timer, pl011
 ├── ke/                # Kernel Executive
 │   ├── scheduler.zig
+│   ├── timekeeping.zig
 │   ├── timer.zig
 │   ├── interrupt.zig  # IRQ + syscall entry
 │   └── sync.zig
@@ -111,14 +112,17 @@ Identity mapping is used; kernel and framebuffer have dedicated mappings. Startu
 
 ## 4. Scheduler (`ke/scheduler.zig`)
 
+Chinese detail: [docs/cn/SCHEDULER_API.md](../cn/SCHEDULER_API.md).
+
 | Property | Value |
 |----------|-------|
-| Algorithm | Round-robin |
-| Max threads | 32 |
+| Algorithm | Per-logical-CPU 32-level FIFO ready buckets + priority-class quanta + starvation / I/O boost hooks |
+| Max threads | Build-time `-Dmax_scheduler_threads=` (clamped 8..256, default 64) |
 | Stack size | 8KB |
-| Tick | PIT IRQ0 |
+| Tick | PIT IRQ0 (~100Hz) drives `scheduler.tick` |
 | States | ready, running, blocked, terminated |
 | Control | `scheduling_enabled` can pause scheduling |
+| Process teardown | `ps/process.zig` calls `before_release_process_address_space` so no thread keeps a released user CR3 (K2.1) |
 
 ## 5. Interrupts and timer
 
@@ -134,6 +138,12 @@ Identity mapping is used; kernel and framebuffer have dedicated mappings. Startu
 |------|------|
 | PIC | 8259A cascaded |
 | PIT | ~100 Hz tick |
+
+### Timekeeping (`ke/timekeeping.zig`) and HPET (x86_64)
+
+- **`readInterruptTicks`**: same counter as the preemptive scheduler (`scheduler.getTicks`).  
+- **`readMonotonicRaw`**: HPET main counter when `hal/x86_64/hpet.zig` probe succeeds after MMIO identity-map; otherwise falls back to interrupt ticks. IRQ0 is **not** switched to HPET yet — see [TimerPrecisionRoadmap.md](../cn/TimerPrecisionRoadmap.md).  
+- LAPIC one-shot / single tick source migration: stub log in `hal/x86_64/lapic_timer_tick.zig`.
 
 ### Dispatch chain
 
@@ -170,19 +180,19 @@ NT-style unified object management.
 
 ## 7. I/O Manager (`io/io.zig`)
 
-IRP-based I/O.
+IRP-based I/O. `Irp.status` and driver dispatch return values use **`NTSTATUS`** (`io.NTSTATUS`), aligned with the same numeric subset as [`ntdll`](../../src/libs/ntdll.zig).
 
 ### Objects
 
 | Object | Role |
 |--------|------|
-| DriverObject | Driver entry + dispatch table |
-| DeviceObject | Device on a stack |
-| Irp | One I/O operation |
+| DriverObject | Per–major-function `major_dispatch[]` plus legacy single `dispatch` fallback |
+| DeviceObject | Device on a stack; fixed `DeviceExtension` blob; `IoGetDeviceExtension` |
+| Irp | One I/O operation; `system_buffer` / `user_buffer` / `mdl_address` / `io_status_block_ptr` (WDK-shaped subset); `tail` tunnel (e.g. `FileObject*`) |
 
 ### Major functions
 
-create, close, read, write, ioctl, query_info, …
+create, close, read, write, ioctl, query_info, pnp, power, …
 
 ### Device kinds
 
@@ -199,9 +209,24 @@ User API
   → complete IRP
 ```
 
-### VFS bridge (Phase 3)
+### Async / cancel (subset)
 
-Native file read/write/close can be driven through [`vfs.dispatchFileObjectIr`](../../src/fs/vfs.zig), which maps `Irp` major codes to `vfs.read` / `vfs.write` / `vfs.close`. This is invoked from [`ntdll`](../../src/libs/ntdll.zig) after resolving a per-process handle to a `FileObject`.
+- `IoMarkIrpPending`, `IoCancelIrp`, and a two-slot LIFO completion stack (`IoSetCompletionRoutine` / `IoCompleteRequest`).
+- DPC drain hook contract: see [`ke/dpc.zig`](../../src/ke/dpc.zig) (K4.4).
+
+### Block IRP smoke (VirtIO-BLK PCI)
+
+When PCI enumeration sees `1af4:1042`, [`virtio_blk_pci`](../../src/drivers/storage/virtio_blk_pci.zig) registers a stub disk and `submitReadSectors` issues `IRP_MJ_READ`. Kernel log line `STORAGE: VirtIO-blk IRP sector0 read OK` after a successful boot-path read.
+
+### VFS bridge
+
+Native file read/write/close go through [`vfs.dispatchFileObjectIrp`](../../src/fs/vfs.zig): if the mount has a **volume device object**, the IRP is sent with `dispatchIrpThroughStack`; otherwise the path falls back to direct `FsOps`. [`ntdll`](../../src/libs/ntdll.zig) builds minimal `Irp` values and maps completed `NTSTATUS` into `IO_STATUS_BLOCK`.
+
+### Reproduce (host)
+
+```bash
+zig build test   # includes io_irp_host, fs_status_nt_map_host
+```
 
 ## 8. Filesystems (`fs/`)
 
@@ -209,9 +234,11 @@ Native file read/write/close can be driven through [`vfs.dispatchFileObjectIr`](
 
 | Concept | Role |
 |---------|------|
-| MountPoint | Mount tracking |
-| FileObject | Open file |
+| MountPoint | Mount tracking + optional `volume_device_idx` (stack top for IRP) |
+| FileObject | Open file; `share_access`; `dir_enum_next` for `NtQueryDirectoryFile` |
 | FsOps | FS operations |
+
+`NtCreateFile` / `NtOpenFile` use `resolvePath` (object-path normalization), `share_access`, and a subset of `create_disposition` / `create_options`. `NtQueryDirectoryFile` returns one `FILE_NAMES_INFORMATION` entry per call for directory handles.
 
 ### FAT32 (`fat32.zig`)
 

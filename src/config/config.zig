@@ -123,7 +123,8 @@ pub fn getFrameSize() u64 {
 }
 
 pub fn getMaxPhysicalMb() u64 {
-    return system_config.getIntOr("memory", "max_physical_mb", 4096);
+    // 默认与 NT 6.1 / Win7 Ultimate x64 档物理内存上界同量级；真实 PFN 元数据仍受 `phys_track_gb` 限制。
+    return system_config.getIntOr("memory", "max_physical_mb", 196608);
 }
 
 pub fn getStackSizeKb() u64 {

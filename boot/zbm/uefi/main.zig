@@ -644,6 +644,7 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
 
     // ── Jump to kernel_main（架构相关调用约定）──
     // x86_64: RDI=magic, RSI=info, RSP=内核栈（勿用 UEFI 栈）
+    // 须模拟 `call kernel_main`：入口 RSP 须为 16n+8（AMD64 SysV），否则 Zig/LLVM 在 -ORelease 下对 RBP 偏移的 MOVAPS 会因未对齐而 #GP。
     // AArch64: x0=magic, x1=info, SP=内核栈
     // RISC-V: a0=magic, a1=info, sp=内核栈
     const kernel_stack = @as(*const u64, @ptrFromInt(vb + uefi_vec_off_stack)).*;
@@ -652,6 +653,7 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
             asm volatile ("cli");
             asm volatile (
                 \\mov %[stack], %%rsp
+                \\sub $8, %%rsp
                 \\xor %%rbp, %%rbp
                 \\mov %[magic], %%rdi
                 \\mov %[info], %%rsi

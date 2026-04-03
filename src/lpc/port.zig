@@ -234,8 +234,9 @@ pub fn requestWaitReplyPort(
             var msg = ipc.Message.init(server_port.owner_pid, client_pid, opcode);
             msg.msg_type = .reply;
             std.mem.writeInt(i32, msg.data[0..4], ret, .little);
-            // `CsrApiNumber.get_message` == 0x10025：附加 `user32` 序列化的 `MSG`（见 `subsystem.zig`）。
-            if (opcode == 0x10025) {
+            // `get_message`（0x10025）：`user32` 序列化 `MSG`；`open_desktop`（0x10028）：4 字节 1-based HDESK。
+            const csr_reply_extra_payload = opcode == 0x10025 or opcode == 0x10028;
+            if (csr_reply_extra_payload) {
                 const plen = ipc.csrReplyPayloadLen();
                 if (plen > 0 and plen <= msg.data.len - 4) {
                     @memcpy(msg.data[4..][0..plen], ipc.csr_reply_payload[0..plen]);

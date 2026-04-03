@@ -12,7 +12,7 @@
 // IRQL / SMP（与 WDK 目标语义对齐的演进说明）：
 // - **NonPagedPool**：文档要求可在 DISPATCH_LEVEL 及以下安全分配；本模块对档位链表与 tag 统计使用 **原子自旋风格锁**（`pool_gate`），与 `heap` 内锁嵌套顺序为 **先 pool 后 heap**，避免死锁。
 // - 完整 SMP 下仍宜引入 per-CPU 池或 `IrqSpinLock` 包装；见路线图 K1。
-// - **PagedPool**：逻辑计数分离，**尚未**接真正分页换出。
+// - **PagedPool**：`paged_bytes_outstanding` 仅作语义占位与泄漏倾向统计；**未** 实现将页体换出到磁盘或修剪工作集（WDK 完整 PagedPool 需分页器 + 后备存储；见 [MM_HEAP_POOL_SLAB.md](../../docs/cn/MM_HEAP_POOL_SLAB.md)）。在接分页器之前，勿依赖「可分页」在高压下的 OOM 行为与真实 NT 一致。
 
 const std = @import("std");
 const heap = @import("heap.zig");
@@ -23,6 +23,7 @@ pub const PoolType = enum(u8) {
 };
 
 var paged_bytes_outstanding: usize = 0;
+var paged_trim_placeholder_events: usize = 0;
 
 const SLOT_COUNT: usize = 6;
 const slot_sizes: [SLOT_COUNT]usize = .{ 16, 32, 64, 128, 256, 512 };
@@ -105,6 +106,16 @@ pub fn tagStatsLenForDebug() usize {
     lockPool();
     defer unlockPool();
     return tag_stats_len;
+}
+
+/// K1.2：分页器 / 工作集修剪占位。无换出实现时仅统计事件；接 `Mm` 修剪后在此接线。
+pub fn notePagedPoolTrimPlaceholder(bytes_hint: usize) void {
+    _ = bytes_hint;
+    paged_trim_placeholder_events +|= 1;
+}
+
+pub fn pagedTrimPlaceholderEventsForDebug() usize {
+    return paged_trim_placeholder_events;
 }
 
 /// 逻辑 **PagedPool**：当前与 NonPaged 共用同一后备；`paged_bytes_outstanding` 用于调试统计。
@@ -192,4 +203,10 @@ test "pool stress alloc free stable slot reuse" {
     const last = allocateNonPaged(128, 0xCCDD) orelse return error.Oom;
     freeNonPaged(last, 128, 0xCCDD);
     try std.testing.expect(true);
+}
+
+test "PagedPool trim placeholder counter" {
+    const before = pagedTrimPlaceholderEventsForDebug();
+    notePagedPoolTrimPlaceholder(4096);
+    try std.testing.expectEqual(before + 1, pagedTrimPlaceholderEventsForDebug());
 }

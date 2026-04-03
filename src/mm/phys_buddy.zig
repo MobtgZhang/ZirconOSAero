@@ -194,4 +194,4 @@ pub fn freeContiguousPagesWithSource(fa: *frame_mod.FrameAllocator, phys: u64, n
     }
 }
 
-// 与 `FrameAllocator` 的联合主机单测受 Zig 模块根路径限制（`frame.zig` 依赖 `arch`）；算法见 `buddy.zig` 单测，接线验证见内核启动 klog `PhysBuddy:`。
+// 与 `FrameAllocator` carve 的联合用例受 Zig 0.15「测试根须在 `src/` 模块树内」限制；算法见 `buddy.zig` 单测与 `frame.zig` `freeContiguousRange`；内核启动 klog `PhysBuddy:` 为接线确认。

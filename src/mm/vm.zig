@@ -120,6 +120,12 @@ fn freeFrameForRelease(ctx: ?*anyopaque, phys: u64) void {
 /// 释放进程 **用户半区** 页表子树与叶帧，并 `free` 顶层 PML4；调用方须将 `AddressSpace` 置为不再使用且 **不得** 再以该 CR3 运行。
 /// 调用方还须保证 **无** 仍在运行的线程持有该 `pml4_phys` 作为当前 CR3（见 `ps/process.zig` `terminateProcess` 与调度器配合）。
 pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
+    // 多核：拆除整棵用户子树前记录 shootdown 提示；`releaseUserHalf` 内部逐页路径亦会在 `unmapRange` 中递增（K1.4/K2.5）。
+    if (builtin.cpu.arch == .x86_64) {
+        const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
+        tlb.notePendingGlobalShootdown();
+        tlb.noteUserMappingInvalidatedSmp();
+    }
     if (@hasDecl(paging, "releaseUserHalfAddressSpace")) {
         paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, @ptrCast(space.allocator));
     }

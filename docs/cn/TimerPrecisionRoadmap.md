@@ -8,20 +8,27 @@
 
 | 架构 | 高精度源 | 备注 |
 |------|----------|------|
-| **x86_64** | **APIC 定时器**（含 TSC-deadline 若可用） | 与现有 I/O APIC / LAPIC 初始化衔接；需文档化 IRQL 与校准。 |
-| **x86_64** | **HPET** | MMIO；与 PIT 并存时的优先级与 `KeQueryInterruptTime` 语义需统一。 |
-| **aarch64** | **ARM Generic Timer** | 已在 HAL 方向预留；与 tick 统一为 `arch` 分派。 |
-| **riscv64** | **CLINT / APLIC + rdtime** | 依平台实现。 |
-| **loongarch64** | **Constant / CPU 定时器 CSR** | 依龙芯公开手册。 |
+| **x86_64** | **APIC 定时器**（含 TSC-deadline 若可用） | 与现有 I/O APIC / LAPIC 初始化衔接；需文档化 IRQL 与校准。挂钩：`hal/x86_64/lapic_timer_tick.zig`（T3 占位日志）。 |
+| **x86_64** | **HPET** | MMIO；与 PIT 并存时的优先级与 `KeQueryInterruptTime` 语义需统一。实现：`hal/x86_64/hpet.zig`（`main.zig` 在绑定内核页表后 `mapDeviceMmioIdentity` + `initOptional`）；**不改 IRQ0**。 |
+| **aarch64** | **ARM Generic Timer** | 已在 HAL 方向预留；与 tick 统一为 `ke/timekeeping.zig` + `arch.initTimer`。 |
+| **riscv64** | **CLINT / APLIC + rdtime** | 依平台实现；单调读当前回退 tick。 |
+| **loongarch64** | **Constant / CPU 定时器 CSR** | 依龙芯公开手册；单调读当前回退 tick。 |
 
-## 里程碑建议
+## 里程碑与代码锚点
 
-1. **抽象**：在 `ke/` 或 `hal/` 增加 **单调时钟 + 可选 high_res tick** 接口，PIT 仍为 fallback。
-2. **验证**：调度器在 100Hz 下行为不变；引入高分辨率后补 **单元 / QEMU** 测试（tick 漂移上界）。
-3. **文档**：更新 [SyscallABI.md](SyscallABI.md) 无关，但 **PROCESS_NT61.md** 与 **Kernel.md** 中「定时子系统」小节应指向本文。
+| # | 内容 | 状态（诚实） |
+|---|------|----------------|
+| **1** | **抽象**：`ke/timekeeping.zig` — `readInterruptTicks()`（≈ `scheduler.getTicks`）、`readMonotonicRaw()`（x86_64 优先 HPET 主计数器，否则 tick）；`ke/timer.zig` 经 `timekeeping` 读 tick。 | **已接线** |
+| **2** | **HPET 探测与频率推算**：GCAP_ID + period(fs) → `hpet_counter_hz_approx`；`isCalibratedForTickMigration()` 为真表示可读主计数器（**仍**未迁 tick）。 | **已接线** |
+| **3** | **单一 tick 源**：LAPIC periodic / one-shot 或 TSC-deadline **替换** PIT 前须 mask IRQ0、避免双源风暴。 | **未** — 见 `lapic_timer_tick.zig` |
+| **4** | **验证**：100Hz 下调度行为不变；高分辨率引入后补 tick 漂移上界测试。 | 部分（策略单测已有；QEMU 漂移 TBD） |
 
 ## 参考（白名单）
 
 - Intel SDM（APIC、TSC）
 - ACPI HPET 规范
 - ARM DDI 0487（Generic Timer）
+
+## 交叉引用
+
+- 用户态 **`NtDelayExecution` / Sleep** 与 tick 粒度：见 [NT61_VirtualMemory_ABI_Notes.md](NT61_VirtualMemory_ABI_Notes.md) §「延时与 tick」。

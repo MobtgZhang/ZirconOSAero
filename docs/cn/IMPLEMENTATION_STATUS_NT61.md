@@ -16,10 +16,11 @@ GitHub Actions：`.github/workflows/ci.yml`（多架构 `zig build kernel`、ZBM
 
 | 方向 | 现状（摘要） | 跟踪文档 / 代码 |
 |------|----------------|-----------------|
-| 物理帧 / mmap | Multiboot2（ZBM 递交）驱动 `frame.zig`；伙伴连续页等见契约矩阵 | `src/mm/frame.zig`, `phys_buddy.zig` |
+| 物理帧 / mmap | Multiboot2（ZBM 递交）驱动 `frame.zig`；`-Dphys_track_gb` 扩展可跟踪 RAM 上界；伙伴 + 帧缓冲连续页 `allocContiguousPagesWithSource` | `src/mm/frame.zig`, `phys_buddy.zig` |
 | 池与堆 | Bump + 回收 + `mm/pool` 档位；slab/伙伴演进 | [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md) |
 | 分页 / 隔离 | 四级表、恒等映射；每进程 CR3 与缓解见矩阵 | `src/arch/*/paging*`, `mitigations.zig` |
-| 中断 / 定时器 | x86_64：PIC+PIT 主路径；IOAPIC/HPET/SMP 见 K3/K2 | [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K2–K3, `src/hal/` |
+| 中断 / 定时器 | x86_64：PIC+PIT 主 tick；`ke/timekeeping.zig` 抽象；HPET MMIO 探测/主计数器只读（`hpet.zig`，**未**接 IRQ0）；LAPIC 单源 tick T3；SMP AP 实路径 K2.4 | [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md), [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) K2–K3 |
+| 图形 / VirtIO-GPU / NVIDIA | VirtIO：`SET_SCANOUT` + `RESOURCE_FLUSH`；NVIDIA：BAR 日志 + 可选可预取 BAR 4MiB 映射 + `IOCTL_NVIDIA_BAR0_FIRST_U32` | [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §8、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) 第七阶段 |
 | 其他架构 | aarch64 / riscv64 / loongarch64：向量、定时器、设备树或固件 handoff 各异 | 各 `src/arch/<arch>/`, [Boot.md](Boot.md) |
 
 **待办锚点**：NT61_KERNEL_TODO **K1、K2、K3**。
@@ -28,9 +29,9 @@ GitHub Actions：`.github/workflows/ci.yml`（多架构 `zig build kernel`、ZBM
 
 | 方向 | 现状（摘要） | 跟踪文档 / 代码 |
 |------|----------------|-----------------|
-| 调度 | 多档就绪队列；非完整 NT 32 级 | [SCHEDULER_API.md](SCHEDULER_API.md), `src/ke/scheduler.zig` |
+| 调度 | 每 CPU **32** 档 FIFO 分桶 + 时间片/饥饿/I/O boost；互斥继承 **深度配对**；线程表默认 **64** 槽（`-Dmax_scheduler_threads=`）；NUMA/完整 IRQL **明确非短期范围** | [SCHEDULER_API.md](SCHEDULER_API.md), `src/ke/scheduler.zig`, `mutex_inherit_depth_host` 单测 |
 | 进程 / 线程 | Process Server、对象路径部分可用 | `src/ps/`, 契约矩阵 §0 |
-| Syscall | x86_64：`syscall` + SSDT 子集；用户缓冲 probe | [SyscallABI.md](SyscallABI.md), `ssdt_nt61.zig` |
+| Syscall | x86_64：`syscall` + SSDT 子集；VM/节区分发拆至 `syscall_dispatch_mm.zig`；返回用户态前刷新 CR3 | [SyscallABI.md](SyscallABI.md), `ssdt_nt61.zig`, `syscall_dispatch_mm.zig` |
 | ntdll 对齐 | 服务号与桩函数持续与 SSDT 对齐 | `src/libs/ntdll/`, K7 |
 
 **待办锚点**：NT61_KERNEL_TODO **K2、K7**。

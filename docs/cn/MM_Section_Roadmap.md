@@ -11,7 +11,7 @@
 ## 阶段划分
 
 1. **当前**：`src/mm/vm.zig` 每进程 `AddressSpace`、`mapPage` / `mapPageAlloc`；`ntdll` 中 `NtAllocateVirtualMemory` 与当前进程空间挂钩。
-2. **短期**：`section.zig` + `ntdll` 已实现 **匿名节** 与 `NtMapViewOfSection`/`NtUnmapViewOfSection` 子集；x64 **`syscall` 分发** 已接 `ssdt_nt61` 中 `NtCreateSection`（0x47）/`NtMapViewOfSection`（0x48）/`NtUnmapViewOfSection`（0x2A，Win7 SP1 公开索引）。只读 **文件后备** 映射（与 `vfs`/`FileObject`）仍为后续项。
+2. **短期**：`section.zig` + `ntdll`：**匿名节**、`SEC_IMAGE` 文件节标志、`NtMapViewOfSection`/`NtUnmapViewOfSection`；可写文件后备为 **eager copy**（非 COW）；`vm.AddressSpace.section_view_token` 单调 token 供 LPC 绑定。x64 分发见 `syscall_dispatch_mm.zig`。真 **写时拷贝** 与只读共享仍为后续项。
 3. **中期**：PE 映像映射（与 `src/loader/pe.zig` 统一），`SEC_IMAGE` 等标志按 MSDN 语义解析。
 4. **长期**：共享节、写时拷贝、子进程继承视图；布局以 `comptime` 测试锁定 `sizeof`/对齐。
 

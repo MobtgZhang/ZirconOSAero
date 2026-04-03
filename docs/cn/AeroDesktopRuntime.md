@@ -261,6 +261,8 @@
 
 **QEMU x86 说明**：默认 `pc` + `-vga std` **不会出现** PCI 厂商 `0x1002` / `0x10DE` 的独立显示控制器；AMD/NVIDIA 探测会静默失败并继续使用 GOP。验证 NVIDIA 路径需 **真机**、**PCI 直通** 或自行在 QEMU 附加含 `10DE:03xx` 的设备。VirtIO 显示为 `**1af4:1050`**（`virtio-gpu-pci`），与本节 NVIDIA 路径不同。
 
+**VirtIO-GPU 复现（scanout）**：QEMU 增加 `-device virtio-gpu-pci`；内核串口在桌面初始化后可见 `VirtIO-GPU: scanout resource=2 …`（需 **32bpp**、**pitch = width×4**、屏前 RAM 页连续，见 `framebuffer.getFrontBufferPhysContiguousForVirtio`）。**NVIDIA 诊断 IOCTL**：`IOCTL_NVIDIA_BAR0_FIRST_U32`（`nvidia_gpu.zig`），仅内核/调试用途；与闭源 Windows 驱动共存时仍默认不写显示引擎。
+
 **范围（R7 及以下）**：DID 与芯片族见 `src/drivers/video/amd/dids.zig`、`family_detect.zig`（Stoney / Carrizo / Kaveri / Kabini 等）；未知 DID 仍 handoff，但不走实验性 KMS 分派。
 
 ## 9. 双缓冲、大块后备与软件光标层

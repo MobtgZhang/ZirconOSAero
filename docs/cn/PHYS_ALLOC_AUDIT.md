@@ -6,9 +6,9 @@
 
 | 组件 | 路径 | 职责 |
 |------|------|------|
-| 位图帧分配器 | [`src/mm/frame.zig`](../../src/mm/frame.zig) | 自 Multiboot2 `mmap`（`BootInfo`）初始化可用帧；`alloc` / `free` / `allocContiguous` |
+| 位图帧分配器 | [`src/mm/frame.zig`](../../src/mm/frame.zig) | 自 Multiboot2 `mmap`（`BootInfo`）初始化可用帧；`alloc` / `free` / `allocContiguous`；可跟踪物理跨度由构建选项 **`-Dphys_track_gb=8\|16\|32\|64`** 决定（默认 8） |
 | 伙伴（逻辑） | [`src/mm/buddy.zig`](../../src/mm/buddy.zig) | 主机单元测试与算法参考 |
-| 物理伙伴封装 | [`src/mm/phys_buddy.zig`](../../src/mm/phys_buddy.zig) | 从 `FrameAllocator.allocContiguous` carve `2^max_order` 页，映射索引→物理地址 |
+| 物理伙伴封装 | [`src/mm/phys_buddy.zig`](../../src/mm/phys_buddy.zig) | 从 `FrameAllocator.allocContiguous` carve `2^max_order` 页；`allocContiguousPagesWithSource` 对 **2 的幂**页数优先伙伴、否则回退位图（帧缓冲等释放须配对 `source`） |
 | 虚拟映射回调 | [`src/mm/vm.zig`](../../src/mm/vm.zig) `allocFrameCb` | 页表页与匿名页均经 `FrameAllocator.allocZeroed` |
 
 ## 内存图（Multiboot2）

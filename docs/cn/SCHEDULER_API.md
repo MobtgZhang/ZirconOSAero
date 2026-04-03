@@ -26,8 +26,9 @@
 
 ### 互斥体优先级继承（最小子集）
 
-- `ke/sync.zig`：`Mutex.acquireWithInheritance` / `release` 调用 `scheduler.applyMutexInheritFloor` / `clearMutexInheritFloor`。
-- **限制**：多互斥同时持有时当前实现可能在 `release` 时过早清零 `mutex_inherit_floor`；单互斥或顺序持锁场景可用。
+- `ke/sync.zig`：`Mutex.acquireWithInheritance` / `release` 与 `scheduler.beginMutexInheritance`、`updateMutexInheritFloor`、`endMutexInheritance` 配对；每条 mutex 等待边在**首次**阻塞时 `begin` 一次，后续自旋仅 `update`；持有者**最外层** `release` 时 `end` 一次。
+- **多锁**：`Thread.mutex_inherit_depth` 计数并行等待边；仅当深度归零时清零 `mutex_inherit_floor`（深度仍大于 0 时 floor 可能**暂高于**剩余等待者真实需求，属可接受保守抬升）。
+- **验证**：`zig build test` → **mutex_inherit_depth_host**（深度模型主机对照）。
 
 ### 处理器亲和
 
@@ -44,15 +45,15 @@
 | 能力 | NT / 公开文档侧 | 本仓库 |
 |------|-----------------|--------|
 | 就绪组织 | 多级反馈 + 动态调整 | 32 分桶 FIFO + 显式 boost/饥饿/继承钩子 |
-| NUMA / 公平份额 | 有 | 未实现 |
-| IRQL / 抢占边界 | 严格 | 简化模型 |
+| NUMA / 公平份额 | 有 | **Explicitly out of scope（短期）** — 不在本里程碑假装「完整调度器」；见契约矩阵 §0 |
+| IRQL / 抢占边界 | 严格（DISPATCH_LEVEL 等） | **简化模型**：未完整建模 WDK IRQL 与 DPC 队列；抢占主要绑定在 **timer IRQ** 路径；后续接线点见 `ke/irql.zig` 与中断入口注释 |
 
 ## 公开入口
 
 - `init` / `enableScheduling` / `tick` / `yield`
 - `createThread` / `blockThread` / `unblockThread` / `terminateThread`
 - `setThreadPriority` / `setThreadPriorityClass` / `setThreadAffinityMask`
-- `applyMutexInheritFloor` / `clearMutexInheritFloor`（通常由 `Mutex` 调用）
+- `beginMutexInheritance` / `updateMutexInheritFloor` / `endMutexInheritance`（由 `Mutex` 调用）；`clearMutexInheritFloor` 为强制复位（调试）
 - `getCurrentThread` / `getTicks` / `effectivePriorityForThread`
 
 ## 测试

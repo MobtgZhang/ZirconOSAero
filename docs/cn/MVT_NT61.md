@@ -35,6 +35,7 @@
 | 常见 `NTSTATUS` 与文件打开映射（P6-1 锚点） | 同上 → fs_status_nt_map_host | [tests/fs_status_nt_map_host.zig](../../tests/fs_status_nt_map_host.zig) |
 | FULL_API_BACKLOG §1–§10 分节 CI 锚点 | 同上 → nt61_full_api_backlog_anchors_host | [tests/nt61_full_api_backlog_anchors_host.zig](../../tests/nt61_full_api_backlog_anchors_host.zig) |
 | 调度器策略公式（主机） | 同上 → scheduler_policy_host | [tests/scheduler_policy_host.zig](../../tests/scheduler_policy_host.zig) |
+| 互斥继承深度模型（主机） | 同上 → mutex_inherit_depth_host | [tests/mutex_inherit_depth_host.zig](../../tests/mutex_inherit_depth_host.zig) |
 | Phase F 调度差额（文档化占位） | 同上 → nt61_phase_f_scheduler_gap | [tests/nt61_phase_f_scheduler_gap.zig](../../tests/nt61_phase_f_scheduler_gap.zig) |
 | GpuDevice / ramfb 占位 | 同上 → gpu_device_host | [src/drivers/video/gpu_device.zig](../../src/drivers/video/gpu_device.zig) |
 | Win32k 窗口骨架 | 同上 → win32k_host | [src/subsystems/win32k/mod.zig](../../src/subsystems/win32k/mod.zig) |

@@ -3,6 +3,8 @@
 ## 已实现机制（代码路径）
 
 - **独立页表**：`ps/process.zig` 中 `createProcess` 为每个进程分配 `vm.AddressSpace`（新 PML4 等）。
+- **syscall 返回**：`src/arch/x86_64/syscall.zig` 在写回 `RAX` 后对当前进程 `AddressSpace.activate()`，与调度器 CR3 切换互补。
+- **多核 TLB**：`vm.unmapRange` / `decommitVirtualRange` 在 x86_64 上调用 `tlb_broadcast.noteUserMappingInvalidatedSmp()` 递增诊断计数（完整 IPI shootdown 仍为 K2.5）。
 - **映射标志**：`vm.MapFlags.user` / `Write` / `NoExecute` 对应用户可访问页（公开分页语义）。
 - **惰性提交**：`AddressSpace.tryLazyCommitFault` + `vm.handleLazyCommitFault`；合法保留区缺页可提交匿名页。
 - **用户态缺页**：`ke/interrupt_x86.zig` 中 `#PF` 且 error code 含 user 位时，先尝试 lazy commit，失败则 `terminateProcess` 并记录 `ACCESS_VIOLATION` 语义（0xC0000005 为应用退出码占位）。

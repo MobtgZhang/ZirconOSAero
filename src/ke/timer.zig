@@ -4,6 +4,7 @@
 const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const scheduler = @import("scheduler.zig");
+const timekeeping = @import("timekeeping.zig");
 const klog = @import("../rtl/klog.zig");
 
 const TIMER_HZ: u32 = 100;
@@ -14,6 +15,7 @@ pub fn init() void {
     arch.initPic();
     arch.initTimer();
     arch.unmaskIrq(0);
+    timekeeping.noteArchTimerInitialized();
     timer_initialized = true;
     switch (builtin.target.cpu.arch) {
         .x86_64 => klog.info("Timer: PIT at %uHz, PIC initialized", .{TIMER_HZ}),
@@ -23,7 +25,7 @@ pub fn init() void {
 }
 
 pub fn getTicks() u64 {
-    return scheduler.getTicks();
+    return timekeeping.readInterruptTicks();
 }
 
 pub fn getSeconds() u64 {

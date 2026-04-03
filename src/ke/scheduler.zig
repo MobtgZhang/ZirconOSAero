@@ -9,6 +9,7 @@
 // Reference: MS Learn — scheduling (conceptual); OS textbook MLQ; Intel SDM for syscall path elsewhere.
 
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const klog = @import("../rtl/klog.zig");
 const vm_mod = @import("../mm/vm.zig");
 const process_mod = @import("../ps/process.zig");
@@ -53,7 +54,11 @@ pub const ThreadContext = struct {
     rip: u64 = 0,
 };
 
-const MAX_THREADS: usize = 32;
+/// 线程槽上限；`-Dmax_scheduler_threads=` 覆盖（8..256，默认见 `build.zig`）。
+const MAX_THREADS: usize = blk: {
+    const v = build_options.max_scheduler_threads;
+    break :blk @max(8, @min(256, @as(usize, v)));
+};
 const STACK_SIZE: usize = 8192;
 const MAX_SCHED_CPUS: usize = 8;
 const NUM_PRI: usize = 32;
@@ -377,8 +382,10 @@ pub const Thread = struct {
     /// 当前就绪桶优先级；255 = 不在任何桶。
     ready_bucket_pri: u8 = 255,
     ready_sched_cpu: u8 = 0,
-    /// 互斥体等待者抬升的**下限**（effective 至少为此值）；单互斥场景下 release 清零。
+    /// 互斥体等待者抬升的**下限**（effective 至少为此值）。
     mutex_inherit_floor: u8 = 0,
+    /// 并行等待边数量：每有一条「本 mutex 触发的继承边」+1；最后一次 `endMutexInheritance` 时若归零则清零 floor。
+    mutex_inherit_depth: u32 = 0,
     name: [16]u8 = [_]u8{0} ** 16,
 };
 
@@ -405,6 +412,27 @@ var scheduling_enabled: bool = false;
 
 var starve_ticks: [MAX_THREADS]u64 = @splat(0);
 
+fn terminateThreadsForProcess(pid: u32) void {
+    if (pid == 0) return;
+    sched_irq_lock.lock();
+    defer sched_irq_lock.unlock();
+
+    var i: usize = 0;
+    while (i < thread_count) : (i += 1) {
+        if (i == 0) continue; // idle
+        if (threads[i].process_id == pid) {
+            removeFromReadyQueue(i);
+            threads[i].state = .terminated;
+            threads[i].mutex_inherit_floor = 0;
+            threads[i].mutex_inherit_depth = 0;
+        }
+    }
+    if (current_thread < thread_count and threads[current_thread].process_id == pid) {
+        current_thread = 0;
+        activateCr3ForProcessId(0);
+    }
+}
+
 pub fn init() void {
     resetReadyQueues();
     thread_count = 0;
@@ -412,6 +440,8 @@ pub fn init() void {
     tick_count = 0;
     initialized = true;
     scheduling_enabled = false;
+
+    process_mod.before_release_process_address_space = terminateThreadsForProcess;
 
     _ = createIdleThread();
 }
@@ -616,15 +646,39 @@ pub fn setThreadAffinityMask(tid: usize, mask: u64) void {
     threads[tid].home_cpu = pickHomeCpuForAffinity(affinityCpuMask(&threads[tid]));
 }
 
-/// 互斥体：等待者有效优先级 `waiter_effective` 抬升持有者（**单互斥**场景下 `release` 应配对 `clearMutexInheritFloor`）。
-pub fn applyMutexInheritFloor(owner_tid: usize, waiter_effective_pri: u8) void {
+/// 本 mutex 上**首次**建立等待继承边：深度 +1 并抬升 floor。
+pub fn beginMutexInheritance(owner_tid: usize, waiter_effective_pri: u8) void {
+    if (owner_tid >= thread_count) return;
+    threads[owner_tid].mutex_inherit_depth +|= 1;
+    threads[owner_tid].mutex_inherit_floor = @max(threads[owner_tid].mutex_inherit_floor, waiter_effective_pri);
+}
+
+/// 同一条等待边上 waiter 有效优先级变化时仅刷新 floor（不增减深度）。
+pub fn updateMutexInheritFloor(owner_tid: usize, waiter_effective_pri: u8) void {
     if (owner_tid >= thread_count) return;
     threads[owner_tid].mutex_inherit_floor = @max(threads[owner_tid].mutex_inherit_floor, waiter_effective_pri);
 }
 
+/// 释放 mutex 时配对调用：深度减一；仅当深度归零时清零 floor（多锁时避免过早回落）。
+pub fn endMutexInheritance(owner_tid: usize) void {
+    if (owner_tid >= thread_count) return;
+    if (threads[owner_tid].mutex_inherit_depth == 0) return;
+    threads[owner_tid].mutex_inherit_depth -= 1;
+    if (threads[owner_tid].mutex_inherit_depth == 0) {
+        threads[owner_tid].mutex_inherit_floor = 0;
+    }
+}
+
+/// 遗留/调试：强制清空继承状态。
 pub fn clearMutexInheritFloor(owner_tid: usize) void {
     if (owner_tid >= thread_count) return;
+    threads[owner_tid].mutex_inherit_depth = 0;
     threads[owner_tid].mutex_inherit_floor = 0;
+}
+
+/// 兼容旧名：等价于 `updateMutexInheritFloor`（不推荐新代码使用）。
+pub fn applyMutexInheritFloor(owner_tid: usize, waiter_effective_pri: u8) void {
+    updateMutexInheritFloor(owner_tid, waiter_effective_pri);
 }
 
 pub fn isInitialized() bool {

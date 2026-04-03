@@ -1,8 +1,8 @@
 //! Kernel Synchronization Primitives
 //! Event, Mutex, Semaphore, SpinLock
 //!
-//! Mutex `acquireWithInheritance` / `release` 与 `ke/scheduler.zig` 的 `mutex_inherit_floor` 联动；
-//! 多互斥同时持有时当前实现仅在**最后一次 release** 清零继承（限制见 `release` 注释）。
+//! Mutex `acquireWithInheritance` / `release` 与 `ke/scheduler.zig` 的 `beginMutexInheritance` / `endMutexInheritance` 联动；
+//! 每条 mutex 等待边配对一次深度计数，多锁并行时避免过早清零 `mutex_inherit_floor`。
 
 const ob = @import("../ob/object.zig");
 const scheduler = @import("scheduler.zig");
@@ -48,6 +48,8 @@ pub const Mutex = struct {
     locked: bool = false,
     owner_tid: u32 = 0,
     recursion_count: u32 = 0,
+    /// 本 mutex 上已安装一条「等待者 → 持有者」继承边（`beginMutexInheritance` 恰好一次）。
+    inheritance_wait_edge: bool = false,
 
     pub fn init() Mutex {
         return .{
@@ -74,11 +76,14 @@ pub const Mutex = struct {
         if (!self.locked or self.owner_tid != tid) return false;
         self.recursion_count -= 1;
         if (self.recursion_count == 0) {
-            const owner = self.owner_tid;
+            const owner_snapshot = self.owner_tid;
+            const had_edge = self.inheritance_wait_edge;
             self.owner_tid = 0;
             self.locked = false;
-            // 单互斥/顺序持锁场景足够；多互斥并行时需按持锁集合重算 floor（未实现）。
-            scheduler.clearMutexInheritFloor(@intCast(owner));
+            if (had_edge) {
+                self.inheritance_wait_edge = false;
+                scheduler.endMutexInheritance(@intCast(owner_snapshot));
+            }
         }
         return true;
     }
@@ -90,7 +95,12 @@ pub const Mutex = struct {
         const owner = self.owner_tid;
         if (owner == tid) return true;
         const w_ep = scheduler.effectivePriorityForThread(@intCast(waiter_tid)) orelse 0;
-        scheduler.applyMutexInheritFloor(@intCast(owner), w_ep);
+        if (!self.inheritance_wait_edge) {
+            self.inheritance_wait_edge = true;
+            scheduler.beginMutexInheritance(@intCast(owner), w_ep);
+        } else {
+            scheduler.updateMutexInheritFloor(@intCast(owner), w_ep);
+        }
         return false;
     }
 

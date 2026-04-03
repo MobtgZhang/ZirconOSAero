@@ -103,6 +103,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     const exec = @import("subsystems/win32/exec.zig");
     const user32_mod = @import("subsystems/win32/user32.zig");
     const gdi32_mod = @import("subsystems/win32/gdi32.zig");
+    const dwmapi_mod = @import("subsystems/win32/dwmapi.zig");
     const wow64_mod = @import("subsystems/win32/wow64.zig");
     const sys_config = @import("config/config.zig");
     const drivers = @import("drivers/mod.zig");
@@ -426,6 +427,7 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
 
     user32_mod.init();
     gdi32_mod.init();
+    dwmapi_mod.ensureLinked();
     subsys.initGuiSubsystem();
 
     klog.info("GUI: user32 + gdi32 initialized", .{});
@@ -910,6 +912,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     const exec = @import("subsystems/win32/exec.zig");
     const user32_mod = @import("subsystems/win32/user32.zig");
     const gdi32_mod = @import("subsystems/win32/gdi32.zig");
+    const dwmapi_mod = @import("subsystems/win32/dwmapi.zig");
     const wow64_mod = @import("subsystems/win32/wow64.zig");
     const sys_config = @import("config/config.zig");
     const audio = @import("drivers/audio/audio.zig");
@@ -1402,6 +1405,7 @@ fn startGeneric(magic: u32, info_addr: usize) noreturn {
     klog.info("--- Phase 10: Graphical Subsystem ---", .{});
     user32_mod.init();
     gdi32_mod.init();
+    dwmapi_mod.ensureLinked();
     subsys.initGuiSubsystem();
 
     klog.info("--- Phase 11: WOW64 + Audio ---", .{});

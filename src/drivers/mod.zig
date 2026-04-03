@@ -122,7 +122,9 @@ pub fn init() void {
         if (bus.pcie.supports_pci_config) {
             storage.ahci.probeAndLog(1);
             storage.ahci.noteVfsVolumeIntentAfterProbe(1);
+            storage.ahci.tryInitMmioDmaPath(1);
             storage.nvme_pci.probeAndLog(1);
+            storage.nvme_pci.tryMapBar0AndLogCap(1);
             net.virtio_net_pci.probeAndLog(1);
         }
         timer.pit_timer.init();

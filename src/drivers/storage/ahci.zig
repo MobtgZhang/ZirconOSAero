@@ -8,9 +8,16 @@
 // Reference: Serial ATA AHCI 1.3.1 specification (ABAR memory register block); PCI class codes — PCI-SIG.
 // Milestone: docs/cn/PHASE4_HARDWARE_SYSTEM_INTEGRATION.md — 存储总线枚举。
 
+const std = @import("std");
+const builtin = @import("builtin");
 const pcie = @import("../bus/pcie.zig");
 const pci_bind = @import("../bus/pci_driver_bind.zig");
 const klog = @import("../../rtl/klog.zig");
+const vm = @import("../../mm/vm.zig");
+const frame = @import("../../mm/frame.zig");
+const io = @import("../../io/io.zig");
+const block_common = @import("block_dev_common.zig");
+const vfs = @import("../../fs/vfs.zig");
 
 pub const AhciPciDev = struct {
     loc: pcie.PciLoc,
@@ -96,4 +103,328 @@ pub fn noteVfsVolumeIntentAfterProbe(max_bus: u8) void {
     const c = collectAhciPci(buf[0..], max_bus);
     if (c == 0) return;
     klog.info("AHCI: VFS volume wiring (H2): %u controller(s) pending block ops + mount", .{c});
+}
+
+// ── H2a–H2c：ABAR MMIO、HBA 复位、端口命令表、IDENTIFY DEVICE、DMA 读单扇区 ──
+// Ref: Serial ATA AHCI 1.3.1 — HBA registers, PxCMD, command list / FIS / PRDT（公开规范，clean-room 字段布局）。
+
+const REG_GHC: usize = 0x04;
+const REG_PI: usize = 0x0C;
+const GHC_AE: u32 = 1 << 31;
+const GHC_HR: u32 = 1 << 0;
+
+fn portRegBase(port: u32) usize {
+    return 0x100 + @as(usize, port) * 0x80;
+}
+
+fn hbaR(abar: usize, off: usize) u32 {
+    return @as(*volatile u32, @ptrFromInt(abar + off)).*;
+}
+
+fn hbaW(abar: usize, off: usize, v: u32) void {
+    @as(*volatile u32, @ptrFromInt(abar + off)).* = v;
+}
+
+fn portR(abar: usize, port: u32, off: usize) u32 {
+    return hbaR(abar, portRegBase(port) + off);
+}
+
+fn portW(abar: usize, port: u32, off: usize, v: u32) void {
+    hbaW(abar, portRegBase(port) + off, v);
+}
+
+var g_abar_va: usize = 0;
+var g_active_port: u32 = 0;
+var g_storage_ready: bool = false;
+var g_identify_model: [40]u8 = [_]u8{0} ** 40;
+var g_sector0: [512]u8 = [_]u8{0} ** 512;
+
+fn hbaReset(abar: usize) bool {
+    var v = hbaR(abar, REG_GHC);
+    v |= GHC_HR;
+    hbaW(abar, REG_GHC, v);
+    var i: u32 = 0;
+    while (i < 1_000_000) : (i += 1) {
+        if ((hbaR(abar, REG_GHC) & GHC_HR) == 0) return true;
+    }
+    return false;
+}
+
+fn portStop(abar: usize, port: u32) void {
+    var cmd = portR(abar, port, 0x18);
+    cmd &= ~@as(u32, 1); // ST
+    portW(abar, port, 0x18, cmd);
+    var i: u32 = 0;
+    while (i < 500_000) : (i += 1) {
+        if ((portR(abar, port, 0x18) & (1 << 15)) == 0) break;
+    }
+    cmd = portR(abar, port, 0x18);
+    cmd &= ~@as(u32, 1 << 4); // FRE
+    portW(abar, port, 0x18, cmd);
+    i = 0;
+    while (i < 500_000) : (i += 1) {
+        if ((portR(abar, port, 0x18) & (1 << 14)) == 0) break;
+    }
+}
+
+fn portStart(abar: usize, port: u32, cl_phys: u64, fb_phys: u64) void {
+    portW(abar, port, 0x00, @truncate(cl_phys));
+    portW(abar, port, 0x04, @truncate(cl_phys >> 32));
+    portW(abar, port, 0x08, @truncate(fb_phys));
+    portW(abar, port, 0x0C, @truncate(fb_phys >> 32));
+    var cmd = portR(abar, port, 0x18);
+    cmd |= 1 << 4; // FRE
+    portW(abar, port, 0x18, cmd);
+    var i: u32 = 0;
+    while (i < 500_000) : (i += 1) {
+        if ((portR(abar, port, 0x18) & (1 << 14)) != 0) break;
+    }
+    cmd = portR(abar, port, 0x18);
+    cmd |= 1; // ST
+    portW(abar, port, 0x18, cmd);
+    i = 0;
+    while (i < 500_000) : (i += 1) {
+        if ((portR(abar, port, 0x18) & (1 << 15)) != 0) break;
+    }
+}
+
+fn waitPxCiClear(abar: usize, port: u32, max_iter: u32) bool {
+    var i: u32 = 0;
+    while (i < max_iter) : (i += 1) {
+        if ((portR(abar, port, 0x38) & 1) == 0) return true;
+    }
+    return false;
+}
+
+/// 在已映射 ABAR 上执行 **IDENTIFY DEVICE**（命令 0xEC），将型号字（字 27–46）写入 `g_identify_model`（ATA 字序交换后 ASCII）。
+fn runIdentifyDevice(abar: usize, port: u32, fa: *frame.FrameAllocator) bool {
+    const cl_phys = fa.allocZeroed() orelse return false;
+    const fb_phys = fa.allocZeroed() orelse return false;
+    const ct_phys = fa.allocZeroed() orelse return false;
+    const data_phys = fa.allocZeroed() orelse return false;
+    defer {
+        fa.free(cl_phys);
+        fa.free(fb_phys);
+        fa.free(ct_phys);
+        fa.free(data_phys);
+    }
+
+    portStop(abar, port);
+    portStart(abar, port, cl_phys, fb_phys);
+
+    // Command list entry 0 @ cl_phys (1KiB-aligned page satisfies PxCLB).
+    const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
+    const ct: [*]u8 = @ptrFromInt(ct_phys);
+    @memset(ct[0..256], 0);
+    // Register — Host to Device FIS (type 0x27).
+    ct[0] = 0x27;
+    ct[1] = 0x80; // C bit
+    ct[2] = 0xEC; // IDENTIFY DEVICE
+    // PRDT @ offset 0x80 in command table (128-byte aligned region).
+    const prdt_off: usize = 0x80;
+    const le_da = std.mem.nativeToLittle(u64, data_phys);
+    @memcpy(ct[prdt_off .. prdt_off + 8], std.mem.asBytes(&le_da));
+    @memset(ct[prdt_off + 8 .. prdt_off + 12], 0);
+    const le_bc = std.mem.nativeToLittle(u32, (@as(u32, 511)) | (@as(u32, 1) << 31));
+    @memcpy(ct[prdt_off + 12 .. prdt_off + 16], std.mem.asBytes(&le_bc));
+
+    // Cmd header DW0: CFL=5 dwords, PRDTL=1；DW2–DW3 = CTBA（64 位，小端拆为两 dword）。
+    cl[0] = 5 | (@as(u32, 1) << 16);
+    cl[1] = 0;
+    cl[2] = @truncate(ct_phys);
+    cl[3] = @truncate(ct_phys >> 32);
+
+    asm volatile ("" ::: .{ .memory = true });
+    portW(abar, port, 0x10, 0xFFFF_FFFF);
+    portW(abar, port, 0x38, 1);
+
+    if (!waitPxCiClear(abar, port, 5_000_000)) {
+        klog.warn("AHCI: IDENTIFY timeout (PxCI)", .{});
+        portStop(abar, port);
+        return false;
+    }
+
+    const data = @as([*]u8, @ptrFromInt(data_phys));
+    var m: usize = 0;
+    var w: usize = 27;
+    while (w <= 46 and m + 1 < g_identify_model.len) : (w += 1) {
+        const o = w * 2;
+        g_identify_model[m] = data[o + 1];
+        g_identify_model[m + 1] = data[o];
+        m += 2;
+    }
+    portStop(abar, port);
+    return true;
+}
+
+fn runReadSector(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.FrameAllocator) bool {
+    const cl_phys = fa.allocZeroed() orelse return false;
+    const fb_phys = fa.allocZeroed() orelse return false;
+    const ct_phys = fa.allocZeroed() orelse return false;
+    defer {
+        fa.free(cl_phys);
+        fa.free(fb_phys);
+        fa.free(ct_phys);
+    }
+
+    portStop(abar, port);
+    portStart(abar, port, cl_phys, fb_phys);
+
+    const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
+    const ct: [*]u8 = @ptrFromInt(ct_phys);
+    @memset(ct[0..256], 0);
+    // READ SECTORS (0x20)，LBA28 单扇区。
+    ct[0] = 0x27;
+    ct[1] = 0x80;
+    ct[2] = 0x20;
+    ct[3] = 0;
+    ct[4] = @truncate(lba);
+    ct[5] = @truncate(lba >> 8);
+    ct[6] = @truncate(lba >> 16);
+    ct[7] = 0x40 | @as(u8, @truncate((lba >> 24) & 0x0F));
+    ct[12] = 1; // sector count
+
+    const prdt_off: usize = 0x80;
+    const le_out = std.mem.nativeToLittle(u64, out_phys);
+    @memcpy(ct[prdt_off .. prdt_off + 8], std.mem.asBytes(&le_out));
+    @memset(ct[prdt_off + 8 .. prdt_off + 12], 0);
+    const le_bc2 = std.mem.nativeToLittle(u32, (@as(u32, 511)) | (@as(u32, 1) << 31));
+    @memcpy(ct[prdt_off + 12 .. prdt_off + 16], std.mem.asBytes(&le_bc2));
+
+    cl[0] = 5 | (@as(u32, 1) << 16);
+    cl[1] = 0;
+    cl[2] = @truncate(ct_phys);
+    cl[3] = @truncate(ct_phys >> 32);
+
+    asm volatile ("" ::: .{ .memory = true });
+    portW(abar, port, 0x10, 0xFFFF_FFFF);
+    portW(abar, port, 0x38, 1);
+
+    const ok = waitPxCiClear(abar, port, 5_000_000);
+    portStop(abar, port);
+    return ok;
+}
+
+var g_ahci_blk_ctx: u8 = 0;
+
+fn readBlocksImpl(ctx: *anyopaque, lba: u64, buf: []u8) io.NTSTATUS {
+    _ = ctx;
+    if (!g_storage_ready or buf.len < 512 or (buf.len % 512) != 0) return io.STATUS_INVALID_PARAMETER;
+    const fa = frame.kernelFrameAllocatorPtr();
+    const sectors = buf.len / 512;
+    var s: u64 = 0;
+    while (s < sectors) : (s += 1) {
+        const slice = buf[s * 512 ..][0..512];
+        const p = fa.allocZeroed() orelse return io.STATUS_INSUFFICIENT_RESOURCES;
+        defer fa.free(p);
+        if (!runReadSector(g_abar_va, g_active_port, lba + s, p, fa)) return io.STATUS_IO_DEVICE_ERROR;
+        @memcpy(slice, @as([*]const u8, @ptrFromInt(p))[0..512]);
+    }
+    return io.STATUS_SUCCESS;
+}
+
+/// 供 NVMe/AHCI 共享的块读表（当前仅 AHCI 就绪时有效）。
+pub fn blockDevVTableOrNull() ?block_common.BlockDevVTable {
+    if (!g_storage_ready) return null;
+    return .{
+        .ctx = @ptrCast(&g_ahci_blk_ctx),
+        .read_blocks = readBlocksImpl,
+    };
+}
+
+pub fn storageReady() bool {
+    return g_storage_ready;
+}
+
+/// 映射 ABAR、复位 HBA、对首个实现端口发 IDENTIFY 与 LBA0 读；成功则 `g_storage_ready=true`。
+pub fn tryInitMmioDmaPath(max_bus: u8) void {
+    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!pcie.supports_pci_config) return;
+    if (g_storage_ready) return;
+
+    var buf: [4]AhciPciDev = undefined;
+    const n = collectAhciPci(buf[0..], max_bus);
+    if (n == 0) return;
+
+    const dev = buf[0];
+    if (!vm.mapDeviceMmioIdentity(dev.abar_phys, dev.abar_size)) {
+        klog.warn("AHCI: mapDeviceMmioIdentity failed for ABAR 0x%x", .{dev.abar_phys});
+        return;
+    }
+
+    const abar: usize = @intCast(dev.abar_phys);
+    g_abar_va = abar;
+    if (!hbaReset(abar)) {
+        klog.warn("AHCI: HBA reset timeout", .{});
+        return;
+    }
+    var ghc = hbaR(abar, REG_GHC);
+    ghc |= GHC_AE;
+    hbaW(abar, REG_GHC, ghc);
+
+    const pi = hbaR(abar, REG_PI);
+    var p: u32 = 0;
+    while (p < 32) : (p += 1) {
+        if ((pi & (std.math.shl(u32, 1, p))) == 0) continue;
+        g_active_port = p;
+        const fa = frame.kernelFrameAllocatorPtr();
+        if (!runIdentifyDevice(abar, p, fa)) continue;
+
+        var nz: usize = 0;
+        for (g_identify_model) |ch| {
+            if (ch != 0) nz += 1;
+        }
+        if (nz > 0) {
+            klog.info("AHCI: port %u IDENTIFY model (ATA identify words 27-46)", .{p});
+        } else {
+            klog.info("AHCI: port %u IDENTIFY done (model empty)", .{p});
+        }
+
+        const sec_phys = fa.allocZeroed() orelse continue;
+        defer fa.free(sec_phys);
+        if (!runReadSector(abar, p, 0, sec_phys, fa)) {
+            klog.warn("AHCI: read LBA0 failed on port %u", .{p});
+            continue;
+        }
+        @memcpy(&g_sector0, @as([*]const u8, @ptrFromInt(sec_phys))[0..512]);
+        g_storage_ready = true;
+        klog.info("AHCI: DMA read LBA0 OK (signature 0x%x 0x%x)", .{
+            std.mem.readInt(u16, g_sector0[510..512], .little),
+        });
+        return;
+    }
+    klog.warn("AHCI: no implemented port completed init", .{});
+}
+
+fn ahciProbeOpen(f: *vfs.FileObject, path: []const u8, _: vfs.FileAccessMode) vfs.FileStatus {
+    _ = path;
+    f.file_size = 512;
+    f.fs_data = 1;
+    return .success;
+}
+
+fn ahciProbeClose(_: *vfs.FileObject) vfs.FileStatus {
+    return .success;
+}
+
+fn ahciProbeRead(f: *vfs.FileObject, buffer: []u8) vfs.ReadResult {
+    if (f.fs_data == 0) return .{ .status = .invalid_parameter };
+    const n = @min(buffer.len, g_sector0.len);
+    @memcpy(buffer[0..n], g_sector0[0..n]);
+    return .{ .status = .success, .bytes_read = n };
+}
+
+fn getProbeFsOps() vfs.FsOps {
+    return .{
+        .open = &ahciProbeOpen,
+        .close = &ahciProbeClose,
+        .read = &ahciProbeRead,
+    };
+}
+
+/// 在 `vfs.init()` 之后调用：若 DMA 路径就绪，挂载 `E:\\` 暴露扇区 0 只读（H2d 烟测）。
+pub fn mountVfsProbeIfReady() void {
+    if (!g_storage_ready) return;
+    _ = vfs.mount("E:\\", .devfs, getProbeFsOps(), 0, "AHCI-LBA0");
+    klog.info("VFS: AHCI probe mount E:\\ (512-byte LBA0 read)", .{});
 }

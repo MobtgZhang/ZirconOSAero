@@ -8,9 +8,13 @@
 // Reference: NVM Express Base Specification — PCI class code 010802; BAR0 为控制器寄存器块（本文件仅记录物理基址与尺寸）。
 // Milestone: 与 `ahci.zig` 共享上层块设备抽象（后续）。
 
+const builtin = @import("builtin");
 const pcie = @import("../bus/pcie.zig");
 const pci_bind = @import("../bus/pci_driver_bind.zig");
 const klog = @import("../../rtl/klog.zig");
+const vm = @import("../../mm/vm.zig");
+const io = @import("../../io/io.zig");
+const block_common = @import("block_dev_common.zig");
 
 pub const NvmePciDev = struct {
     loc: pcie.PciLoc,
@@ -84,4 +88,39 @@ pub fn probeAndLog(max_bus: u8) void {
             e.bar0_size,
         });
     }
+}
+
+var g_nvme_blk_ctx: u8 = 0;
+
+fn nvmeReadBlocksStub(ctx: *anyopaque, lba: u64, buf: []u8) io.NTSTATUS {
+    _ = ctx;
+    _ = lba;
+    _ = buf;
+    return io.STATUS_NOT_IMPLEMENTED;
+}
+
+/// H3c：与 AHCI 共享 `BlockDevVTable` 形状；读路径仍为占位（`STATUS_NOT_IMPLEMENTED`）。
+pub fn blockDevVTablePlaceholder() block_common.BlockDevVTable {
+    return .{
+        .ctx = @ptrCast(&g_nvme_blk_ctx),
+        .read_blocks = nvmeReadBlocksStub,
+    };
+}
+
+/// H3a：映射首台 NVMe 的 BAR0 并读取 **CAP** 寄存器低 64 位（NVMe Base Spec 寄存器块偏移 0）。
+pub fn tryMapBar0AndLogCap(max_bus: u8) void {
+    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!pcie.supports_pci_config) return;
+    var buf: [4]NvmePciDev = undefined;
+    const c = collectNvmePci(buf[0..], max_bus);
+    if (c == 0) return;
+    const e = buf[0];
+    if (!vm.mapDeviceMmioIdentity(e.bar0_phys, @max(e.bar0_size, 0x1000))) {
+        klog.warn("NVMe: BAR0 map failed phys=0x%x", .{e.bar0_phys});
+        return;
+    }
+    const bar: usize = @intCast(e.bar0_phys);
+    const cap_lo = @as(*volatile u32, @ptrFromInt(bar)).*;
+    const cap_hi = @as(*volatile u32, @ptrFromInt(bar + 4)).*;
+    klog.info("NVMe: BAR0 CAP 0x%x:0x%x (MMIO mapped; Admin/IO Read=H3b)", .{ cap_hi, cap_lo });
 }

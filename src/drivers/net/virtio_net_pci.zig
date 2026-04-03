@@ -67,6 +67,9 @@ pub fn probeAndLog(max_bus: u8) void {
         return;
     }
     minimal_stack.noteVirtioNetPciEnumerated(c);
+    if (c > 0 and minimal_stack.virtioNetStackSmokeSelfTest()) {
+        klog.info("VirtIO-Net: H4b minimal_stack Ethernet/ARP/IPv4 smoke OK", .{});
+    }
     var i: usize = 0;
     while (i < c) : (i += 1) {
         const e = buf[i];

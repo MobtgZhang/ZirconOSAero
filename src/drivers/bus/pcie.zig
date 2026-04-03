@@ -624,6 +624,45 @@ pub fn pciCapabilityMsiMsixOffsets(bus: u8, dev: u8, func: u8) struct { msi: ?u8
     return .{ .msi = msi, .msix = msix };
 }
 
+/// H1a：统一枚举入口（CF8/CFC 或 MCFG，与 `readConfigDword` 同源）；写入 `out` 至多 `out.len` 条并返回**在位功能总数**（可大于 `out.len`）。
+pub const PciFunctionBrief = struct {
+    bus: u8,
+    dev: u8,
+    func: u8,
+    vendor_id: u16,
+    device_id: u16,
+    class_config: u32,
+};
+
+pub fn enumeratePciFunctions(out: []PciFunctionBrief, max_bus: u8) usize {
+    if (!supports_pci_config) return 0;
+    var total: usize = 0;
+    var b: u8 = 0;
+    while (b <= max_bus) : (b += 1) {
+        var d: u8 = 0;
+        while (d < 32) : (d += 1) {
+            var f: u8 = 0;
+            while (f < 8) : (f += 1) {
+                const id = readConfigDword(b, d, f, 0);
+                if (id == 0xFFFFFFFF) continue;
+                const cls = readConfigDword(b, d, f, 0x08);
+                if (total < out.len) {
+                    out[total] = .{
+                        .bus = b,
+                        .dev = d,
+                        .func = f,
+                        .vendor_id = @truncate(id),
+                        .device_id = @truncate(id >> 16),
+                        .class_config = cls,
+                    };
+                }
+                total += 1;
+            }
+        }
+    }
+    return total;
+}
+
 /// H1：总线 0 枚举 + `pci_driver_bind` + MSI/MSI-X 偏移诊断（单入口，供启动路径调用）。
 pub fn logPciEnumerationBindAndCapabilitiesBus0() void {
     if (!supports_pci_config) return;

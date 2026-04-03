@@ -134,6 +134,52 @@ pub fn parseUdpHeader(bytes: []const u8) ?UdpHeader {
     };
 }
 
+/// 以太网 II（无 802.1Q）：按 `EtherType` 分流 ARP / IPv4，供 VirtIO-Net 收包与 H4b 自测。
+pub const EthernetInspectKind = enum { unknown, arp, ipv4 };
+
+pub fn inspectEthernet8023Frame(frame: []const u8) EthernetInspectKind {
+    if (frame.len < 14) return .unknown;
+    const et = std.mem.readInt(u16, frame[12..14], .big);
+    if (et == 0x0806) {
+        if (parseArpHeaderFixed(frame[14..])) |_| return .arp;
+        return .unknown;
+    }
+    if (et == 0x0800) {
+        if (parseIpv4Header(frame[14..])) |_| return .ipv4;
+        return .unknown;
+    }
+    return .unknown;
+}
+
+/// H4b：无硬件时的栈解析烟测（ARP 与 IPv4 固定头）。
+pub fn virtioNetStackSmokeSelfTest() bool {
+    var eth: [42]u8 = undefined;
+    @memset(&eth, 0);
+    eth[12] = 0x08;
+    eth[13] = 0x06;
+    var arp: [8]u8 = undefined;
+    std.mem.writeInt(u16, arp[0..2], 1, .big);
+    std.mem.writeInt(u16, arp[2..4], 0x0800, .big);
+    arp[4] = 6;
+    arp[5] = 4;
+    std.mem.writeInt(u16, arp[6..8], ARP_OP_REQUEST, .big);
+    @memcpy(eth[14..22], &arp);
+    if (inspectEthernet8023Frame(&eth) != .arp) return false;
+
+    @memset(&eth, 0);
+    eth[12] = 0x08;
+    eth[13] = 0x00;
+    var ip: [20]u8 = [_]u8{0} ** 20;
+    ip[0] = 0x45;
+    ip[8] = 64;
+    ip[9] = IPPROTO_UDP;
+    std.mem.writeInt(u16, ip[2..4], 20, .big);
+    std.mem.writeInt(u32, ip[12..16], 0x0a000001, .big);
+    std.mem.writeInt(u32, ip[16..20], 0x0a000002, .big);
+    @memcpy(eth[14..34], &ip);
+    return inspectEthernet8023Frame(&eth) == .ipv4;
+}
+
 test "parseIpv4Header rejects IHL greater than 5 (options not implemented)" {
     var wire: [20]u8 = [_]u8{0} ** 20;
     wire[0] = 0x46; // version 4, IHL 6 — 解析器仅接受 IHL=5
@@ -181,6 +227,10 @@ test "parseIcmpHeader echo request" {
     const ic = parseIcmpHeader(&b) orelse return error.Bad;
     try std.testing.expectEqual(ICMP_ECHO_REQUEST, ic.icmp_type);
     try std.testing.expectEqual(@as(u16, 0xABCD), ic.checksum);
+}
+
+test "inspectEthernet8023Frame arp and ipv4" {
+    try std.testing.expect(virtioNetStackSmokeSelfTest());
 }
 
 test "parseUdpHeader ports and length" {

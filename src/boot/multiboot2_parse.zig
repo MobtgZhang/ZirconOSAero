@@ -80,6 +80,25 @@ pub const FramebufferInfo = struct {
     pixel_bgr: u8 = 1,
 };
 
+/// GOP 线性帧缓冲占用的 **物理** 页对齐区间；须从可用 RAM 中剔除，避免当作普通页清零。
+/// `fb_type == 2`（文本等）返回 `(0,0)`。`page_size` 典型为 4096。
+pub fn gopPhysicalReserveRange(fb: FramebufferInfo, page_size: u64) struct { start: u64, end_exclusive: u64 } {
+    if (fb.fb_type == 2 or fb.addr == 0) return .{ .start = 0, .end_exclusive = 0 };
+    if (page_size == 0 or (page_size & (page_size - 1)) != 0) return .{ .start = 0, .end_exclusive = 0 };
+    const ps = page_size;
+    const line_bytes = @as(u64, fb.pitch) * @as(u64, fb.height);
+    if (line_bytes == 0) {
+        const s = fb.addr & ~(ps - 1);
+        return .{ .start = s, .end_exclusive = s + ps };
+    }
+    if (fb.addr > std.math.maxInt(u64) - line_bytes) return .{ .start = 0, .end_exclusive = 0 };
+    const end_raw = fb.addr + line_bytes;
+    const start = fb.addr & ~(ps - 1);
+    const end_excl = (end_raw + ps - 1) & ~(ps - 1);
+    if (end_excl < start) return .{ .start = 0, .end_exclusive = 0 };
+    return .{ .start = start, .end_exclusive = end_excl };
+}
+
 pub const DesktopTheme = enum {
     none,
     aero,
@@ -263,4 +282,33 @@ fn parseCmdlineDesktop(cmdline: []const u8) DesktopTheme {
         return .aero;
     }
     return .none;
+}
+
+test "gopPhysicalReserveRange 1600x900x32 at 2GiB page aligned" {
+    const ps: u64 = 4096;
+    const r = gopPhysicalReserveRange(.{
+        .addr = 0x8000_0000,
+        .pitch = 6400,
+        .width = 1600,
+        .height = 900,
+        .bpp = 32,
+        .fb_type = 1,
+    }, ps);
+    try std.testing.expectEqual(@as(u64, 0x8000_0000), r.start);
+    const line = 6400 * 900;
+    const expect_end = (0x8000_0000 + line + ps - 1) & ~(ps - 1);
+    try std.testing.expectEqual(expect_end, r.end_exclusive);
+}
+
+test "gopPhysicalReserveRange text mode yields empty" {
+    const r = gopPhysicalReserveRange(.{
+        .addr = 0xB8000,
+        .pitch = 160,
+        .width = 80,
+        .height = 25,
+        .bpp = 0,
+        .fb_type = 2,
+    }, 4096);
+    try std.testing.expectEqual(@as(u64, 0), r.start);
+    try std.testing.expectEqual(@as(u64, 0), r.end_exclusive);
 }

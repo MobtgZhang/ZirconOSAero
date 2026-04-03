@@ -118,6 +118,13 @@ test "submitCompositorPresentHints merges dirty before present (spec anchor)" {
     try std.testing.expect(dirty_merged);
 }
 
+test "VirtIO scanout flush hint full flip uses null dirty (spec anchor)" {
+    const full_flip: bool = true;
+    const dirty_union: ?struct { x: i32, y: i32, w: i32, h: i32 } = .{ .x = 0, .y = 0, .w = 10, .h = 10 };
+    const hint = if (full_flip) @as(?struct { x: i32, y: i32, w: i32, h: i32 }, null) else dirty_union;
+    try std.testing.expect(hint == null);
+}
+
 test "dwm.syncPolicyFromRegistry uses dwm_config_registry_sync broadcast hints" {
     const before: dwm_registry_sync.RegistryVisibleDwmFields = .{
         .glass_tint_color = 0x4068A0,

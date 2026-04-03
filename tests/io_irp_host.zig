@@ -10,9 +10,12 @@ const std = @import("std");
 
 const IrpCompletionRoutine = *const fn (*Irp) void;
 
+const MAX_CR: usize = 2;
+
 const Irp = struct {
     bytes_transferred: usize = 0,
-    completion_routine: ?IrpCompletionRoutine = null,
+    completion_depth: u8 = 0,
+    completion_stack: [MAX_CR]?IrpCompletionRoutine = .{ null, null },
 
     fn complete(self: *Irp, transferred: usize) void {
         self.bytes_transferred = transferred;
@@ -20,23 +23,44 @@ const Irp = struct {
 };
 
 fn ioSetCompletionRoutine(irp: *Irp, routine: ?IrpCompletionRoutine) void {
-    irp.completion_routine = routine;
+    const r = routine orelse return;
+    if (irp.completion_depth >= MAX_CR) return;
+    irp.completion_stack[irp.completion_depth] = r;
+    irp.completion_depth += 1;
 }
 
-/// 镜像 `io.zig` `IoCompleteRequest`：先写状态/传输计数，再同步调用并清除完成例程。
+/// 镜像 `io.zig` `IoCompleteRequest`：LIFO 调用最多两层完成例程。
 fn ioCompleteRequest(irp: *Irp, transferred: usize) void {
     irp.complete(transferred);
-    if (irp.completion_routine) |cb| {
-        cb(irp);
-        irp.completion_routine = null;
+    while (irp.completion_depth > 0) {
+        irp.completion_depth -= 1;
+        if (irp.completion_stack[irp.completion_depth]) |cb| {
+            irp.completion_stack[irp.completion_depth] = null;
+            cb(irp);
+        }
     }
 }
 
 var completion_hits: u32 = 0;
+var completion_order: [2]u8 = .{ 0, 0 };
+var order_len: usize = 0;
 
-fn onComplete(irp: *Irp) void {
+fn onCompleteA(irp: *Irp) void {
     _ = irp;
     completion_hits += 1;
+    if (order_len < completion_order.len) {
+        completion_order[order_len] = 1;
+        order_len += 1;
+    }
+}
+
+fn onCompleteB(irp: *Irp) void {
+    _ = irp;
+    completion_hits += 1;
+    if (order_len < completion_order.len) {
+        completion_order[order_len] = 2;
+        order_len += 1;
+    }
 }
 
 /// 与 `src/io/io.zig` `IrpMajorFunction` 中 PnP/Power 序号保持同步（WDK `IRP_MJ_PNP` / `IRP_MJ_POWER` 概念对齐）；改 `io.zig` 枚举时须同步此处。
@@ -51,11 +75,23 @@ test "IRP major PnP and Power ordinals match io.zig comptime asserts" {
 test "IRP completion routine runs once after bytes set (IoCompleteRequest contract)" {
     completion_hits = 0;
     var irp: Irp = .{};
-    ioSetCompletionRoutine(&irp, onComplete);
+    ioSetCompletionRoutine(&irp, onCompleteA);
     ioCompleteRequest(&irp, 4);
     try std.testing.expectEqual(@as(u32, 1), completion_hits);
-    try std.testing.expect(irp.completion_routine == null);
+    try std.testing.expectEqual(@as(u8, 0), irp.completion_depth);
     try std.testing.expectEqual(@as(usize, 4), irp.bytes_transferred);
+}
+
+test "IRP completion LIFO order with two routines (matches io.zig stack)" {
+    completion_hits = 0;
+    order_len = 0;
+    var irp: Irp = .{};
+    ioSetCompletionRoutine(&irp, onCompleteA);
+    ioSetCompletionRoutine(&irp, onCompleteB);
+    ioCompleteRequest(&irp, 1);
+    try std.testing.expectEqual(@as(u32, 2), completion_hits);
+    try std.testing.expectEqual(@as(u8, 2), completion_order[0]);
+    try std.testing.expectEqual(@as(u8, 1), completion_order[1]);
 }
 
 // 镜像 `io.zig` `resolveStackBottom` / `dispatchIrpThroughStack` 的链式语义（主机侧无 klog 依赖）。

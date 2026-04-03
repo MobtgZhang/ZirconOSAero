@@ -21,3 +21,18 @@ test "PROCESS_BASIC_INFORMATION x64 is 48 bytes" {
 test "KEY_VALUE_PARTIAL_INFORMATION header is 12 bytes" {
     try std.testing.expectEqual(@as(usize, 12), 3 * @sizeOf(u32));
 }
+
+/// `SECTION_BASIC_INFORMATION`（winternl / 查询类 0 子集）；x64 对齐与 Learn 公开布局一致。
+const SectionBasicInformation = extern struct {
+    BaseAddress: ?*anyopaque,
+    AllocationAttributes: u32,
+    _pad0: u32,
+    MaximumSize: i64,
+};
+
+test "SECTION_BASIC_INFORMATION x64 is 24 bytes" {
+    try std.testing.expectEqual(@as(usize, 24), @sizeOf(SectionBasicInformation));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(SectionBasicInformation, "BaseAddress"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(SectionBasicInformation, "AllocationAttributes"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(SectionBasicInformation, "MaximumSize"));
+}

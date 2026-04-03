@@ -83,7 +83,8 @@ qemu-system-x86_64 \
 
 - 在 `build.conf` / QEMU 中把客户分辨率设为 **1920×1080**（或 `Makefile` 同步脚本所期望的桌面宽高），并保留 **`-device virtio-gpu-pci`**（与 `-vga` 组合以本机不花屏为准，可尝试 `-vga none` 仅 virtio-gpu）。
 - 构建内核时打开 **`-Ddwm_blur_stats=true`**（见 `build.zig` / `build_options`），串口每帧可看到一行 `dwm blur frame: box_blur_calls=… budget_denials=… tint_only_calls=…`。
-- **期望关键字（成功 scanout）**：`VirtIO-GPU: scanout resource=`、`mem_entries=`（单段为 `1`，散列物理页为 `>1`）、`Desktop display phase (WDDM-like runtime): virtio_scanout_flat` 或 `virtio_scanout_multipage`。
+- **期望关键字（成功 scanout）**：`VirtIO-GPU: scanout resource=`、`mem_entries=`（单段为 `1`，散列物理页为 `>1`）、`Desktop display phase (WDDM-like runtime): virtio_scanout_flat` 或 `virtio_scanout_multipage`，以及 `compositor_backend=cpu_with_virtio_present`（或 `future_gpu_assist` 若 VirGL 空提交成功）。
+- **强制 GOP 对照**：`zig build kernel -Darch=x86_64 -Dforce_gop_present=true` — 即使 scanout 成功，串口应显示 `present_backend=gop_linear` 与 `compositor_backend=cpu_full`（见 [docs/cn/PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](cn/PHASE4_HARDWARE_SYSTEM_INTEGRATION.md)）。
 - **VirGL（可选）**：`-device virtio-gpu-pci,virgl=on` 且主机支持时，可额外看到 `device offers VIRGL`、`CMD_CTX_CREATE ok`；**GPU 模糊尚未启用**，`budget_denials` 行为与纯 CPU 路径一致，直至 `SUBMIT_3D` 接線（见 [docs/cn/VirtioVirglMVP.md](cn/VirtioVirglMVP.md)）。
 
 ## 桌面性能烟测（可选）

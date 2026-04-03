@@ -285,6 +285,32 @@ pub fn build(b: *std.Build) void {
         "Override ZBM/ramfb height; else build.conf RESOLUTION, else sync artifact, else 1080",
     ) orelse if (conf_fb) |c| c.h else if (sync_fb) |s| s.h else fb_fallback.h;
 
+    const phys_track_gb_raw = b.option(
+        u32,
+        "phys_track_gb",
+        "Kernel frame bitmap span in GiB: 8, 16, 32, or 64 (default 8). Larger values increase BSS for bitmap/PFN metadata.",
+    ) orelse 8;
+    const phys_track_gb: u32 = switch (phys_track_gb_raw) {
+        8, 16, 32, 64 => phys_track_gb_raw,
+        else => blk: {
+            std.log.err("Invalid -Dphys_track_gb={d}; allowed 8, 16, 32, 64 — using 8", .{phys_track_gb_raw});
+            break :blk 8;
+        },
+    };
+
+    const max_scheduler_threads_raw = b.option(
+        u16,
+        "max_scheduler_threads",
+        "Kernel scheduler thread table slots (clamped 8..256; default 64)",
+    ) orelse 64;
+    const max_scheduler_threads: u16 = switch (max_scheduler_threads_raw) {
+        8...256 => max_scheduler_threads_raw,
+        else => blk: {
+            std.log.err("Invalid -Dmax_scheduler_threads={d}; allowed 8..256 — using 64", .{max_scheduler_threads_raw});
+            break :blk 64;
+        },
+    };
+
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "debug", debug_mode);
     build_opts.addOption(bool, "mouse_debug", mouse_debug_opt);
@@ -315,6 +341,8 @@ pub fn build(b: *std.Build) void {
     // 与 ZBM `zbm_preferred_fb_*` 同源：ramfb / 诊断与 `build.conf` RESOLUTION 对齐（LoongArch 等 GOP 回退路径）。
     build_opts.addOption(u32, "kernel_preferred_fb_width", zbm_fb_w);
     build_opts.addOption(u32, "kernel_preferred_fb_height", zbm_fb_h);
+    build_opts.addOption(u32, "phys_track_gb", phys_track_gb);
+    build_opts.addOption(u16, "max_scheduler_threads", max_scheduler_threads);
 
     const code_model: std.builtin.CodeModel = switch (cpu_arch) {
         .x86_64 => .kernel,
@@ -610,6 +638,28 @@ pub fn build(b: *std.Build) void {
     });
     const run_mdl_tests = b.addRunArtifact(mdl_tests);
 
+    const frame_bitmap_math_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/frame_bitmap_math_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const frame_bitmap_math_tests = b.addTest(.{
+        .root_module = frame_bitmap_math_host_mod,
+        .name = "frame_bitmap_math_host",
+    });
+    const run_frame_bitmap_math_tests = b.addRunArtifact(frame_bitmap_math_tests);
+
+    const paging_x86_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/paging.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const paging_x86_host_tests = b.addTest(.{
+        .root_module = paging_x86_host_mod,
+        .name = "paging_x86_64_host",
+    });
+    const run_paging_x86_host_tests = b.addRunArtifact(paging_x86_host_tests);
+
     const pci_bind_test_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/bus/pci_driver_bind.zig"),
         .target = b.graph.host,
@@ -664,6 +714,17 @@ pub fn build(b: *std.Build) void {
         .name = "scheduler_policy_host",
     });
     const run_sched_policy_tests = b.addRunArtifact(sched_policy_tests);
+
+    const mutex_inherit_depth_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/mutex_inherit_depth_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const mutex_inherit_depth_tests = b.addTest(.{
+        .root_module = mutex_inherit_depth_host_mod,
+        .name = "mutex_inherit_depth_host",
+    });
+    const run_mutex_inherit_depth_tests = b.addRunArtifact(mutex_inherit_depth_tests);
 
     const nt61_phase_f_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61_phase_f_scheduler_gap.zig"),
@@ -733,6 +794,17 @@ pub fn build(b: *std.Build) void {
         .name = "nt61_abi_layout_host",
     });
     const run_nt61_abi_layout_tests = b.addRunArtifact(nt61_abi_layout_tests);
+
+    const nt61_layouts_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/layouts.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const nt61_layouts_tests = b.addTest(.{
+        .root_module = nt61_layouts_host_mod,
+        .name = "nt61_layouts_host",
+    });
+    const run_nt61_layouts_tests = b.addRunArtifact(nt61_layouts_tests);
 
     const win32k_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32k/mod.zig"),
@@ -1009,7 +1081,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_ssdt_x64_x86_namespace_tests = b.addRunArtifact(ssdt_x64_x86_namespace_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, mutex_inherit_depth_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -1027,16 +1099,20 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lpc_portkind_tests.step);
     test_step.dependOn(&run_minimal_net_tests.step);
     test_step.dependOn(&run_mdl_tests.step);
+    test_step.dependOn(&run_frame_bitmap_math_tests.step);
+    test_step.dependOn(&run_paging_x86_host_tests.step);
     test_step.dependOn(&run_pci_bind_tests.step);
     test_step.dependOn(&run_fs_vfs_constants_tests.step);
     test_step.dependOn(&run_fs_status_nt_map_tests.step);
     test_step.dependOn(&run_nt61_backlog_anchors_tests.step);
     test_step.dependOn(&run_sched_policy_tests.step);
+    test_step.dependOn(&run_mutex_inherit_depth_tests.step);
     test_step.dependOn(&run_nt61_phase_f_tests.step);
     test_step.dependOn(&run_gpu_device_tests.step);
     test_step.dependOn(&run_virtio_gpu_spec_tests.step);
     test_step.dependOn(&run_display_flip_journal_tests.step);
     test_step.dependOn(&run_nt61_abi_layout_tests.step);
+    test_step.dependOn(&run_nt61_layouts_tests.step);
     test_step.dependOn(&run_win32k_tests.step);
     test_step.dependOn(&run_msg_pm_semantics_tests.step);
     test_step.dependOn(&run_gdi_rop_contract_tests.step);

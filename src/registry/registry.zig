@@ -408,6 +408,9 @@ fn populateDefaults() void {
     _ = setValueDword(dwm_key, "ColorizationColor", 0x00D778);
     _ = setValueDword(dwm_key, "ColorizationOpaqueBlend", 0);
     _ = setValueDword(dwm_key, "EnableAeroPeek", 1);
+    // ZirconOSAero：`dwm.syncPolicyFromRegistry` 映射；与 Shell 文档化 DWM 键名并列的 DWORD 开关。
+    _ = setValueDword(dwm_key, "Composition", 1);
+    _ = setValueDword(dwm_key, "ColorizationGlass", 1);
 
     const mm_key = createKey(.hklm, session_key, "Memory Management") orelse return;
     _ = setValueDword(mm_key, "DisablePagingExecutive", 0);
@@ -485,14 +488,14 @@ pub const Zosh1MergeStats = struct {
 
 fn readU16Le(data: []const u8, off: *usize) ?u16 {
     if (off.* + 2 > data.len) return null;
-    const v = std.mem.readInt(u16, data[off.* ..][0..2], .little);
+    const v = std.mem.readInt(u16, data[off.*..][0..2], .little);
     off.* += 2;
     return v;
 }
 
 fn readU32Le(data: []const u8, off: *usize) ?u32 {
     if (off.* + 4 > data.len) return null;
-    const v = std.mem.readInt(u32, data[off.* ..][0..4], .little);
+    const v = std.mem.readInt(u32, data[off.*..][0..4], .little);
     off.* += 4;
     return v;
 }

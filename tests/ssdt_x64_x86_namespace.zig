@@ -34,3 +34,7 @@ test "Win7 SP1 public ref: NtQueryVirtualMemory index differs x64 vs x86" {
     try std.testing.expect(x64.NtQueryVirtualMemory == 0x20);
     try std.testing.expect(x86.NtQueryVirtualMemory == 0x10B);
 }
+
+test "Win7 SP1 public ref: NtTerminateProcess x86 index (j00ru Win7 SP1 x86 json)" {
+    try std.testing.expect(x86.NtTerminateProcess == 0x172);
+}

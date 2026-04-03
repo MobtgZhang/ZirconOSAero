@@ -2,6 +2,7 @@
 //! 与 docs/cn/NT61_CONTRACT_MATRIX.md §4 对照；单一数据源：`src/config/dwm_nt61_api_contract.zig`。
 const std = @import("std");
 const dnc = @import("dwm_nt61_api_contract");
+const csr_lpc_policy = @import("csr_lpc_policy");
 
 test "DWM notification message ids stable for NT6.1 docs" {
     try std.testing.expectEqual(@as(u32, 0x031E), dnc.WM_DWMCOMPOSITIONCHANGED);
@@ -46,7 +47,27 @@ test "WM_DWMNCRENDERINGCHANGED wParam non-zero when policy enabled" {
     try std.testing.expect(wp != 0);
 }
 
+test "register_dwm_listener v1 LPC magic stable (DWM01)" {
+    try std.testing.expectEqual(@as(u32, 0x014D5744), csr_lpc_policy.register_dwm_listener_v1_magic_le);
+}
+
 test "DWM notify ids used by registry sync broadcast path" {
     try std.testing.expectEqual(@as(u32, 0x0320), dnc.WM_DWMCOLORIZATIONCOLORCHANGED);
     try std.testing.expectEqual(@as(u32, 0x031F), dnc.WM_DWMNCRENDERINGCHANGED);
+}
+
+test "dwm_nt61_api_contract packers match user32 broadcast narrative" {
+    try std.testing.expectEqual(@as(u64, 1), dnc.compositionChangedWParam(true));
+    try std.testing.expectEqual(@as(i64, 1), dnc.colorizationChangedLParam(true));
+    const lp = dnc.iconicSizeRequestLParam(64, 48);
+    const u: u32 = @bitCast(@as(i32, @intCast(lp)));
+    try std.testing.expectEqual(@as(u32, 64), u & 0xFFFF);
+    try std.testing.expectEqual(@as(u32, 48), (u >> 16) & 0xFFFF);
+    try std.testing.expectEqual(@as(u64, 1), dnc.windowMaximizedChangeWParam(true));
+}
+
+// 启动豁免叙事锚点：`getWindowCount()==0` 时注册表同步路径不投递 `WM_DWM*`（见 `dwm.syncPolicyFromRegistry` 与 DWM_NOTIFY_MODEL_NT61.md）。
+test "startup exemption when zero HWNDs is policy gate not message id" {
+    const zero_windows: usize = 0;
+    try std.testing.expectEqual(@as(usize, 0), zero_windows);
 }

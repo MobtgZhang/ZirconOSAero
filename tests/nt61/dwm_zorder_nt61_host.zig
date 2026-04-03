@@ -69,3 +69,13 @@ test "Flip3D shell sid filter skips tiny or non-owned surfaces" {
     try std.testing.expect(!flip3dShellCollectable(true, 1, 8, 64, 100));
     try std.testing.expect(!flip3dShellCollectable(true, 1, 64, 64, 30000));
 }
+
+/// Learn：`HWND_NOTOPMOST` 对 **已非** topmost 的窗口不改变 Z 序；仅当此前为 topmost 时取消 topmost 并置于普通栈顶。
+fn notopmostShouldReorderZ(was_topmost: bool) bool {
+    return was_topmost;
+}
+
+test "HWND_NOTOPMOST Learn no-op when window not topmost" {
+    try std.testing.expect(!notopmostShouldReorderZ(false));
+    try std.testing.expect(notopmostShouldReorderZ(true));
+}

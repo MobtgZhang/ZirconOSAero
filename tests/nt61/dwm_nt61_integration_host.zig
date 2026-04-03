@@ -7,6 +7,7 @@
 const std = @import("std");
 const dwm_registry_sync = @import("dwm_config_registry_sync");
 const dwm_blur_budget = @import("dwm_blur_budget");
+const dnc = @import("dwm_nt61_api_contract");
 
 const WM_DWMSENDICONICTHUMBNAIL: u32 = 0x0323;
 
@@ -125,12 +126,22 @@ test "VirtIO scanout flush hint full flip uses null dirty (spec anchor)" {
     try std.testing.expect(hint == null);
 }
 
+test "dwmapi HRESULT DWM_E_COMPOSITIONDISABLED documented bit pattern" {
+    try std.testing.expectEqual(@as(u32, 0x80263001), @as(u32, @bitCast(dnc.DWM_E_COMPOSITIONDISABLED)));
+}
+
+test "DWM_THUMBNAIL_PROPERTIES size matches MSVC LP64 documentation anchor" {
+    try std.testing.expectEqual(@as(usize, 52), @sizeOf(dnc.DWM_THUMBNAIL_PROPERTIES));
+}
+
 test "dwm.syncPolicyFromRegistry uses dwm_config_registry_sync broadcast hints" {
     const before: dwm_registry_sync.RegistryVisibleDwmFields = .{
         .glass_tint_color = 0x4068A0,
         .glass_opacity = 210,
         .glass_taskbar_tint_opacity = 88,
         .peek_enabled = true,
+        .composition_enabled = true,
+        .glass_enabled = true,
     };
     var after = before;
     after.peek_enabled = false;

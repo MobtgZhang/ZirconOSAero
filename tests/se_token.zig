@@ -96,3 +96,42 @@ test "seAccessActiveDesktopForWin32k mirror allows TCB elevated cross-desktop" {
     var user = Token{ .owner = USER_SID, .is_elevated = true, .privileges = PRIV_TCB };
     try std.testing.expect(seAccessActiveDesktopForWin32kMirror(&user, 5, 0));
 }
+
+const SYNCHRONIZE: u32 = 0x00100000;
+const GENERIC_ALL: u32 = 0x10000000;
+
+/// 与 `src/se/token.zig` `seAccessCheckMask` 同构（主机镜像，K6.3）。
+fn seAccessCheckMaskMirror(is_system_or_elevated: bool, desired: u32, object_grants: u32) bool {
+    if (is_system_or_elevated) return true;
+    return (object_grants & desired) == desired;
+}
+
+test "seAccessCheckMask mirror denies when grants do not cover desired" {
+    try std.testing.expect(!seAccessCheckMaskMirror(false, GENERIC_READ, SYNCHRONIZE));
+    try std.testing.expect(seAccessCheckMaskMirror(false, SYNCHRONIZE, GENERIC_READ | SYNCHRONIZE));
+}
+
+test "seAccessCheckMask mirror allows elevated bypass" {
+    try std.testing.expect(seAccessCheckMaskMirror(true, GENERIC_ALL, 0));
+}
+
+/// 与 `src/se/token.zig` `effectiveGrantsFromDaclPresent` 同构。
+fn effectiveGrantsFromDaclPresentMirror(dacl_present: bool, aggregated_allow: u32) u32 {
+    if (!dacl_present) return 0xFFFF_FFFF;
+    return aggregated_allow;
+}
+
+/// 与 `src/se/token.zig` `seAccessCheckWithDacl` 同构（主机镜像）。
+fn seAccessCheckWithDaclMirror(is_system_or_elevated: bool, desired: u32, dacl_present: bool, aggregated_allow: u32) bool {
+    const grants = effectiveGrantsFromDaclPresentMirror(dacl_present, aggregated_allow);
+    return seAccessCheckMaskMirror(is_system_or_elevated, desired, grants);
+}
+
+test "seAccessCheckWithDacl mirror: no DACL grants full mask for non-elevated check path" {
+    try std.testing.expect(seAccessCheckWithDaclMirror(false, GENERIC_READ, false, 0));
+}
+
+test "seAccessCheckWithDacl mirror: DACL present uses aggregated allow" {
+    try std.testing.expect(seAccessCheckWithDaclMirror(false, GENERIC_READ, true, GENERIC_READ | GENERIC_WRITE));
+    try std.testing.expect(!seAccessCheckWithDaclMirror(false, GENERIC_READ | GENERIC_WRITE, true, GENERIC_READ));
+}

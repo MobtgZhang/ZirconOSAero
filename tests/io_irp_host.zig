@@ -120,3 +120,77 @@ test "device stack bottom empty chain returns top" {
     var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
     try std.testing.expectEqual(@as(u32, 1), stackBottom(&att, 3, 1));
 }
+
+const STATUS_SUCCESS_HOST: i32 = 0;
+const STATUS_NOT_IMPLEMENTED_HOST: i32 = -1073741822;
+
+const IrpMirror2 = struct { device_hit: u32 = 0 };
+
+/// 镜像 `io.dispatchIrpThroughStack`：下层 `STATUS_NOT_IMPLEMENTED` 时沿 `attached_device` 下降。
+fn dispatchThroughStackMirror(top: u32, irp: *IrpMirror2, attached: *const [MAX_DEV]u32, dev_count: usize, impl: *const fn (u32, *IrpMirror2) i32) i32 {
+    var idx = top;
+    var guard: usize = 0;
+    while (guard < MAX_DEV) : (guard += 1) {
+        if (idx >= dev_count) return STATUS_NOT_IMPLEMENTED_HOST;
+        const st = impl(idx, irp);
+        if (st != STATUS_NOT_IMPLEMENTED_HOST) return st;
+        const next = attached[idx];
+        if (next == 0) return st;
+        idx = next;
+    }
+    return STATUS_NOT_IMPLEMENTED_HOST;
+}
+
+/// 镜像 `io.IoForwardIrpToNextDevice`：仅投递到 `attached_device` 一层。
+fn ioForwardIrpToNextDeviceMirror(top: u32, attached: *const [MAX_DEV]u32, dev_count: usize, impl: *const fn (u32) i32) i32 {
+    if (top >= dev_count) return STATUS_NOT_IMPLEMENTED_HOST;
+    const next = attached[top];
+    if (next == 0) return STATUS_NOT_IMPLEMENTED_HOST;
+    return impl(next);
+}
+
+test "IoForwardIrpToNextDevice mirror dispatches to attached lower index" {
+    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    att[0] = 1;
+    att[1] = 0;
+    const S = struct {
+        fn disp(idx: u32) i32 {
+            if (idx == 1) return STATUS_SUCCESS_HOST;
+            return STATUS_NOT_IMPLEMENTED_HOST;
+        }
+    };
+    const st = ioForwardIrpToNextDeviceMirror(0, &att, 2, &S.disp);
+    try std.testing.expectEqual(STATUS_SUCCESS_HOST, st);
+}
+
+test "IoForwardIrpToNextDevice mirror fails without lower device" {
+    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    const S = struct {
+        fn disp(_: u32) i32 {
+            return STATUS_SUCCESS_HOST;
+        }
+    };
+    const st = ioForwardIrpToNextDeviceMirror(0, &att, 2, &S.disp);
+    try std.testing.expectEqual(STATUS_NOT_IMPLEMENTED_HOST, st);
+}
+
+test "dispatchIrpThroughStack falls through NOT_IMPLEMENTED to lower device" {
+    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    att[0] = 1;
+    att[1] = 2;
+    att[2] = 0;
+    var irp: IrpMirror2 = .{};
+    const S = struct {
+        fn disp(idx: u32, i: *IrpMirror2) i32 {
+            if (idx == 0 or idx == 1) return STATUS_NOT_IMPLEMENTED_HOST;
+            if (idx == 2) {
+                i.device_hit = idx;
+                return STATUS_SUCCESS_HOST;
+            }
+            return STATUS_NOT_IMPLEMENTED_HOST;
+        }
+    };
+    const st = dispatchThroughStackMirror(0, &irp, &att, 3, &S.disp);
+    try std.testing.expectEqual(STATUS_SUCCESS_HOST, st);
+    try std.testing.expectEqual(@as(u32, 2), irp.device_hit);
+}

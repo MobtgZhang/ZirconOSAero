@@ -61,6 +61,16 @@ pub fn disableInterrupts() void {
     impl.disableInterrupts();
 }
 
+/// 保存「中断是否曾允许」后关中断；与 `restoreInterrupts` 配对供 `IrqSpinLock` 使用（ISR 内不得误 `sti`）。
+pub fn saveAndDisableInterrupts() bool {
+    return impl.saveAndDisableInterrupts();
+}
+
+/// 仅当 `saveAndDisableInterrupts` 返回 `true` 时重新开中断。
+pub fn restoreInterrupts(were_enabled: bool) void {
+    impl.restoreInterrupts(were_enabled);
+}
+
 /// 自旋等待时的 CPU 退让提示（x86 `pause`、AArch64 `yield`、LoongArch `dbar 0` 等）。
 /// 通用内核路径禁止直接使用 x86 助记符，否则 LoongArch/RISC-V 等交叉编译会失败。
 pub fn spinCpuRelax() void {
@@ -92,6 +102,13 @@ pub fn serialReadByte() ?u8 {
         return impl.serialReadByte();
     }
     return null;
+}
+
+/// 调试串口 flush（x86_64 COM1 等）；无实现的目标为空操作。
+pub fn flushDebugSerialOutput() void {
+    if (@hasDecl(impl, "flushDebugSerialOutput")) {
+        impl.flushDebugSerialOutput();
+    }
 }
 
 pub fn stallApproxMs(ms: u32) void {
@@ -161,6 +178,13 @@ pub fn consumeWallpaperCycleHotkey() bool {
 pub fn consumeFlip3dHotkey() bool {
     if (@hasDecl(impl, "consumeFlip3dHotkey")) {
         return impl.consumeFlip3dHotkey();
+    }
+    return false;
+}
+
+pub fn consumeFlip3dDismiss() bool {
+    if (@hasDecl(impl, "consumeFlip3dDismiss")) {
+        return impl.consumeFlip3dDismiss();
     }
     return false;
 }

@@ -639,6 +639,39 @@ pub fn build(b: *std.Build) void {
     });
     const run_ecam_layout_tests = b.addRunArtifact(ecam_layout_tests);
 
+    const acpi_fadt_pm1a_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/acpi_fadt_pm1a_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const acpi_fadt_pm1a_host_tests = b.addTest(.{
+        .root_module = acpi_fadt_pm1a_host_mod,
+        .name = "acpi_fadt_pm1a_host",
+    });
+    const run_acpi_fadt_pm1a_host_tests = b.addRunArtifact(acpi_fadt_pm1a_host_tests);
+
+    const acpi_tables_parse_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/hal/x86_64/acpi_tables_parse.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const acpi_tables_parse_tests = b.addTest(.{
+        .root_module = acpi_tables_parse_test_mod,
+        .name = "acpi_tables_parse_host",
+    });
+    const run_acpi_tables_parse_tests = b.addRunArtifact(acpi_tables_parse_tests);
+
+    const j_smp_inventory_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/j_smp_inventory_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const j_smp_inventory_host_tests = b.addTest(.{
+        .root_module = j_smp_inventory_host_mod,
+        .name = "j_smp_inventory_host",
+    });
+    const run_j_smp_inventory_host_tests = b.addRunArtifact(j_smp_inventory_host_tests);
+
     const hpet_id_test_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/x86_64/hpet_id.zig"),
         .target = b.graph.host,
@@ -1416,6 +1449,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ob_object_tests.step);
     test_step.dependOn(&run_io_irp_tests.step);
     test_step.dependOn(&run_ecam_layout_tests.step);
+    test_step.dependOn(&run_acpi_fadt_pm1a_host_tests.step);
+    test_step.dependOn(&run_acpi_tables_parse_tests.step);
+    test_step.dependOn(&run_j_smp_inventory_host_tests.step);
     test_step.dependOn(&run_hpet_id_tests.step);
     test_step.dependOn(&run_lpc_portkind_tests.step);
     test_step.dependOn(&run_minimal_net_tests.step);

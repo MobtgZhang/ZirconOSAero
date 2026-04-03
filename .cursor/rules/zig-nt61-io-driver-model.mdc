@@ -1,0 +1,347 @@
+---
+description: ZirconOSAero I/O 管理器与驱动模型规则：IRP、DRIVER_OBJECT、设备栈
+globs: ["**/kernel/io/**/*.zig", "**/drivers/**/*.zig", "**/sdk/wdm.zig"]
+---
+
+# I/O 管理器与驱动模型规则
+
+## 设计原则
+基于 NT I/O 管理器的公开文档行为规范实现，采用 Zig 的类型系统增强安全性。
+所有数据结构布局以 WDK 公开头文件文档为参考，独立实现，不复制任何现有代码。
+
+参考文档：
+- https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/i-o-manager
+- https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-major-function-codes
+
+---
+
+## 核心 IRQL 定义
+
+```zig
+/// 中断请求级别（参考 WDK KIRQL 类型文档）
+pub const Irql = enum(u8) {
+    passive  = 0,   // 普通线程执行
+    apc      = 1,   // APC 传递
+    dispatch = 2,   // 调度器/DPC
+    // 3-11: 设备中断（设备相关，DIRQL）
+    clock    = 13,  // 时钟中断
+    ipi      = 14,  // 处理器间中断
+    high     = 15,  // 最高级别，屏蔽所有中断
+    _,
+};
+
+/// 获取当前 IRQL（通过读取 CR8 寄存器，x86_64 APIC TPR）
+pub fn keGetCurrentIrql() Irql {
+    return @enumFromInt(asm volatile ("mov %%cr8, %[ret]"
+        : [ret] "=r" (-> u64),
+    ) & 0xF);
+}
+```
+
+---
+
+## IRP（I/O 请求包）
+
+```zig
+/// IRP 主功能码（参考 WDK 公开文档 IRP_MJ_* 常量）
+pub const IrpMajorFunction = enum(u8) {
+    create              = 0x00,
+    create_named_pipe   = 0x01,
+    close               = 0x02,
+    read                = 0x03,
+    write               = 0x04,
+    query_information   = 0x05,
+    set_information     = 0x06,
+    query_ea            = 0x07,
+    set_ea              = 0x08,
+    flush_buffers       = 0x09,
+    query_volume_information = 0x0A,
+    set_volume_information   = 0x0B,
+    directory_control   = 0x0C,
+    file_system_control = 0x0D,
+    device_control      = 0x0E,
+    internal_device_control = 0x0F,
+    shutdown            = 0x10,
+    lock_control        = 0x11,
+    cleanup             = 0x12,
+    create_mailslot     = 0x13,
+    query_security      = 0x14,
+    set_security        = 0x15,
+    power               = 0x16,
+    system_control      = 0x17,
+    device_change       = 0x18,
+    query_quota         = 0x19,
+    set_quota           = 0x1A,
+    pnp                 = 0x1B,
+    _,
+    pub const maximum_function = 0x1B;
+};
+
+/// IRP 栈位置（每层设备各有一个）
+pub const IrpStackLocation = extern struct {
+    major_function:     u8,
+    minor_function:     u8,
+    flags:              u8,
+    control:            u8,
+    /// 根据 MajorFunction 解释的参数联合体
+    parameters: extern union {
+        create: extern struct {
+            security_context:     ?*anyopaque,
+            options:              u32,
+            file_attributes:      u16,
+            share_access:         u16,
+            ea_length:            u32,
+        },
+        read: extern struct {
+            length:        u32,
+            _pad:          u32,
+            byte_offset:   LargeInteger,
+        },
+        write: extern struct {
+            length:        u32,
+            _pad:          u32,
+            byte_offset:   LargeInteger,
+        },
+        device_io_control: extern struct {
+            output_buffer_length: u32,
+            _pad:                 u32,
+            input_buffer_length:  u32,
+            _pad2:                u32,
+            io_control_code:      u32,
+            type3_input_buffer:   ?*anyopaque,
+        },
+        others: extern struct {
+            argument1: ?*anyopaque,
+            argument2: ?*anyopaque,
+            argument3: ?*anyopaque,
+            argument4: ?*anyopaque,
+        },
+    },
+    device_object:      ?*DeviceObject,
+    file_object:        ?*anyopaque,  // FILE_OBJECT（前向引用）
+    completion_routine: ?*const fn (*DeviceObject, *Irp, ?*anyopaque) callconv(.winapi) NtStatus,
+    context:            ?*anyopaque,
+};
+
+/// IRP（I/O 请求包）主结构
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_irp
+pub const Irp = extern struct {
+    type:                   i16,
+    size:                   u16,
+    mdl_address:            ?*anyopaque,  // MDL（内存描述列表）
+    flags:                  u32,
+    associated_irp: extern union {
+        master_irp:        ?*Irp,
+        irp_count:         i32,
+        system_buffer:     ?*anyopaque,
+    },
+    thread_list_entry:      ListEntry,
+    io_status: extern struct {
+        status:      NtStatus,
+        information: usize,
+    },
+    requestor_mode:         u8,   // KernelMode = 0, UserMode = 1
+    pending_returned:       bool,
+    stack_count:            i8,
+    current_location:       i8,
+    cancel:                 bool,
+    cancel_irql:            u8,
+    apc_environment:        u8,
+    allocation_flags:       u8,
+    user_io_status_block:   ?*anyopaque,
+    user_event:             ?*anyopaque,
+    overlay: extern union {
+        async_parameters: extern struct {
+            user_apc_routine: ?*anyopaque,
+            user_apc_context: ?*anyopaque,
+        },
+        allocation_size: LargeInteger,
+    },
+    cancel_routine:         ?*anyopaque,
+    user_buffer:            ?*anyopaque,
+    tail: extern union {
+        overlay: extern struct {
+            list_entry:      ListEntry,
+            current_stack_location: ?*IrpStackLocation,
+        },
+    },
+
+    // --- 辅助方法 ---
+
+    /// 获取当前 IRP 栈位置
+    pub fn getCurrentStackLocation(self: *Irp) *IrpStackLocation {
+        return self.tail.overlay.current_stack_location orelse
+            @panic("Irp: current stack location is null");
+    }
+
+    /// 将当前栈位置向下移动（传递给下层驱动前调用）
+    pub fn skipCurrentIrpStackLocation(self: *Irp) void {
+        self.current_location += 1;
+        self.tail.overlay.current_stack_location =
+            @ptrFromInt(@intFromPtr(self.tail.overlay.current_stack_location) +
+                @sizeOf(IrpStackLocation));
+    }
+
+    /// 设置 IRP 完成状态
+    pub fn complete(self: *Irp, status: NtStatus, information: usize) void {
+        self.io_status.status      = status;
+        self.io_status.information = information;
+    }
+};
+```
+
+---
+
+## DEVICE_OBJECT 与 DRIVER_OBJECT
+
+```zig
+/// 设备对象
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_device_object
+pub const DeviceObject = extern struct {
+    type:                   i16,
+    size:                   u16,
+    reference_count:        i32,
+    driver_object:          *DriverObject,
+    next_device:            ?*DeviceObject,
+    attached_device:        ?*DeviceObject,
+    current_irp:            ?*Irp,
+    timer:                  ?*anyopaque,
+    flags:                  u32,
+    characteristics:        u32,
+    vpb:                    ?*anyopaque,
+    device_extension:       ?*anyopaque,  // 驱动私有扩展区
+    device_type:            u32,
+    stack_size:             i8,
+    queue: extern union {
+        list_head:     ListEntry,
+        assign_queue:  ?*anyopaque,
+    },
+    alignment_requirement:  u32,
+    device_queue:           extern struct { type: i16, size: u16, list_head: ListEntry, busy: u32 },
+    dpc:                    [4]usize,     // KDPC
+    active_thread_count:    u32,
+    security_descriptor:    ?*anyopaque,
+    device_lock:            extern struct { event: [4]usize },
+    sector_size:            u16,
+    spare1:                 u16,
+    device_object_extension: ?*anyopaque,
+    reserved:               ?*anyopaque,
+};
+
+/// 驱动对象
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_driver_object
+pub const DriverObject = extern struct {
+    type:               i16,
+    size:               i16,
+    device_object:      ?*DeviceObject,
+    flags:              u32,
+    driver_start:       ?*anyopaque,
+    driver_size:        u32,
+    driver_section:     ?*anyopaque,
+    driver_extension:   ?*anyopaque,
+    driver_name:        UnicodeString,
+    hardware_database:  ?*UnicodeString,
+    fast_io_dispatch:   ?*anyopaque,
+    driver_init:        ?DriverInitFn,
+    driver_start_io:    ?DriverStartIoFn,
+    driver_unload:      ?DriverUnloadFn,
+    /// IRP 分发函数表（IRP_MJ_MAXIMUM_FUNCTION + 1 = 0x1C 个槽位）
+    major_function: [0x1C]DispatchFn,
+};
+
+// 函数指针类型定义
+pub const DriverInitFn    = *const fn (*DriverObject, *UnicodeString) callconv(.winapi) NtStatus;
+pub const DriverUnloadFn  = *const fn (*DriverObject) callconv(.winapi) void;
+pub const DriverStartIoFn = *const fn (*DeviceObject, *Irp) callconv(.winapi) void;
+pub const DispatchFn      = *const fn (*DeviceObject, *Irp) callconv(.winapi) NtStatus;
+```
+
+---
+
+## 驱动入口规范
+
+每个 ZirconOSAero 驱动的入口函数必须遵循以下模板：
+
+```zig
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// ZirconOSAero Driver: [驱动名称]
+// Clean-room implementation. Reference: [文档链接]
+
+const kernel = @import("kernel");
+const io     = kernel.io;
+const mm     = kernel.mm;
+
+/// 驱动入口点（等价于 Windows DriverEntry）
+/// 必须使用 .winapi 调用约定以确保 ABI 兼容
+pub export fn DriverEntry(
+    driver_object:  *kernel.DriverObject,
+    registry_path:  *kernel.UnicodeString,
+) callconv(.winapi) kernel.NtStatus {
+    _ = registry_path;
+
+    // 1. 注册 IRP 分发函数
+    driver_object.major_function[@intFromEnum(kernel.IrpMajorFunction.create)]
+        = &dispatchCreate;
+    driver_object.major_function[@intFromEnum(kernel.IrpMajorFunction.close)]
+        = &dispatchClose;
+    driver_object.major_function[@intFromEnum(kernel.IrpMajorFunction.device_control)]
+        = &dispatchIoctl;
+    driver_object.driver_unload = &driverUnload;
+
+    // 2. 创建设备对象
+    var device_object: *kernel.DeviceObject = undefined;
+    const device_name = kernel.UnicodeString.initLiteral("\\Device\\MyDevice");
+    const status = io.ioCreateDevice(
+        driver_object,
+        @sizeOf(MyDeviceExtension),
+        &device_name,
+        .unknown,
+        0,
+        false,
+        &device_object,
+    );
+    if (!status.isSuccess()) return status;
+
+    return .success;
+}
+
+fn driverUnload(driver_object: *kernel.DriverObject) callconv(.winapi) void {
+    // 删除设备对象、符号链接等
+    _ = driver_object;
+}
+
+fn dispatchCreate(device: *kernel.DeviceObject, irp: *kernel.Irp) callconv(.winapi) kernel.NtStatus {
+    irp.complete(.success, 0);
+    return io.ioCompleteRequest(irp, 0);
+}
+
+fn dispatchClose(device: *kernel.DeviceObject, irp: *kernel.Irp) callconv(.winapi) kernel.NtStatus {
+    irp.complete(.success, 0);
+    return io.ioCompleteRequest(irp, 0);
+}
+
+fn dispatchIoctl(device: *kernel.DeviceObject, irp: *kernel.Irp) callconv(.winapi) kernel.NtStatus {
+    const stack = irp.getCurrentStackLocation();
+    const ioctl_code = stack.parameters.device_io_control.io_control_code;
+    _ = ioctl_code;
+    irp.complete(.not_implemented, 0);
+    return io.ioCompleteRequest(irp, 0);
+}
+
+const MyDeviceExtension = struct {
+    // 驱动私有状态
+};
+```
+
+---
+
+## IoCompleteRequest 规范
+
+```
+调用 IoCompleteRequest 的规则（Clean-room，基于 MS 文档行为描述）：
+1. 调用后，IRP 可能立即被释放，不得再访问 IRP 的任何字段。
+2. PriorityBoost 参数：通常传 0（IO_NO_INCREMENT），实时设备传正值。
+3. 完成例程从最高栈位置向下依次调用，直到某个完成例程返回
+   STATUS_MORE_PROCESSING_REQUIRED，则停止向下传递。
+4. 禁止在 IRQL > DISPATCH_LEVEL 调用 IoCompleteRequest。
+```

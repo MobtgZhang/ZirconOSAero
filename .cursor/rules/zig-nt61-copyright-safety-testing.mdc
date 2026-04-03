@@ -1,0 +1,221 @@
+---
+description: ZirconOSAero 版权安全守则、测试规范与调试指南
+globs: ["**/*.zig", "**/*.md"]
+alwaysApply: true
+---
+
+# 版权安全守则、测试与调试规范
+
+## ⚖️ 版权安全守则（最高优先级，任何时候均适用）
+
+### Clean-Room 实现原则
+本项目采用严格的 **Clean-Room 实现**策略：
+
+1. **知识来源白名单**（可参考）：
+   - Microsoft 官方文档：https://learn.microsoft.com/（MSDN / WDK 文档）
+   - Intel/AMD CPU 手册（硬件架构规范）
+   - ACPI 规范（UEFI Forum 公开发布）
+   - UEFI 规范（UEFI Forum 公开发布）
+   - PCI/PCIe 规范（PCI-SIG 公开部分）
+   - 学术论文和操作系统教材（如 *Windows Internals* 第 7 版中描述的架构概念）
+   - 公开的逆向工程文章（仅用于理解行为，不用于复制代码）
+
+2. **禁止参考的代码库**（任何直接代码复制均违规）：
+   - Windows NT 源代码（任何形式，包括泄露版本）
+   - ReactOS 源代码（GPL v2；若使用须完整遵循 GPL，包括开源义务）
+   - Wine 源代码（LGPL；同上）
+   - 任何未经授权的 Windows 逆向代码
+
+3. **AI 生成代码的版权检查**：
+   - 每次 AI 生成的内核代码片段，开发者需人工确认：
+     - 不与已知 Windows 代码片段的结构/注释/变量名高度吻合。
+     - 算法实现来自公开文档描述，而非对现有实现的重现。
+   - 若对某段代码的来源有疑问，**宁可重写，不要保留**。
+
+4. **ABI 兼容合法性说明**：
+   - 使用与 NT API 相同的函数名、结构体名、常量值是合法的。
+   - 这是 ABI 兼容（接口规范遵循），不构成版权侵犯。
+   - 法律先例：SCO v. IBM、Sega v. Accolade、Google v. Oracle（API 不受版权保护）。
+   - 但**具体实现算法**必须是独立编写的，不得复制。
+
+---
+
+## 🧪 测试规范
+
+### 内核单元测试（Zig 内置测试框架）
+
+Zig 内置 `test` 块，可以在 `freestanding` 目标上运行不依赖 OS 的单元测试。
+
+```zig
+// 示例：sdk/nt_types.zig 中的布局验证测试
+const std = @import("std");
+
+test "UnicodeString layout" {
+    // 验证结构体大小与 ABI 要求一致（x86_64: 16 字节）
+    try std.testing.expectEqual(@sizeOf(UnicodeString), 16);
+    try std.testing.expectEqual(@offsetOf(UnicodeString, "length"),         0);
+    try std.testing.expectEqual(@offsetOf(UnicodeString, "maximum_length"), 2);
+    try std.testing.expectEqual(@offsetOf(UnicodeString, "buffer"),         8);
+}
+
+test "NtStatus classification" {
+    try std.testing.expect(NtStatus.success.isSuccess());
+    try std.testing.expect(!NtStatus.access_denied.isSuccess());
+    try std.testing.expect(NtStatus.access_denied.isError());
+    try std.testing.expect(NtStatus.buffer_overflow.isWarning());
+}
+
+test "ListEntry container_of" {
+    const TestStruct = struct {
+        value: u32 = 42,
+        entry: ListEntry = undefined,
+    };
+    var obj = TestStruct{};
+    obj.entry.flink = &obj.entry;
+    obj.entry.blink = &obj.entry;
+
+    const recovered = obj.entry.containerOf(TestStruct, "entry");
+    try std.testing.expectEqual(recovered.value, 42);
+}
+
+test "PageTableEntry bit layout" {
+    var pte = PageTableEntry{
+        .present = 1, .writable = 1, .user_accessible = 0,
+        .write_through = 0, .cache_disabled = 0, .accessed = 0,
+        .dirty = 0, .huge_page = 0, .global = 0, ._available = 0,
+        .phys_addr = 0x1000, // 物理地址 0x1000000
+        .no_execute = 0, ._reserved = 0,
+    };
+    try std.testing.expectEqual(pte.getPhysAddr(), 0x1000000);
+}
+```
+
+### 测试运行方式
+
+```bash
+# 运行所有单元测试（在主机上运行，不需要 QEMU）
+zig test sdk/nt_types.zig
+zig test kernel/mm/pool.zig
+
+# 运行所有测试
+zig build test
+```
+
+### 测试分层策略
+
+| 层次 | 工具 | 运行环境 | 目标 |
+|------|------|---------|------|
+| 单元测试 | `zig test` | 主机 | 纯 Zig 逻辑（类型布局、算法） |
+| 集成测试 | `zig build test-qemu` | QEMU | 内存管理、中断处理、驱动加载 |
+| 兼容性测试 | `zig build test-compat` | QEMU + 真实 NT 驱动 | ABI 兼容验证 |
+
+---
+
+## 🐛 调试规范
+
+### 内核调试输出
+
+```zig
+// 内核调试打印（串口输出，不依赖显示驱动）
+pub const DbgLevel = enum { trace, info, warn, err, crit };
+
+pub fn dbgPrint(comptime level: DbgLevel, comptime fmt: []const u8, args: anytype) void {
+    // 格式化到临时缓冲区，然后逐字节写串口（COM1 = 0x3F8）
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "[{s}] " ++ fmt ++ "\r\n",
+        .{@tagName(level)} ++ args) catch return;
+    for (msg) |c| {
+        hal.outByte(0x3F8, c);  // 写入 COM1 数据寄存器
+    }
+}
+
+// 便捷宏
+pub const DPRINT  = struct {
+    pub fn call(comptime fmt: []const u8, args: anytype) void {
+        if (builtin.mode == .Debug) dbgPrint(.trace, fmt, args);
+    }
+};
+```
+
+### QEMU 调试配置
+
+```bash
+# 开启 GDB 远程调试（等待 GDB 连接后再继续启动）
+qemu-system-x86_64 \
+    -kernel zig-out/bin/zirconaero \
+    -m 512M \
+    -serial stdio \
+    -S -s \                          # -S: 暂停等待 GDB，-s: 监听 :1234
+    -d int,cpu_reset,mmu             # 打印中断、CPU 复位、MMU 事件
+    -no-reboot -no-shutdown          # 崩溃后停留，便于查看寄存器
+
+# 在另一个终端连接 GDB
+gdb \
+    -ex "target remote :1234" \
+    -ex "set architecture i386:x86-64" \
+    -ex "symbol-file zig-out/bin/zirconaero" \
+    -ex "break _kernel_entry"
+```
+
+### KeBugCheck 实现规范
+
+```zig
+/// 内核崩溃停止码（参考 WDK 公开的 Bug Check 代码列表）
+pub const BugCheckCode = enum(u32) {
+    irql_not_less_or_equal        = 0x0000000A,
+    kmode_exception_not_handled   = 0x0000001E,
+    system_thread_exception_not_handled = 0x0000007E,
+    unexpected_kernel_mode_trap   = 0x0000007F,
+    page_fault_in_nonpaged_area   = 0x00000050,
+    driver_irql_not_less_or_equal = 0x000000D1,
+    _,
+};
+
+/// 内核崩溃（等价于 KeBugCheckEx）
+pub fn keBugCheckEx(
+    bug_check_code: BugCheckCode,
+    param1: usize,
+    param2: usize,
+    param3: usize,
+    param4: usize,
+) noreturn {
+    // 禁用所有中断
+    asm volatile ("cli" ::: "memory");
+
+    // 打印崩溃信息到串口
+    dbgPrint(.crit,
+        "*** STOP: 0x{X:0>8} (0x{X:0>16}, 0x{X:0>16}, 0x{X:0>16}, 0x{X:0>16})",
+        .{ @intFromEnum(bug_check_code), param1, param2, param3, param4 });
+
+    // 永久停机
+    while (true) {
+        asm volatile ("hlt" ::: "memory");
+    }
+}
+```
+
+---
+
+## 📋 代码审查清单
+
+提交代码前，必须自查以下项目：
+
+### 版权安全
+- [ ] 本 PR 中无任何 Windows NT 源代码（包括泄露版本）
+- [ ] 本 PR 中无任何未经许可的 ReactOS/Wine 代码
+- [ ] 所有 `extern struct` 布局均有文档来源注释（MSDN/WDK URL）
+- [ ] 新增的常量值均来自公开文档，注释中有来源引用
+
+### 代码质量
+- [ ] 内核函数返回值均已检查（无被忽略的 `NtStatus`）
+- [ ] 所有 `exAllocatePoolWithTag` 调用都有对应的 `exFreePoolWithTag`
+- [ ] IRQL 约束未被违反（分页池访问在 DISPATCH_LEVEL 以下）
+- [ ] 持有自旋锁期间没有调用分页函数
+- [ ] 新增 `extern struct` 有对应的 `comptime` 布局断言测试
+- [ ] 文件头有 SPDX 许可证标识符
+- [ ] 公开 API 函数有 `///` 文档注释
+
+### Zig 特定检查
+- [ ] 内核模块没有使用 `std.os`、`std.fs` 等 OS 依赖的标准库
+- [ ] 裸指针操作有安全理由注释
+- [ ] 没有未处理的 `try`（内核 API 应返回 `NtStatus`，不应扩散 Zig 错误）

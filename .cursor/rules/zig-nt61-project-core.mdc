@@ -1,0 +1,280 @@
+---
+description: ZirconOSAero 项目核心规则：Zig 语言 NT6.1 兼容操作系统开发总纲
+globs: ["**/*.zig", "**/*.ld", "**/build.zig", "**/build.zig.zon"]
+alwaysApply: true
+---
+
+# ZirconOSAero 核心开发规则
+
+## 项目定位与法律边界
+
+### 本项目是什么
+ZirconOSAero 是一个以 **NT 6.1（Windows 7 内核版本）ABI 为兼容目标**的独立操作系统内核，
+使用 Zig 语言从零实现。目标是在公开文档描述的接口层面与 NT6.1 兼容，而非复制任何已有实现。
+
+### 严格版权安全规则（最高优先级）
+- **禁止**直接使用、翻译或参考任何 Windows 源代码（无论任何渠道获取）。
+- **禁止**直接复制 ReactOS / Wine 的源代码（其为 GPL/LGPL 许可，若使用须完整遵循其许可证）。
+- **允许**参考 Microsoft 公开发布的 WDK 文档、MSDN / Microsoft Learn 中的接口描述。
+- **允许**使用公开 NT API 名称（函数名、常量名、结构体名）——这些是公开 ABI，不受版权保护。
+- **允许** Clean-room 实现：根据公开文档描述的**行为规范**自主编写算法，不参考任何已有实现的代码。
+- 若 AI 生成代码，每次生成后须人工审查，确认没有复现已知版权代码片段的结构。
+
+---
+
+## 技术栈与目标
+
+### 语言版本
+- **Zig 版本**：始终使用最新稳定版或 nightly（2026 年目前为 0.14.x 系列）。
+- 充分利用 `comptime`、错误联合（`!T`）、可选类型（`?T`）等 Zig 特性。
+- **禁止**在内核代码中使用 Zig 标准库中依赖 OS 的部分（`std.os`、`std.fs`、`std.heap.GeneralPurposeAllocator` 等），须自己实现内核分配器。
+
+### 目标架构与平台
+
+本项目支持以下五个目标架构，内核核心代码（`kernel/`）全部平台无关，
+体系结构相关逻辑严格限制在 `kernel/arch/<arch>/` 和 `hal/<arch>/` 目录中。
+
+| 架构标识 | Zig 目标三元组 | 优先级 | 参考规范文档 |
+|---------|--------------|--------|------------|
+| `x86_64` | `x86_64-freestanding-none` | 主目标 | Intel/AMD SDM |
+| `aarch64` | `aarch64-freestanding-none` | 次目标 | ARM ARM（DDI 0487） |
+| `riscv64` | `riscv64-freestanding-none` | 次目标 | RISC-V ISA Spec（非特权/特权） |
+| `loongarch64` | `loongarch64-freestanding-none` | 扩展目标 | LoongArch ABI/ISA 手册（龙芯） |
+| `x86`（32 位） | `x86-freestanding-none` | 兼容层 | Intel SDM Vol.3 |
+
+- ABI 目标兼容层：NT 6.1（Windows 7，内核版本 6.1.7600/7601）
+- 所有架构统一通过 `build.zig` 的 `-Dtarget=` 选项切换，无需修改源码。
+- 架构差异通过 Zig 的 `comptime builtin.cpu.arch` 进行编译期分支，禁止运行期 if-arch 判断。
+
+#### 各架构关键差异速查
+
+| 特性 | x86_64 | aarch64 | riscv64 | loongarch64 |
+|------|--------|---------|---------|------------|
+| 中断控制器 | xAPIC/x2APIC | GICv2/GICv3 | PLIC/APLIC | EIOINTC/LIOINTC |
+| 页表格式 | 4 级（PML4） | 4 级（TTBR0/1） | Sv39/Sv48/Sv57 | 4 级（PGDL/PGDH） |
+| 系统调用入口 | `syscall` 指令 | `svc` 指令 | `ecall` 指令 | `syscall` 指令 |
+| 内核/用户地址分割 | 规范地址洞 | TTBR0(用户)/TTBR1(内核) | satp 模式位 | pgdl(用户)/pgdh(内核) |
+| I/O 端口访问 | `in`/`out` 指令 | 内存映射（MMIO only） | MMIO only | MMIO only |
+| 时钟源 | HPET/LAPIC Timer | ARM Generic Timer | RISC-V timer CSR | Constant Timer |
+| 红区（Red Zone） | 有（需禁用） | 无 | 无 | 无 |
+| 特权寄存器访问 | CR0~CR4, MSR | SCTLR_EL1, TCR_EL1 | CSR（satp, stvec 等） | CSR（crmd, era 等）
+
+### 构建系统
+- 统一使用 `build.zig`，禁止使用 Makefile 或 CMake。
+- 内核、HAL、驱动分别作为独立的 `std.Build.Step.Compile` 单元。
+- 使用 `zig build` 完成编译、链接、生成 ISO 及 QEMU 启动。
+
+---
+
+## Zig 内核编程约束
+
+### 必须禁用的编译器特性（内核模式，所有架构通用）
+
+内核模块的 `build.zig` 中**必须**配置以下约束，各架构细节不同：
+
+```zig
+// ── 通用（所有架构）────────────────────────────────────────────────
+kernel_module.red_zone    = false;   // 禁用红区（x86_64 强制；其他架构无害）
+kernel_module.stack_check = false;   // 内核自己管理栈，不使用编译器栈金丝雀
+// 软浮点：内核不初始化浮点单元，禁止生成硬浮点指令
+// （各架构通过 cpu_features_sub 实现，见下文）
+
+// ── x86_64 ─────────────────────────────────────────────────────────
+// 禁用所有 SIMD（SSE/AVX/MMX）：中断时 CPU 不自动保存 SIMD 状态
+if (arch == .x86_64) {
+    kernel_module.cpu_features_sub = std.Target.x86.featureSet(&.{
+        .avx, .avx2, .avx512f, .sse, .sse2, .sse3, .ssse3,
+        .sse4_1, .sse4_2, .mmx,
+    });
+    kernel_module.cpu_features_add = std.Target.x86.featureSet(&.{.soft_float});
+}
+
+// ── aarch64 ────────────────────────────────────────────────────────
+// 禁用 NEON/SVE/Crypto：同理，中断时无 FP/SIMD 上下文保存
+// NEON 在 AArch64 中是强制特性，需通过编译器标志 +soft-float 抑制
+if (arch == .aarch64) {
+    kernel_module.cpu_features_sub = std.Target.aarch64.featureSet(&.{
+        .neon, .sve, .sve2, .crypto, .fp_armv8,
+    });
+    // 注：AArch64 无"红区"概念，sp 始终是当前栈顶，无需额外配置
+}
+
+// ── riscv64 ────────────────────────────────────────────────────────
+// 禁用 F（单精度）/D（双精度）/V（向量）扩展
+if (arch == .riscv64) {
+    kernel_module.cpu_features_sub = std.Target.riscv.featureSet(&.{
+        .f, .d, .q, .v, .zve32f, .zve64f, .zve64d,
+    });
+    // 确保编译器使用 ilp32 / lp64 整型 ABI，不生成浮点调用约定代码
+}
+
+// ── loongarch64 ────────────────────────────────────────────────────
+// 禁用 LSX（128 位 SIMD）和 LASX（256 位 SIMD）扩展
+if (arch == .loongarch64) {
+    kernel_module.cpu_features_sub = std.Target.loongarch.featureSet(&.{
+        .lsx, .lasx,
+    });
+    // LoongArch 基础 FPU 也需禁用（mfpu0 等效）
+    // 参考：LoongArch ABI 手册 §2.1 寄存器约定
+}
+```
+
+### 内存安全原则
+- 所有裸指针操作必须包裹在显式的 `unsafe` 注释块中，并说明安全理由。
+- 使用 `@alignCast` 时必须有注释说明对齐来源。
+- 内核中的 `@ptrFromInt` 必须注明目标地址的来源（硬件规范、固件传入、内核数据结构等）。
+- 不使用 `@ptrCast` 进行类型双关（type punning），改用 `@bitCast` 或 `extern union`。
+
+### 错误处理
+- 所有可能失败的内核操作返回 `NtStatus`（见 `zig-nt-types.mdc`）。
+- 禁止在内核关键路径上使用 Zig 的 `panic`（会导致不可控的内核崩溃）；
+  改用显式的 `KeBugCheck` 或 `KeBugCheckEx` 等价实现。
+- 驱动/内核模块初始化失败必须做完整的资源回滚（RAII 模式或手动展开）。
+
+---
+
+## 代码风格
+
+### 命名约定
+| 类别 | 约定 | 示例 |
+|------|------|------|
+| NT 公开 API 函数 | PascalCase，NT 前缀 | `NtCreateFile`, `NtAllocateVirtualMemory` |
+| 内核内部函数 | PascalCase，子系统前缀 | `MmAllocatePool`, `ObReferenceObject` |
+| Zig 模块私有函数 | camelCase | `setupPageTable`, `initGdt` |
+| 结构体类型 | PascalCase | `DriverObject`, `IrpStackLocation` |
+| 常量/枚举值 | SCREAMING_SNAKE 或 PascalCase | `STATUS_SUCCESS`, `PagedPool` |
+| 汇编标签 | snake_case | `kernel_entry`, `isr_common_stub` |
+
+### 文件头模板（每个 .zig 文件必须包含）
+```zig
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// ZirconOSAero - NT 6.1 Compatible Kernel
+// Module: [模块路径，如 kernel/mm/pool.zig]
+// Purpose: [本文件的职责一句话描述]
+//
+// This is an independent clean-room implementation.
+// No Windows source code or ReactOS source code was referenced.
+// Reference: [所参考的公开文档链接，如 MS Docs / WDK Docs URL]
+```
+
+### 注释规范
+- 公开 API 函数使用 `///` 文档注释。
+- 内核内部实现使用 `//` 行注释，着重说明"为什么"而非"是什么"。
+- 凡是引用公开文档中特定章节的，必须在注释中给出 URL 或文档名称。
+- 引用 NT 内核行为规范时，注明参考来源（例如 `// Ref: MSDN - NtCreateFile remarks`）。
+
+---
+
+## 目录结构规范
+
+```
+ZirconOSAero/
+├── build.zig                       # 统一构建入口（多架构切换）
+├── build.zig.zon                   # 依赖声明
+├── kernel/                         # 内核核心（平台无关部分）
+│   ├── main.zig                    # 内核入口（KernelEntryPoint）
+│   ├── arch/                       # 体系结构相关（平台有关）
+│   │   ├── arch.zig                # comptime 架构分派接口
+│   │   ├── x86_64/
+│   │   │   ├── gdt.zig             # GDT/TSS
+│   │   │   ├── idt.zig             # IDT/中断向量表
+│   │   │   ├── paging.zig          # 4 级页表（PML4）
+│   │   │   ├── cpu.zig             # CPUID/MSR/CR 寄存器
+│   │   │   └── kernel.ld           # 链接脚本
+│   │   ├── aarch64/
+│   │   │   ├── exceptions.zig      # 异常向量表（VBAR_EL1）
+│   │   │   ├── paging.zig          # 4 级页表（TTBR0/TTBR1）
+│   │   │   ├── cpu.zig             # 系统寄存器（SCTLR/TCR/MAIR）
+│   │   │   └── kernel.ld
+│   │   ├── riscv64/
+│   │   │   ├── trap.zig            # 陷阱处理（stvec/scause）
+│   │   │   ├── paging.zig          # Sv48 页表
+│   │   │   ├── csr.zig             # CSR 读写（satp/sie/sip 等）
+│   │   │   └── kernel.ld
+│   │   └── loongarch64/
+│   │       ├── exceptions.zig      # 异常入口（era/ecfg/estat）
+│   │       ├── paging.zig          # 4 级页表（PGDL/PGDH）
+│   │       ├── csr.zig             # CSR（crmd/prmd/tlbidx 等）
+│   │       └── kernel.ld
+│   ├── mm/                         # 内存管理子系统
+│   ├── ke/                         # 内核执行体（调度/同步）
+│   ├── ob/                         # 对象管理器
+│   ├── io/                         # I/O 管理器
+│   ├── ps/                         # 进程/线程管理
+│   ├── se/                         # 安全子系统
+│   └── rtl/                        # 运行时库（RtlXxx 函数）
+├── hal/                            # 硬件抽象层
+│   ├── hal.zig                     # HAL 接口定义（平台无关）
+│   ├── x86_64/
+│   │   ├── apic.zig                # xAPIC/x2APIC
+│   │   ├── hpet.zig                # 高精度事件定时器
+│   │   ├── acpi.zig                # ACPI 表解析
+│   │   └── hal_x86_64.zig          # HAL 实现入口
+│   ├── aarch64/
+│   │   ├── gic.zig                 # GICv2/GICv3 通用中断控制器
+│   │   ├── timer.zig               # ARM Generic Timer
+│   │   ├── psci.zig                # PSCI（电源状态协调接口）
+│   │   └── hal_aarch64.zig
+│   ├── riscv64/
+│   │   ├── plic.zig                # PLIC 平台级中断控制器
+│   │   ├── clint.zig               # CLINT 核心本地中断器（定时器/软件中断）
+│   │   ├── sbi.zig                 # SBI（Supervisor Binary Interface）调用
+│   │   └── hal_riscv64.zig
+│   └── loongarch64/
+│       ├── eiointc.zig             # 扩展 I/O 中断控制器
+│       ├── liointc.zig             # 旧式 I/O 中断控制器
+│       ├── ls7a.zig                # 龙芯 7A 桥片寄存器
+│       └── hal_loongarch64.zig
+├── drivers/                        # 内核驱动（平台无关驱动框架 + 具体驱动）
+│   ├── bus/
+│   │   ├── pci.zig                 # PCI/PCIe 总线枚举（MMIO ECAM）
+│   │   └── usb/                    # USB 主控制器（xHCI/EHCI）
+│   ├── storage/
+│   │   ├── ahci.zig                # AHCI SATA 控制器
+│   │   ├── nvme.zig                # NVMe 控制器
+│   │   └── virtio_blk.zig          # VirtIO 块设备（QEMU 测试用）
+│   ├── video/
+│   │   ├── framebuffer.zig         # 通用线性帧缓冲（UEFI GOP）
+│   │   └── virtio_gpu.zig          # VirtIO GPU（QEMU 测试用）
+│   ├── net/
+│   │   └── virtio_net.zig          # VirtIO 网卡（QEMU 测试用）
+│   ├── input/
+│   │   ├── ps2.zig                 # PS/2 键盘/鼠标（x86_64 特有）
+│   │   └── pl050.zig               # ARM PL050 KMI（aarch64）
+│   └── uart/
+│       ├── ns16550.zig             # 16550 兼容 UART（x86/LoongArch）
+│       ├── pl011.zig               # ARM PL011 UART（aarch64）
+│       └── sifive.zig              # SiFive UART（riscv64）
+├── ntdll/                          # 用户态 NT DLL 存根
+├── sdk/                            # 内核/驱动开发 SDK
+│   ├── nt_types.zig                # NT 类型定义
+│   ├── ntstatus.zig                # NTSTATUS 常量
+│   └── wdm.zig                     # WDM 接口
+└── tests/                          # 内核单元测试
+```
+
+### 架构分派模式（`kernel/arch/arch.zig`）
+
+内核代码通过此文件的 `comptime` 分派访问架构相关功能，**禁止**在其他文件中直接 `@import` 架构子目录：
+
+```zig
+// kernel/arch/arch.zig
+const builtin = @import("builtin");
+
+pub const Arch = switch (builtin.cpu.arch) {
+    .x86_64      => @import("x86_64/cpu.zig"),
+    .aarch64     => @import("aarch64/cpu.zig"),
+    .riscv64     => @import("riscv64/csr.zig"),
+    .loongarch64 => @import("loongarch64/csr.zig"),
+    else         => @compileError("Unsupported architecture: " ++ @tagName(builtin.cpu.arch)),
+};
+
+pub const Paging = switch (builtin.cpu.arch) {
+    .x86_64      => @import("x86_64/paging.zig"),
+    .aarch64     => @import("aarch64/paging.zig"),
+    .riscv64     => @import("riscv64/paging.zig"),
+    .loongarch64 => @import("loongarch64/paging.zig"),
+    else         => @compileError("Unsupported architecture"),
+};
+```

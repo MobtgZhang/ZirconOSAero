@@ -1,0 +1,258 @@
+---
+description: ZirconOSAero 内核同步原语与调度器规则：自旋锁、互斥体、事件、DPC、APC
+globs: ["**/kernel/ke/**/*.zig", "**/kernel/sync/**/*.zig"]
+---
+
+# 内核同步原语与调度器规则（Ke）
+
+## IRQL 约束总表
+
+| 操作 | 最低 IRQL | 最高 IRQL | 说明 |
+|------|----------|----------|------|
+| 访问分页内存 | 0 | APC (1) | DISPATCH_LEVEL 以上禁止页错误 |
+| 等待内核对象 | 0 | APC (1) | 阻塞操作 |
+| 获取自旋锁 | 0 | 任意 | 获取后 IRQL 提升至 DISPATCH |
+| 调用 IoCompleteRequest | 0 | DISPATCH (2) | |
+| 调用 ExAllocatePool(Paged) | 0 | APC (1) | |
+| 调用 ExAllocatePool(NonPaged) | 0 | DISPATCH (2) | |
+| 执行 DPC 例程 | DISPATCH (2) | DISPATCH (2) | 固定在 DISPATCH |
+
+---
+
+## 自旋锁（KSPIN_LOCK）
+
+```zig
+/// 内核自旋锁（参考 WDK KSPIN_LOCK 类型）
+/// 物理上是一个 pointer-sized 的整数，0 = 未锁定
+pub const SpinLock = struct {
+    /// 内部状态（原子操作，禁止直接访问）
+    _state: std.atomic.Value(usize) = .{ .raw = 0 },
+
+    pub fn init() SpinLock {
+        return .{};
+    }
+
+    /// 获取自旋锁，返回保存的旧 IRQL（必须用于 release）
+    /// 会将 IRQL 提升到 DISPATCH_LEVEL
+    pub fn acquire(self: *SpinLock) Irql {
+        const old_irql = raiseIrqlToDispatch();
+        // 自旋直到 CAS 成功（test-and-set 语义）
+        while (self._state.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) {
+            // 使用 PAUSE 指令减少内存总线争用（x86 优化）
+            asm volatile ("pause" ::: "memory");
+        }
+        return old_irql;
+    }
+
+    /// 释放自旋锁，恢复 IRQL
+    pub fn release(self: *SpinLock, old_irql: Irql) void {
+        self._state.store(0, .release);
+        lowerIrql(old_irql);
+    }
+
+    /// 仅获取锁（不修改 IRQL，用于已在 DISPATCH_LEVEL 的场景）
+    pub fn acquireAtDpcLevel(self: *SpinLock) void {
+        while (self._state.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) {
+            asm volatile ("pause" ::: "memory");
+        }
+    }
+
+    pub fn releaseAtDpcLevel(self: *SpinLock) void {
+        self._state.store(0, .release);
+    }
+};
+
+/// IRQL 提升至 DISPATCH_LEVEL（写入 CR8 TPR 寄存器，x86_64）
+fn raiseIrqlToDispatch() Irql {
+    const old = keGetCurrentIrql();
+    asm volatile ("mov %[val], %%cr8"
+        :: [val] "r" (@as(u64, @intFromEnum(Irql.dispatch)))
+        : "memory"
+    );
+    return old;
+}
+
+/// 降低 IRQL
+fn lowerIrql(irql: Irql) void {
+    asm volatile ("mov %[val], %%cr8"
+        :: [val] "r" (@as(u64, @intFromEnum(irql)))
+        : "memory"
+    );
+}
+```
+
+### 自旋锁使用规范
+- 持有自旋锁期间**禁止**：调用任何可分页函数、等待任何内核对象、访问分页内存。
+- 持有自旋锁的代码路径必须尽可能短（微秒级），绝不允许长时间持锁。
+- 禁止在持有锁 A 的情况下尝试获取锁 B（除非有明确的锁序文档），以防止死锁。
+- 每个自旋锁必须在头部注释中声明其保护的数据结构。
+
+---
+
+## 互斥体（KMUTEX）
+
+```zig
+/// 内核互斥体（仅可在 IRQL <= APC_LEVEL 使用）
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/kernel-mutexes
+pub const KMutex = extern struct {
+    header: DispatcherHeader,
+    mutation_count: i32,
+    owner_thread:   ?*KThread,
+
+    pub fn init(self: *KMutex) void {
+        self.header = .{
+            .type          = 0x02, // MutantObject
+            .signal_state  = 1,
+            .wait_list_head = .{ .flink = &self.header.wait_list_head,
+                                 .blink = &self.header.wait_list_head },
+        };
+        self.mutation_count = 0;
+        self.owner_thread   = null;
+    }
+
+    /// 获取互斥体（可能阻塞当前线程）
+    /// timeout: null = 无限等待, 否则为 100ns 单位的负值相对时间
+    pub fn acquire(self: *KMutex, timeout: ?*LargeInteger) NtStatus {
+        return keWaitForSingleObject(&self.header, .executive, .kernel_mode, false, timeout);
+    }
+
+    /// 释放互斥体
+    pub fn release(self: *KMutex) void {
+        keReleaseMutex(self, false);
+    }
+};
+```
+
+---
+
+## 事件（KEVENT）
+
+```zig
+/// 事件类型
+pub const EventType = enum(u32) {
+    notification_event   = 0,  // 手动重置：signal 后保持信号状态直到 Reset
+    synchronization_event = 1, // 自动重置：每次等待成功后自动清除信号
+};
+
+/// 内核事件
+pub const KEvent = extern struct {
+    header: DispatcherHeader,
+
+    pub fn init(self: *KEvent, event_type: EventType, initial_state: bool) void {
+        self.header = .{
+            .type         = @intFromEnum(event_type),
+            .signal_state = @intFromBool(initial_state),
+            .wait_list_head = .{
+                .flink = &self.header.wait_list_head,
+                .blink = &self.header.wait_list_head,
+            },
+        };
+    }
+
+    pub fn set(self: *KEvent, increment: i32, wait: bool) i32 {
+        return keSetEvent(self, increment, wait);
+    }
+
+    pub fn clear(self: *KEvent) void {
+        keClearEvent(self);
+    }
+
+    pub fn wait(self: *KEvent, timeout: ?*LargeInteger) NtStatus {
+        return keWaitForSingleObject(&self.header, .executive, .kernel_mode, false, timeout);
+    }
+};
+```
+
+---
+
+## DPC（延迟过程调用）
+
+```zig
+/// DPC 对象（用于将 ISR 的处理推迟到 DISPATCH_LEVEL）
+/// 参考: https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/dpc-objects-and-dpcs
+pub const Kdpc = extern struct {
+    type:            u8,
+    importance:      u8,
+    number:          u16,
+    list:            ListEntry,
+    deferred_routine: DpcRoutine,
+    deferred_context: ?*anyopaque,
+    system_argument1: ?*anyopaque,
+    system_argument2: ?*anyopaque,
+    lock:            ?*anyopaque,
+
+    pub const DpcRoutine = *const fn (
+        dpc:     *Kdpc,
+        context: ?*anyopaque,
+        arg1:    ?*anyopaque,
+        arg2:    ?*anyopaque,
+    ) callconv(.winapi) void;
+
+    pub fn init(self: *Kdpc, routine: DpcRoutine, context: ?*anyopaque) void {
+        keInitializeDpc(self, routine, context);
+    }
+
+    /// 将 DPC 加入当前处理器的 DPC 队列
+    pub fn queue(self: *Kdpc, arg1: ?*anyopaque, arg2: ?*anyopaque) bool {
+        return keInsertQueueDpc(self, arg1, arg2);
+    }
+};
+```
+
+### DPC 使用规范
+- DPC 例程在 `DISPATCH_LEVEL` 执行，**不得**等待任何内核对象或调用分页函数。
+- 一个 DPC 对象同时只能在一个 CPU 的队列中，重复 `queue` 是安全的（幂等）。
+- 驱动的中断服务例程（ISR）应尽量短，将主要处理工作通过 DPC 推迟。
+- 使用 `KeFlushQueuedDpcs` 在驱动卸载前确保所有待处理 DPC 已完成。
+
+---
+
+## DispatcherHeader（分发器公共头）
+
+```zig
+/// NT 可等待对象的公共头部
+pub const DispatcherHeader = extern struct {
+    type:           u8,
+    _reserved:      u8,
+    _reserved2:     u8,
+    _reserved3:     u8,
+    signal_state:   i32,
+    wait_list_head: ListEntry,
+};
+```
+
+---
+
+## 线程（KTHREAD）骨架
+
+```zig
+/// 内核线程控制块（精简版，仅列出关键字段）
+pub const KThread = extern struct {
+    header:             DispatcherHeader,   // 必须是第一个字段
+    cycle_time:         u64,
+    quantum_reset:      u32,
+    wait_status:        NtStatus,
+    wait_irql:          u8,
+    wait_mode:          u8,
+    wait_next:          bool,
+    wait_reason:        u8,
+    wait_block_list:    ?*anyopaque,
+    wait_list_entry:    ListEntry,
+    priority:           i8,
+    base_priority:      i8,
+    state:              ThreadState,
+    teb:                ?*anyopaque,        // 用户态 TEB（线程环境块）
+    // ... 更多字段按需添加
+
+    pub const ThreadState = enum(u8) {
+        initialized = 0,
+        ready       = 1,
+        running     = 2,
+        standby     = 3,
+        terminated  = 4,
+        waiting     = 5,
+        transition  = 6,
+        deferred_ready = 7,
+    };
+};
+```

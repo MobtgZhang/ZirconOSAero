@@ -45,6 +45,12 @@ pub const Process = struct {
     image_base_address: u64 = 0,
     /// NT 6.1 里程碑：进程环境块用户 VA；由加载器/Nt 路径填写，供 syscall 与用户异常对齐。
     peb_address: u64 = 0,
+    /// WOW64：32 位子系统进程；影响注册表/路径重定向与 `ProcessWow64Information`。
+    is_wow64: bool = false,
+    /// 32 位 PEB 用户 VA（`NtQueryInformationProcess` / 调试器子集）。
+    peb32_user_va: u64 = 0,
+    /// 初始线程 TEB32 用户 VA（演示；多线程后为首个线程）。
+    teb32_user_va: u64 = 0,
 
     pub fn init(pid: u32) Process {
         return .{
@@ -235,6 +241,14 @@ pub fn terminateProcess(pid: u32, exit_code: u32) bool {
     p.exit_code = exit_code;
     klog.debug("Process: PID=%u terminated (exit_code=%u)", .{ pid, exit_code });
     return true;
+}
+
+/// 若存在同 PID 的 `Process` 槽位，标记为 WOW64 并记录 32 位 PEB/TEB 用户 VA（与 `wow64.zig` 演示进程协同）。
+pub fn attachWow64IfPresent(pid: u32, peb32_va: u64, teb32_va: u64) void {
+    const p = findProcess(pid) orelse return;
+    p.is_wow64 = true;
+    p.peb32_user_va = peb32_va;
+    p.teb32_user_va = teb32_va;
 }
 
 pub fn findProcess(pid: u32) ?*Process {

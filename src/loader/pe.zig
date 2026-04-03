@@ -8,6 +8,7 @@
 //! 将映像提交到用户地址空间时，须通过 `mm/vm.AddressSpace.mapPage*` 按页对齐映射，
 //! 并与 `mm/vm.VirtualCommitPhase`（Reserve/Commit 分阶段） eventual 一致；不得假设与 Windows 加载器实现相同的数据结构布局。
 
+const std = @import("std");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
 
@@ -375,6 +376,14 @@ pub const LoadedImage = struct {
         return null;
     }
 
+    /// 按 PE **序号**（合成导出表中的 `ordinal`）解析 RVA；无序号匹配返回 null。
+    pub fn findExportByOrdinal(self: *const LoadedImage, ordinal: u16) ?u64 {
+        for (self.exports[0..self.export_count]) |*exp| {
+            if (exp.ordinal == ordinal) return self.image_base + exp.rva;
+        }
+        return null;
+    }
+
     pub fn addExport(self: *LoadedImage, name: []const u8, rva: u32, ordinal: u16) void {
         if (self.export_count >= MAX_EXPORTS) return;
         var exp = &self.exports[self.export_count];
@@ -422,6 +431,12 @@ pub const LoadStatus = enum {
     dll_not_found,
     entry_not_found,
     already_loaded,
+    /// `IMAGE_DIRECTORY_ENTRY_TLS` 非空：回调/线程局部存储顺序未接线。
+    tls_directory_not_supported,
+    /// `IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT` 非空。
+    delay_load_not_supported,
+    /// `IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT` 非空。
+    bound_import_not_supported,
 };
 
 pub const LoadResult = struct {
@@ -499,6 +514,32 @@ pub const PeFormat = enum {
     pe32plus,
 };
 
+/// Optional header 中 `Subsystem` 字段相对 optional 起始的偏移（PE32 / PE32+ 均为 68；公开 COFF 文档）。
+pub fn optionalSubsystemWordOffsetFromMagic(magic: u16) ?usize {
+    return switch (magic) {
+        PE32_MAGIC, PE32PLUS_MAGIC => 68,
+        else => null,
+    };
+}
+
+/// 从 **已映射** 的 PE 映像字节读取 `OptionalHeader.Subsystem`；非 PE 或缓冲过短返回 null。
+/// **unsafe**：`data` 须为有效 PE 视图；`DosHeader` 布局与 MS PE 规范一致。
+pub fn readSubsystemFromPeBytes(data: []const u8) ?u16 {
+    if (validatePeHeader(data) != .success) return null;
+    const dos: *const DosHeader = @ptrCast(@alignCast(data.ptr));
+    const pe = dos.e_lfanew;
+    if (data.len < pe + 4 + @sizeOf(FileHeader)) return null;
+    const opt_start = pe + 4 + @sizeOf(FileHeader);
+    const fh: *const FileHeader = @ptrCast(@alignCast(data.ptr + pe + 4));
+    if (fh.size_of_optional_header < 70) return null;
+    if (data.len < opt_start + fh.size_of_optional_header) return null;
+    const magic = std.mem.readInt(u16, data[opt_start..][0..2], .little);
+    const off = optionalSubsystemWordOffsetFromMagic(magic) orelse return null;
+    const sub_off = opt_start + off;
+    if (sub_off + 2 > data.len) return null;
+    return std.mem.readInt(u16, data[sub_off..][0..2], .little);
+}
+
 pub fn validatePeHeader(data: []const u8) LoadStatus {
     if (data.len < @sizeOf(DosHeader)) return .invalid_format;
 
@@ -512,6 +553,69 @@ pub fn validatePeHeader(data: []const u8) LoadStatus {
     if (pe_sig != PE_SIGNATURE) return .not_pe;
 
     return .success;
+}
+
+/// PE 可选头中数据目录项 **虚拟地址**（RVA）；`entry` 为 `IMAGE_DIRECTORY_ENTRY_*`。
+/// **unsafe**：`data` 须已通过 `validatePeHeader`；布局与 Microsoft PE COFF 规范一致。
+fn readDataDirectoryRva(data: []const u8, entry: usize) ?u32 {
+    if (entry >= IMAGE_NUM_DIRECTORIES) return null;
+    if (validatePeHeader(data) != .success) return null;
+    const dos = @as(*const DosHeader, @ptrCast(@alignCast(data.ptr)));
+    const pe = dos.e_lfanew;
+    if (data.len < pe + 4 + @sizeOf(FileHeader)) return null;
+    const opt_start = pe + 4 + @sizeOf(FileHeader);
+    const fh: *const FileHeader = @ptrCast(@alignCast(data.ptr + pe + 4));
+    if (fh.size_of_optional_header < 112 + 8) return null;
+    if (data.len < opt_start + fh.size_of_optional_header) return null;
+    const magic = std.mem.readInt(u16, data[opt_start..][0..2], .little);
+    const dd_base_off: usize = switch (magic) {
+        PE32PLUS_MAGIC => 112,
+        PE32_MAGIC => 96,
+        else => return null,
+    };
+    const dd_off = opt_start + dd_base_off + entry * 8;
+    if (dd_off + 8 > data.len) return null;
+    return std.mem.readInt(u32, data[dd_off..][0..4], .little);
+}
+
+/// 对 **已映射** PE 映像字节检查本加载器尚未接线的目录项；用于返回明确 `LoadStatus` / `NTSTATUS`（阶段 4 二进制兼容）。
+pub fn validatePeLoadPolicy(data: []const u8) LoadStatus {
+    const base = validatePeHeader(data);
+    if (base != .success) return base;
+    if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT)) |rva| {
+        if (rva != 0) return .bound_import_not_supported;
+    }
+    if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT)) |rva| {
+        if (rva != 0) return .delay_load_not_supported;
+    }
+    if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_TLS)) |rva| {
+        if (rva != 0) return .tls_directory_not_supported;
+    }
+    return .success;
+}
+
+/// 将 `LoadStatus` 映射为与 `ntdll.NTSTATUS` 同数值的 `i32`（供 `exec`/syscall 路径统一失败码）。
+pub fn loadStatusToNtStatus(s: LoadStatus) i32 {
+    return switch (s) {
+        .success => 0,
+        .invalid_format,
+        .not_pe,
+        => @bitCast(@as(u32, 0xC000007B)), // STATUS_INVALID_IMAGE_FORMAT
+        .not_pe64 => @bitCast(@as(u32, 0xC000007A)), // STATUS_INVALID_IMAGE_WIN_TYPE（近似）
+        .too_many_images => @bitCast(@as(u32, 0xC000009A)), // STATUS_INSUFFICIENT_RESOURCES
+        .already_loaded => @bitCast(@as(u32, 0xC0000035)), // STATUS_OBJECT_NAME_COLLISION
+        .section_error,
+        .relocation_error,
+        => @bitCast(@as(u32, 0xC000007B)), // STATUS_INVALID_IMAGE_FORMAT
+        .import_error,
+        .dll_not_found,
+        .entry_not_found,
+        => @bitCast(@as(u32, 0xC0000135)), // STATUS_DLL_NOT_FOUND
+        .tls_directory_not_supported,
+        .delay_load_not_supported,
+        .bound_import_not_supported,
+        => @bitCast(@as(u32, 0xC0000002)), // STATUS_NOT_IMPLEMENTED
+    };
 }
 
 pub fn detectPeFormat(data: []const u8) PeFormat {
@@ -722,6 +826,7 @@ fn initSystemDlls() void {
         img.addSection(".data", 0x101000, 0x20000, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_CNT_INITIALIZED_DATA);
         img.addSection(".rsrc", 0x121000, 0x10000, IMAGE_SCN_MEM_READ | IMAGE_SCN_CNT_INITIALIZED_DATA);
 
+        // 导出 **顺序与名称** 须与 [`src/config/nt61_core_dll_abi_inventory.zig`](../config/nt61_core_dll_abi_inventory.zig) 一致（阶段 4 PE ABI）。
         img.addExport("NtCreateProcess", 0x1000, 1);
         img.addExport("NtTerminateProcess", 0x1020, 2);
         img.addExport("NtCreateThread", 0x1040, 3);
@@ -817,6 +922,49 @@ fn initSystemDlls() void {
         img.addExport("PathCombineA", 0x1000, 1);
         img.addExport("PathFileExistsA", 0x1020, 2);
     }
+
+    const g32_result = loadDll("gdi32.dll", 0x7FFA0000);
+    if (g32_result.image) |img| {
+        img.subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI;
+        img.entry_point = 0x7FFA0000 + 0x1000;
+        img.size_of_image = 0x80000;
+        img.addImport("ntdll.dll");
+        img.addExport("BitBlt", 0x1000, 1);
+        img.addExport("GetStockObject", 0x1040, 2);
+    }
+
+    const u32_result = loadDll("user32.dll", 0x7FFB0000);
+    if (u32_result.image) |img| {
+        img.subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI;
+        img.entry_point = 0x7FFB0000 + 0x1000;
+        img.size_of_image = 0x80000;
+        img.addImport("ntdll.dll");
+        img.addImport("gdi32.dll");
+        img.addExport("CreateWindowExA", 0x1000, 1);
+        img.addExport("DefWindowProcA", 0x1040, 2);
+    }
+
+    // 合成 `dwmapi.dll` 导出顺序与名称须与 [`dwm_nt61_abi_inventory.zig`](../config/dwm_nt61_abi_inventory.zig) `dwmapi_exports_nt61` 一致（阶段 4 PE ABI）。
+    const dwmapi_result = loadDll("dwmapi.dll", 0x7FF90000);
+    if (dwmapi_result.image) |img| {
+        img.subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI;
+        img.entry_point = 0x7FF90000 + 0x1000;
+        img.size_of_image = 0x80000;
+        img.addImport("ntdll.dll");
+        img.addImport("user32.dll");
+        img.addExport("DwmIsCompositionEnabled", 0x1000, 1);
+        img.addExport("DwmGetColorizationColor", 0x1040, 2);
+        img.addExport("DwmExtendFrameIntoClientArea", 0x1080, 3);
+        img.addExport("DwmEnableBlurBehindWindow", 0x10C0, 4);
+        img.addExport("DwmGetWindowAttribute", 0x1100, 5);
+        img.addExport("DwmSetWindowAttribute", 0x1140, 6);
+        img.addExport("DwmRegisterThumbnail", 0x1180, 7);
+        img.addExport("DwmUnregisterThumbnail", 0x11C0, 8);
+        img.addExport("DwmUpdateThumbnailProperties", 0x1200, 9);
+        img.addExport("DwmQueryThumbnailSourceSize", 0x1240, 10);
+        img.addExport("DwmFlush", 0x1280, 11);
+        img.addExport("DwmInvalidateIconicBitmaps", 0x12C0, 12);
+    }
 }
 
 pub fn init() void {
@@ -827,4 +975,10 @@ pub fn init() void {
         image_count, getDllCount(),
     });
     klog.info("PE Loader: PE32+ (64-bit) and PE32 (32-bit/WOW64) support", .{});
+}
+
+test "optionalSubsystemWordOffsetFromMagic" {
+    try std.testing.expectEqual(@as(usize, 68), optionalSubsystemWordOffsetFromMagic(PE32PLUS_MAGIC).?);
+    try std.testing.expectEqual(@as(usize, 68), optionalSubsystemWordOffsetFromMagic(PE32_MAGIC).?);
+    try std.testing.expect(optionalSubsystemWordOffsetFromMagic(0) == null);
 }

@@ -20,11 +20,12 @@
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
-const theme = @import("theme.zig");
+const theme = @import("../desktop/theme.zig");
 const nt61_aero = @import("nt61_aero_defaults");
-const color_nt61 = @import("../../config/color_nt61.zig");
-const dwm_blur_budget = @import("../../config/dwm_blur_budget.zig");
-const dwm_registry_sync = @import("../../config/dwm_config_registry_sync.zig");
+const color_nt61 = @import("../../../config/color_nt61.zig");
+const dwm_blur_budget = @import("../../../config/dwm_blur_budget.zig");
+const virtio_gpu_pci = @import("../virtio/virtio_gpu_pci.zig");
+const dwm_registry_sync = @import("../../../config/dwm_config_registry_sync.zig");
 const rgb = theme.rgb;
 
 /// 与 `nt61_aero_defaults.compositor_config_epoch` 一致；`display` 等仅通过本模块读取，避免重复依赖 `nt61_aero_defaults` 模块。
@@ -89,7 +90,7 @@ pub fn beginFrameBlurBudget() void {
 /// 每帧末尾调用（如 `display.renderDesktopFrameEx`）：`-Ddwm_blur_stats=true` 时输出本帧盒式模糊调用次数、预算拒绝次数、`renderGlassTintOnly` 次数。
 pub fn flushBlurFrameStatsDebug() void {
     if (!blurStatsEnabled()) return;
-    const klog = @import("../../rtl/klog.zig");
+    const klog = @import("../../../rtl/klog.zig");
     klog.debug("dwm blur frame: box_blur_calls=%u budget_denials=%u tint_only_calls=%u", .{
         blur_frame_box_blur_calls,
         blur_frame_budget_denials,
@@ -117,6 +118,7 @@ fn tryConsumeBlurBudget(w: i32, h: i32, passes: u32) bool {
 }
 
 fn boxBlurRectBudgeted(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) void {
+    if (virtio_gpu_pci.tryVirglBlurBoxDelegation(x, y, w, h, radius, passes)) return;
     if (w <= 0 or h <= 0 or radius == 0 or passes == 0) return;
     if (blur_rect_calls_remaining == 0) return;
     const area64 = @as(u64, @intCast(w)) *% @as(u64, @intCast(h));
@@ -177,7 +179,7 @@ pub fn getConfig() *const DwmConfig {
 /// **启动豁免**：尚无有效窗口时不广播（桌面 `enterDesktopSession` 在首窗创建前后可能多次调用本函数）。
 pub fn syncPolicyFromRegistry() void {
     if (!initialized) return;
-    const reg = @import("../../registry/registry.zig");
+    const reg = @import("../../../registry/registry.zig");
     const k = reg.hklm_dwm_key orelse return;
     const before = dwm_registry_sync.snapshotFromDwmConfig(config);
     if (reg.queryValueDword(k, "AccentColor")) |ac| {
@@ -204,7 +206,7 @@ pub fn syncPolicyFromRegistry() void {
     const hints = dwm_registry_sync.broadcastHintsAfterRegistryApply(before, after);
     if (!hints.colorization and !hints.nc_policy) return;
 
-    const user32 = @import("../../subsystems/win32/user32.zig");
+    const user32 = @import("../../../subsystems/win32/user32.zig");
     if (user32.getWindowCount() == 0) return;
 
     if (hints.colorization) {
@@ -220,14 +222,14 @@ pub fn syncPolicyFromRegistry() void {
 pub fn setColorizationTint(colorref_low24: color_nt61.ColorrefLow24, blend_enabled: bool) void {
     if (!initialized) return;
     config.glass_tint_color = color_nt61.kernelDwmTintFromColorrefLow24(colorref_low24);
-    const user32 = @import("../../subsystems/win32/user32.zig");
+    const user32 = @import("../../../subsystems/win32/user32.zig");
     user32.broadcastDwmColorizationChanged(colorref_low24, if (blend_enabled) user32.TRUE else user32.FALSE);
 }
 
 pub fn setGlass(enabled: bool) void {
     if (config.glass_enabled == enabled) return;
     config.glass_enabled = enabled;
-    const user32 = @import("../../subsystems/win32/user32.zig");
+    const user32 = @import("../../../subsystems/win32/user32.zig");
     // 毛玻璃/非客户区绘制策略变化；`WM_DWMCOMPOSITIONCHANGED` 仅随 `composition_enabled` 变化（见 `setCompositionEnabled`）。
     user32.broadcastDwmNcRenderingChanged(user32.TRUE);
 }
@@ -236,7 +238,7 @@ pub fn setGlass(enabled: bool) void {
 pub fn setCompositionEnabled(enabled: bool) void {
     if (config.composition_enabled == enabled) return;
     config.composition_enabled = enabled;
-    const user32 = @import("../../subsystems/win32/user32.zig");
+    const user32 = @import("../../../subsystems/win32/user32.zig");
     user32.broadcastDwmCompositionChanged(if (enabled) user32.TRUE else user32.FALSE);
 }
 

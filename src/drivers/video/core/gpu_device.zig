@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/gpu_device.zig
+// Module: src/drivers/video/core/gpu_device.zig
 // Purpose: Abstract display backend (ramfb vs future VirtIO-GPU 2D); scalar-only pixel paths.
 //
 // This is an independent clean-room implementation.

@@ -4,30 +4,31 @@
 //! **right**, Y increases **down**. Taskbar occupies `y ∈ [scr_h - tb_h, scr_h)`.
 
 const std = @import("std");
-const io = @import("../../io/io.zig");
-const klog = @import("../../rtl/klog.zig");
-const vga_driver = @import("vga.zig");
-const hdmi_driver = @import("hdmi.zig");
+const io = @import("../../../io/io.zig");
+const klog = @import("../../../rtl/klog.zig");
+const vga_driver = @import("../legacy/vga.zig");
+const hdmi_driver = @import("../legacy/hdmi.zig");
 const fb = @import("framebuffer.zig");
-const icons = @import("icons.zig");
-const startmenu = @import("startmenu.zig");
+const icons = @import("../desktop/icons.zig");
+const startmenu = @import("../desktop/startmenu.zig");
 const dwm_comp = @import("dwm_compositor.zig");
-const mat = @import("material.zig");
-const shell_strings = @import("shell_strings.zig");
-const aero_tray = @import("aero_tray.zig");
-const aero_cursor_shape = @import("aero_cursor_shape.zig");
+const mat = @import("../desktop/material.zig");
+const shell_strings = @import("../desktop/shell_strings.zig");
+const aero_tray = @import("../desktop/aero_tray.zig");
+const aero_cursor_shape = @import("../desktop/aero_cursor_shape.zig");
 const cursor_plane = @import("cursor_plane.zig");
-const builtin_apps = @import("builtin_apps.zig");
-const config = @import("../../config/config.zig");
-const process = @import("../../ps/process.zig");
-const user32 = @import("../../subsystems/win32/user32.zig");
-const virtio_gpu_pci = @import("virtio_gpu_pci.zig");
-const color_nt61 = @import("../../config/color_nt61.zig");
+const builtin_apps = @import("../desktop/builtin_apps.zig");
+const config = @import("../../../config/config.zig");
+const process = @import("../../../ps/process.zig");
+const user32 = @import("../../../subsystems/win32/user32.zig");
+const virtio_gpu_pci = @import("../virtio/virtio_gpu_pci.zig");
+const wddm_abs = @import("wddm_abstraction.zig");
+const color_nt61 = @import("../../../config/color_nt61.zig");
 
-pub const theme_mod = @import("theme.zig");
+pub const theme_mod = @import("../desktop/theme.zig");
 pub const dwm_mod = @import("dwm.zig");
-pub const renderer_aero = @import("renderer_aero.zig");
-const wallpaper_bitmap = @import("wallpaper_bitmap.zig");
+pub const renderer_aero = @import("../desktop/renderer_aero.zig");
+const wallpaper_bitmap = @import("../desktop/wallpaper_bitmap.zig");
 const display_flip_journal = @import("display_flip_journal.zig");
 
 pub const ThemeColors = theme_mod.ThemeColors;
@@ -381,8 +382,8 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
     display_state = .desktop_mode;
     display_mode = .desktop;
 
-    const app_cfg = @import("../../config/config.zig");
-    @import("shell_strings.zig").explorer_use_zh = app_cfg.isExplorerShellLangZh();
+    const app_cfg = @import("../../../config/config.zig");
+    @import("../desktop/shell_strings.zig").explorer_use_zh = app_cfg.isExplorerShellLangZh();
 }
 
 pub fn initTextMode() void {
@@ -570,7 +571,7 @@ var explorer_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 var taskmgr_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
 fn renderSceneWithoutSoftwareCursor() void {
-    const panic_ctx = @import("../../rtl/panic_context.zig");
+    const panic_ctx = @import("../../../rtl/panic_context.zig");
     panic_ctx.setPhase(0x0002_0070);
     cursor_plane.invalidate();
     syncAeroGlassFastPath();
@@ -597,7 +598,7 @@ pub fn getTaskbarHeight() i32 {
 /// shows the pointer at the correct position (typically screen center).
 pub fn syncCursorFromMouse() void {
     if (!use_framebuffer or !fb.isInitialized()) return;
-    const mouse = @import("../input/mouse.zig");
+    const mouse = @import("../../input/mouse.zig");
     const mx = mouse.getX();
     const my = mouse.getY();
     const P: i32 = 256;
@@ -684,7 +685,7 @@ fn buildSystemInfoText() []const u8 {
         }
     }
     if (@import("build_options").mouse_debug) {
-        const mouse = @import("../input/mouse.zig");
+        const mouse = @import("../../input/mouse.zig");
         const mx = mouse.getX();
         const my = mouse.getY();
         const ptr_lbl = " | ptr ";
@@ -734,7 +735,7 @@ pub fn renderDesktopFrame() void {
 /// `scene_dirty` 为真时优先于其余路径。
 /// **诊断**：`-Ddwm_blur_stats=true` 时本帧结束打 `klog.debug` 一行（盒式模糊调用次数、预算拒绝、`renderGlassTintOnly` 次数）；常与 `-Ddesktop_bisect` 分帧日志配合。
 pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_repaint: bool, startmenu_repaint: bool, shell_geometry_repaint: bool) void {
-    const panic_ctx = @import("../../rtl/panic_context.zig");
+    const panic_ctx = @import("../../../rtl/panic_context.zig");
     panic_ctx.setPhase(0x0002_0001);
     defer panic_ctx.setPhase(0);
     if (!use_framebuffer or !fb.isInitialized()) return;
@@ -749,13 +750,13 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
 
     // 合成顺序：场景（壁纸/窗口/DWM 效果）→ 任务栏等壳层（renderer_aero 内）→ CursorPlane（save-under + 绘制）→ 调用方 present。
     // 合成前再排空一轮输入，避免 IRQ/轮询与取样之间存在竞态导致本帧光标滞后一整帧。
-    const input_hub = @import("../../drivers/input/input_hub.zig");
+    const input_hub = @import("../../../drivers/input/input_hub.zig");
     input_hub.pollAll();
     panic_ctx.setPhase(0x0002_0010);
 
     // VirtIO-Input / PS/2 均在 mouse 状态中更新坐标；非 x86 也必须每帧同步到 desktop_ctx，
     // 否则光标停留在 syncCursorFromMouse 的初值（VirtIO 事件无法驱动绘制）。
-    const mouse = @import("../../drivers/input/mouse.zig");
+    const mouse = @import("../../../drivers/input/mouse.zig");
 
     // 开始菜单打开时仍保留适度插值步数，避免重绘帧后光标长时间「追赶」指针（原 2 步过苛）。
     const interp_limit: u32 = if (isWindowDragging() or ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) 5 else 8;
@@ -772,7 +773,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     desktop_ctx.cursor_y = desktop_ctx.smooth_cursor.display_y;
     panic_ctx.setPhase(0x0002_0020);
 
-    const mouse_debug = @import("../../drivers/input/mouse_debug.zig");
+    const mouse_debug = @import("../../../drivers/input/mouse_debug.zig");
     const md_enabled = @import("build_options").mouse_debug;
 
     var path_kind: mouse_debug.DesktopRenderPathKind = .cursor_fast;
@@ -933,7 +934,7 @@ pub fn hideStartMenu() void {
 
 /// 键盘快捷键（如 Ctrl+Shift+Esc → 任务管理器；Ctrl+Alt+F9 → 循环壁纸预设；Alt+Tab → Flip3D 近似）。返回 true 时需整屏重绘。
 pub fn handleDesktopHotkeys() bool {
-    const arch = @import("../../arch.zig");
+    const arch = @import("../../../arch.zig");
     const nt61_aero = @import("nt61_aero_defaults");
     // 单消费：`consumeFlip3dHotkey` 仅在键盘 IRQ 路径置位；此处为壳层唯一读取点（与矩阵 §4.1 Flip3D 一致）。
     if (nt61_aero.KernelCompositor.flip3d_enabled and arch.consumeFlip3dHotkey()) {
@@ -1026,7 +1027,7 @@ fn aeroExplorerClientClick(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
 }
 
 pub fn handleClick(x: i32, y: i32) bool {
-    const panic_ctx = @import("../../rtl/panic_context.zig");
+    const panic_ctx = @import("../../../rtl/panic_context.zig");
     panic_ctx.setPhase(0x0003_0001);
     defer panic_ctx.setPhase(0);
     const h: i32 = @intCast(fb.getHeight());
@@ -1056,16 +1057,16 @@ pub fn handleClick(x: i32, y: i32) bool {
             .none => return true,
             .shutdown => {
                 startmenu.hide();
-                @import("../../arch.zig").shutdown();
+                @import("../../../arch.zig").shutdown();
             },
             .restart => {
                 startmenu.hide();
-                @import("../../arch.zig").reset();
+                @import("../../../arch.zig").reset();
             },
             .standby => {
                 startmenu.hide();
                 klog.info("Start menu: Sleep (standby)", .{});
-                @import("../../arch.zig").standby();
+                @import("../../../arch.zig").standby();
             },
             .logoff => {
                 startmenu.hide();
@@ -1361,7 +1362,7 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
 
     const scr_w: i32 = @intCast(fb.getWidth());
     const scr_h: i32 = @intCast(fb.getHeight());
-    const mouse = @import("../input/mouse.zig");
+    const mouse = @import("../../input/mouse.zig");
     var shell_geometry_changed = false;
     if (explorer_edge_resize != .none and mouse.isLeftPressed()) {
         shell_geometry_changed = applyExplorerFrameResize(x, y, scr_w, scr_h) or shell_geometry_changed;
@@ -1586,7 +1587,7 @@ fn renderAeroBackground(w: i32, h: i32, t: *const ThemeColors) void {
 
 /// Aero 任务栏唯一绘制入口（`renderer_aero` 全帧与壳层共用，避免两套像素分叉）。
 pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, tb_h: i32) void {
-    const panic_ctx = @import("../../rtl/panic_context.zig");
+    const panic_ctx = @import("../../../rtl/panic_context.zig");
     const tb_y = clampI32FromI64(@as(i64, scr_h) - @as(i64, tb_h));
     taskmgr_tray_chip_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
     const drag_fast = isDragging();
@@ -1767,7 +1768,16 @@ pub fn initAeroDwm() void {
         const hz = config.getTickRateHz();
         dwm_comp.thumb_refresh_min_ticks = @max(4, (hz *% 120) / 1000);
         virtio_gpu_pci.bringupMmioIfProbed();
-        // 可选 GPU 路径：VirtIO 2D scratch 与帧缓冲子矩形恒等往返（失败仅打日志，合成仍走 CPU）。
+        if (fb.isInitialized()) {
+            fb.logVirtioScanoutReadiness();
+            const ph = wddm_abs.classifyVirtioRuntimePhase(
+                virtio_gpu_pci.isScanoutActive(),
+                virtio_gpu_pci.scanoutUsesMultipageBacking(),
+                virtio_gpu_pci.virglContextReady(),
+            );
+            klog.info("Desktop display phase (WDDM-like runtime): {s}", .{@tagName(ph)});
+        }
+        // 可选：VirtIO 2D scratch 与帧缓冲子矩形恒等往返（失败仅打日志）。
         if (fb.isInitialized() and virtio_gpu_pci.compositorOffloadAvailable()) {
             const w = @min(@as(u32, 4), fb.getWidth());
             const h = @min(@as(u32, 4), fb.getHeight());
@@ -2981,7 +2991,7 @@ fn maybeRefreshExplorerTaskbarThumb(px: i32, py: i32, scr_w: i32, scr_h: i32) vo
         taskbar_explorer_thumb_valid = false;
         return;
     }
-    const sched = @import("../../ke/scheduler.zig");
+    const sched = @import("../../../ke/scheduler.zig");
     const now = sched.getTicks();
     if (taskbar_explorer_thumb_valid and now -% taskbar_explorer_thumb_last_tick < dwm_comp.thumb_refresh_min_ticks) return;
     taskbar_explorer_thumb_last_tick = now;
@@ -3569,9 +3579,11 @@ pub fn isDesktopVsyncPolicyEnabled() bool {
 
 pub fn present() void {
     if (!use_framebuffer) return;
+    virtio_gpu_pci.beginPresentVirtioBudget();
+    defer virtio_gpu_pci.endPresentVirtioBudget();
+
     const scanout_vio = virtio_gpu_pci.isScanoutActive();
     const dirty_before_flip: ?fb.Rect = if (scanout_vio) fb.peekDirtyUnionPx() else null;
-    // VirtIO-GPU：`flipDirty` 且脏外包 ≤32×32 时尝试 `trySubmitFramebufferDirtyRect`（PoC，与 init 4×4 往返同命令路径）；失败或非 offload 不影响 CPU 提交。
     // 首帧强制整幅 flip：LoongArch+QEMU 双缓冲下若脏矩形与合成路径偶发不同步，屏上可长期黑/花；后续帧仍可按配置走 flipDirty。
     const first_present = (desktop_ctx.present_count == 0);
     const will_full_flip = fb.isDoubleBuffered() and (config.isPresentFullFlipEnabled() or first_present);
@@ -3580,16 +3592,6 @@ pub fn present() void {
         if (will_full_flip) {
             fb.flip();
         } else {
-            // VirtIO-GPU：小脏区可走 `trySubmitFramebufferDirtyRect`（≤32×32）做 PoC 级传输自检；主路径仍以 CPU flipDirty。
-            if (virtio_gpu_pci.compositorOffloadAvailable()) {
-                if (fb.peekDirtyUnionPx()) |r| {
-                    const rw: u32 = @intCast(r.w);
-                    const rh: u32 = @intCast(r.h);
-                    if (rw > 0 and rh > 0 and rw <= 32 and rh <= 32) {
-                        _ = virtio_gpu_pci.trySubmitFramebufferDirtyRect(fb.getWidth(), fb.getHeight(), @intCast(r.x), @intCast(r.y), rw, rh);
-                    }
-                }
-            }
             fb.flipDirty();
         }
     } else {
@@ -3599,6 +3601,7 @@ pub fn present() void {
     const virtio_flush_hint: ?fb.Rect = if (!scanout_vio) null else if (will_full_flip) null else dirty_before_flip;
     virtio_gpu_pci.notifyScanoutFrontUpdated(virtio_flush_hint);
     notifyHardwareCursorIfAvailable();
+    virtio_gpu_pci.syncHardwareCursorFromPresent(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
     if (dwm_comp.isInitialized()) {
         dwm_comp.notifyFramePresented();
     }
@@ -3609,8 +3612,12 @@ pub fn present() void {
 
 pub fn presentFull() void {
     if (!use_framebuffer) return;
+    virtio_gpu_pci.beginPresentVirtioBudget();
+    defer virtio_gpu_pci.endPresentVirtioBudget();
     fb.flip();
+    virtio_gpu_pci.notifyScanoutFrontUpdated(null);
     notifyHardwareCursorIfAvailable();
+    virtio_gpu_pci.syncHardwareCursorFromPresent(desktop_ctx.cursor_x, desktop_ctx.cursor_y);
     desktop_ctx.present_count += 1;
     desktop_ctx.frame_count += 1;
     display_flip_journal.notePresentFlip();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/cursor_plane.zig
+// Module: src/drivers/video/core/cursor_plane.zig
 // Purpose: Software cursor plane — save-under blit after scene compose (conceptual split from main frame).
 //
 // This is an independent clean-room implementation.
@@ -15,7 +15,8 @@
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
-const aero_cursor_shape = @import("aero_cursor_shape.zig");
+const aero_cursor_shape = @import("../desktop/aero_cursor_shape.zig");
+const virtio_gpu_pci = @import("../virtio/virtio_gpu_pci.zig");
 
 pub const CursorDrawFn = *const fn (i32, i32) void;
 
@@ -88,6 +89,10 @@ pub fn markMotionDirty(ax: i32, ay: i32, bx: i32, by: i32) void {
 /// 场景合成完成后调用：保存指针下像素并绘制指针（须在 `present` 之前）。
 pub fn composeAfterScene(cursor_visible: bool, cx: i32, cy: i32, kind: aero_cursor_shape.CursorKind, draw: CursorDrawFn) void {
     if (!fb.isInitialized()) return;
+    if (virtio_gpu_pci.hardwareCursorActive()) {
+        invalidate();
+        return;
+    }
     if (!cursor_visible) {
         invalidate();
         return;
@@ -109,6 +114,7 @@ pub fn composeAfterScene(cursor_visible: bool, cx: i32, cy: i32, kind: aero_curs
 /// 返回 false 时调用方应整场景重绘。
 pub fn moveOnly(cursor_visible: bool, cx: i32, cy: i32, prev_x: i32, prev_y: i32, kind: aero_cursor_shape.CursorKind, draw: CursorDrawFn) bool {
     if (!fb.isInitialized()) return false;
+    if (virtio_gpu_pci.hardwareCursorActive()) return true;
     if (!cursor_visible) return false;
     if (!sw_cursor_placed) return false;
 

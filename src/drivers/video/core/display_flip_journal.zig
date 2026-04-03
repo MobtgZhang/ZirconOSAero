@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/drivers/video/display_flip_journal.zig
+// Module: src/drivers/video/core/display_flip_journal.zig
 // Purpose: Present-generation counter + idle-tail input poll budgeting (Phase B1/D5 hook).
 //
 // This is an independent clean-room implementation.
@@ -11,6 +11,8 @@
 const std = @import("std");
 
 var present_generation: u64 = 0;
+var virtio_resource_flush_full: u64 = 0;
+var virtio_resource_flush_partial: u64 = 0;
 
 /// Incremented after each successful `present()` flip path (full or dirty).
 pub fn notePresentFlip() void {
@@ -19,6 +21,19 @@ pub fn notePresentFlip() void {
 
 pub fn getPresentGeneration() u64 {
     return present_generation;
+}
+
+/// `virtio_gpu_pci.notifyScanoutFrontUpdated` 遥测：整幅 vs 脏矩形 `RESOURCE_FLUSH`。
+pub fn noteVirtioResourceFlush(is_full_screen: bool) void {
+    if (is_full_screen) {
+        virtio_resource_flush_full +%= 1;
+    } else {
+        virtio_resource_flush_partial +%= 1;
+    }
+}
+
+pub fn getVirtioFlushTelemetry() struct { full: u64, partial: u64 } {
+    return .{ .full = virtio_resource_flush_full, .partial = virtio_resource_flush_partial };
 }
 
 /// When the desktop loop has not painted for many iterations, reduce redundant `input_hub` polls
@@ -33,4 +48,14 @@ test "extraInputPollBudget respects floor" {
     try std.testing.expectEqual(@as(u32, 16), extraInputPollBudget(16, 0));
     try std.testing.expectEqual(@as(u32, 8), extraInputPollBudget(16, 30));
     try std.testing.expectEqual(@as(u32, 4), extraInputPollBudget(6, 30));
+}
+
+test "noteVirtioResourceFlush increments telemetry" {
+    const b0 = getVirtioFlushTelemetry();
+    noteVirtioResourceFlush(true);
+    const b1 = getVirtioFlushTelemetry();
+    try std.testing.expect(b1.full >= b0.full + 1);
+    noteVirtioResourceFlush(false);
+    const b2 = getVirtioFlushTelemetry();
+    try std.testing.expect(b2.partial >= b1.partial + 1);
 }

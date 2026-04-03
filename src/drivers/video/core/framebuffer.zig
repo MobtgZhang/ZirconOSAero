@@ -4,13 +4,14 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const io = @import("../../io/io.zig");
-const klog = @import("../../rtl/klog.zig");
-const cjk_font = @import("cjk_font.zig");
-const config_mod = @import("../../config/config.zig");
-const frame_mod = @import("../../mm/frame.zig");
-const phys_pb = @import("../../mm/phys_buddy.zig");
-const vm = @import("../../mm/vm.zig");
+const io = @import("../../../io/io.zig");
+const klog = @import("../../../rtl/klog.zig");
+const cjk_font = @import("../desktop/cjk_font.zig");
+const virtio_gpu_spec = @import("../virtio/virtio_gpu_spec.zig");
+const config_mod = @import("../../../config/config.zig");
+const frame_mod = @import("../../../mm/frame.zig");
+const phys_pb = @import("../../../mm/phys_buddy.zig");
+const vm = @import("../../../mm/vm.zig");
 
 // ── Pixel Format ──
 
@@ -1499,6 +1500,83 @@ pub fn getHeight() u32 {
 
 pub fn getBpp() u8 {
     return fb_config.bpp;
+}
+
+/// 与 VirtIO `virtio_gpu_mem_entry` 同布局（guest 物理地址 + 长度），供 `RESOURCE_ATTACH_BACKING` 多段路径；定义于此避免 `framebuffer` ↔ `virtio_gpu_spec` 循环依赖。
+pub const VirtioBackingMemEntry = struct {
+    addr: u64,
+    length: u32,
+};
+
+/// 将屏前缓冲（`fb_config.address`，与 `getFrontBufferPhysContiguousForVirtio` 同一可见面）按 **guest 物理连续段** 切分为多枚 mem_entry。
+/// 每段长度不超过 `u32::MAX`；段数写入 `out` 前缀，返回段数；不满足 32bpp / 紧密 pitch / 长度页对齐等条件时返回 `null`。
+pub fn fillFrontBufferVirtioBackingEntries(out: []VirtioBackingMemEntry) ?usize {
+    if (!config_ready or fb_config.address == 0) return null;
+    if (fb_config.bpp != 32) return null;
+    const w = fb_config.width;
+    const h = fb_config.height;
+    if (w == 0 or h == 0) return null;
+    const pitch_u: u64 = fb_config.pitch;
+    const need_pitch: u64 = @as(u64, w) * 4;
+    if (pitch_u != need_pitch) return null;
+    const len: u64 = pitch_u * @as(u64, h);
+    if (len == 0 or len > 64 * 1024 * 1024) return null;
+    const page: u64 = 4096;
+    if (len % page != 0) return null;
+
+    const base: usize = fb_config.address;
+    var off: u64 = 0;
+    var count: usize = 0;
+    while (off < len) {
+        const pa0: u64 = @intCast(vm.kernelVirtToPhys(base + @as(usize, @intCast(off))));
+        var pages: u64 = 0;
+        while (off + pages * page < len) : (pages += 1) {
+            const page_off = off + pages * page;
+            const p: u64 = @intCast(vm.kernelVirtToPhys(base + @as(usize, @intCast(page_off))));
+            if (p != pa0 + pages * page) break;
+        }
+        if (pages == 0) return null;
+        const nbytes: u64 = pages * page;
+        if (nbytes > std.math.maxInt(u32)) return null;
+        if (count >= out.len) return null;
+        out[count] = .{ .addr = pa0, .length = @intCast(nbytes) };
+        count += 1;
+        off += nbytes;
+    }
+    return count;
+}
+
+/// 桌面 / VirtIO 初始化时调用：说明屏前缓冲是否满足单段连续、或多段 attach 可行性（不依赖 `virtio_gpu_pci`，无循环引用）。
+pub fn logVirtioScanoutReadiness() void {
+    if (!config_ready or fb_config.address == 0) {
+        klog.debug("VirtIO scanout hints: framebuffer not ready", .{});
+        return;
+    }
+    if (fb_config.bpp != 32) {
+        klog.info("VirtIO scanout hints: bpp=%u (need 32)", .{fb_config.bpp});
+        return;
+    }
+    const w = fb_config.width;
+    const h = fb_config.height;
+    if (w == 0 or h == 0) {
+        klog.debug("VirtIO scanout hints: zero dimensions", .{});
+        return;
+    }
+    const pitch_u = fb_config.pitch;
+    const need_pitch: u32 = w *| 4;
+    if (pitch_u != need_pitch) {
+        klog.info("VirtIO scanout hints: pitch=%u != width*4=%u (tight stride required for B8G8R8X8 scanout)", .{ pitch_u, need_pitch });
+    }
+    if (getFrontBufferPhysContiguousForVirtio()) |_| {
+        klog.info("VirtIO scanout hints: front buffer single contiguous GPA span (legacy attach path ok)", .{});
+        return;
+    }
+    var entries: [virtio_gpu_spec.max_virtio_backing_mem_entries]VirtioBackingMemEntry = undefined;
+    if (fillFrontBufferVirtioBackingEntries(&entries)) |n| {
+        klog.info("VirtIO scanout hints: multi-entry backing ok ({d} virtio_gpu_mem_entry segments)", .{n});
+        return;
+    }
+    klog.warn("VirtIO scanout hints: cannot derive backing entries (check VM mapping / pitch)", .{});
 }
 
 /// 屏前线性缓冲（`fb_config.address`）在 **4KiB 页**上物理连续时的 GPA 与长度，供 VirtIO-GPU `RESOURCE_ATTACH_BACKING`。

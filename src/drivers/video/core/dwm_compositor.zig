@@ -2,12 +2,12 @@
 //! 表面标志语义见 `src/config/dwm_surface_spec.zig`、`docs/cn/DesktopManagerSpec.md`。
 
 const std = @import("std");
-const klog = @import("../../rtl/klog.zig");
+const klog = @import("../../../rtl/klog.zig");
 const nt61_aero = @import("nt61_aero_defaults");
-const dwm_surface_spec = @import("../../config/dwm_surface_spec.zig");
-const dwm_nt61_abi = @import("../../config/dwm_nt61_api_contract.zig");
+const dwm_surface_spec = @import("../../../config/dwm_surface_spec.zig");
+const dwm_nt61_abi = @import("../../../config/dwm_nt61_api_contract.zig");
 const fb = @import("framebuffer.zig");
-const material = @import("material.zig");
+const material = @import("../desktop/material.zig");
 
 pub const CompositorBackend = enum(u8) {
     none = 0,
@@ -243,7 +243,7 @@ pub fn getFrameNumber() u64 {
 pub fn notifyFramePresented() void {
     if (!compositor_initialized) return;
     frame_number += 1;
-    const sched = @import("../../ke/scheduler.zig");
+    const sched = @import("../../../ke/scheduler.zig");
     const now = sched.getTicks();
     var i: u16 = 0;
     while (i < surface_count) : (i += 1) {
@@ -351,7 +351,7 @@ pub fn collectShellWindowSurfaceIds(buf: []u16) usize {
 pub fn enqueueIconicThumbnailRequest(surface_id: u16) void {
     if (!compositor_initialized or surface_id >= surface_count) return;
     iconic_thumbnail_serial +%= 1;
-    const sched = @import("../../ke/scheduler.zig");
+    const sched = @import("../../../ke/scheduler.zig");
     const now = sched.getTicks();
     const prev = surface_thumb_last_tick[surface_id];
     if (prev != 0 and now -% prev < thumb_refresh_min_ticks) return;

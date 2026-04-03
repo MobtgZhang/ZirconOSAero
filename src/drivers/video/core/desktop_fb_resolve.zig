@@ -1,9 +1,9 @@
 //! 桌面帧缓冲解析：`main.zig` 唯一入口。顺序：龙芯（LoongArch 有效）→ NVIDIA → Intel → AMD → GOP 原样。
 
-const loongson_igpu = @import("loongson_igpu.zig");
-const nvidia_gpu = @import("nvidia_gpu.zig");
-const intel_igpu = @import("intel_igpu.zig");
-const amd_igpu = @import("amd_igpu.zig");
+const loongson_igpu = @import("../loongson_igpu.zig");
+const nvidia_gpu = @import("../nvidia_gpu.zig");
+const intel_igpu = @import("../intel_igpu.zig");
+const amd_igpu = @import("../amd_igpu.zig");
 
 pub const DesktopFb = intel_igpu.DesktopFb;
 

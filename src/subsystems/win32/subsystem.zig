@@ -59,6 +59,12 @@ pub const CsrApiNumber = enum(u32) {
     get_message = 0x10025,
     create_dc = 0x10026,
     register_dwm_listener = 0x10027,
+    /// vNext：按名打开或创建桌面，应答载荷含 1-based HDESK（u32 LE）。见 `LPC_NT61_HANDSHAKE.md`。
+    open_desktop = 0x10028,
+    /// vNext：按名切换到已激活桌面。
+    switch_desktop_lpc = 0x10029,
+    /// vNext：关闭非 Default 的 1-based 桌面句柄（魔数 DSL1）。
+    close_desktop_lpc = 0x1002A,
     shutdown_system = 0x10030,
     _,
 };
@@ -251,6 +257,7 @@ pub fn openDesktopByName(name: []const u8) u32 {
     const ws = getWindowStation(active_window_station_idx) orelse return 0;
     for (0..ws.desktop_count) |i| {
         const d = &ws.desktops[i];
+        if (!d.is_active) continue;
         if (d.name_len == name.len and std.mem.eql(u8, d.name[0..d.name_len], name)) {
             return @as(u32, @intCast(i)) + 1;
         }
@@ -262,6 +269,7 @@ pub fn switchToDesktop(name: []const u8) bool {
     const ws = getWindowStation(active_window_station_idx) orelse return false;
     for (0..ws.desktop_count) |i| {
         const d = &ws.desktops[i];
+        if (!d.is_active) continue;
         if (d.name_len == name.len and std.mem.eql(u8, d.name[0..d.name_len], name)) {
             for (0..ws.desktop_count) |j| {
                 ws.desktops[j].is_active = (j == i);
@@ -272,6 +280,22 @@ pub fn switchToDesktop(name: []const u8) bool {
         }
     }
     return false;
+}
+
+/// 关闭 **非 Default**（索引 0）的 1-based 桌面句柄；若当前活动桌面被关闭则切回 `Default`。
+pub fn closeDesktopByHandle(hdesk: u32) bool {
+    if (hdesk <= 1) return false;
+    const idx = hdesk - 1;
+    const ws = getWindowStation(active_window_station_idx) orelse return false;
+    if (idx >= ws.desktop_count) return false;
+    var d = &ws.desktops[idx];
+    if (!d.is_active) return false;
+    d.is_active = false;
+    if (active_desktop_idx == idx) {
+        _ = switchToDesktop("Default");
+    }
+    klog.info("csrss: CloseDesktop hdesk=%u idx=%u", .{ hdesk, idx });
+    return true;
 }
 
 /// 绑定 Win32 进程到窗口站内的桌面索引（0..desktop_count-1）。
@@ -364,6 +388,30 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             const tid = csr_lpc_policy.resolveDwmListenerTid(tid_raw, pid);
             csr_dwm_listeners.register(tid);
             return 0;
+        },
+        .open_desktop => {
+            const d = data_opt orelse return -1;
+            const name = csr_lpc_policy.parseDesktopNamedMessage(d[0..ipc.MSG_DATA_SIZE], csr_lpc_policy.desktop_open_switch_magic_le) orelse return -1;
+            var h = openDesktopByName(name);
+            if (h == 0) {
+                h = createUserDesktop(name);
+            }
+            if (h == 0) return -1;
+            ipc.csrReplyPayloadReset();
+            var le: [4]u8 = undefined;
+            std.mem.writeInt(u32, &le, h, .little);
+            ipc.csrReplyPayloadSet(&le);
+            return 0;
+        },
+        .switch_desktop_lpc => {
+            const d = data_opt orelse return -1;
+            const name = csr_lpc_policy.parseDesktopNamedMessage(d[0..ipc.MSG_DATA_SIZE], csr_lpc_policy.desktop_open_switch_magic_le) orelse return -1;
+            return if (switchToDesktop(name)) 0 else -1;
+        },
+        .close_desktop_lpc => {
+            const d = data_opt orelse return -1;
+            const hdesk = csr_lpc_policy.readCloseDesktopHdesk(d[0..ipc.MSG_DATA_SIZE]) orelse return -1;
+            return if (closeDesktopByHandle(hdesk)) 0 else -1;
         },
         .post_message => {
             const wp = findWin32Process(pid) orelse return -1;

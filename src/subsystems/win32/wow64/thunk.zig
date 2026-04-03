@@ -18,6 +18,7 @@ pub fn translateSyscall32to64(wow_proc: *types.Wow64Process, syscall_num: u32) n
     wow_proc.syscall_count += 1;
     total_syscall_translations += 1;
 
+    // 阶段 4：`NtConnectPort` / `NtRequestWaitReplyPort` 与 csrss、DWM 监听 LPC 同族；索引见 `ssdt_x86_win7_sp1.zig`。
     if (x86.wow64SyscallStubReturnsSuccess(syscall_num)) {
         return ntdll.STATUS_SUCCESS;
     }

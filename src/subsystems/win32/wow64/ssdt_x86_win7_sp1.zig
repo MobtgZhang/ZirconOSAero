@@ -14,6 +14,8 @@ pub const NtClose: u32 = 0x32;
 pub const NtCreateEvent: u32 = 0x40;
 pub const NtCreateFile: u32 = 0x42;
 pub const NtCreatePort: u32 = 0x4D;
+/// 32 位进程连接 csrss / 子系统端口（与 DWM 通知 LPC 同机制族）；**Windows 7 SP1 x86** 服务号 **59**（`j00ru/windows-syscalls` `nt-per-system.json`）。
+pub const NtConnectPort: u32 = 0x3B;
 pub const NtCreateProcess: u32 = 0x4F;
 pub const NtCreateSection: u32 = 0x54;
 pub const NtCreateThread: u32 = 0x57;
@@ -27,6 +29,8 @@ pub const NtQuerySystemInformation: u32 = 0x105;
 pub const NtQueryVirtualMemory: u32 = 0x10B;
 pub const NtReadFile: u32 = 0x111;
 pub const NtReadVirtualMemory: u32 = 0x115;
+/// 同步 LPC 请求/应答（含 `CsrApiNumber` 窗口消息）；Win7 SP1 x86 **299**。
+pub const NtRequestWaitReplyPort: u32 = 0x12B;
 pub const NtTerminateProcess: u32 = 0x172;
 pub const NtTerminateThread: u32 = 0x173;
 pub const NtWaitForSingleObject: u32 = 0x187;
@@ -41,6 +45,7 @@ pub fn wow64SyscallStubReturnsSuccess(syscall_num: u32) bool {
         NtCreateEvent,
         NtCreateFile,
         NtCreatePort,
+        NtConnectPort,
         NtCreateProcess,
         NtCreateSection,
         NtCreateThread,
@@ -54,6 +59,7 @@ pub fn wow64SyscallStubReturnsSuccess(syscall_num: u32) bool {
         NtQueryVirtualMemory,
         NtReadFile,
         NtReadVirtualMemory,
+        NtRequestWaitReplyPort,
         NtTerminateProcess,
         NtTerminateThread,
         NtWaitForSingleObject,
@@ -71,10 +77,14 @@ test "WOW64 x86 Win7 SP1 reference indices" {
     try std.testing.expect(NtQueryVirtualMemory == 0x10B);
     try std.testing.expect(NtTerminateProcess == 0x172);
     try std.testing.expect(NtCreateFile == 0x42);
+    try std.testing.expect(NtConnectPort == 0x3B);
+    try std.testing.expect(NtRequestWaitReplyPort == 0x12B);
 }
 
 test "wow64SyscallStubReturnsSuccess covers thunk table syscalls" {
     try std.testing.expect(wow64SyscallStubReturnsSuccess(NtCreateProcess));
     try std.testing.expect(wow64SyscallStubReturnsSuccess(NtWriteFile));
+    try std.testing.expect(wow64SyscallStubReturnsSuccess(NtConnectPort));
+    try std.testing.expect(wow64SyscallStubReturnsSuccess(NtRequestWaitReplyPort));
     try std.testing.expect(!wow64SyscallStubReturnsSuccess(0xFFFF));
 }

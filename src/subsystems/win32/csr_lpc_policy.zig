@@ -102,3 +102,44 @@ test "LPC payload offsets align with subsystem handleApiCall" {
     try std.testing.expect(post_message_wparam_off >= post_message_msg_off + 4);
     try std.testing.expect(get_message_tid_off == 20);
 }
+
+/// `open_desktop` / `switch_desktop`：`DSK1` 小端魔数（与 `LPC_NT61_HANDSHAKE.md` vNext 一致）。
+pub const desktop_open_switch_magic_le: u32 = 0x44534B31;
+/// `close_desktop`：`DSL1`。
+pub const desktop_close_magic_le: u32 = 0x44534C31;
+pub const desktop_payload_name_len_off: usize = 4;
+pub const desktop_payload_name_off: usize = 5;
+pub const desktop_name_max_len: u8 = 31;
+
+pub fn parseDesktopNamedMessage(data: []const u8, expected_magic: u32) ?[]const u8 {
+    if (data.len < desktop_payload_name_off) return null;
+    const m = std.mem.readInt(u32, data[0..4], .little);
+    if (m != expected_magic) return null;
+    const n = data[desktop_payload_name_len_off];
+    if (n == 0 or n > desktop_name_max_len) return null;
+    if (desktop_payload_name_off + @as(usize, n) > data.len) return null;
+    return data[desktop_payload_name_off .. desktop_payload_name_off + n];
+}
+
+pub fn readCloseDesktopHdesk(data: []const u8) ?u32 {
+    if (data.len < 8) return null;
+    const m = std.mem.readInt(u32, data[0..4], .little);
+    if (m != desktop_close_magic_le) return null;
+    return std.mem.readInt(u32, data[4..8], .little);
+}
+
+test "desktop DSK1 name payload round-trip" {
+    var buf: [40]u8 = [_]u8{0} ** 40;
+    std.mem.writeInt(u32, buf[0..4], desktop_open_switch_magic_le, .little);
+    buf[4] = 3;
+    @memcpy(buf[5..8], "abc");
+    const nm = parseDesktopNamedMessage(&buf, desktop_open_switch_magic_le).?;
+    try std.testing.expectEqualStrings("abc", nm);
+}
+
+test "desktop DSL1 close hdesk" {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u32, buf[0..4], desktop_close_magic_le, .little);
+    std.mem.writeInt(u32, buf[4..8], 2, .little);
+    try std.testing.expectEqual(@as(u32, 2), readCloseDesktopHdesk(&buf).?);
+}

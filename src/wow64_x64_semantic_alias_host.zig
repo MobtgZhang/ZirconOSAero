@@ -17,6 +17,41 @@ test "x64SsdtIndexForWin7Sp1X86 maps stub-list syscalls" {
     try std.testing.expectEqual(@as(?u32, ssdt64.NtAllocateVirtualMemory), alias.x64SsdtIndexForWin7Sp1X86(x86.NtAllocateVirtualMemory));
     try std.testing.expectEqual(@as(?u32, ssdt64.NtConnectPort), alias.x64SsdtIndexForWin7Sp1X86(x86.NtConnectPort));
     try std.testing.expectEqual(@as(?u32, ssdt64.NtRequestWaitReplyPort), alias.x64SsdtIndexForWin7Sp1X86(x86.NtRequestWaitReplyPort));
-    try std.testing.expectEqual(@as(?u32, null), alias.x64SsdtIndexForWin7Sp1X86(x86.NtTerminateThread));
+    try std.testing.expectEqual(@as(?u32, ssdt64.NtTerminateThread), alias.x64SsdtIndexForWin7Sp1X86(x86.NtTerminateThread));
+    try std.testing.expectEqual(@as(?u32, ssdt64.NtDelayExecution), alias.x64SsdtIndexForWin7Sp1X86(x86.NtDelayExecution));
     try std.testing.expectEqual(@as(?u32, null), alias.x64SsdtIndexForWin7Sp1X86(0xFFFF));
+}
+
+test "wow64SyscallStubReturnsSuccess entries have x64 semantic alias" {
+    inline for (.{
+        x86.NtAllocateVirtualMemory,
+        x86.NtClose,
+        x86.NtCreateEvent,
+        x86.NtCreateFile,
+        x86.NtCreatePort,
+        x86.NtConnectPort,
+        x86.NtCreateProcess,
+        x86.NtCreateSection,
+        x86.NtCreateThread,
+        x86.NtFreeVirtualMemory,
+        x86.NtMapViewOfSection,
+        x86.NtOpenFile,
+        x86.NtOpenProcess,
+        x86.NtProtectVirtualMemory,
+        x86.NtQueryInformationProcess,
+        x86.NtQuerySystemInformation,
+        x86.NtQueryVirtualMemory,
+        x86.NtReadFile,
+        x86.NtReadVirtualMemory,
+        x86.NtRequestWaitReplyPort,
+        x86.NtDelayExecution,
+        x86.NtTerminateProcess,
+        x86.NtTerminateThread,
+        x86.NtWaitForSingleObject,
+        x86.NtWriteFile,
+        x86.NtWriteVirtualMemory,
+    }) |svc| {
+        try std.testing.expect(x86.wow64SyscallStubReturnsSuccess(svc));
+        try std.testing.expect(alias.x64SsdtIndexForWin7Sp1X86(svc) != null);
+    }
 }

@@ -7,12 +7,17 @@
 // This is an independent clean-room implementation.
 // Reference: Intel SDM Vol.3 Ch.10 — Local APIC, ICR delivery modes; ACPI MADT.
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K2.4
+// 配套：IRQ 自 PIC→IOAPIC 迁移与 `main` Phase3 诊断 `ioapic_route.logIoApicRedirectionMilestone`；TLB IPI 见 `tlb_broadcast.zig`。
 
 const std = @import("std");
 const madt = @import("madt.zig");
 
 const REG_ICR_LOW: u32 = 0x300;
 const REG_ICR_HIGH: u32 = 0x310;
+/// Spurious Interrupt Vector Register：bit 8 **APIC Software Enable**（Intel SDM Vol.3 §10.4.7）。
+const REG_SVR: u32 = 0x0F0;
+/// End Of Interrupt（写入任意值清除 in-service；Intel SDM Vol.3 §10.8.5）。
+const REG_EOI: u32 = 0x0B0;
 
 /// ICR.Low：Delivery Mode INIT (101)、Level=1、Trigger=1、Destination Shorthand = All Excluding Self (11)。
 /// 数值与常见固件/OS 公开描述一致；若改位布局须对照 Intel SDM 图 10-12。
@@ -100,4 +105,29 @@ pub fn broadcastInitIpiExcludingSelf() void {
 pub fn broadcastInitAndSipiSequenceExcludingSelf() void {
     broadcastInitIpiExcludingSelf();
     broadcastSipiSequenceTwiceAfterInit();
+}
+
+/// 置位 SVR 的 APIC Enable；PIT/IRQ0 仍可作 tick 源，后续可接 LVT Timer（见 `lapic_timer_tick.zig`）。
+pub fn ensureLocalApicSoftwareEnabled() void {
+    if (madt.local_apic_mmio_phys == 0) return;
+    const svr = lapicRead(REG_SVR);
+    lapicWrite(REG_SVR, svr | 0x100);
+}
+
+/// 本地 APIC **EOI**（用于 LAPIC LVT Timer 等不经 8259 的路径）。
+pub fn sendLocalEoi() void {
+    if (madt.local_apic_mmio_phys == 0) return;
+    lapicWrite(REG_EOI, 0);
+}
+
+/// Fixed 投递、**除自身外全部**（TLB shootdown / 跨核 DPC 唤醒等子集；向量须已在 IDT 登记）。
+/// ICR 布局：Intel SDM Fig. 10-12；Shorthand=All Excluding Self（bits 19:18=11）。
+pub fn broadcastFixedIpiExcludingSelf(vector: u8) void {
+    waitIcrIdle();
+    lapicWrite(REG_ICR_HIGH, 0);
+    waitIcrIdle();
+    // Shorthand 11<<18 | Level(assert)=1<<14 | Fixed delivery(0<<8) | vector（Intel SDM ICR 低 32 位）。
+    const low: u32 = 0x000C_4000 | (@as(u32, vector) & 0xFF);
+    lapicWrite(REG_ICR_LOW, low);
+    waitIcrIdle();
 }

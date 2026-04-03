@@ -1,6 +1,7 @@
 //! NTFS File System Implementation (Simplified)
 //! Supports basic NTFS volume operations with MFT, attribute parsing,
 //! file read/write, and directory enumeration.
+//! 阶段五：可靠性深化与配置存储分轨；hive/注册表烟测见 `zig build test`（`ntfs_hive_minimum_host`、`registry_zosh1_host`）。
 
 const vfs = @import("vfs.zig");
 const klog = @import("../rtl/klog.zig");

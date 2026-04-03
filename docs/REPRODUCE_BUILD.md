@@ -27,6 +27,15 @@ zig build install -Darch=x86_64 -Doptimize=ReleaseSafe
 bash scripts/ci-qemu-smoke.sh
 ```
 
+**分辨率编译矩阵（可选）**：在不改仓库内单行 `RESOLUTION` 的前提下，对 `build.conf` 注释表所列各档做 **`zig build kernel -Darch=x86_64 -Dzbm_preferred_fb_width=… -Dzbm_preferred_fb_height=…`** 校验：
+
+```bash
+bash scripts/test_x86_resolution_matrix.sh          # 全表
+bash scripts/test_x86_resolution_matrix.sh --quick  # 三档（与 CI 一致）
+```
+
+LoongArch 对应脚本：`scripts/test_loongarch_resolution_matrix.sh`（另构建 ZBM UEFI 对象）。
+
 `zig build test` 当前包含：`heap`、`pool`、`buddy`、`slab`、`ssdt`、`ssdt_stub_parity`、`ssdt_x64_x86_namespace`、`se_token`、`smp_atomic_host`、`wow64_types`、`object`、`io_irp_host`、`ecam_layout`、`hpet_id`、`lpc_portkind_host`、`minimal_net`、`mdl_host`、`pci_driver_bind_host`、`fs_vfs_constants_host`、`scheduler_policy_host`、`mutex_inherit_depth_host`、`nt61_phase_f_scheduler_gap`、`gpu_device_host`、`virtio_gpu_spec_host`、`display_flip_journal_host`、`win32k_host`、`msg_pm_semantics_host`、`dwm_surface_spec_host`、`aero_flag_mapping_host`、`nt61_aero_defaults_host`、`color_nt61_host`、`dwm_messages_nt61_host`、`dwm_nt61_integration_host`、`wow64_ssdt_x86` 等主机单测；与 [NT61_CONTRACT_MATRIX.md](cn/NT61_CONTRACT_MATRIX.md) 中「验证」行一致。
 
 交叉编译与 ZBM 辅助产物（可选；与 CI 矩阵一致）：
@@ -61,6 +70,13 @@ qemu-system-x86_64 \
 **预期串口（成功）**：`VirtIO-GPU: GET_DISPLAY_INFO + RESOURCE_CREATE_2D + TRANSFER_* scratch loop ok`；若帧缓冲已为 32bpp 且初始化完成，可紧跟 `VirtIO-GPU: display ↔ scratch TRANSFER round-trip ok (4×4)`（或更小尺寸）。
 
 **回退（无 GPU / 命令失败 / 非 32bpp）**：不出现上述首条 info，或出现 `VirtIO-GPU: display ↔ scratch round-trip failed`；桌面仍走 CPU 合成路径。
+
+### 1920×1080 与 scanout / 模糊统计（可选）
+
+- 在 `build.conf` / QEMU 中把客户分辨率设为 **1920×1080**（或 `Makefile` 同步脚本所期望的桌面宽高），并保留 **`-device virtio-gpu-pci`**（与 `-vga` 组合以本机不花屏为准，可尝试 `-vga none` 仅 virtio-gpu）。
+- 构建内核时打开 **`-Ddwm_blur_stats=true`**（见 `build.zig` / `build_options`），串口每帧可看到一行 `dwm blur frame: box_blur_calls=… budget_denials=… tint_only_calls=…`。
+- **期望关键字（成功 scanout）**：`VirtIO-GPU: scanout resource=`、`mem_entries=`（单段为 `1`，散列物理页为 `>1`）、`Desktop display phase (WDDM-like runtime): virtio_scanout_flat` 或 `virtio_scanout_multipage`。
+- **VirGL（可选）**：`-device virtio-gpu-pci,virgl=on` 且主机支持时，可额外看到 `device offers VIRGL`、`CMD_CTX_CREATE ok`；**GPU 模糊尚未启用**，`budget_denials` 行为与纯 CPU 路径一致，直至 `SUBMIT_3D` 接線（见 [docs/cn/VirtioVirglMVP.md](cn/VirtioVirglMVP.md)）。
 
 ## 桌面性能烟测（可选）
 

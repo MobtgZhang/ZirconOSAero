@@ -4,32 +4,19 @@
 
 **独立项目声明**：非 Microsoft 产品；「Windows」「Windows 7」等为商标说明，仅用于兼容目标描述。第三方与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
-<p align="center">
-  <img src="assets/ZirconOS_logo.svg" alt="ZirconOSAero" width="480" />
-</p>
+
 
 ## Screenshots
 
-<table width="100%">
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <img src="assets/screenshot-zbm.png" alt="ZBM boot manager (Windows 7 style)" width="95%" /><br />
-      <sub>ZBM — Windows 7–style text menu</sub>
-    </td>
-    <td align="center" width="34%" valign="top">
-      <img src="assets/screenshot-aero.png" alt="ZirconOSAero Aero desktop" width="95%" /><br />
-      <sub>Shell — Windows 7 Aero (NT 6.1)</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <img src="assets/screenshot-cmd.png" alt="CMD shell" width="95%" /><br />
-      <sub>CMD shell</sub>
-    </td>
-  </tr>
-</table>
+
+|                                 |                                 |           |
+| ------------------------------- | ------------------------------- | --------- |
+| ZBM — Windows 7–style text menu | Shell — Windows 7 Aero (NT 6.1) | CMD shell |
+
 
 **中文说明**：[README_cn.md](README_cn.md)
 
-[![CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml/badge.svg)](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
+[CI](https://github.com/MobtgZhang/ZirconOSAero/actions/workflows/ci.yml)
 
 **CI / 本地**：`zig build test`；`bash scripts/ci-qemu-smoke.sh`；Zig **0.15.2**（见 [docs/REPRODUCE_BUILD.md](docs/REPRODUCE_BUILD.md)、[.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试索引：[docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md)。
 
@@ -48,9 +35,11 @@
 
 **流程与契约（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md) · [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 列同源；**Partial / Stub** 即非 Done）· [docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md) · [docs/cn/DWM_NOTIFY_MODEL_NT61.md](docs/cn/DWM_NOTIFY_MODEL_NT61.md) · [docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md) · [docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) / [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)
 
+**调度与定时（行为细节）**：[docs/cn/SCHEDULER_API.md](docs/cn/SCHEDULER_API.md)（就绪队列、时间片、饥饿与 I/O boost）· [docs/cn/TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md)（PIT 以外的高分辨率路径）
+
 状态标签：`Stub` · `Partial` · `Done` · `Verified`。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
-More: [`docs/README.md`](docs/README.md) · [`docs/en/Architecture.md`](docs/en/Architecture.md) · [`docs/en/Kernel.md`](docs/en/Kernel.md) · [`docs/en/Boot.md`](docs/en/Boot.md) · [`docs/en/BuildSystem.md`](docs/en/BuildSystem.md) · [`docs/en/Roadmap.md`](docs/en/Roadmap.md)
+More: `[docs/README.md](docs/README.md)` · `[docs/en/Architecture.md](docs/en/Architecture.md)` · `[docs/en/Kernel.md](docs/en/Kernel.md)` · `[docs/en/Boot.md](docs/en/Boot.md)` · `[docs/en/BuildSystem.md](docs/en/BuildSystem.md)` · `[docs/en/Roadmap.md](docs/en/Roadmap.md)`
 
 ## Repository layout
 
@@ -117,7 +106,7 @@ ZirconOSAero/
 
 LoongArch UEFI 链接 GNU-EFI：`make fetch-gnu-efi`（输出在 `gnu-efi/`；见 `scripts/README.md`）。
 
-`src/config/desktop.conf`（编译期嵌入）中 `[desktop] theme` 仅 **`aero`** 或 **`none`**（无图形壳）。
+`src/config/desktop.conf`（编译期嵌入）中 `[desktop] theme` 仅 `**aero`** 或 `**none**`（无图形壳）。
 
 ```ini
 [desktop]
@@ -169,46 +158,48 @@ Clean-room，行为以 [Microsoft Learn](https://learn.microsoft.com/)、WDK 与
 
 ## Phase 0–11 feature matrix（继承上游能力）
 
-| Area | Status | Notes |
-|------|--------|--------|
-| ZBM boot | Done | BIOS/MBR + UEFI；Windows 7 风格文本菜单 |
-| UEFI boot | Done | UEFI app, Debug/Release, Phase 0–11 banner |
-| VGA | Done | Text console |
-| Serial | Done | COM1 |
-| Frame allocator | Partial | 位图 + mmap 过滤；连续页伙伴见 `phys_buddy.zig`（[NT61_CONTRACT_MATRIX §0](docs/cn/NT61_CONTRACT_MATRIX.md)） |
-| Paging | Partial | 四级表、恒等映射；每进程 CR3/SMEP 见契约矩阵与 `mitigations.zig` |
-| Kernel heap | Partial | Bump + 空闲链表回收 + `mm/pool` 档位；Paged 语义与完整池化见契约矩阵 |
-| Section objects | Partial | 匿名节 + `ntdll` / `section.zig`；x64 `syscall` 分发 `NtCreateSection`/`NtMapViewOfSection`/`NtUnmapViewOfSection`（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)） |
-| IPC (LPC) | Partial | Queues, ports；连接/通信端口分离雏形、`section_view_handle` 占位（[Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md)） |
-| Syscall | Partial | `int 0x80` + `syscall`/`sysret`；**NT 6.1 x64 SSDT 子集**；`NtQuerySystemInformation` 等对输出缓冲 `probe`（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
-| IDT/ISR | Done | 256 vectors |
-| Scheduler | Partial | 多优先级就绪队列（idle/normal 档）；完整 32 级与饥饿策略见契约矩阵 |
-| Timer | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
-| Sync | Done | Event, mutex, semaphore, spinlock |
-| Object Manager | Partial | 类型、句柄表、命名空间子集；主机测试 [zircon_host_ob_test.zig](src/zircon_host_ob_test.zig) |
-| Process Manager | Partial | 进程/线程、Process Server；隔离与 CR3 切换见契约矩阵 §0 |
-| Session Manager | Done | SMSS, sessions, subsystem registration |
-| Security | Done | Token, SID, access checks |
-| I/O Manager | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP 桥接；PnP/PCI 见 `acpi_pci_early.zig` |
-| VFS | Partial | Mount points；完整 IRP/锁语义见契约矩阵 |
-| FAT32 | Partial | `C:\` 主路径可用；与 NT 格式化工具完全互操作非目标 |
-| NTFS | Partial | MFT 子集与基本路径；**非**完整 NTFS（日志/压缩/稀疏/安全描述符全谱系见路线图） |
-| PE32+ loader | Partial | Headers, imports, relocs, PEB/TEB 子集；绑定与边界情况持续对齐 SSDT |
-| PE32 loader | Partial | 32-bit PE + WOW64；与官方 SysWOW64/SSDT 不对齐 |
-| ELF loader | Partial | ELF64 头与加载子集；与 glibc 动态链接全兼容非目标 |
-| ntdll | Partial | Native API 子集；服务号见 SSDT 路线图 |
-| kernel32 | Partial | Win32 base API 子集 |
-| user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集；完整 NC 序列见契约矩阵 |
-| gdi32 | Partial | DC/原语/字体/位图子集；分阶段见 `gdi32.zig` 头注释与契约矩阵 |
-| Console | Done | Console runtime |
-| CMD | Done | dir, cd, set, ver, systeminfo, tasklist, … |
-| .NET Shell（用户态，预留） | Planned | 内核内 ZirconShell 已移除；由未来 .NET 用户态宿主提供 |
-| csrss | Partial | Win32 server, stations, desktops, GUI dispatch |
-| Exec engine | Partial | PE load, DLL bind, lifecycle |
-| WOW64 | Partial | PE32, thunk；32→64 服务号须对齐 `ssdt_nt61.zig`（与旧 `SYS_*` 已分离）— 见 `wow64.zig` |
-| Registry runtime | Partial | 内存树 + `Mouse`/`Desktop`/`HKLM\...\Windows\DWM`/`Memory Management` 等键；RegF/hive 持久化 Planned |
-| Aero / DWM (kernel shell) | Partial | 脏区/Flip3D(Alt+Tab) 近似/任务栏缩略采样/标志映射 `aero_flag_mapping`；CPU 为主，VirtIO-GPU 卸载见契约矩阵 §4.1；[DesktopManagerSpec.md](docs/cn/DesktopManagerSpec.md) |
-| 多架构 Win32 栈 | Partial | **x86_64** 为主验证路径；riscv64/LoongArch/MIPS 引导与桌面见各 `arch` 文档与 CI 说明 |
+
+| Area                      | Status  | Notes                                                                                                                                                                                    |
+| ------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ZBM boot                  | Done    | BIOS/MBR + UEFI；Windows 7 风格文本菜单                                                                                                                                                         |
+| UEFI boot                 | Done    | UEFI app, Debug/Release, Phase 0–11 banner                                                                                                                                               |
+| VGA                       | Done    | Text console                                                                                                                                                                             |
+| Serial                    | Done    | COM1                                                                                                                                                                                     |
+| Frame allocator           | Partial | 位图 + mmap 过滤；连续页伙伴见 `phys_buddy.zig`（[NT61_CONTRACT_MATRIX §0](docs/cn/NT61_CONTRACT_MATRIX.md)）                                                                                         |
+| Paging                    | Partial | 四级表、恒等映射；每进程 CR3/SMEP 见契约矩阵与 `mitigations.zig`                                                                                                                                           |
+| Kernel heap               | Partial | Bump + 空闲链表回收 + `mm/pool` 档位；Paged 语义与完整池化见契约矩阵                                                                                                                                          |
+| Section objects           | Partial | 匿名节 + `ntdll` / `section.zig`；x64 `syscall` 分发 `NtCreateSection`/`NtMapViewOfSection`/`NtUnmapViewOfSection`（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)）                     |
+| IPC (LPC)                 | Partial | Queues, ports；连接/通信端口分离雏形、`section_view_handle` 占位（[Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md)）                                                                     |
+| Syscall                   | Partial | `int 0x80` + `syscall`/`sysret`；**NT 6.1 x64 SSDT 子集**；`NtQuerySystemInformation` 等对输出缓冲 `probe`（[SyscallABI.md](docs/cn/SyscallABI.md), [ssdt_nt61.zig](src/arch/x86_64/ssdt_nt61.zig)） |
+| IDT/ISR                   | Done    | 256 vectors                                                                                                                                                                              |
+| Scheduler                 | Partial | **已实现**：每逻辑 CPU **32** 档 FIFO 分桶、`non_empty` 位图、按 **priority class** 时间片、饥饿提升、I/O boost、互斥优先级继承（多锁深度配对 `mutex_inherit_depth`）、亲和与 `home_cpu`、tick 路径 CR3 切换（[SCHEDULER_API.md](docs/cn/SCHEDULER_API.md)）。**未等同 NT**：NUMA/公平份额、完整 IRQL 抢占模型、AP **INIT-SIPI** 实路径与多核 tick 仍为路线图（K2.4/K2.6）。 |
+| Timer                     | Partial | **主 tick**：PIC + **PIT ~100Hz**（`ke/timer.zig`）。**单调时钟抽象**：`ke/timekeeping.zig`（调度 tick + 可选 HPET 主计数器只读）。**HPET**：MMIO 探测/频率解析见 `hal/x86_64/hpet.zig`（接 IRQ0 迁移与 LAPIC one-shot 见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md)）。 |
+| Sync                      | Done    | Event, mutex, semaphore, spinlock                                                                                                                                                        |
+| Object Manager            | Partial | 类型、句柄表、命名空间子集；主机测试 [zircon_host_ob_test.zig](src/zircon_host_ob_test.zig)                                                                                                                |
+| Process Manager           | Partial | 进程/线程、Process Server；隔离与 CR3 切换见契约矩阵 §0                                                                                                                                                  |
+| Session Manager           | Done    | SMSS, sessions, subsystem registration                                                                                                                                                   |
+| Security                  | Done    | Token, SID, access checks                                                                                                                                                                |
+| I/O Manager               | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP 桥接；PnP/PCI 见 `acpi_pci_early.zig`                                                                                                                    |
+| VFS                       | Partial | Mount points；完整 IRP/锁语义见契约矩阵                                                                                                                                                             |
+| FAT32                     | Partial | `C:\` 主路径可用；与 NT 格式化工具完全互操作非目标                                                                                                                                                           |
+| NTFS                      | Partial | MFT 子集与基本路径；**非**完整 NTFS（日志/压缩/稀疏/安全描述符全谱系见路线图）                                                                                                                                          |
+| PE32+ loader              | Partial | Headers, imports, relocs, PEB/TEB 子集；绑定与边界情况持续对齐 SSDT                                                                                                                                    |
+| PE32 loader               | Partial | 32-bit PE + WOW64；与官方 SysWOW64/SSDT 不对齐                                                                                                                                                  |
+| ELF loader                | Partial | ELF64 头与加载子集；与 glibc 动态链接全兼容非目标                                                                                                                                                          |
+| ntdll                     | Partial | Native API 子集；服务号见 SSDT 路线图                                                                                                                                                              |
+| kernel32                  | Partial | Win32 base API 子集                                                                                                                                                                        |
+| user32                    | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集；完整 NC 序列见契约矩阵                                                                                                                                                |
+| gdi32                     | Partial | DC/原语/字体/位图子集；分阶段见 `gdi32.zig` 头注释与契约矩阵                                                                                                                                                  |
+| Console                   | Done    | Console runtime                                                                                                                                                                          |
+| CMD                       | Done    | dir, cd, set, ver, systeminfo, tasklist, …                                                                                                                                               |
+| .NET Shell（用户态，预留）        | Planned | 内核内 ZirconShell 已移除；由未来 .NET 用户态宿主提供                                                                                                                                                     |
+| csrss                     | Partial | Win32 server, stations, desktops, GUI dispatch                                                                                                                                           |
+| Exec engine               | Partial | PE load, DLL bind, lifecycle                                                                                                                                                             |
+| WOW64                     | Partial | PE32, thunk；32→64 服务号须对齐 `ssdt_nt61.zig`（与旧 `SYS_`* 已分离）— 见 `wow64.zig`                                                                                                                  |
+| Registry runtime          | Partial | 内存树 + `Mouse`/`Desktop`/`HKLM\...\Windows\DWM`/`Memory Management` 等键；RegF/hive 持久化 Planned                                                                                              |
+| Aero / DWM (kernel shell) | Partial | 脏区/Present 契约、`thumb_refresh` 节流、任务栏缩略 `enqueueIconicThumbnailRequest` 与 Flip3D 表面枚举；**Aero 模糊/合成仍以 CPU 为主**（`blur_budget`）。**VirtIO-GPU**：`SET_SCANOUT` + 屏前 RAM `RESOURCE_FLUSH`（`isScanoutActive`）；≤32×32 scratch `TRANSFER` PoC 仍保留。**NVIDIA**：PCI/BAR0 + 可选 4MiB 可预取 BAR 诊断映射、`IOCTL_NVIDIA_BAR0_FIRST_U32`（非 WDDM）。见 [AeroDesktopRuntime.md](docs/cn/AeroDesktopRuntime.md)、契约矩阵 §4.1、[SOFTWARE_COMPOSITOR_WDDM.md](docs/cn/SOFTWARE_COMPOSITOR_WDDM.md) |
+| 多架构 Win32 栈               | Partial | **x86_64** 为主验证路径；riscv64/LoongArch/MIPS 引导与桌面见各 `arch` 文档与 CI 说明                                                                                                                        |
+
 
 ## Milestones
 
@@ -223,4 +214,5 @@ Clean-room，行为以 [Microsoft Learn](https://learn.microsoft.com/)、WDK 与
 - **Phase 8** — Native userland (ntdll/kernel32, CMD)  
 - **Phase 9** — Win32 subsystem (csrss, exec engine, PE/DLL)  
 - **Phase 10** — Graphics (user32, gdi32, message queue, GUI dispatch)  
-- **Phase 11** — WOW64 (PE32, thunking, 32-bit PEB/TEB)  
+- **Phase 11** — WOW64 (PE32, thunking, 32-bit PEB/TEB)
+

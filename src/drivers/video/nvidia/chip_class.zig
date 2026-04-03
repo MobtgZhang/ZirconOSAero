@@ -1,4 +1,4 @@
-//! PCI DID → 粗代际（启发式）。细化请对照 Linux `nouveau` `nvkm_device_pci_table`。
+//! PCI DID → 粗代际（启发式，clean-room；不对照任何第三方驱动源码表）。
 //! 后续迭代：按芯片族拆分 BAR、VRAM、显示引擎（见 `nvidia_gpu.zig` 顶部注释）。
 
 const types = @import("types.zig");

@@ -9,6 +9,8 @@ const klog = @import("../../rtl/klog.zig");
 const cjk_font = @import("cjk_font.zig");
 const config_mod = @import("../../config/config.zig");
 const frame_mod = @import("../../mm/frame.zig");
+const phys_pb = @import("../../mm/phys_buddy.zig");
+const vm = @import("../../mm/vm.zig");
 
 // ── Pixel Format ──
 
@@ -285,8 +287,11 @@ var triple_buffer_active: bool = false;
 var draw_slot: u32 = 0;
 /// 单槽字节数 (= pitch*height)。
 var bytes_per_slot: usize = 0;
-/// `allocContiguous` 后备时使用；可能容纳 1 或 2 槽。
+/// `allocContiguous` / 伙伴优先路径后备时使用；可能容纳 1 或 2 槽。
 var back_buffer_heap_nframes: usize = 0;
+/// 与 `phys_buddy.allocContiguousPagesWithSource` 配对释放。
+var back_heap_contig_source: phys_pb.ContiguousSource = .frame_bitmap;
+var back_heap_contig_order: u5 = 0;
 
 // ── IOCTL Codes ──
 
@@ -1429,51 +1434,51 @@ pub fn logFramebufferMemorySummary() void {
 
 // ── IRP Dispatch ──
 
-fn fbDispatch(irp: *io.Irp) io.IoStatus {
+fn fbDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => return handleIoctl(irp),
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
 
-fn handleIoctl(irp: *io.Irp) io.IoStatus {
+fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
     switch (irp.ioctl_code) {
         IOCTL_FB_GET_CONFIG => {
             irp.buffer_ptr = fb_config.address;
             irp.bytes_transferred = @intCast(@as(u64, fb_config.pitch) * @as(u64, fb_config.height));
-            irp.complete(.success, fb_config.width);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, fb_config.width);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_FB_MAP_BUFFER => {
             irp.buffer_ptr = fb_config.address;
-            irp.complete(.success, @intCast(@as(u64, fb_config.pitch) * @as(u64, fb_config.height)));
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, @intCast(@as(u64, fb_config.pitch) * @as(u64, fb_config.height)));
+            return io.STATUS_SUCCESS;
         },
         IOCTL_FB_FLIP => {
             flip();
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_FB_FILL_RECT => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_FB_GET_STATS => {
             irp.buffer_ptr = total_draw_calls;
             irp.bytes_transferred = @intCast(total_flips);
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
@@ -1494,6 +1499,37 @@ pub fn getHeight() u32 {
 
 pub fn getBpp() u8 {
     return fb_config.bpp;
+}
+
+/// 屏前线性缓冲（`fb_config.address`）在 **4KiB 页**上物理连续时的 GPA 与长度，供 VirtIO-GPU `RESOURCE_ATTACH_BACKING`。
+/// 要求 `pitch == width*4`（与 `FORMAT_B8G8R8X8_UNORM` 紧密 stride 一致）。双缓冲下 flip 写入该区间后由 `RESOURCE_FLUSH` 通知设备。
+pub fn getFrontBufferPhysContiguousForVirtio() ?struct { base: u64, len: u64 } {
+    if (!config_ready or fb_config.address == 0) return null;
+    if (fb_config.bpp != 32) return null;
+    const w = fb_config.width;
+    const h = fb_config.height;
+    if (w == 0 or h == 0) return null;
+    const pitch_u: u64 = fb_config.pitch;
+    const need_pitch: u64 = @as(u64, w) * 4;
+    if (pitch_u != need_pitch) return null;
+    const len: u64 = pitch_u * @as(u64, h);
+    if (len == 0) return null;
+    if (len > 64 * 1024 * 1024) return null; // 单 attach `length` u32 上限内保守 cap
+    const page: u64 = 4096;
+    if (len % page != 0) return null;
+    var off: u64 = 0;
+    var prev_phys: ?u64 = null;
+    while (off < len) {
+        const va = fb_config.address + off;
+        const pa: u64 = @intCast(vm.kernelVirtToPhys(va));
+        if (prev_phys) |pp| {
+            if (pa != pp + page) return null;
+        }
+        prev_phys = pa;
+        off += page;
+    }
+    const base: u64 = @intCast(vm.kernelVirtToPhys(fb_config.address));
+    return .{ .base = base, .len = len };
 }
 
 pub fn getPitch() u32 {
@@ -1532,9 +1568,22 @@ fn zeroHeapBack(total_bytes: usize) void {
 
 pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr: bool) void {
     const required = @as(usize, pitch) * @as(usize, height);
+    if (back_buffer_heap_nframes > 0 and back_buffer_addr != 0) {
+        if (frame_mod.getKernelFrameAllocator()) |fa_rel| {
+            phys_pb.freeContiguousPagesWithSource(
+                fa_rel,
+                @as(u64, @truncate(back_buffer_addr)),
+                back_buffer_heap_nframes,
+                back_heap_contig_source,
+                back_heap_contig_order,
+            );
+        }
+    }
     back_buffer_addr = 0;
     back_buffer_size = 0;
     back_buffer_heap_nframes = 0;
+    back_heap_contig_source = .frame_bitmap;
+    back_heap_contig_order = 0;
     double_buffer_active = false;
     triple_buffer_active = false;
     draw_slot = 0;
@@ -1556,7 +1605,10 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
         } else if (required <= BACK_BUF_MAX and want_triple and total_for_triple > BACK_BUF_MAX) {
             if (frame_mod.getKernelFrameAllocator()) |fa| {
                 const nframes2 = (total_for_triple + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
-                if (fa.allocContiguous(nframes2)) |base_phys| {
+                const ac = phys_pb.allocContiguousPagesWithSource(fa, nframes2);
+                if (ac.phys) |base_phys| {
+                    back_heap_contig_source = ac.source;
+                    back_heap_contig_order = ac.order;
                     back_buffer_addr = @as(usize, @truncate(base_phys));
                     back_buffer_heap_nframes = nframes2;
                     back_buffer_size = nframes2 * frame_mod.FRAME_SIZE;
@@ -1583,7 +1635,10 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
             if (frame_mod.getKernelFrameAllocator()) |fa| {
                 if (want_triple) {
                     const nframes2 = (total_for_triple + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
-                    if (fa.allocContiguous(nframes2)) |base_phys| {
+                    const ac2 = phys_pb.allocContiguousPagesWithSource(fa, nframes2);
+                    if (ac2.phys) |base_phys| {
+                        back_heap_contig_source = ac2.source;
+                        back_heap_contig_order = ac2.order;
                         back_buffer_addr = @as(usize, @truncate(base_phys));
                         back_buffer_heap_nframes = nframes2;
                         back_buffer_size = nframes2 * frame_mod.FRAME_SIZE;
@@ -1600,7 +1655,10 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
                 }
                 if (!double_buffer_active) {
                     const nframes = (required + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
-                    if (fa.allocContiguous(nframes)) |base_phys| {
+                    const ac3 = phys_pb.allocContiguousPagesWithSource(fa, nframes);
+                    if (ac3.phys) |base_phys| {
+                        back_heap_contig_source = ac3.source;
+                        back_heap_contig_order = ac3.order;
                         back_buffer_addr = @as(usize, @truncate(base_phys));
                         back_buffer_heap_nframes = nframes;
                         back_buffer_size = nframes * frame_mod.FRAME_SIZE;

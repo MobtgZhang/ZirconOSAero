@@ -340,37 +340,37 @@ pub fn clearScreen(color: u8) void {
 
 // ── IRP Dispatch (NT Driver Model) ──
 
-fn vgaDispatch(irp: *io.Irp) io.IoStatus {
+fn vgaDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => return handleIoctl(irp),
         .read => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .write => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
 
-fn handleIoctl(irp: *io.Irp) io.IoStatus {
+fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
     switch (irp.ioctl_code) {
         IOCTL_VIDEO_QUERY_NUM_MODES => {
-            irp.complete(.success, supported_modes.len);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, supported_modes.len);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_QUERY_CURRENT_MODE => {
-            irp.complete(.success, @intFromEnum(current_mode));
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, @intFromEnum(current_mode));
+            return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_SET_MODE => {
             const mode_byte: u8 = @truncate(irp.buffer_ptr & 0xFF);
@@ -379,34 +379,34 @@ fn handleIoctl(irp: *io.Irp) io.IoStatus {
                 .text_80x25 => setTextMode(),
                 .gfx_320x200_256 => setMode13h(),
                 else => {
-                    irp.complete(.not_implemented, 0);
-                    return .not_implemented;
+                    irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                    return io.STATUS_NOT_IMPLEMENTED;
                 },
             }
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_RESET => {
             setTextMode();
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_MAP_FRAMEBUFFER => {
             irp.buffer_ptr = current_fb;
-            irp.complete(.success, current_pitch * current_height);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, current_pitch * current_height);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_SET_PALETTE => {
             setDefaultPalette();
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_SET_CURSOR_POS => {
             const x: u16 = @truncate(irp.buffer_ptr & 0xFFFF);
             const y: u16 = @truncate((irp.buffer_ptr >> 16) & 0xFFFF);
             setCursorPosition(x, y);
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_ENABLE_CURSOR => {
             if (irp.buffer_ptr != 0) {
@@ -414,12 +414,12 @@ fn handleIoctl(irp: *io.Irp) io.IoStatus {
             } else {
                 disableCursor();
             }
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

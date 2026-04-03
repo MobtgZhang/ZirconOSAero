@@ -352,7 +352,10 @@ pub fn enqueueIconicThumbnailRequest(surface_id: u16) void {
     if (!compositor_initialized or surface_id >= surface_count) return;
     iconic_thumbnail_serial +%= 1;
     const sched = @import("../../ke/scheduler.zig");
-    refreshSurfaceThumbFromFramebuffer(surface_id, sched.getTicks());
+    const now = sched.getTicks();
+    const prev = surface_thumb_last_tick[surface_id];
+    if (prev != 0 and now -% prev < thumb_refresh_min_ticks) return;
+    refreshSurfaceThumbFromFramebuffer(surface_id, now);
 }
 
 pub fn iconicThumbnailSerial() u64 {

@@ -3569,12 +3569,15 @@ pub fn isDesktopVsyncPolicyEnabled() bool {
 
 pub fn present() void {
     if (!use_framebuffer) return;
+    const scanout_vio = virtio_gpu_pci.isScanoutActive();
+    const dirty_before_flip: ?fb.Rect = if (scanout_vio) fb.peekDirtyUnionPx() else null;
     // VirtIO-GPU：`flipDirty` 且脏外包 ≤32×32 时尝试 `trySubmitFramebufferDirtyRect`（PoC，与 init 4×4 往返同命令路径）；失败或非 offload 不影响 CPU 提交。
     // 首帧强制整幅 flip：LoongArch+QEMU 双缓冲下若脏矩形与合成路径偶发不同步，屏上可长期黑/花；后续帧仍可按配置走 flipDirty。
     const first_present = (desktop_ctx.present_count == 0);
+    const will_full_flip = fb.isDoubleBuffered() and (config.isPresentFullFlipEnabled() or first_present);
     // 双缓冲：`present_full_flip` 默认整幅 memcpy（避免漏画光标区）；关则用脏矩形 flipDirty（须完整 mark dirty）。
     if (fb.isDoubleBuffered()) {
-        if (config.isPresentFullFlipEnabled() or first_present) {
+        if (will_full_flip) {
             fb.flip();
         } else {
             // VirtIO-GPU：小脏区可走 `trySubmitFramebufferDirtyRect`（≤32×32）做 PoC 级传输自检；主路径仍以 CPU flipDirty。
@@ -3592,6 +3595,9 @@ pub fn present() void {
     } else {
         fb.flipDirty();
     }
+    // Scanout：`RESOURCE_FLUSH` 整屏（整幅 flip）或 `dirty_before_flip` 外包（`flipDirty`）；与 DesktopManagerSpec present 契约一致。
+    const virtio_flush_hint: ?fb.Rect = if (!scanout_vio) null else if (will_full_flip) null else dirty_before_flip;
+    virtio_gpu_pci.notifyScanoutFrontUpdated(virtio_flush_hint);
     notifyHardwareCursorIfAvailable();
     if (dwm_comp.isInitialized()) {
         dwm_comp.notifyFramePresented();
@@ -3666,50 +3672,50 @@ pub fn incFrameCount() void {
 
 // ── IRP Dispatch ──
 
-fn displayDispatch(irp: *io.Irp) io.IoStatus {
+fn displayDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => return handleIoctl(irp),
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
 
-fn handleIoctl(irp: *io.Irp) io.IoStatus {
+fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
     switch (irp.ioctl_code) {
         IOCTL_DISPLAY_GET_STATE => {
-            irp.complete(.success, @intFromEnum(display_state));
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, @intFromEnum(display_state));
+            return io.STATUS_SUCCESS;
         },
         IOCTL_DISPLAY_GET_SURFACE => {
             irp.buffer_ptr = desktop_ctx.surface.address;
             irp.bytes_transferred = desktop_ctx.surface.pitch * desktop_ctx.surface.height;
-            irp.complete(.success, desktop_ctx.surface.width);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, desktop_ctx.surface.width);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_DISPLAY_SET_BG_COLOR => {
             const color: u32 = @truncate(irp.buffer_ptr);
             renderDesktopBackground(color);
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_DISPLAY_PRESENT => {
             present();
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_DISPLAY_ENUMERATE => {
-            irp.complete(.success, if (use_hdmi) hdmi_driver.getOutputCount() else 1);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, if (use_hdmi) hdmi_driver.getOutputCount() else 1);
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

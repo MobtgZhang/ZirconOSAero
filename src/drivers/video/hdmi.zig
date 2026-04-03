@@ -364,39 +364,39 @@ pub fn syncNvidiaGpuConnector(device_id: u16, family_code: u8) void {
 
 // ── IRP Dispatch ──
 
-fn hdmiDispatch(irp: *io.Irp) io.IoStatus {
+fn hdmiDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         .ioctl => return handleIoctl(irp),
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
 
-fn handleIoctl(irp: *io.Irp) io.IoStatus {
+fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
     switch (irp.ioctl_code) {
         IOCTL_HDMI_QUERY_OUTPUTS => {
-            irp.complete(.success, output_count);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, output_count);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_HDMI_GET_EDID => {
             const idx = irp.buffer_ptr & 0xFF;
             if (idx < output_count and outputs[idx].edid.valid) {
-                irp.complete(.success, 1);
+                irp.complete(io.STATUS_SUCCESS, 1);
             } else {
-                irp.complete(.not_found, 0);
+                irp.complete(io.STATUS_OBJECT_NAME_NOT_FOUND, 0);
             }
-            return .success;
+            return io.STATUS_SUCCESS;
         },
         IOCTL_HDMI_HOTPLUG_DETECT => {
             detectOutputs();
-            irp.complete(.success, output_count);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, output_count);
+            return io.STATUS_SUCCESS;
         },
         IOCTL_HDMI_ENABLE_AUDIO => {
             const idx = irp.buffer_ptr & 0xFF;
@@ -404,31 +404,31 @@ fn handleIoctl(irp: *io.Irp) io.IoStatus {
                 outputs[idx].hdmi_config.audio_enabled = true;
                 outputs[idx].hdmi_config.audio_format = .pcm_2ch;
                 outputs[idx].hdmi_config.audio_sample_rate = 48000;
-                irp.complete(.success, 0);
+                irp.complete(io.STATUS_SUCCESS, 0);
             } else {
-                irp.complete(.invalid_device, 0);
+                irp.complete(io.STATUS_INVALID_PARAMETER, 0);
             }
-            return .success;
+            return io.STATUS_SUCCESS;
         },
         IOCTL_HDMI_DISABLE_AUDIO => {
             const idx = irp.buffer_ptr & 0xFF;
             if (idx < output_count) {
                 outputs[idx].hdmi_config.audio_enabled = false;
                 outputs[idx].hdmi_config.audio_format = .none;
-                irp.complete(.success, 0);
+                irp.complete(io.STATUS_SUCCESS, 0);
             } else {
-                irp.complete(.invalid_device, 0);
+                irp.complete(io.STATUS_INVALID_PARAMETER, 0);
             }
-            return .success;
+            return io.STATUS_SUCCESS;
         },
         IOCTL_HDMI_GET_STATUS => {
             const idx = irp.buffer_ptr & 0xFF;
             if (idx < output_count) {
-                irp.complete(.success, @intFromEnum(outputs[idx].status));
+                irp.complete(io.STATUS_SUCCESS, @intFromEnum(outputs[idx].status));
             } else {
-                irp.complete(.invalid_device, 0);
+                irp.complete(io.STATUS_INVALID_PARAMETER, 0);
             }
-            return .success;
+            return io.STATUS_SUCCESS;
         },
         IOCTL_HDMI_SET_PRIMARY => {
             const idx = irp.buffer_ptr & 0xFF;
@@ -438,15 +438,15 @@ fn handleIoctl(irp: *io.Irp) io.IoStatus {
                 }
                 outputs[idx].is_primary = true;
                 primary_output = idx;
-                irp.complete(.success, 0);
+                irp.complete(io.STATUS_SUCCESS, 0);
             } else {
-                irp.complete(.invalid_device, 0);
+                irp.complete(io.STATUS_INVALID_PARAMETER, 0);
             }
-            return .success;
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }

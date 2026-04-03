@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/drivers/video/virtio_gpu_pci.zig
-// Purpose: VirtIO-GPU PCI (1af4:1050) modern transport；`GET_DISPLAY_INFO` + `RESOURCE_CREATE_2D` + `TRANSFER_*` scratch 自检与可选帧缓冲往返。
+// Purpose: VirtIO-GPU PCI (1af4:1050) modern transport；控制队列、`GET_DISPLAY_INFO`、scratch `TRANSFER_*` 自检、**SET_SCANOUT**（guest 帧缓冲 backing + `RESOURCE_FLUSH` 减设备侧陈旧像素）。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
@@ -41,6 +41,10 @@ const VirtqDesc = extern struct {
 var probed_gpu: bool = false;
 var gpu_loc: ?pcie.PciLoc = null;
 var gpu_offload_ready: bool = false;
+/// 屏前缓冲已 attach 且 `CMD_SET_SCANOUT` 成功；`present` 后仅需 `RESOURCE_FLUSH`（无需整屏 `TRANSFER`，CPU 仍负责 back→front memcpy）。
+var scanout_active: bool = false;
+var scanout_w: u32 = 0;
+var scanout_h: u32 = 0;
 
 var common_base: usize = 0;
 var notify_base: usize = 0;
@@ -58,7 +62,12 @@ var local_avail_idx: u16 = 0;
 var last_used_idx: u16 = 0;
 
 const gpu_scratch_res_id: u32 = 1;
+const gpu_scanout_res_id: u32 = 2;
 const gpu_scratch_dim: u32 = 32;
+
+/// 控制队列请求/响应分置于低 4KiB 与高 4KiB，满足设备对描述符 GPA 的常见对齐假设。
+const gpu_cmd_io_split: usize = 4096;
+var gpu_cmd_io: [8192]u8 align(4096) = undefined;
 
 /// True after PCI locate of 1af4:1050（MMIO 尚未就绪时亦为 true）。
 pub fn isPresent() bool {
@@ -188,20 +197,23 @@ pub fn bringupMmioIfProbed() void {
     const loc = gpu_loc orelse return;
     if (tryGpuBringup(loc)) {
         gpu_offload_ready = true;
-        klog.info("VirtIO-GPU: GET_DISPLAY_INFO + RESOURCE_CREATE_2D + TRANSFER_* scratch loop ok (offload active)", .{});
-        klog.info("VirtIO-GPU: full-frame Aero blur/composite remains CPU; ≤32×32 present PoC + roadmap: SOFTWARE_COMPOSITOR_WDDM.md", .{});
+        if (trySetupScanoutFromFramebuffer()) {
+            klog.info("VirtIO-GPU: SET_SCANOUT + guest-RAM backing (flip + RESOURCE_FLUSH); see SOFTWARE_COMPOSITOR_WDDM.md", .{});
+        } else if (klog.DEBUG_MODE) {
+            klog.debug("VirtIO-GPU: scanout off (pitch/contiguity); scratch TRANSFER PoC only", .{});
+        }
     }
 }
 
-/// Submit one control-queue command (`req` copied to the fixed guest page); returns response `type` or `null` on timeout.
+/// Submit one control-queue command；`req` 置于 `gpu_cmd_io` 低半区，响应写入高半区。返回响应 `type` 或超时 `null`。
 fn submitControl(req: []const u8, rsp_len: u32) ?u32 {
-    if (req.len > 0xF0) return null;
-    @memcpy(ring_page[0x200..][0..req.len], req);
-    @memset(ring_page[0x300..][0..512], 0);
+    if (req.len > 3800 or rsp_len > 3800 or rsp_len < 4) return null;
+    @memcpy(gpu_cmd_io[0..req.len], req);
+    @memset(gpu_cmd_io[gpu_cmd_io_split..][0..rsp_len], 0);
 
-    const page_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&ring_page)));
-    const req_phys: u64 = page_phys + 0x200;
-    const rsp_phys: u64 = page_phys + 0x300;
+    const page_phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_cmd_io)));
+    const req_phys = page_phys;
+    const rsp_phys = page_phys + @as(u64, gpu_cmd_io_split);
 
     descTable()[0] = .{ .addr = req_phys, .len = @intCast(req.len), .flags = VRING_DESC_F_NEXT, .next = 1 };
     descTable()[1] = .{ .addr = rsp_phys, .len = rsp_len, .flags = VRING_DESC_F_WRITE, .next = 0 };
@@ -218,13 +230,95 @@ fn submitControl(req: []const u8, rsp_len: u32) ?u32 {
         fullMemoryFence();
         if (readUsedIdx() != last_used_idx) {
             last_used_idx = readUsedIdx();
-            return std.mem.readInt(u32, ring_page[0x300..][0..4], .little);
+            return std.mem.readInt(u32, gpu_cmd_io[gpu_cmd_io_split..][0..4], .little);
         }
         if (builtin.target.cpu.arch == .x86_64) {
             asm volatile ("pause" ::: .{ .memory = true });
         }
     }
     return null;
+}
+
+fn trySetupScanoutFromFramebuffer() bool {
+    scanout_active = false;
+    scanout_w = 0;
+    scanout_h = 0;
+    if (!gpu_offload_ready) return false;
+    if (!fb.isInitialized()) return false;
+    const span = fb.getFrontBufferPhysContiguousForVirtio() orelse return false;
+    const w = fb.getWidth();
+    const h = fb.getHeight();
+    if (w == 0 or h == 0) return false;
+
+    var cmd: [512]u8 = undefined;
+    if (spec.resourceAttachBackingReqLen(1) > cmd.len) return false;
+
+    spec.writeResourceCreate2D(cmd[0..spec.resource_create_2d_req_len], gpu_scanout_res_id, spec.FORMAT_B8G8R8X8_UNORM, w, h);
+    const rt0 = submitControl(cmd[0..spec.resource_create_2d_req_len], 64) orelse return false;
+    if (rt0 != spec.RESP_OK_NODATA) return false;
+
+    const len_u32: u32 = @intCast(span.len);
+    const attach_entries: [1]spec.GpuMemEntry = .{.{
+        .addr = span.base,
+        .length = len_u32,
+    }};
+    spec.writeResourceAttachBackingN(cmd[0..spec.resourceAttachBackingReqLen(1)], gpu_scanout_res_id, &attach_entries);
+    const attach_len = spec.resourceAttachBackingReqLen(1);
+    const rt1 = submitControl(cmd[0..attach_len], 64) orelse return false;
+    if (rt1 != spec.RESP_OK_NODATA) return false;
+
+    spec.writeSetScanout(cmd[0..spec.set_scanout_req_len], 0, gpu_scanout_res_id, 0, 0, w, h);
+    const rt2 = submitControl(cmd[0..spec.set_scanout_req_len], 64) orelse return false;
+    if (rt2 != spec.RESP_OK_NODATA) return false;
+
+    spec.writeResourceFlush(cmd[0..spec.resource_flush_req_len], gpu_scanout_res_id, 0, 0, w, h);
+    _ = submitControl(cmd[0..spec.resource_flush_req_len], 64) orelse return false;
+
+    scanout_active = true;
+    scanout_w = w;
+    scanout_h = h;
+    klog.info("VirtIO-GPU: scanout resource=%u %ux%u bytes=%u (guest RAM backing + flush path)", .{
+        gpu_scanout_res_id, w, h, len_u32,
+    });
+    return true;
+}
+
+/// `true` 当 `SET_SCANOUT` 已绑定屏前缓冲；与 `compositorOffloadAvailable`（scratch 自检）独立。
+pub fn isScanoutActive() bool {
+    return scanout_active;
+}
+
+/// 在 `flip`/`flipDirty` 将像素写入屏前 RAM **之后**调用；`dirty_opt` 为 `peekDirtyUnionPx` 在外包（`null` 则整屏 flush）。
+pub fn notifyScanoutFrontUpdated(dirty_opt: ?fb.Rect) void {
+    if (!scanout_active) return;
+    const w = scanout_w;
+    const h = scanout_h;
+    if (w == 0 or h == 0) return;
+
+    var rx: u32 = 0;
+    var ry: u32 = 0;
+    var rw: u32 = w;
+    var rh: u32 = h;
+    if (dirty_opt) |r| {
+        if (r.w > 0 and r.h > 0) {
+            const fw: i32 = @intCast(w);
+            const fh: i32 = @intCast(h);
+            const x0 = std.math.clamp(r.x, 0, fw -| 1);
+            const y0 = std.math.clamp(r.y, 0, fh -| 1);
+            const x1 = std.math.clamp(r.x + r.w, 0, fw);
+            const y1 = std.math.clamp(r.y + r.h, 0, fh);
+            if (x1 > x0 and y1 > y0) {
+                rx = @intCast(x0);
+                ry = @intCast(y0);
+                rw = @intCast(x1 - x0);
+                rh = @intCast(y1 - y0);
+            }
+        }
+    }
+
+    var cmd: [64]u8 = undefined;
+    spec.writeResourceFlush(cmd[0..spec.resource_flush_req_len], gpu_scanout_res_id, rx, ry, rw, rh);
+    _ = submitControl(cmd[0..spec.resource_flush_req_len], 64);
 }
 
 fn tryGpuScratch2dValidate() bool {
@@ -436,6 +530,8 @@ pub fn trySubmitFramebufferDirtyRect(
 ) bool {
     _ = scr_w;
     _ = scr_h;
+    // Scanout 路径由 `display.present` 在 flip 后统一 `RESOURCE_FLUSH`；此处避免重复命令。
+    if (scanout_active) return false;
     if (!gpu_offload_ready) return false;
     if (w == 0 or h == 0) return false;
     if (w > gpu_scratch_dim or h > gpu_scratch_dim) return false;

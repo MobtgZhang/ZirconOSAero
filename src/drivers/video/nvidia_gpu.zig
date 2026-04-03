@@ -3,7 +3,7 @@
 //! - **非** Windows WDDM / 闭源驱动 ABI；仅内核占位 `\\Driver\\Nvidia`、`\\Device\\Nvidia0`（create/close），供后续 IOCTL 面扩展。
 //! - 默认**不写入** PMC / display engine，利于双启动安装 NVIDIA Windows 驱动；GPU 直通虚拟机时建议 `-Dnvidia_gpu=false`。
 //!
-//! **后续迭代**（`future-nouveau`）：按芯片族拆分 MMIO、VRAM BAR、显示引擎；对照 nouveau `nvkm` 寄存器布局；保留 `nvidia_kms_experimental` 与白名单写路径。
+//! **后续迭代**：按芯片族拆分 MMIO、VRAM BAR、显示引擎；仅依据 **公开** 硬件文档自主填寄存器语义；保留 `nvidia_kms_experimental` 与白名单写路径。
 
 const builtin = @import("builtin");
 const build_options = @import("build_options");
@@ -45,15 +45,37 @@ pub fn isDeferredProbePending() bool {
     return !probe_ran;
 }
 
-fn nvidiaDispatch(irp: *io.Irp) io.IoStatus {
+/// 诊断 IOCTL：将 BAR0 首 **只读** u32 拷入调用方缓冲（`buffer_size >= 4`）。非 WDDM；与 `nvidia_kms_experimental` 独立。
+pub const IOCTL_NVIDIA_BAR0_FIRST_U32: u32 = 0x8000E004;
+
+fn nvidiaDispatch(irp: *io.Irp) io.NTSTATUS {
     switch (irp.major_function) {
         .create, .close => {
-            irp.complete(.success, 0);
-            return .success;
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
+        },
+        .ioctl => {
+            if (irp.ioctl_code != IOCTL_NVIDIA_BAR0_FIRST_U32) {
+                irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+                return io.STATUS_NOT_IMPLEMENTED;
+            }
+            if (!mmio_mapped or mmio_virt == 0) {
+                irp.complete(io.STATUS_INVALID_PARAMETER, 0);
+                return io.STATUS_INVALID_PARAMETER;
+            }
+            if (irp.buffer_size < 4 or irp.buffer_ptr == 0) {
+                irp.complete(io.STATUS_BUFFER_TOO_SMALL, 0);
+                return io.STATUS_BUFFER_TOO_SMALL;
+            }
+            // SAFETY: IOCTL 路径仅内核自测/调试；`buffer_ptr` 须指向可写内核缓冲。
+            const peek = @as(*const volatile u32, @ptrFromInt(mmio_virt)).*;
+            @as(*align(1) volatile u32, @ptrFromInt(irp.buffer_ptr)).* = peek;
+            irp.complete(io.STATUS_SUCCESS, 4);
+            return io.STATUS_SUCCESS;
         },
         else => {
-            irp.complete(.not_implemented, 0);
-            return .not_implemented;
+            irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);
+            return io.STATUS_NOT_IMPLEMENTED;
         },
     }
 }
@@ -113,6 +135,24 @@ fn runPciProbeOnce() void {
     mmio_mapped = vm.mapDeviceMmioIdentity(mmio_phys, mmio_size);
     if (!mmio_mapped) {
         klog.warn("NVIDIA: mapDeviceMmioIdentity failed (phys=0x%x size=0x%x)", .{ mmio_phys, mmio_size });
+    }
+
+    if (pcie.largestPrefetchableMmioBar(&dev)) |vb| {
+        if (vb.base != mmio_phys and vb.size >= 16 * 1024 * 1024) {
+            const cap_map: u64 = 4 * 1024 * 1024;
+            const map_sz: u64 = @min(vb.size, cap_map);
+            if (vm.mapDeviceMmioIdentity(vb.base, map_sz)) {
+                klog.info("NVIDIA: prefetchable BAR diag map phys=0x%x size=0x%x (cap 4MiB; no engine writes)", .{
+                    @as(u32, @truncate(vb.base)), @as(u32, @truncate(map_sz)),
+                });
+            }
+        }
+    } else if (pcie.largestMmioBar(&dev)) |vb2| {
+        if (vb2.base != mmio_phys and vb2.size > mmio_size) {
+            klog.info("NVIDIA: largest MMIO BAR phys=0x%x size=0x%x (not mapped; diagnostic log only)", .{
+                @as(u32, @truncate(vb2.base)), @as(u32, @truncate(vb2.size)),
+            });
+        }
     }
 
     display_result = display_handoff.initForFamily(family, mmio_virt, build_options.nvidia_kms_experimental);

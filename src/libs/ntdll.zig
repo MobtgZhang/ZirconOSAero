@@ -24,6 +24,7 @@ const section_mm = @import("../mm/section.zig");
 const probe = @import("../mm/probe.zig");
 const scheduler = @import("../ke/scheduler.zig");
 const wait_mod = @import("../ke/wait.zig");
+const wow64_redirect = @import("../subsystems/win32/wow64/redirect.zig");
 
 pub const NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
@@ -130,6 +131,8 @@ pub const SystemExceptionInformation: u32 = 33;
 pub const ProcessBasicInformation: u32 = 0;
 /// Ref: learn.microsoft.com — `PROCESSINFOCLASS` / `ProcessSessionInformation`.
 pub const ProcessSessionInformation: u32 = 24;
+/// Ref: learn.microsoft.com `PROCESSINFOCLASS` — WOW64 进程返回 32 位 PEB 指针；本机 64 位进程为 0。
+pub const ProcessWow64Information: u32 = 26;
 pub const ThreadBasicInformation: u32 = 0;
 
 /// `THREAD_BASIC_INFORMATION` x64 布局（公开头文件描述；clean-room 字段顺序）。
@@ -505,6 +508,15 @@ pub fn NtQueryInformationProcess(
             sess.* = proc.security_token.session_id;
             return STATUS_SUCCESS;
         },
+        ProcessWow64Information => {
+            const need: u32 = @sizeOf(usize);
+            if (return_length) |rl| rl.* = need;
+            if (process_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const buf = process_information orelse return STATUS_INVALID_PARAMETER;
+            const out: *align(1) usize = @ptrCast(buf);
+            out.* = if (proc.is_wow64) @as(usize, @truncate(proc.peb32_user_va)) else 0;
+            return STATUS_SUCCESS;
+        },
         else => {
             if (return_length) |rl| rl.* = 0;
             return STATUS_INVALID_INFO_CLASS;
@@ -651,7 +663,9 @@ pub fn NtCreateFile(
 
     if (obj_attrs) |attrs| {
         if (attrs.object_name) |name| {
-            const path = name.buffer[0..name.length];
+            const path_src = name.buffer[0..name.length];
+            var wow_path_buf: [512]u8 = undefined;
+            const path = wow64_redirect.applyWow64FilePathUtf16Le(proc.is_wow64, path_src, &wow_path_buf) orelse path_src;
             const resolved = vfs.resolvePath(path);
             const faccess = desiredAccessToFileAccess(access);
             var de: vfs.DirEntry = undefined;
@@ -735,7 +749,9 @@ pub fn NtOpenFile(
 
     if (obj_attrs) |attrs| {
         if (attrs.object_name) |name| {
-            const path = name.buffer[0..name.length];
+            const path_src = name.buffer[0..name.length];
+            var wow_path_buf: [512]u8 = undefined;
+            const path = wow64_redirect.applyWow64FilePathUtf16Le(proc.is_wow64, path_src, &wow_path_buf) orelse path_src;
             const resolved = vfs.resolvePath(path);
             const sh = if (share_access == 0)
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
@@ -2009,15 +2025,46 @@ pub fn NtSetSystemInformation(info_class: u32, _: ?*anyopaque, _: u32) NTSTATUS 
 
 // ── Registry APIs ──
 
+/// 从 `UNICODE_STRING` 抽出注册表 NT 路径字节：若为 UTF-16LE 且各 WCHAR 高字节为 0（ASCII 子集），压成窄路径；否则按窄字节路径原样使用（与历史桩一致）。
+fn extractRegistryPathBytes(uname: *const UNICODE_STRING, out: *[512]u8) ?[]const u8 {
+    if (uname.length == 0) return null;
+    const raw = uname.buffer[0..uname.length];
+    if (raw.len >= 2 and raw.len % 2 == 0) {
+        var all_ascii_wchar = true;
+        var w: usize = 0;
+        while (w < raw.len / 2) : (w += 1) {
+            if (raw[w * 2 + 1] != 0) {
+                all_ascii_wchar = false;
+                break;
+            }
+        }
+        if (all_ascii_wchar) {
+            const n = raw.len / 2;
+            if (n > out.len) return null;
+            var j: usize = 0;
+            while (j < n) : (j += 1) {
+                out[j] = raw[j * 2];
+            }
+            return out[0..n];
+        }
+    }
+    if (raw.len > out.len) return null;
+    @memcpy(out[0..raw.len], raw);
+    return out[0..raw.len];
+}
+
 pub fn NtOpenKey(key_handle: *HANDLE, desired_access: u32, object_attributes: ?*OBJECT_ATTRIBUTES) NTSTATUS {
     _ = desired_access;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const attrs = object_attributes orelse return STATUS_INVALID_PARAMETER;
     const uname = attrs.object_name orelse return STATUS_INVALID_PARAMETER;
     if (uname.length == 0) return STATUS_OBJECT_NAME_NOT_FOUND;
-    const raw = uname.buffer[0..uname.length];
-    const path = ob.normalizeNtObjectPath(raw);
-    const idx = registry.openKeyByNtPath(path) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    var narrow_buf: [512]u8 = undefined;
+    var redir_buf: [512]u8 = undefined;
+    const narrow = extractRegistryPathBytes(uname, &narrow_buf) orelse return STATUS_INVALID_PARAMETER;
+    const path_norm = ob.normalizeNtObjectPath(narrow);
+    const path_open = wow64_redirect.applyWow64RegistryMachineSoftwarePath(proc.is_wow64, path_norm, &redir_buf) orelse path_norm;
+    const idx = registry.openKeyByNtPath(path_open) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     const hdr = registry.keyHeaderPtr(idx) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     const mask = ob.GENERIC_READ;
     const h = proc.handle_table.allocHandle(@intFromPtr(hdr), mask, .key) orelse return STATUS_INSUFFICIENT_RESOURCES;
@@ -2260,9 +2307,13 @@ pub fn NtCreateKey(
     const attrs = object_attributes orelse return STATUS_INVALID_PARAMETER;
     const uname = attrs.object_name orelse return STATUS_INVALID_PARAMETER;
     if (uname.length == 0) return STATUS_OBJECT_NAME_NOT_FOUND;
-    const raw = uname.buffer[0..uname.length];
-    const path = ob.normalizeNtObjectPath(raw);
-    const cr = registry.createKeyFromNtPath(path) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
+    const proc_ck = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    var narrow_buf_ck: [512]u8 = undefined;
+    var redir_buf_ck: [512]u8 = undefined;
+    const narrow_ck = extractRegistryPathBytes(uname, &narrow_buf_ck) orelse return STATUS_INVALID_PARAMETER;
+    const path_norm_ck = ob.normalizeNtObjectPath(narrow_ck);
+    const path_open_ck = wow64_redirect.applyWow64RegistryMachineSoftwarePath(proc_ck.is_wow64, path_norm_ck, &redir_buf_ck) orelse path_norm_ck;
+    const cr = registry.createKeyFromNtPath(path_open_ck) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     if (disposition) |d| d.* = if (cr.created) REG_CREATED_NEW_KEY else REG_OPENED_EXISTING_KEY;
     const hdr = registry.keyHeaderPtr(cr.idx) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;

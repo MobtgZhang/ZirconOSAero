@@ -13,8 +13,15 @@
 | ntdll       | NtUserGetMessage / PeekMessage | Partial | SSDT 0x58/0x59，内核消息泵桥接 |
 | kernelbase  | GetLastError / SetLastError | Partial | [`kernelbase.zig`](../../src/libs/kernelbase.zig)；`kernel32` 转发；TEB+0x68 为长期目标 |
 | kernel32    | CreateFileA          | Partial | 见 VFS |
-| user32      | GetMessage / DefWindowProc | Partial | SC_MOVE 模态环、DWM 广播消息 |
+| user32      | GetMessage / DefWindowProc | Partial | SC_MOVE 模态环、DWM 广播；`DispatchMessage`/`class_id` 与 `NtUser*`/`STATUS_PENDING` 边界见契约矩阵 §5 |
+| user32      | SetWindowPos / 桌面切换 | Partial | `HWND_NOTOPMOST` Learn（非 topmost 无 Z 序效果）；`CreateDesktopA`/`OpenDesktopA`/`SwitchDesktopA` ↔ `subsystem`；扩展 `SWP_*` |
 | gdi32       | TextOutA             | Partial | 位图字体；FreeType 为路线图 C-T05 |
 | gdi32       | Rectangle / FillRect | Partial | 矩形填充子集；与 Aero 脏区合成见 `SOFTWARE_COMPOSITOR_WDDM.md` |
+| gdi32       | BitBlt / AlphaBlend  | Partial | ROP 子集见 `gdi_rop_contract.zig`；`AlphaBlend` 仅 `AC_SRC_OVER` 存根 |
+| dwmapi      | Vista/7 公开子集（Attribute / Thumbnail / Extend / Blur / Flush / InvalidateIconic） | Partial | [`dwmapi.zig`](../../src/subsystems/win32/dwmapi.zig) + [`dwm_nt61_api_contract.zig`](../../src/config/dwm_nt61_api_contract.zig)；**ABI 清单** [`dwm_nt61_abi_inventory.zig`](../../src/config/dwm_nt61_abi_inventory.zig)；**PE 策略** [DWMAPI_PE_EXPORT_STRATEGY.md](DWMAPI_PE_EXPORT_STRATEGY.md)；**WOW64 布局** [`dwmapi_wow64.zig`](../../src/subsystems/win32/dwmapi_wow64.zig)；主机 **dwm_nt61_abi_inventory_host**、**dwmapi_wow64_host**、**dwm_nt61_api_contract_host** |
+| csrss / LPC | `register_dwm_listener` v1 + 旧 4 字节 tid | Partial | [`csr_lpc_policy.zig`](../../src/subsystems/win32/csr_lpc_policy.zig)、[`LPC_NT61_HANDSHAKE.md`](LPC_NT61_HANDSHAKE.md)；**csr_lpc_policy_host**、**dwm_messages_nt61_host** |
+| video       | GOP vs VirtIO scanout 呈现后端 | Partial | [`display_backend.zig`](../../src/drivers/video/core/display_backend.zig)、[`display.zig`](../../src/drivers/video/core/display.zig)；串口 `present_backend=` |
+| pe / exec   | 子系统 DLL 绑定、PE 策略失败码      | Partial | `pe.zig`：`validatePeLoadPolicy`（TLS/delay/bound 目录非空 → `LoadStatus`）、`loadStatusToNtStatus`；`findExportByOrdinal`；预载 `dwmapi` + **ntdll/kernel32/user32** 合成导出（与 [`nt61_core_dll_abi_inventory.zig`](../../src/config/nt61_core_dll_abi_inventory.zig)、[CORE_DLL_PE_EXPORT_STRATEGY.md](CORE_DLL_PE_EXPORT_STRATEGY.md) 一致）；GUI `exec` 绑定 `dwmapi` |
+| ntfs / hive | 小文件写、簇大小（hive 路线图） | Partial | [`ntfs.zig`](../../src/fs/ntfs.zig)；**ntfs_hive_minimum_host** |
 
 **状态含义**：`Stub` 仅符号；`Partial` 有部分语义；`Done` 行为与公开文档一致且含测试；`Verified` 有 CI/回归覆盖。

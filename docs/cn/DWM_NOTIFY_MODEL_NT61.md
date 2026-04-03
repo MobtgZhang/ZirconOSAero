@@ -7,7 +7,7 @@
 | `dwm.setCompositionEnabled` | `WM_DWMCOMPOSITIONCHANGED` | 合成总开关 |
 | `dwm.setColorizationTint` | `WM_DWMCOLORIZATIONCOLORCHANGED` | 染色 + lParam 混合位 |
 | `dwm.setGlass` | `WM_DWMNCRENDERINGCHANGED` | 毛玻璃 / NC 策略（**不**发 `WM_DWMCOMPOSITIONCHANGED`） |
-| `dwm.syncPolicyFromRegistry` | 见下行 | 见 `src/config/dwm_config_registry_sync.zig` 差异位；**仅当** `user32.getWindowCount() > 0` 且相对前快照有变化时补发；染色 → `WM_DWMCOLORIZATIONCOLORCHANGED`；不透明度 / 任务栏染色 / Aero Peek → `WM_DWMNCRENDERINGCHANGED` |
+| `dwm.syncPolicyFromRegistry` | 见下行 | 见 `src/config/dwm_config_registry_sync.zig` 差异位；**仅当** `user32.getWindowCount() > 0` 且相对前快照有变化时补发；`HKLM\SOFTWARE\Microsoft\Windows\DWM` 下 **`Composition` dword**（合成总开关）→ `WM_DWMCOMPOSITIONCHANGED`；染色 → `WM_DWMCOLORIZATIONCOLORCHANGED`；不透明度 / 任务栏染色 / Aero Peek / **`ColorizationGlass`（毛玻璃）** → `WM_DWMNCRENDERINGCHANGED` |
 | `dwm.init` / `applyPlatformAndResolutionTuning` | 否（启动/内部） | 模糊预算与半径上限为性能路径，非独立 `WM_DWM*` 契约 |
 | `setSkipGlassBoxBlur` / `setGlassLiteBlurEnabled` | 否 | 帧内交互优化，非 `DwmConfig` |
 | 缩略图刷新 | `WM_DWMSENDICONICTHUMBNAIL` | `user32.broadcastDwmIconicThumbnailRequested` |
@@ -17,8 +17,8 @@
 ## 本仓库当前实现（内核单地址空间 Shell）
 
 - **状态变更源**：`src/drivers/video/core/dwm.zig` 的 `setCompositionEnabled`、`setColorizationTint`、`setGlass`、`syncPolicyFromRegistry` 等。
-- **广播路径**：`src/subsystems/win32/user32.zig` 中 `broadcastDwmCompositionChanged` / `broadcastDwmColorizationChanged` / `broadcastDwmNcRenderingChanged` / `broadcastDwmIconicThumbnailRequested`：向 **每个有效 HWND 的消息队列** `postMessage`，并 **额外** 向已登记线程 `PostThreadMessage`（`registerDwmNotificationListener` + `dwm_listener_tids[]`，上限 8）。
-- **与典型「csrss 维护监听列表 + LPC 投递」拓扑的差异**：本阶段 **无** 独立 csrss 进程内维护列表；等价语义为「登记线程 tid + 内核侧线程投递表」。若将来引入真 LPC/csrss，可将 `registerDwmNotificationListener` 的登记迁移到 csrss，而 ** HWND 队列广播** 仍可与现路径并存（双投）或收敛为单一真源（见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.1）。
+- **广播路径**：`src/subsystems/win32/user32.zig` 中 `broadcastDwmCompositionChanged` / `broadcastDwmColorizationChanged` / `broadcastDwmNcRenderingChanged` / `broadcastDwmIconicThumbnailRequested` / `broadcastDwmWindowMaximizedChanged` / `broadcastDwmIconicLivePreviewBitmapRequested`：向 **每个有效 HWND 的消息队列** `postMessage`，并 **额外** 向已登记线程 `PostThreadMessage`（**权威 tid 表**：`csr_dwm_listeners.zig`，由 LPC `register_dwm_listener` 写入；上限 8；`user32.registerDwmNotificationListener` 仍转发至同表）。`wParam`/`lParam` 打包与 `dwm_nt61_api_contract.zig` 中 `compositionChangedWParam`、`colorizationChangedLParam`、`iconicSizeRequestLParam` 等对齐。
+- **与典型「csrss 维护监听列表 + LPC 投递」拓扑的差异**：监听 tid 表已落在 **csrss 模块侧**（`csr_dwm_listeners.zig` + `subsystem.handleApiCall`），与典型「csr 登记」更近一步；** HWND 队列广播** 仍在 `user32.broadcastDwm*`（见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.1）。
 
 ## WM\_DWM\* 与 `dwm.zig` 触发对应关系
 
@@ -27,7 +27,9 @@
 | `WM_DWMCOMPOSITIONCHANGED` | `dwm.setCompositionEnabled` | `wParam`：合成开=1、关=0；`lParam`=0 |
 | `WM_DWMCOLORIZATIONCOLORCHANGED` | `dwm.setColorizationTint`；**或** `syncPolicyFromRegistry` 在已有窗口时若染色 dword 变化 | `wParam`：COLORREF 风格色值；`lParam`：混合开≠0（注册表路径当前简化为 `TRUE`） |
 | `WM_DWMNCRENDERINGCHANGED` | `dwm.setGlass`（毛玻璃开关变化）；**或** `syncPolicyFromRegistry` 在已有窗口时若不透明度 / 任务栏染色 / Peek 变化 | `wParam`=1（策略启用）；`lParam`=0 |
-| `WM_DWMSENDICONICTHUMBNAIL` | `user32.broadcastDwmIconicThumbnailRequested` | `wParam`=0；`lParam` 低/高 16 位为最大宽、高 |
+| `WM_DWMSENDICONICTHUMBNAIL` | `user32.broadcastDwmIconicThumbnailRequested` | `wParam`=0；`lParam` 低/高 16 位为最大宽、高（`iconicSizeRequestLParam`） |
+| `WM_DWMWINDOWMAXIMIZEDCHANGE` | `user32.broadcastDwmWindowMaximizedChanged` | `wParam` 非零=最大化；`lParam`=0 |
+| `WM_DWMSENDICONICLIVEPREVIEWBITMAP` | `user32.broadcastDwmIconicLivePreviewBitmapRequested` | 与缩略图请求相同的 `lParam` 打包 |
 
 毛玻璃开关 **不** 单独发 `WM_DWMCOMPOSITIONCHANGED`；合成总开关与毛玻璃在配置结构上分离（见 `dwm.DwmConfig`）。
 
@@ -39,6 +41,6 @@
 
 | 理想项（路线图叙述） | 本仓库当前 |
 |----------------------|------------|
-| csrss 维护 DWM 监听列表 | 列表在 **内核 `user32`**（`dwm_listener_tids`）；`register_dwm_listener` LPC 仅 **转发** 到同一 API |
+| csrss 维护 DWM 监听列表 | **`csr_dwm_listeners.zig`**（`subsystem.register_dwm_listener` 写入）；`user32.broadcastDwm*` 读表 `PostThreadMessage` |
 | 状态变更经 LPC 投递 `WM_DWM*` | 变更在 **`dwm.zig`**，广播在 **`user32.broadcastDwm*`**（同内核地址空间） |
 | 迁移策略 | 将来可将登记权威迁到 csrss 进程；HWND 队列广播可保留或收敛为单投 — 见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.1、§3.3（**C1 独立里程碑**，非本迭代「问题二必达」） |

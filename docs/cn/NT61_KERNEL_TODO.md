@@ -6,6 +6,8 @@
 
 **与桌面 / LPC / 显示栈收敛对齐**：在 **不缩小 K1–K8 范围** 的前提下，LPC、`user32`、显示栈的收敛与契约常量见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4.1、`src/config/dwm_nt61_api_contract.zig`、MVT 中 **dwm_zorder_nt61_host** / **csr_lpc_policy_host**；全栈 Aero 用户态仍属 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。
 
+**缺口优先级快照（二进制兼容导向）**：[BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md)（与 K1–K8、矩阵 §0/§8 交叉引用）。
+
 ## 范围
 
 - **在内**：`src/mm`、`src/ke`、`src/hal`、`src/arch`、syscall 分发、`src/io`、`src/ob`、`src/se`、`src/lpc`、`src/ps` 内核对象路径、`src/fs` 与 IRP 桥接。
@@ -41,7 +43,7 @@
 | K2.1 | CR3 切换与进程销毁顺序 | `src/ke/scheduler.zig` |
 | K2.2 | 调度模型文档与可选 32 级优先级 | [SCHEDULER_API.md](SCHEDULER_API.md) |
 | K2.3 | HPET/单调时钟接计时 | [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md), `hal/x86_64/hpet.zig` |
-| K2.4 | AP INIT-SIPI-SIPI 实路径 | `ap_entry.zig`, `madt.zig` |
+| K2.4 | AP INIT + **SIPI×2** + 低 1MiB 实模式跳板（`lapic_smp` 0x8000）；长模式 AP + 每核调度 | `ap_entry.zig`, `smp_boot.zig`, `lapic_smp.zig`, `madt.zig` |
 | K2.5 | TLB IPI 或可证 BSP 策略 | `tlb_broadcast.zig` |
 | K2.6 | 每 CPU 就绪队列与 `home_cpu` | `percpu_sched.zig` |
 

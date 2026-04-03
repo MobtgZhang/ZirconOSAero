@@ -69,9 +69,9 @@
 
 | 主题 | 当前状态 | 备注 |
 |------|----------|------|
-| 窗口创建/销毁 → 合成树 | **主路径闭合**：`user32.CreateWindowEx`/`DestroyWindow` ↔ `dwm_compositor`（`detachCompositorSurface` 单点释放，与 `ensureCompositorSurface` 对偶）；**LPC**：`register_window` / `destroy_window` → `onCsrssRegisterGuiWindow` / `DestroyWindow` | csrss 仅对已存在于 `user32` 表的 HWND 补 `ensureCompositorSurface`；**不能**替代「无 CreateWindow 则无主表面」的语义 |
-| Z-order | **子集**：`SetWindowPos` + `syncCompositorZOrderForUserWindows`（**两趟**：先非 `is_topmost` 表面再顶层）；`HWND_TOPMOST` / `HWND_NOTOPMOST` 维护 `Window.is_topmost`；`HWND_TOP` / `HWND_BOTTOM` 仅在 **同 band** 内调整；**指定 HWND 之后**：跨 band 时将 `hwnd` 的 `is_topmost` 与 `insert_after` 对齐后再插入（`user32.placeHwndAboveInsertAfter`） | 见矩阵 §4.1 |
-| DWM 监听列表 | **内核线程表**（`registerDwmNotificationListener`），非 csrss 进程内列表 | 与上述典型拓扑差异见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) §3 |
+| 窗口创建/销毁 → 合成树 | **主路径闭合**：`user32.CreateWindowEx`/`DestroyWindow` ↔ `dwm_compositor`（`detachCompositorSurface` 单点释放，与 `ensureCompositorSurface` 对偶）；**LPC**：`register_window` / `destroy_window` → `onCsrssRegisterGuiWindow` / `DestroyWindow` | csrss 仅对已存在于 `user32` 表的 HWND 调 **`refreshGuiWindowCompositorAndTables`**（与 `CreateWindowEx` 末尾同路径）；**不能**替代「无 CreateWindow 则无主表面」的语义 |
+| Z-order | **子集**：`SetWindowPos` + `syncCompositorZOrderForUserWindows`（**两趟**：先非 `is_topmost` 表面再顶层）；`HWND_TOPMOST` / `HWND_NOTOPMOST` 维护 `Window.is_topmost`（**Learn**：`HWND_NOTOPMOST` 在窗口**已非** topmost 时 **不改变** Z 序）；`HWND_TOP` / `HWND_BOTTOM` 仅在 **同 band** 内调整；**指定 HWND 之后**：跨 band 时将 `hwnd` 的 `is_topmost` 与 `insert_after` 对齐后再插入（`user32.placeHwndAboveInsertAfter`）；`SWP_FRAMECHANGED` 等重绘相关位当前无害忽略 | 见矩阵 §4.1 |
+| DWM 监听列表 | **`csr_dwm_listeners.zig`** + LPC `register_dwm_listener`；`user32.registerDwmNotificationListener` 写入同表 | 见 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) §2–§3 |
 | 注册表 → Shell | **ZOSH1 可选文件** + 启动后 `mouse.syncFromRegistry` / `dwm.syncPolicyFromRegistry` | [hive.zig](../../src/registry/hive.zig)、[registry.zig](../../src/registry/registry.zig) |
 | 消息队列 tid | **必须一致**：`GetMessage`/`PostMessage` 与 `csrFillOneMessageForLpc` 使用同一 `thread_id` | LPC 测试若 tid 错配则「有 HWND 无消息」假阴性 |
 
@@ -81,7 +81,7 @@
 
 | LPC API（`subsystem.zig`） | 调用的 `user32` / 其它 | **不**经过的入口 |
 |----------------------------|-------------------------|------------------|
-| `register_window` | `registerGuiWindow` → **`onCsrssRegisterGuiWindow`**（对已存在 `HWND`：`ensureCompositorSurface` + `notifyCompositorWindowGeometry` + `syncCompositorZOrderForUserWindows` + `syncWin32kFromUser32`） | `CreateWindowEx`、`PostMessage`（除非另行调用） |
+| `register_window` | `registerGuiWindow` → **`onCsrssRegisterGuiWindow`**（对已存在 `HWND`：单函数 **`refreshGuiWindowCompositorAndTables`**） | `CreateWindowEx`、`PostMessage`（除非另行调用） |
 | `destroy_window` | **`DestroyWindow`**（内含 `detachCompositorSurface`）→ `unregisterGuiWindow`（计数） | 无单独 `NtUserDestroyWindow` syscall 包装在本表 |
 | `post_message` | **`PostMessageA`** | 不创建窗口、不分配表面 |
 | `get_message` | **`csrFillOneMessageForLpc`**（内部 `peekMessageAForThread`）；负载 **20–24 须为非零线程 id**（`csr_lpc_policy.resolveGetMessageClientTid`，禁止 `0` 回退 `pid`） | 与 `NtUserGetMessage` 共享队列模型但 **非** 同一 syscall 路径 |
@@ -92,7 +92,7 @@
 
 - **`compositor_surface_id == no_compositor_surface`**：`ensureCompositorSurface` / `CreateWindowEx` 仅在 `dwm_compositor` 已初始化且 `createSurface` 成功时写入有效 id；失败则保持无表面（壳层仍可有 HWND）。
 - **销毁**：**仅** `detachCompositorSurface`（`DestroyWindow`）释放 `dwm_compositor` 槽位；禁止在 `is_valid == false` 之后保留非 `no_compositor_surface` 的 id。
-- **双入口一致**：`CreateWindowEx` 与 `onCsrssRegisterGuiWindow` 均通过 **`ensureCompositorSurface`** 分配（见 `user32.zig`），LPC 路径在表面已存在时仍 **`notifyCompositorWindowGeometry`** 以刷新脏区。
+- **双入口一致**：`CreateWindowEx` 与 `onCsrssRegisterGuiWindow` 均经 **`refreshGuiWindowCompositorAndTables`**（内部 `ensureCompositorSurface` + `notifyCompositorWindowGeometry` + Z + win32k），LPC 路径在表面已存在时仍刷新几何与表同步。
 
 ## 4. Surface 标志语义对照
 

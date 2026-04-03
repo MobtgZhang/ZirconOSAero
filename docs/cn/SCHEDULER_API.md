@@ -33,7 +33,7 @@
 ### 处理器亲和
 
 - `Thread.affinity_mask`：位 i = 可运行于逻辑 CPU i；**0** 表示「当前构建可见的全部逻辑 CPU」（受 `MAX_SCHED_CPUS` 截断）。
-- `setThreadAffinityMask` / `home_cpu` 与 `percpu_sched.assignCpuForNewThread` 协同。
+- `setThreadAffinityMask` / `home_cpu`：`createThread` 使用 `pickBalancedHomeCpu()`（最短就绪队列）；`createIdleThread` 仍用 `percpu_sched.assignCpuForNewThread()`。
 
 ## I/O 唤醒提升（clean-room）
 

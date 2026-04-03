@@ -37,7 +37,7 @@
 
 - **NT 风格混合微内核**：调度、虚拟内存、IPC、中断与系统调用在内核中实现
 - **用户态系统服务**：Object Manager、Process Manager、I/O Manager、Security 等
-- **Win32 兼容层**（**子集**，按里程碑推进；**不**声称与微软 DLL 二进制兼容）：仓库内 ntdll/kernel32/kernelbase 风格 API 与控制台 — 见 [NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)
+- **Win32 兼容层**（**子集**，按里程碑推进）：**二进制兼容**指 **自研合成 DLL** + 公开文档 ABI **子集** + PE 加载策略（导出清单见 `src/config/nt61_core_dll_abi_inventory.zig` 等），**非**可在商业 Windows 上替换 `System32` 闭源微软 DLL 或与之逐位等价 — 见 [NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)、[BINARY_COMPAT_GAP_AUDIT.md](docs/cn/BINARY_COMPAT_GAP_AUDIT.md)
 - **Win32 子系统服务器**（**部分**）：csrss 风格进程注册与消息桥接；完整窗口站/桌面生命周期分阶段 — [LPC_NT61_HANDSHAKE.md](docs/cn/LPC_NT61_HANDSHAKE.md)
 - **Win32 执行引擎**（**子集**）：PE 加载、DLL 绑定、进程创建、API 分发（仅已支持路径）
 - **图形子系统**（**部分**）：user32（窗口/消息）与 gdi32（绘图/字体/位图），优先 Aero/壳场景 — **非**完整 GDI（ROP、完整字体光栅化、完整 DC 对象模型）

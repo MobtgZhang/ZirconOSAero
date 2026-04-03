@@ -35,6 +35,9 @@ jobs:
       - name: Unit tests (heap + SSDT + se token)
         run: zig build test
 
+      - name: x86_64 resolution compile matrix (--quick)
+        run: bash scripts/test_x86_resolution_matrix.sh --quick
+
       - name: Desktop Aero freestanding static library (A2 build path)
         run: zig build desktop-aero-freestanding
 

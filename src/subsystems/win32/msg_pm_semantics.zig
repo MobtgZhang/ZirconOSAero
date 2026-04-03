@@ -70,8 +70,18 @@ test "SetWindowPos SWP flag values (Learn anchors)" {
 }
 
 // GetMessage / PeekMessage 的 min/max 过滤与阻塞语义见 user32.zig；此处仅 PM_* 位标志锚点（契约矩阵 §5）。
+//
+// **D-D1-1 审计摘要**（多线程）：`PostMessage` / `PostThreadMessage` 经 `wakeOneMsgWaiter` 唤醒在 `GetMessage` 空队列路径上 `blockThread` 的线程；`peekMessageAForThread` 与 `GetMessage` 均用 `client_tid`（CSR `get_message`）或 `GetCurrentThreadId()`，须与 `CreateWindowEx` 写入的 `wnd.thread_id` 一致，否则窗口队列与线程投递错位。`PeekMessage` 不阻塞、不置 `msg_wait_mask`（与 `allowSchedulerYieldForPeekFlags` 一致）。
+//
+// **D-D1-4**：`getMessageFiltered` / `peekMessageFiltered` 对非 `WM_QUIT` 采用轮转重排队以逼近 `[min,max]` 过滤；与 Learn 全量语义差距见 [PHASE_D_WIN32_MSG_PUMP_DWM.md](../../docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md)。
 test "peek remove flags documented band" {
     try std.testing.expect(PM_NOREMOVE < PM_REMOVE);
+}
+
+test "NtUserPeekMessage empty queue status anchor" {
+    // 与 `user32.ntUserPeekMessageSyscall` 一致：空队列非 SUCCESS，便于用户态映射 PeekMessage FALSE。
+    const no_more: i32 = @bitCast(@as(u32, 0x8000001A));
+    try std.testing.expect(no_more != 0);
 }
 
 test "min max filter: zero zero is wildcard" {
@@ -108,5 +118,5 @@ test "min max well-formed" {
 // | `PeekMessage` PM_REMOVE | 置位时从队列移除 | `Window.peekMessage` / 过滤路径一致；纯函数标志见上 |
 // | `PeekMessage` PM_NOYIELD | 置位时不应主动让出调度 | 多线程下仍可能 `blockThread`；以 `allowSchedulerYieldForPeekFlags` 为契约锚点 |
 // | `GetMessage` 阻塞 | 无消息时阻塞至有消息或 WM_QUIT | 协作式：`STATUS_PENDING` + `blockThread`；与真 NT 抢占差异见 syscall 注释 |
-// | `NtUserPeekMessage` | 无消息时 `FALSE` + 清零输出 | 与 Learn 不同：返回 `STATUS_PENDING` 且清零 `MSG*`（见 `user32.ntUserPeekMessageSyscall` 注释） |
+// | `NtUserPeekMessage` | 无消息时 `FALSE` + 清零输出 | **`STATUS_NO_MORE_ENTRIES` + 清零 `MSG*`**（用户态映射 FALSE；与 `GetMessage` 空队列 `STATUS_PENDING` 区分；亦避免与 `WM_NULL`/`message==0` 混淆） |
 // | 过滤范围 min/max | 仅返回区间内消息 | `getMessageFiltered` 轮转放回非匹配消息（简化语义）；纯函数镜像见 `messageMatchesMinMaxFilter` |

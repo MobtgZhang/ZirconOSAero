@@ -131,6 +131,8 @@ pub const Wow64Process = struct {
     exit_code: u32 = 0,
     syscall_count: u64 = 0,
     thunk_count: u64 = 0,
+    /// `translateSyscall32to64` 最近一次解析的 **x64 SSDT 索引**（公开 Win7 SP1 同名 API 对照）；无对照时为 `null`。
+    last_x64_ssdt_alias: ?u32 = null,
 
     pub fn getName(self: *const Wow64Process) []const u8 {
         return self.image_name[0..self.image_name_len];

@@ -325,6 +325,11 @@ fn clearMsgWaitBit(sched_tid: usize) void {
     msg_wait_mask &= ~msgWaitBit(sched_tid);
 }
 
+/// 是否有线程在 `GetMessage` 空队列路径上 `blockThread` 等待（`msg_wait_mask` 非零）。供桌面主循环加大 `input_hub` 轮询，缩短投递延迟（阶段 D）。
+pub fn msgPumpThreadsBlockedApprox() bool {
+    return msg_wait_mask != 0;
+}
+
 /// 唤醒首个在消息等待掩码上的线程（`PostMessage` / `PostThreadMessage` 路径调用）。
 fn wakeOneMsgWaiter() void {
     if (!sched_mod.isInitialized()) return;
@@ -542,6 +547,33 @@ var focus_hwnd: HWND = 0;
 var capture_hwnd: HWND = 0;
 var active_hwnd: HWND = 0;
 var foreground_hwnd: HWND = 0;
+
+/// 内核侧 **WndProc 子集**：`RegisterClass*` 的 `wndproc_id` 非 0 时，在此表登记则 `DispatchMessageA` 优先调用（矩阵 §5；非用户 VA 函数指针）。
+const max_kernel_wndproc: usize = 8;
+var kernel_wndproc_ids: [max_kernel_wndproc]u32 = [_]u32{0} ** max_kernel_wndproc;
+var kernel_wndproc_fns: [max_kernel_wndproc]?KernelWndProcFn = [_]?KernelWndProcFn{null} ** max_kernel_wndproc;
+var kernel_wndproc_count: usize = 0;
+
+pub const KernelWndProcFn = *const fn (HWND, u32, WPARAM, LPARAM) callconv(.c) LRESULT;
+
+/// 登记 `wndproc_id` → 内核可调用例程；`id==0` 拒绝。供测试或内置类使用。
+pub fn registerKernelWndProc(id: u32, pfn: KernelWndProcFn) bool {
+    if (id == 0 or kernel_wndproc_count >= max_kernel_wndproc) return false;
+    kernel_wndproc_ids[kernel_wndproc_count] = id;
+    kernel_wndproc_fns[kernel_wndproc_count] = pfn;
+    kernel_wndproc_count += 1;
+    return true;
+}
+
+fn dispatchKernelWndProcById(id: u32, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ?LRESULT {
+    var i: usize = 0;
+    while (i < kernel_wndproc_count) : (i += 1) {
+        if (kernel_wndproc_ids[i] == id) {
+            if (kernel_wndproc_fns[i]) |f| return f(hwnd, msg, wp, lp);
+        }
+    }
+    return null;
+}
 
 /// 与 `build_options.kernel_preferred_fb_*`（build.conf RESOLUTION / sync）一致；桌面就绪后 `syncScreenFromFramebuffer()` 与内核 FB 再对齐。
 var screen_width: i32 = @as(i32, @intCast(build_options.kernel_preferred_fb_width));
@@ -1231,7 +1263,7 @@ pub fn SetProcessDesktopByIndex(pid: DWORD, desktop_index: DWORD) BOOL {
 }
 
 // ── Message Loop ──
-// `NtUserGetMessage` / `NtUserPeekMessage`：无消息时返回 `STATUS_PENDING` 且清零 `MSG*`，与 Learn 的 BOOL/`GetMessage` 阻塞语义不同 — 见 [NT61_CONTRACT_MATRIX.md](../../../docs/cn/NT61_CONTRACT_MATRIX.md) §5 与 `msg_pm_semantics.zig` 差距表。
+// `NtUserGetMessage`：空队列仍可能 `STATUS_PENDING`（协作式）。`NtUserPeekMessage`：空队列返回 **`STATUS_NO_MORE_ENTRIES`** 且清零 `MSG*`（非 `STATUS_SUCCESS`，便于用户态映射为 Learn 的 `FALSE` 且不与 `WM_NULL` 混淆）— 见矩阵 §5 与 `msg_pm_semantics.zig`。
 
 pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
     if (!pm_sem.minMaxRangeWellFormed(min, max)) {
@@ -1334,7 +1366,7 @@ pub fn ntUserGetMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_m
 }
 
 /// `NtUserPeekMessage`：第 5 参 `wRemoveMsg`（如 `PM_REMOVE`）在用户栈上。
-/// 与 Learn：`PeekMessage` 无消息时返回 **FALSE** 且通常 **不** 视其为错误；本 syscall 在无消息时返回 **`STATUS_PENDING`** 并清零 `MSG*`（与 `NtUserGetMessage` 并列的简化内核契约，**非** NT 上 `PeekMessage` 的 BOOL 返回值映射）。
+/// Ref: Learn — `PeekMessage` 无消息时返回 **FALSE**（非错误）。本 syscall **无消息时返回 `STATUS_NO_MORE_ENTRIES`**（`0x8000001A`）并清零 `MSG*`；用户态 `PeekMessage` 包装应将其映射为 FALSE，**勿**与失败 NTSTATUS 混同。有消息时返回 `STATUS_SUCCESS`。
 pub fn ntUserPeekMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_msg: u32, remove_flags: u32) ntdll.NTSTATUS {
     const msg_len: u64 = @sizeOf(MSG);
     if ((msg_user_va & 7) != 0) return ntdll.STATUS_INVALID_PARAMETER;
@@ -1349,7 +1381,7 @@ pub fn ntUserPeekMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_
     if (PeekMessageA(&km, hwnd, min_msg, max_msg, remove_flags) == FALSE) {
         const um: *volatile MSG = @ptrFromInt(msg_user_va);
         um.* = .{};
-        return ntdll.STATUS_PENDING;
+        return ntdll.STATUS_NO_MORE_ENTRIES;
     }
     const um: *volatile MSG = @ptrFromInt(msg_user_va);
     um.* = km;
@@ -1458,7 +1490,7 @@ pub fn csrFillOneMessageForLpc(client_tid: u32, hwnd: HWND, min_v: u32, max_v: u
 }
 
 pub fn PeekMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32, remove: u32) BOOL {
-    // Ref: Learn — `PeekMessage`：`PM_NOREMOVE` 值为 0，故「窥视不移除」= 未置 `PM_REMOVE`；`PM_NOYIELD` 抑制调度让出（`NtUserPeekMessage` 单次返回、无忙等，与带 `yield` 的 `GetMessage` 路径区分）。
+    // Ref: Learn — `PM_NOREMOVE` = 未置 `PM_REMOVE`；`PM_NOYIELD` = 不向调度器 yield。本路径 **从不** `blockThread`/`yield`，与 `GetMessage` 区分；标志与 `msg_pm_semantics.allowSchedulerYieldForPeekFlags` 对齐供契约测试引用。
     _ = pm_sem.allowSchedulerYieldForPeekFlags(remove);
     return peekMessageAForThread(kernel32.GetCurrentThreadId(), msg, hwnd, min, max, remove);
 }
@@ -1467,12 +1499,16 @@ pub fn TranslateMessage(_: *const MSG) BOOL {
     return TRUE;
 }
 
-/// Ref: Learn — `DispatchMessage` 调用窗口 `WndProc`；本仓库以 `class_id`（ATOM）解析登记类（`findClassByAtom`），**尚无** 用户态函数指针表时仍转发 `DefWindowProcA`（矩阵 §5）。
+/// Ref: Learn — `DispatchMessage` 调用窗口 `WndProc`；本仓库以 `class_id`（ATOM）→ `WindowClass.wndproc_id`，命中 `registerKernelWndProc` 表则先调内核例程，否则 `DefWindowProcA`（矩阵 §5）。
 pub fn DispatchMessageA(msg: *const MSG) LRESULT {
     total_messages_processed += 1;
     if (msg.hwnd != 0) {
         if (findWindow(msg.hwnd)) |w| {
-            _ = findClassByAtom(@truncate(w.class_id));
+            if (findClassByAtom(@truncate(w.class_id))) |cls| {
+                if (cls.wndproc_id != 0) {
+                    if (dispatchKernelWndProcById(cls.wndproc_id, msg.hwnd, msg.message, msg.wparam, msg.lparam)) |lr| return lr;
+                }
+            }
         }
     }
     return DefWindowProcA(msg.hwnd, msg.message, msg.wparam, msg.lparam);
@@ -1509,12 +1545,11 @@ pub fn SendMessageA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRESUL
     return 0;
 }
 
+/// Ref: Learn — `PostQuitMessage` 向**调用线程**的消息队列投递 `WM_QUIT`（`hwnd` 为空）；与每条窗口队列分别投递不同。
 pub fn PostQuitMessage(exit_code: i32) void {
-    for (windows[0..window_count]) |*wnd| {
-        if (wnd.is_valid and wnd.owner_pid == kernel32.GetCurrentProcessId()) {
-            _ = wnd.postMessage(WM_QUIT, @intCast(@as(u32, @bitCast(exit_code))), 0);
-        }
-    }
+    const tid = kernel32.GetCurrentThreadId();
+    const wp: WPARAM = @intCast(@as(u32, @bitCast(exit_code)));
+    _ = PostThreadMessageA(tid, WM_QUIT, wp, 0);
 }
 
 // ── Painting ──

@@ -3,6 +3,7 @@
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig
 // Purpose: **x86（32 位）** NT 服务号子集，供 WOW64 `translateSyscall32to64`、thunk 表与主机回归；与 x64 `ssdt_nt61` 索引不同。
+// **x64 孪生与映射**：[`../../../arch/x86_64/ssdt_nt61.zig`](../../../arch/x86_64/ssdt_nt61.zig)；[`x64_semantic_alias.zig`](x64_semantic_alias.zig)（`x64SsdtIndexForWin7Sp1X86`）；文档 [`../../../../docs/cn/PHASE_G_WOW64.md`](../../../../docs/cn/PHASE_G_WOW64.md)。
 //
 // This is an independent clean-room implementation.
 // Ref: https://github.com/j00ru/windows-syscalls — `x86/json/nt-per-system.json`, Windows 7 **SP1**（十进制服务号 → 本文件十六进制常量）。
@@ -36,6 +37,9 @@ pub const NtTerminateThread: u32 = 0x173;
 pub const NtWaitForSingleObject: u32 = 0x187;
 pub const NtWriteFile: u32 = 0x18C;
 pub const NtWriteVirtualMemory: u32 = 0x18F;
+
+/// **win32k** 服务十进制 **4111**（公开表：`NtUserPostMessage`）→ `0x100F`；与 x64 折叠槽 `ssdt_nt61.NtUserPostMessage == 0x5A` 为**名称对照**（非同一编号空间）。
+pub const Win32kNtUserPostMessage_x86_index4111: u32 = 0x100F;
 
 /// `translateSyscall32to64` 演示路径：对上述公开服务号返回成功；其余 `STATUS_NOT_IMPLEMENTED`。
 pub fn wow64SyscallStubReturnsSuccess(syscall_num: u32) bool {
@@ -79,6 +83,7 @@ test "WOW64 x86 Win7 SP1 reference indices" {
     try std.testing.expect(NtCreateFile == 0x42);
     try std.testing.expect(NtConnectPort == 0x3B);
     try std.testing.expect(NtRequestWaitReplyPort == 0x12B);
+    try std.testing.expect(Win32kNtUserPostMessage_x86_index4111 == 0x100F);
 }
 
 test "wow64SyscallStubReturnsSuccess covers thunk table syscalls" {

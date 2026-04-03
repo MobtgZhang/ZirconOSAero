@@ -6,6 +6,8 @@
 //
 // This is an independent clean-room implementation.
 // Reference: docs/cn/DesktopManagerSpec.md §3.3–§3.5 (message queue tid must match user32).
+//
+// **阶段 D-D2**：`get_message` / `post_message` 字节偏移与 `subsystem.zig` `handleApiCall`、`user32.csrFillOneMessageForLpc` 双端同改；`register_dwm_listener` 的 tid 回退策略见 `resolveDwmListenerTid`；GUI 桌面 ACL 路由见子系统 `seAccessActiveDesktopForWin32k` 调用点。
 
 const std = @import("std");
 

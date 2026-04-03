@@ -6,6 +6,8 @@
 //
 // This is an independent clean-room implementation.
 
+const std = @import("std");
+
 /// 若路径指向 `System32`，可改写为 `SysWOW64`（占位；未修改 `buf`）。
 pub fn shouldRedirectSystem32ToSyswow64(path_utf16_len: usize) bool {
     _ = path_utf16_len;
@@ -14,3 +16,9 @@ pub fn shouldRedirectSystem32ToSyswow64(path_utf16_len: usize) bool {
 
 /// 注册表 `HKLM\Software` → `HKLM\Software\WOW6432Node` 等策略占位。
 pub fn noteRegistryWow64Node(_: []const u8) void {}
+
+test "SysWOW64 redirect placeholders are conservative" {
+    try std.testing.expect(!shouldRedirectSystem32ToSyswow64(0));
+    try std.testing.expect(!shouldRedirectSystem32ToSyswow64(4096));
+    noteRegistryWow64Node("Software\\Classes");
+}

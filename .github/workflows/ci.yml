@@ -32,7 +32,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 binutils python3 make xorriso dosfstools mtools
 
-      - name: Unit tests (heap + SSDT + se token)
+      - name: Unit tests (incl. phase-4 dwm ABI / wow64 / ntfs hive anchors; see MVT_NT61.md)
         run: zig build test
 
       - name: x86_64 resolution compile matrix (--quick)

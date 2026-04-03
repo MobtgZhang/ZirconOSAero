@@ -152,7 +152,7 @@ CursorLayer {
 
 ## 三、内核层平滑光标
 
-文件：`src/drivers/video/display.zig`
+文件：`src/drivers/video/core/display.zig`
 
 内核的 `display.zig` 也实现了独立的平滑光标（`CursorState`），用于在 Aero 主题库加载之前就提供丝滑的光标移动。
 

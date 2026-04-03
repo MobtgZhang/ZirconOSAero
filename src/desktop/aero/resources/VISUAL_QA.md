@@ -19,4 +19,4 @@
 
 **桌面右键菜单**（帧缓冲）：`display.zig` `renderContextMenu` 使用主题 `titlebar_text`（黑）于浅底，避免白字低对比。
 
-**图标一致**：内核 `src/drivers/video/icons.zig` 中 `IconId` 数值与 `resource_loader` / `DESIGN.md` 内置 ID（1–17）一致；帧缓冲回退位图与 Aero SVG 同源路径。
+**图标一致**：内核 `src/drivers/video/desktop/icons.zig` 中 `IconId` 数值与 `resource_loader` / `DESIGN.md` 内置 ID（1–17）一致；帧缓冲回退位图与 Aero SVG 同源路径。

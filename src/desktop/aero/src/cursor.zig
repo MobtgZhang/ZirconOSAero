@@ -1,7 +1,7 @@
 //! Aero Crystal Cursor Module
 //! Smooth pointer (Win7 Aero–style host compositors may overlay white rim + shadow).
 //! Provides smooth cursor state management and the Aero crystal arrow bitmap.
-//! **位图与内核** `src/drivers/video/aero_cursor_shape.zig` **须保持同步**（内核不解析 SVG，仅嵌入该数组）。
+//! **位图与内核** `src/drivers/video/desktop/aero_cursor_shape.zig` **须保持同步**（内核不解析 SVG，仅嵌入该数组）。
 //!
 //! Smooth cursor algorithm:
 //!   - Sub-pixel precision tracking with 256x fixed-point

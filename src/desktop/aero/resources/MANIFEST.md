@@ -9,7 +9,7 @@
 |---------|------|------|
 | 壁纸 | 12 SVG | 原创矢量壁纸，覆盖 8 个主题变体（含 Harmony 风默认）；默认/Harmony 中心光晕与主题 accent 对齐微调 |
 | 图标 | 17 SVG | 48×48，内置 13 枚 + `file`/`user`/`lock`/`shutdown` 辅助；见 `icons/README.md` |
-| 光标 | 14 SVG | 32×32；**全部**在 [`resource_loader.zig`](../src/resource_loader.zig) `registerBuiltinCursors` 登记（含 `zircon_nwse`）；内核帧缓冲仍用 [`aero_cursor_shape.zig`](../../../drivers/video/aero_cursor_shape.zig) 位图，不加载 SVG |
+| 光标 | 14 SVG | 32×32；**全部**在 [`resource_loader.zig`](../src/resource_loader.zig) `registerBuiltinCursors` 登记（含 `zircon_nwse`）；内核帧缓冲仍用 [`aero_cursor_shape.zig`](../../../drivers/video/desktop/aero_cursor_shape.zig) 位图，不加载 SVG |
 | Logo | 1 SVG | 与 `theme.zig` accent `#3D8ED8` 同色族；`registerBuiltinBrandAssets` ID 1 |
 | 开始按钮 | 1 SVG | Start Orb；`registerBuiltinBrandAssets` ID 2 |
 | 设计规格 | `DESIGN.md` | 画布、描边、色板、高光、ID 映射 |
@@ -19,7 +19,7 @@
 
 内置注册：`computer`, `documents`, `recycle_bin`, `terminal`, `network`, `browser`, `settings`, `calculator`, `text_editor`, `pictures`, `music`, `folder`, `control_panel`。辅助：`file`, `user`, `lock`, `shutdown`。
 
-内核帧缓冲壳层（`src/drivers/video/icons.zig`）中 `IconId` 数值与上表 **1–13** 一致，16×16 回退位图与同名 SVG 路径对应；辅助 ID 14–17 映射到最近内置形。
+内核帧缓冲壳层（`src/drivers/video/desktop/icons.zig`）中 `IconId` 数值与上表 **1–13** 一致，16×16 回退位图与同名 SVG 路径对应；辅助 ID 14–17 映射到最近内置形。
 
 ## 主题配置
 
@@ -64,7 +64,7 @@
 ## 使用方式
 
 - **用户态 Aero 库**：[`resource_loader.zig`](../src/resource_loader.zig) 登记壁纸 / 图标 / 光标 / 主题 / 声音元数据路径 / 品牌 SVG；主题通过 `theme_loader.zig` 加载 `.theme` INI。
-- **内核帧缓冲桌面**：[`renderer_aero.zig`](../../../drivers/video/renderer_aero.zig) 通过 [`wallpaper_bitmap.zig`](../../../drivers/video/wallpaper_bitmap.zig) 将构建期嵌入的 RGBA（来源：`tools/wallpaper_embed.zig` 读取上表 PNG）以 **cover** 缩放绘制；**Ctrl+Alt+F9** 循环 12 套预设。磁盘 PNG 与 `resource_loader` 路径供 Aero 库与主题清单一致。桌面图标仍由 [`icons.zig`](../../../drivers/video/icons.zig) `@embedFile` 嵌入。
+- **内核帧缓冲桌面**：[`renderer_aero.zig`](../../../drivers/video/desktop/renderer_aero.zig) 通过 [`wallpaper_bitmap.zig`](../../../drivers/video/desktop/wallpaper_bitmap.zig) 将构建期嵌入的 RGBA（来源：`tools/wallpaper_embed.zig` 读取上表 PNG）以 **cover** 缩放绘制；**Ctrl+Alt+F9** 循环 12 套预设。磁盘 PNG 与 `resource_loader` 路径供 Aero 库与主题清单一致。桌面图标仍由 [`icons.zig`](../../../drivers/video/desktop/icons.zig) `@embedFile` 嵌入。
 
 ## 注意
 

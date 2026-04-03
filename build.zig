@@ -738,7 +738,7 @@ pub fn build(b: *std.Build) void {
     const run_nt61_phase_f_tests = b.addRunArtifact(nt61_phase_f_tests);
 
     const gpu_device_host_mod = b.createModule(.{
-        .root_source_file = b.path("src/drivers/video/gpu_device.zig"),
+        .root_source_file = b.path("src/drivers/video/core/gpu_device.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });
@@ -749,7 +749,7 @@ pub fn build(b: *std.Build) void {
     const run_gpu_device_tests = b.addRunArtifact(gpu_device_tests);
 
     const virtio_gpu_spec_host_mod = b.createModule(.{
-        .root_source_file = b.path("src/drivers/video/virtio_gpu_spec.zig"),
+        .root_source_file = b.path("src/drivers/video/virtio/virtio_gpu_spec.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });
@@ -760,7 +760,7 @@ pub fn build(b: *std.Build) void {
     const run_virtio_gpu_spec_tests = b.addRunArtifact(virtio_gpu_spec_tests);
 
     const display_flip_journal_host_mod = b.createModule(.{
-        .root_source_file = b.path("src/drivers/video/display_flip_journal.zig"),
+        .root_source_file = b.path("src/drivers/video/core/display_flip_journal.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });

@@ -18,7 +18,7 @@
 
 | 参考指向 | 典型文件 |
 |----------|----------|
-| ReactOS 目录/模块说明 | [`src/registry/registry.zig`](src/registry/registry.zig)、[`src/drivers/video/vga.zig`](src/drivers/video/vga.zig)、[`src/drivers/video/hdmi.zig`](src/drivers/video/hdmi.zig)、[`src/drivers/mod.zig`](src/drivers/mod.zig)、[`src/desktop/aero/src/root.zig`](src/desktop/aero/src/root.zig) 等 |
+| ReactOS 目录/模块说明 | [`src/registry/registry.zig`](src/registry/registry.zig)、[`src/drivers/video/legacy/vga.zig`](src/drivers/video/legacy/vga.zig)、[`src/drivers/video/legacy/hdmi.zig`](src/drivers/video/legacy/hdmi.zig)、[`src/drivers/mod.zig`](src/drivers/mod.zig)、[`src/desktop/aero/src/root.zig`](src/desktop/aero/src/root.zig) 等 |
 | Microsoft Learn / WDM 概念 | [`docs/cn/DesktopManagerSpec.md`](docs/cn/DesktopManagerSpec.md)、部分显示栈注释 |
 
 ## LGPL-2.1 与 Win32 兼容层（分发备忘）

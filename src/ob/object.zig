@@ -29,6 +29,18 @@ pub const OBJ_FLAG_PERMANENT: u32 = 0x01;
 pub const OBJ_FLAG_KERNEL_ONLY: u32 = 0x02;
 pub const OBJ_FLAG_INHERIT: u32 = 0x04;
 pub const OBJ_FLAG_CASE_INSENSITIVE: u32 = 0x08;
+/// 内核事件：`SynchronizationEvent`（Learn）语义 — `NtSetEvent` 唤醒一名等待者后清除 `signal_state`。
+pub const OBJ_FLAG_EVENT_AUTO_RESET: u32 = 0x00010000;
+
+/// 可等待对象上的 FIFO 等待链节点（与 `ke/wait.zig`、`scheduler` 协同）。
+pub const WaitEntry = struct {
+    next: ?*WaitEntry = null,
+    prev: ?*WaitEntry = null,
+    thread_index: usize = 0,
+    hdr: *ObjectHeader = undefined,
+    /// `WaitAny` 下标；单对象等待恒为 0。
+    wait_slot: u32 = 0,
+};
 
 pub const ObjectHeader = struct {
     obj_type: ObjectType = .process,
@@ -40,7 +52,10 @@ pub const ObjectHeader = struct {
     security_desc: u64 = 0,
     signal_state: bool = false,
     wait_count: u32 = 0,
+    /// 通用时间戳字段；**同步对象**：`.semaphore` 时打包 `current_count|max_count`（各 32 bit，见 `ke/wait.zig`），其它类型勿依赖此布局。
     creation_time: u64 = 0,
+    wait_list_head: ?*WaitEntry = null,
+    wait_list_tail: ?*WaitEntry = null,
 
     pub fn addRef(self: *ObjectHeader) void {
         self.ref_count += 1;
@@ -69,6 +84,40 @@ pub const ObjectHeader = struct {
         self.signal_state = false;
     }
 };
+
+/// 将 `entry` 挂到 `hdr` 等待队列尾（FIFO）。调用方须持有 `scheduler` IRQ 自旋锁。
+pub fn waitListAppend(hdr: *ObjectHeader, entry: *WaitEntry) void {
+    entry.hdr = hdr;
+    entry.next = null;
+    entry.prev = hdr.wait_list_tail;
+    if (hdr.wait_list_tail) |t| {
+        t.next = entry;
+    } else {
+        hdr.wait_list_head = entry;
+    }
+    hdr.wait_list_tail = entry;
+}
+
+/// 从所属对象等待队列摘除 `entry`；未入队则为 no-op。
+pub fn waitListRemove(entry: *WaitEntry) void {
+    const hdr = entry.hdr;
+    const linked = (hdr.wait_list_head == entry) or (hdr.wait_list_tail == entry) or
+        (entry.prev != null) or (entry.next != null);
+    if (!linked) return;
+
+    if (entry.prev) |p| {
+        p.next = entry.next;
+    } else {
+        hdr.wait_list_head = entry.next;
+    }
+    if (entry.next) |n| {
+        n.prev = entry.prev;
+    } else {
+        hdr.wait_list_tail = entry.prev;
+    }
+    entry.next = null;
+    entry.prev = null;
+}
 
 pub const Handle = u32;
 pub const INVALID_HANDLE: Handle = 0xFFFFFFFF;
@@ -138,12 +187,17 @@ pub const HandleTable = struct {
         const entry = &self.entries[handle];
         if (entry.object_ptr == 0) return false;
 
-        const hdr = @as(*ObjectHeader, @ptrFromInt(entry.object_ptr));
+        const object_ptr = entry.object_ptr;
+        const obj_type = entry.obj_type;
+        const hdr = @as(*ObjectHeader, @ptrFromInt(object_ptr));
         if (hdr.handle_count > 0) hdr.handle_count -= 1;
-        _ = hdr.release();
+        const freed = hdr.release();
 
         entry.* = .{};
         if (self.count > 0) self.count -= 1;
+        if (freed and obj_type == .section) {
+            @import("cleanup_hooks.zig").invokeSectionLastReference(object_ptr);
+        }
         return true;
     }
 

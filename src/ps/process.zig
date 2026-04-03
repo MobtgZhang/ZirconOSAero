@@ -278,3 +278,44 @@ pub fn forkProcessForTest(parent_pid: u32, frame_alloc: *FrameAllocator) ?*Proce
     child.parent_pid = parent_pid;
     return child;
 }
+
+// ── `NtCreateUserProcess`：内核线程对象句柄（`ObjectType.thread`）与调度器 `tid` 的桥接 ──
+// Ref: [docs/cn/PHASE_F_PROCESS_CREATE.md](../../docs/cn/PHASE_F_PROCESS_CREATE.md)（验收子集；非完整 ETHREAD）。
+
+/// 供句柄表引用的最小线程对象；`scheduler_tid` 对应 `ke/scheduler.zig` 线程槽索引。
+pub const PsThreadObject = struct {
+    header: ob.ObjectHeader = .{ .obj_type = .thread },
+    scheduler_tid: usize = 0,
+    host_pid: u32 = 0,
+};
+
+const max_ps_thread_objects: usize = 128;
+var g_ps_threads: [max_ps_thread_objects]PsThreadObject = undefined;
+var g_ps_thread_busy: [max_ps_thread_objects]bool = [_]bool{false} ** max_ps_thread_objects;
+
+pub fn allocPsThreadObject(scheduler_tid: usize, host_pid: u32) ?*PsThreadObject {
+    for (&g_ps_threads, &g_ps_thread_busy) |*obj, *busy| {
+        if (!busy.*) {
+            busy.* = true;
+            obj.* = .{
+                .header = .{ .obj_type = .thread },
+                .scheduler_tid = scheduler_tid,
+                .host_pid = host_pid,
+            };
+            ob.createObject(.thread, @intFromPtr(&obj.header));
+            return obj;
+        }
+    }
+    return null;
+}
+
+pub fn releasePsThreadObject(ptr: *PsThreadObject) void {
+    _ = ob.dereferenceObject(@intFromPtr(&ptr.header));
+    for (&g_ps_threads, &g_ps_thread_busy) |*obj, *busy| {
+        if (@intFromPtr(obj) == @intFromPtr(ptr)) {
+            busy.* = false;
+            obj.* = .{};
+            return;
+        }
+    }
+}

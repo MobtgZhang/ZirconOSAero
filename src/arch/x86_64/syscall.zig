@@ -522,4 +522,3 @@ fn dispatchNtDisplayString(frame: *InterruptFrame) i64 {
     arch_mod.consoleWrite("\r\n");
     return 0;
 }
-

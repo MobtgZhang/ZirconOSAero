@@ -27,7 +27,7 @@ zig build install -Darch=x86_64 -Doptimize=ReleaseSafe
 bash scripts/ci-qemu-smoke.sh
 ```
 
-`zig build test` 当前包含：`heap`、`pool`、`buddy`、`slab`、`ssdt`、`ssdt_stub_parity`、`ssdt_x64_x86_namespace`、`se_token`、`smp_atomic_host`、`wow64_types`、`object`、`io_irp_host`、`ecam_layout`、`hpet_id`、`lpc_portkind_host`、`minimal_net`、`mdl_host`、`pci_driver_bind_host`、`fs_vfs_constants_host`、`scheduler_policy_host`、`nt61_phase_f_scheduler_gap`、`gpu_device_host`、`virtio_gpu_spec_host`、`display_flip_journal_host`、`win32k_host`、`msg_pm_semantics_host`、`dwm_surface_spec_host`、`aero_flag_mapping_host`、`nt61_aero_defaults_host`、`color_nt61_host`、`dwm_messages_nt61_host`、`dwm_nt61_integration_host`、`wow64_ssdt_x86` 等主机单测；与 [NT61_CONTRACT_MATRIX.md](cn/NT61_CONTRACT_MATRIX.md) 中「验证」行一致。
+`zig build test` 当前包含：`heap`、`pool`、`buddy`、`slab`、`ssdt`、`ssdt_stub_parity`、`ssdt_x64_x86_namespace`、`se_token`、`smp_atomic_host`、`wow64_types`、`object`、`io_irp_host`、`ecam_layout`、`hpet_id`、`lpc_portkind_host`、`minimal_net`、`mdl_host`、`pci_driver_bind_host`、`fs_vfs_constants_host`、`scheduler_policy_host`、`mutex_inherit_depth_host`、`nt61_phase_f_scheduler_gap`、`gpu_device_host`、`virtio_gpu_spec_host`、`display_flip_journal_host`、`win32k_host`、`msg_pm_semantics_host`、`dwm_surface_spec_host`、`aero_flag_mapping_host`、`nt61_aero_defaults_host`、`color_nt61_host`、`dwm_messages_nt61_host`、`dwm_nt61_integration_host`、`wow64_ssdt_x86` 等主机单测；与 [NT61_CONTRACT_MATRIX.md](cn/NT61_CONTRACT_MATRIX.md) 中「验证」行一致。
 
 交叉编译与 ZBM 辅助产物（可选；与 CI 矩阵一致）：
 

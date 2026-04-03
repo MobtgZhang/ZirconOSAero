@@ -3,7 +3,7 @@
 //! - T2：`WM_DWMSENDICONICTHUMBNAIL` 的 `lParam` 打包与 `dwm_messages_nt61` / `user32.broadcastDwmIconicThumbnailRequested` 对齐。
 //! - **全 API 锚点命名**：`dwm_nt61_full_api_host`（grok 计划名）与仓库内 **`nt61_full_api_backlog_anchors_host`**（`build.zig`）为同一闸门职责；以 MVT/矩阵引用 `nt61_full_api_backlog_anchors_host` 为准。
 //!
-//! 对照：`src/subsystems/win32/user32.zig`、`src/drivers/video/dwm_compositor.zig`、`docs/cn/MVT_NT61.md`。
+//! 对照：`src/subsystems/win32/user32.zig`、`src/drivers/video/core/dwm_compositor.zig`、`docs/cn/MVT_NT61.md`。
 const std = @import("std");
 const dwm_registry_sync = @import("dwm_config_registry_sync");
 const dwm_blur_budget = @import("dwm_blur_budget");

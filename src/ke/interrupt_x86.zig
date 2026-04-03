@@ -94,6 +94,9 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
     _ = name;
 
     if (vector == 14) {
+        // #PF error code（Intel SDM Vol.3）：bit0=P present；bit1=W write；bit2=U user；bit3=RSVD；
+        // bit4=I fetch；bit5=PK protection key（若启用）。用户态缺页：`tryLazyCommitFault`（MEM_RESERVE /
+        // 节区视图惰性提交）→ `tryCowWriteFault`（共享 PFN 写时复制）。内核态或未处理用户态缺页：结构化 STOP。
         var cr2: u64 = 0;
         asm volatile ("mov %%cr2, %[cr2]"
             : [cr2] "=r" (cr2),
@@ -115,10 +118,8 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
                 }
             }
         }
-        klog.err("Page Fault at RIP=0x%x, addr=0x%x, err=0x%x", .{
-            frame.rip, cr2, frame.error_code,
-        });
-        arch.halt();
+        const bc = @import("bugcheck.zig");
+        bc.keBugCheckEx(.page_fault_in_nonpaged_area, cr2, frame.rip, frame.error_code, 0);
     }
 
     klog.err("Exception %u error_code=0x%x RIP=0x%x", .{

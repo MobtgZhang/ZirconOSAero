@@ -31,7 +31,11 @@ pub fn queueUserApc(thread: *scheduler.Thread, apc: *KeApc) void {
 
 pub fn hasPendingUserApcForCurrentThread() bool {
     const t = scheduler.getCurrentThread() orelse return false;
-    return t.user_apc_head != null;
+    return hasPendingUserApcForThread(t);
+}
+
+pub fn hasPendingUserApcForThread(thread: *scheduler.Thread) bool {
+    return thread.user_apc_head != null;
 }
 
 /// 在 **PASSIVE_LEVEL** 排空当前线程内核 APC（syscall 返用户前；与 DISPATCH 路径分离）。

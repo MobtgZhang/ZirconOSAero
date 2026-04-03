@@ -3,6 +3,7 @@
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/ke/spinlock.zig
 // Purpose: 自旋锁 + 保存 IF 后关中断；`unlock` 仅恢复入锁前 IF，避免 ISR 内误 `sti` 导致 IRQ 重入。
+// 持锁期间禁止调用 `keWait*`、池分配等可阻塞或可能再次索取同一调度 IRQ 锁的路径（死锁 / IRQL 语义违规）。
 //
 // This is an independent clean-room implementation.
 // Reference: OS textbook irqsave spinlocks; Intel SDM — RFLAGS.IF; ARM DAIF.I; LoongArch CRMD.IE。

@@ -16,6 +16,7 @@ const vm_mod = @import("../mm/vm.zig");
 const process_mod = @import("../ps/process.zig");
 const spinlock_mod = @import("spinlock.zig");
 const percpu_sched = @import("percpu_sched.zig");
+const ob = @import("../ob/object.zig");
 const KeApc = @import("apc_object.zig").KeApc;
 
 /// `tick` / `enqueueReady` 等在定时器 IRQ 路径持锁；`IrqSpinLock` 在 `unlock` 时恢复**加锁前** IF，不在 ISR 内误 `sti`。
@@ -66,6 +67,7 @@ const MAX_THREADS: usize = blk: {
     break :blk @max(8, @min(256, @as(usize, v)));
 };
 const STACK_SIZE: usize = 8192;
+/// 就绪队列 **CPU 槽** 上限；`schedNumCpus()` 将 MADT `logical_cpu_count` 截断到 `[1..@min(n, MAX_SCHED_CPUS)]`。
 const MAX_SCHED_CPUS: usize = 8;
 const NUM_PRI: usize = 32;
 
@@ -434,6 +436,16 @@ pub const Thread = struct {
     name: [16]u8 = [_]u8{0} ** 16,
     kernel_apc_head: ?*KeApc = null,
     user_apc_head: ?*KeApc = null,
+    /// `keWait*` 阻塞在对象等待队列上时为 true（与 `ob.WaitEntry` 链一致）。
+    in_object_wait: bool = false,
+    wait_entries: [64]ob.WaitEntry = undefined,
+    wait_entry_count: u32 = 0,
+    wait_deadline_ticks: ?u64 = null,
+    wait_alertable: bool = false,
+    /// 超时 / APC / `notifyEventSet` 完成等待时在 `unblock` 前写入；`keWait` 持锁消费。
+    pending_wait_status: ?i32 = null,
+    /// `NtAlertThread` 置位；可告警等待路径在 `STATUS_USER_APC` 之前消费并返回 `STATUS_ALERTED`。
+    alert_pending: bool = false,
 };
 
 fn effectivePriority(t: *const Thread) u8 {
@@ -459,6 +471,51 @@ var scheduling_enabled: bool = false;
 
 var starve_ticks: [MAX_THREADS]u64 = @splat(0);
 
+/// 从所有对象等待队列摘除本线程（持 `sched_irq_lock`）。
+pub fn detachThreadFromWaitQueues(tid: usize) void {
+    if (tid >= thread_count) return;
+    const t = &threads[tid];
+    if (!t.in_object_wait) return;
+    var j: u32 = 0;
+    while (j < t.wait_entry_count) : (j += 1) {
+        ob.waitListRemove(&t.wait_entries[j]);
+    }
+    t.wait_entry_count = 0;
+    t.in_object_wait = false;
+    t.wait_deadline_ticks = null;
+    t.wait_alertable = false;
+}
+
+/// 唤醒因对象等待阻塞的线程（持 `sched_irq_lock`）；`status` 常为 `STATUS_WAIT_0 + slot`。
+pub fn completeObjectWait(tid: usize, status: i32) void {
+    if (tid >= thread_count) return;
+    detachThreadFromWaitQueues(tid);
+    threads[tid].pending_wait_status = status;
+    unblockThread(tid);
+}
+
+fn processBlockedObjectWaitsLocked() void {
+    if (!scheduling_enabled) return;
+    const status_timeout: i32 = 258;
+    const status_user_apc: i32 = @bitCast(@as(u32, 0xC0000012));
+    var i: usize = 0;
+    while (i < thread_count) : (i += 1) {
+        if (threads[i].state != .blocked) continue;
+        if (!threads[i].in_object_wait) continue;
+        if (threads[i].pending_wait_status != null) continue;
+
+        if (threads[i].wait_deadline_ticks) |d| {
+            if (tick_count >= d) {
+                completeObjectWait(i, status_timeout);
+                continue;
+            }
+        }
+        if (threads[i].wait_alertable and threads[i].user_apc_head != null) {
+            completeObjectWait(i, status_user_apc);
+        }
+    }
+}
+
 fn terminateThreadsForProcess(pid: u32) void {
     if (pid == 0) return;
     sched_irq_lock.lock();
@@ -468,6 +525,7 @@ fn terminateThreadsForProcess(pid: u32) void {
     while (i < thread_count) : (i += 1) {
         if (i == 0) continue; // idle
         if (threads[i].process_id == pid) {
+            detachThreadFromWaitQueues(i);
             removeFromReadyQueue(i);
             threads[i].state = .terminated;
             threads[i].mutex_inherit_floor = 0;
@@ -597,7 +655,20 @@ pub fn tick() void {
 
     rebalanceReadyBuckets();
 
+    processBlockedObjectWaitsLocked();
+
     if (cur >= thread_count) return;
+
+    // 当前线程已阻塞时必须让出 CPU（否则 `keWait` 在单核上无法前进）。
+    if (threads[cur].state == .blocked) {
+        const next_blk = popHeadHighestGlobal() orelse return;
+        if (next_blk == cur or threads[next_blk].state == .terminated) return;
+        threads[next_blk].state = .running;
+        threads[next_blk].slice_remaining = quantumTicksForThread(&threads[next_blk]);
+        current_thread = next_blk;
+        activateCr3ForProcessId(threads[next_blk].process_id);
+        return;
+    }
 
     if (threads[cur].state == .running and threads[cur].slice_remaining > 0) {
         threads[cur].slice_remaining -= 1;
@@ -634,6 +705,11 @@ pub fn yield() void {
     tick();
 }
 
+pub fn getThreadByIndex(idx: usize) ?*Thread {
+    if (idx >= thread_count) return null;
+    return &threads[idx];
+}
+
 pub fn getCurrentThread() ?*Thread {
     if (!initialized or thread_count == 0) return null;
     return &threads[current_thread];
@@ -659,6 +735,30 @@ pub fn unblockThread(tid: usize) void {
         threads[tid].boost_deadline_tick = tick_count + IO_BOOST_DURATION_TICKS;
         enqueueReady(tid);
     }
+}
+
+pub fn lockSchedIrq() void {
+    sched_irq_lock.lock();
+}
+
+pub fn unlockSchedIrq() void {
+    sched_irq_lock.unlock();
+}
+
+pub fn schedulingIsEnabled() bool {
+    return scheduling_enabled;
+}
+
+/// 与 `sched_irq_lock` 同锁下读取（`tick` / `keWait*`）。
+pub fn tickCountLocked() u64 {
+    return tick_count;
+}
+
+pub fn consumePendingWaitStatus(tid: usize) ?i32 {
+    if (tid >= thread_count) return null;
+    const st = threads[tid].pending_wait_status orelse return null;
+    threads[tid].pending_wait_status = null;
+    return st;
 }
 
 pub fn terminateThread(tid: usize) void {

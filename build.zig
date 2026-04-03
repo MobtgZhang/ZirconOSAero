@@ -121,6 +121,16 @@ pub fn build(b: *std.Build) void {
         "x86_64: handle IRQ12 PS/2 mouse even when VirtIO-Input is active (default false; QEMU 双源叠加风险；真机单 PS/2 时可开)",
     ) orelse false;
     const enable_idt_opt = b.option(bool, "enable_idt", "Enable IDT, timer and syscall (x86_64 only)") orelse true;
+    const lapic_periodic_tick_opt = b.option(
+        bool,
+        "lapic_periodic_tick",
+        "x86_64: use LAPIC LVT periodic timer (mask PIC IRQ0) after Phase 3 identity + MADT",
+    ) orelse false;
+    const smp_tlb_ipi_opt = b.option(
+        bool,
+        "smp_tlb_ipi",
+        "x86_64: broadcast fixed IPI (vector 254) on global TLB flush (AP must have IDT stub)",
+    ) orelse false;
     const aero_skip_ico_build = b.option(bool, "aero-skip-ico-build", "For aero-shell-icons-dll: skip SVG→ICO script (reuse existing ico/)") orelse false;
     const aero_windres_exe = b.option([]const u8, "aero-windres", "windres executable for zircon_shell32_res.rc") orelse "x86_64-w64-mingw32-windres";
     // Reserved for Tier 2: real `zircon_shell32_res.dll` for loongarch64-windows-gnu when Zig emits COFF for that triple.
@@ -232,11 +242,36 @@ pub fn build(b: *std.Build) void {
         "Loongson: allow future MMIO display probe paths (default handoff-only)",
     ) orelse false;
 
-    const target = b.resolveTargetQuery(.{
-        .cpu_arch = cpu_arch,
-        .os_tag = .freestanding,
-        .abi = .none,
-    });
+    // Zig 0.15.x：x86_64 内核在 `-ODebug` 下 `build-exe` 链接阶段会异常退出（LLVM/自托管链接器崩溃）。
+    // 将内核实际编译档位升为 ReleaseSafe；`-Ddebug` 仍控制运行时 klog，与 `-Doptimize` 解耦。
+    const kernel_optimize: std.builtin.OptimizeMode = blk: {
+        if (cpu_arch == .x86_64 and optimize == .Debug) {
+            const zv = @import("builtin").zig_version;
+            if (zv.major == 0 and zv.minor == 15) {
+                break :blk .ReleaseSafe;
+            }
+        }
+        break :blk optimize;
+    };
+
+    // x86_64 内核：禁用 SIMD + soft-float（见 zig-nt61-project-core.mdc）。仅当实际优化档位非 Debug 时启用：
+    // `-ODebug`（含上面对 Zig 0.15 升格后的 ReleaseSafe）下 Zig 仍会生成需 SSE 的 IR，与 feature 冲突 → `x86_64_encoder: movups`。
+    const freestanding_query: std.Target.Query = blk: {
+        var q: std.Target.Query = .{
+            .cpu_arch = cpu_arch,
+            .os_tag = .freestanding,
+            .abi = .none,
+        };
+        if (cpu_arch == .x86_64 and kernel_optimize != .Debug) {
+            q.cpu_features_sub = std.Target.x86.featureSet(&.{
+                .mmx, .sse, .sse2, .sse3, .ssse3, .sse4_1, .sse4_2,
+                .avx, .avx2, .avx512f,
+            });
+            q.cpu_features_add = std.Target.x86.featureSet(&.{.soft_float});
+        }
+        break :blk q;
+    };
+    const target = b.resolveTargetQuery(freestanding_query);
 
     const zigimg_dep = b.dependency("zigimg", .{
         .target = b.graph.host,
@@ -262,7 +297,7 @@ pub fn build(b: *std.Build) void {
     const wallpaper_data_mod = b.createModule(.{
         .root_source_file = wallpaper_manifest_lp,
         .target = target,
-        .optimize = optimize,
+        .optimize = kernel_optimize,
     });
 
     const desktop_default = b.option(
@@ -288,7 +323,7 @@ pub fn build(b: *std.Build) void {
     const phys_track_gb_raw = b.option(
         u32,
         "phys_track_gb",
-        "Kernel frame bitmap span in GiB: 8, 16, 32, or 64 (default 8). Larger values increase BSS for bitmap/PFN metadata.",
+        "Kernel frame bitmap span in GiB: 8, 16, 32, or 64 (default 8). Use 16/32/64 for large RAM (e.g. Win7 Ultimate-class); increases kernel BSS and any host test that stack-allocates FrameAllocator.",
     ) orelse 8;
     const phys_track_gb: u32 = switch (phys_track_gb_raw) {
         8, 16, 32, 64 => phys_track_gb_raw,
@@ -319,6 +354,8 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "desktop_full", desktop_full_opt);
     build_opts.addOption(bool, "dwm_blur_stats", dwm_blur_stats_opt);
     build_opts.addOption(bool, "enable_idt", enable_idt_opt);
+    build_opts.addOption(bool, "lapic_periodic_tick", lapic_periodic_tick_opt);
+    build_opts.addOption(bool, "smp_tlb_ipi", smp_tlb_ipi_opt);
     build_opts.addOption(bool, "amd_igpu", amd_igpu_opt);
     build_opts.addOption(bool, "amd_igpu_defer_probe", amd_igpu_defer_probe_opt);
     build_opts.addOption(bool, "amd_kms_experimental", amd_kms_experimental_opt);
@@ -354,7 +391,7 @@ pub fn build(b: *std.Build) void {
     const root_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = kernel_optimize,
         .link_libc = false,
         .code_model = code_model,
         .pic = false,
@@ -367,14 +404,14 @@ pub fn build(b: *std.Build) void {
     const config_defaults_mod = b.createModule(.{
         .root_source_file = b.path("src/config/defaults.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = kernel_optimize,
     });
     root_mod.addImport("config_defaults", config_defaults_mod);
 
     const nt61_aero_defaults_mod = b.createModule(.{
         .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = kernel_optimize,
     });
     root_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
 
@@ -428,6 +465,7 @@ pub fn build(b: *std.Build) void {
             kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_entry.s"));
             kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_lstar.s"));
         }
+        kernel.addAssemblyFile(b.path("src/arch/x86_64/kernel_end.s"));
     } else if (mem.eql(u8, arch_opt, "aarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/aarch64/start.S"));
     } else if (mem.eql(u8, arch_opt, "riscv64")) {
@@ -650,6 +688,28 @@ pub fn build(b: *std.Build) void {
     });
     const run_frame_bitmap_math_tests = b.addRunArtifact(frame_bitmap_math_tests);
 
+    const multiboot2_parse_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/boot/multiboot2_parse.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const multiboot2_parse_host_tests = b.addTest(.{
+        .root_module = multiboot2_parse_host_mod,
+        .name = "multiboot2_parse_host",
+    });
+    const run_multiboot2_parse_host_tests = b.addRunArtifact(multiboot2_parse_host_tests);
+
+    const ke_irql_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/ke/irql.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const ke_irql_host_tests = b.addTest(.{
+        .root_module = ke_irql_host_mod,
+        .name = "ke_irql_host",
+    });
+    const run_ke_irql_host_tests = b.addRunArtifact(ke_irql_host_tests);
+
     const paging_x86_host_mod = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/paging.zig"),
         .target = b.graph.host,
@@ -796,6 +856,88 @@ pub fn build(b: *std.Build) void {
     });
     const run_nt61_abi_layout_tests = b.addRunArtifact(nt61_abi_layout_tests);
 
+    const object_layout_nt61_mod = b.createModule(.{
+        .root_source_file = b.path("sdk/object_layout_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const object_layout_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/object_layout_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "object_layout_nt61", .module = object_layout_nt61_mod },
+            .{ .name = "teb", .module = teb_nt61_x64_mod },
+        },
+    });
+    const object_layout_nt61_tests = b.addTest(.{
+        .root_module = object_layout_nt61_host_mod,
+        .name = "object_layout_nt61_host",
+    });
+    const run_object_layout_nt61_tests = b.addRunArtifact(object_layout_nt61_tests);
+
+    const seh_pdata_min_anchor_mod = b.createModule(.{
+        .root_source_file = b.path("src/loader/seh_pdata_min.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const alpc_min_anchor_mod = b.createModule(.{
+        .root_source_file = b.path("src/lpc/alpc_min.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const csrss_skeleton_anchor_mod = b.createModule(.{
+        .root_source_file = b.path("src/servers/csrss_skeleton.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const stage4_min_anchor_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/stage4_min_anchor_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "seh_pdata_min", .module = seh_pdata_min_anchor_mod },
+            .{ .name = "alpc_min", .module = alpc_min_anchor_mod },
+            .{ .name = "csrss_skeleton", .module = csrss_skeleton_anchor_mod },
+        },
+    });
+    const stage4_min_anchor_tests = b.addTest(.{
+        .root_module = stage4_min_anchor_host_mod,
+        .name = "stage4_min_anchor_host",
+    });
+    const run_stage4_min_anchor_tests = b.addRunArtifact(stage4_min_anchor_tests);
+
+    const sdk_nt61_syscall_path_mod = b.createModule(.{
+        .root_source_file = b.path("sdk/nt61_syscall_numbers_x64.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const syscall_numbers_lock_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/syscall_numbers_lock_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "sdk_nt61_syscall_path", .module = sdk_nt61_syscall_path_mod },
+        },
+    });
+    const syscall_numbers_lock_nt61_tests = b.addTest(.{
+        .root_module = syscall_numbers_lock_nt61_host_mod,
+        .name = "syscall_numbers_lock_nt61_host",
+    });
+    const run_syscall_numbers_lock_nt61_tests = b.addRunArtifact(syscall_numbers_lock_nt61_tests);
+
+    const wait_user_apc_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/wait_user_apc_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    wait_user_apc_nt61_host_mod.addOptions("build_options", build_opts);
+    const wait_user_apc_nt61_tests = b.addTest(.{
+        .root_module = wait_user_apc_nt61_host_mod,
+        .name = "wait_user_apc_nt61_host",
+    });
+    const run_wait_user_apc_nt61_tests = b.addRunArtifact(wait_user_apc_nt61_tests);
+
     const nt61_layouts_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/layouts.zig"),
         .target = b.graph.host,
@@ -806,6 +948,17 @@ pub fn build(b: *std.Build) void {
         .name = "nt61_layouts_host",
     });
     const run_nt61_layouts_tests = b.addRunArtifact(nt61_layouts_tests);
+
+    const pe64_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("sdk/pe64_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const pe64_nt61_tests = b.addTest(.{
+        .root_module = pe64_nt61_host_mod,
+        .name = "pe64_nt61_host",
+    });
+    const run_pe64_nt61_tests = b.addRunArtifact(pe64_nt61_tests);
 
     const win32k_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32k/mod.zig"),
@@ -1056,6 +1209,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_taskbar_peek_hit_nt61_tests = b.addRunArtifact(taskbar_peek_hit_nt61_tests);
 
+    const startmenu_paint_hint_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/startmenu_paint_hint_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const startmenu_paint_hint_nt61_tests = b.addTest(.{
+        .root_module = startmenu_paint_hint_nt61_host_mod,
+        .name = "startmenu_paint_hint_nt61_host",
+    });
+    const run_startmenu_paint_hint_nt61_tests = b.addRunArtifact(startmenu_paint_hint_nt61_tests);
+
     const kernel_stub_audit_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/kernel_stub_audit_anchor_host.zig"),
         .target = b.graph.host,
@@ -1067,6 +1231,11 @@ pub fn build(b: *std.Build) void {
     });
     const run_kernel_stub_audit_tests = b.addRunArtifact(kernel_stub_audit_tests);
 
+    const wddm_abstraction_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/video/core/wddm_abstraction.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
     const dwm_nt61_integration_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/dwm_nt61_integration_host.zig"),
         .target = b.graph.host,
@@ -1075,6 +1244,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "dwm_config_registry_sync", .module = dwm_config_registry_sync_host_mod },
             .{ .name = "dwm_blur_budget", .module = dwm_blur_budget_host_mod },
             .{ .name = "dwm_nt61_api_contract", .module = dwm_nt61_api_contract_host_mod },
+            .{ .name = "wddm_abstraction", .module = wddm_abstraction_host_mod },
         },
     });
     const dwm_nt61_integration_tests = b.addTest(.{
@@ -1164,7 +1334,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_pe_loader_policy_tests = b.addRunArtifact(pe_loader_policy_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, lpc_handshake_version_host, nt61_os_version_layout_host, nt61_core_dll_abi_inventory_host, pe_loader_policy_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, mutex_inherit_depth_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, dwm_nt61_abi_inventory_host, dwmapi_wow64_host, ntfs_hive_minimum_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
+    const fork_cow_share_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/fork_cow_share_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    fork_cow_share_nt61_host_mod.addOptions("build_options", build_opts);
+    const fork_cow_share_nt61_tests = b.addTest(.{
+        .root_module = fork_cow_share_nt61_host_mod,
+        .name = "fork_cow_share_nt61_host",
+    });
+    const run_fork_cow_share_nt61_tests = b.addRunArtifact(fork_cow_share_nt61_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, lpc_handshake_version_host, nt61_os_version_layout_host, nt61_core_dll_abi_inventory_host, pe_loader_policy_host, fork_cow_share_nt61_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, mutex_inherit_depth_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, dwm_nt61_abi_inventory_host, dwmapi_wow64_host, ntfs_hive_minimum_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, startmenu_paint_hint_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -1183,6 +1365,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_minimal_net_tests.step);
     test_step.dependOn(&run_mdl_tests.step);
     test_step.dependOn(&run_frame_bitmap_math_tests.step);
+    test_step.dependOn(&run_multiboot2_parse_host_tests.step);
+    test_step.dependOn(&run_ke_irql_host_tests.step);
     test_step.dependOn(&run_paging_x86_host_tests.step);
     test_step.dependOn(&run_pci_bind_tests.step);
     test_step.dependOn(&run_fs_vfs_constants_tests.step);
@@ -1195,7 +1379,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_virtio_gpu_spec_tests.step);
     test_step.dependOn(&run_display_flip_journal_tests.step);
     test_step.dependOn(&run_nt61_abi_layout_tests.step);
+    test_step.dependOn(&run_object_layout_nt61_tests.step);
+    test_step.dependOn(&run_stage4_min_anchor_tests.step);
+    test_step.dependOn(&run_syscall_numbers_lock_nt61_tests.step);
+    test_step.dependOn(&run_wait_user_apc_nt61_tests.step);
     test_step.dependOn(&run_nt61_layouts_tests.step);
+    test_step.dependOn(&run_pe64_nt61_tests.step);
     test_step.dependOn(&run_win32k_tests.step);
     test_step.dependOn(&run_msg_pm_semantics_tests.step);
     test_step.dependOn(&run_gdi_rop_contract_tests.step);
@@ -1217,6 +1406,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_dwm_zorder_nt61_tests.step);
     test_step.dependOn(&run_multimon_dpi_nt61_tests.step);
     test_step.dependOn(&run_taskbar_peek_hit_nt61_tests.step);
+    test_step.dependOn(&run_startmenu_paint_hint_nt61_tests.step);
     test_step.dependOn(&run_kernel_stub_audit_tests.step);
     test_step.dependOn(&run_dwm_nt61_integration_tests.step);
     test_step.dependOn(&run_registry_zosh1_tests.step);
@@ -1226,6 +1416,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_nt61_os_version_layout_tests.step);
     test_step.dependOn(&run_nt61_core_dll_abi_inventory_tests.step);
     test_step.dependOn(&run_pe_loader_policy_tests.step);
+    test_step.dependOn(&run_fork_cow_share_nt61_tests.step);
 
     addMinimalPeNt61Step(b);
 

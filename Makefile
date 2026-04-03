@@ -103,6 +103,8 @@ endif
 # ── Derived Paths ──
 
 ROOT_DIR     := $(shell pwd)
+# `make` / `make run-debug`：整次会话输出覆盖写入此文件（非追加）。嵌套 make 请传 ZIRCON_NO_LOG=1 或已由内层自动设置。
+LOG_TXT      := $(ROOT_DIR)/log.txt
 BUILD_DIR    := $(ROOT_DIR)/build
 TMP_DIR      := $(BUILD_DIR)/tmp
 RELEASE_DIR  := $(BUILD_DIR)/release
@@ -161,6 +163,8 @@ else
 UEFI_EFI         := $(UEFI_PREFIX)/bin/BOOTX64.efi
 endif
 ESP_IMG          := $(BUILD_DIR)/esp-$(ARCH).img
+# Debug + desktop=aero 时 kernel.elf 常远超 64MiB；ESP 过小会导致 mcopy 报 Disk full 且 ZBM 找不到内核。
+ESP_IMG_MB       ?= 256
 # run-aarch64 / run-riscv64 在子 make 中按 ARCH 构建 ESP，但父进程 ARCH 可能仍为 x86_64；QEMU 驱动须用固定路径。
 ESP_IMG_AARCH64  := $(BUILD_DIR)/esp-aarch64.img
 ESP_IMG_RISCV64  := $(BUILD_DIR)/esp-riscv64.img
@@ -210,6 +214,8 @@ else
 QEMU_X86_UEFI_ACCEL ?= tcg
 QEMU_X86_UEFI_CPU ?= -cpu max
 endif
+# Phase3 PML4/串口对照：可设 QEMU_SMP_UEFI=1（单核）排除早期 AP 与 BSP 日志交错；默认 2 与 run-iso 一致。
+# Phase3 对照 KVM：即使存在 /dev/kvm，也可强制 `QEMU_X86_UEFI_ACCEL=tcg QEMU_X86_UEFI_CPU=-cpu max` 跑一轮串口（排除虚拟化差异）。
 QEMU_SMP_UEFI ?= 2
 QEMU_X86_UEFI_NET ?= 1
 ifeq ($(QEMU_X86_UEFI_NET),1)
@@ -318,7 +324,12 @@ QEMU_COMMON := $(QEMU_COMMON_X86)
 #  Default target: build & run according to build.conf
 # ══════════════════════════════════════════════════════
 
+ifeq ($(ZIRCON_NO_LOG),1)
 all: run
+else
+all:
+	+@$(MAKE) ZIRCON_NO_LOG=1 all 2>&1 | tee $(LOG_TXT)
+endif
 
 # ══════════════════════════════════════════════════════
 #  show-config: display current build configuration
@@ -431,7 +442,7 @@ help:
 	@echo "  make build-zbm-uefi        Build ZBM UEFI application"
 	@echo "  make build-zbm-bios        Build ZBM BIOS components"
 	@echo "  make build-zbm-disk        Build ZBM bootable disk images"
-	@echo "  make build-esp             Build EFI System Partition image"
+	@echo "  make build-esp             Build EFI System Partition image (dosfstools mkfs.vfat + mtools: mmd, mcopy, mdir; see docs/REPRODUCE_BUILD.md)"
 	@echo ""
 	@echo "Run (auto-selects from build.conf):"
 	@echo "  make run                    Build + run per build.conf"
@@ -724,23 +735,23 @@ ifeq ($(ARCH),loongarch64)
 		ZBM_LOONGARCH64_EFI="$(ZBM_LOONGARCH64_EFI)" \
 		bash $(ROOT_DIR)/scripts/build/mkesp-loongarch64.sh "$(ESP_IMG)" "$(KERNEL_ELF)" "$(ZBM_LOONGARCH64_EFI)"
 else
-	dd if=/dev/zero of=$(ESP_IMG) bs=1M count=64 status=none
-	mformat -i $(ESP_IMG) ::
-	mmd -i $(ESP_IMG) ::/EFI
-	mmd -i $(ESP_IMG) ::/EFI/BOOT
-ifeq ($(ARCH),aarch64)
-	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTAA64.EFI
-else ifeq ($(ARCH),riscv64)
-	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTRISCV64.EFI
-else
-	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTX64.EFI
+	@set -e; \
+	test -f "$(KERNEL_ELF)" || { echo "[ZirconOSAero] ERROR: missing $(KERNEL_ELF). Run: make build" >&2; exit 1; }; \
+	command -v mkfs.vfat >/dev/null 2>&1 || { echo "[ZirconOSAero] ERROR: mkfs.vfat not found (dosfstools). e.g. apt install dosfstools" >&2; exit 1; }; \
+	dd if=/dev/zero of=$(ESP_IMG) bs=1M count=$(ESP_IMG_MB) status=none; \
+	mkfs.vfat -F 32 $(ESP_IMG) >/dev/null; \
+	mmd -i $(ESP_IMG) ::/EFI; \
+	mmd -i $(ESP_IMG) ::/EFI/BOOT; \
+	case "$(ARCH)" in \
+	aarch64)  mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTAA64.EFI ;; \
+	riscv64)  mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTRISCV64.EFI ;; \
+	*)        mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTX64.EFI ;; \
+	esac; \
+	mmd -i $(ESP_IMG) ::/boot || { echo "[ZirconOSAero] ERROR: mmd ::/boot failed (mtools / FAT on $(ESP_IMG))." >&2; exit 1; }; \
+	mcopy -i $(ESP_IMG) $(KERNEL_ELF) ::/boot/kernel.elf || { echo "[ZirconOSAero] ERROR: mcopy kernel.elf failed. Need mtools: apt install mtools (or distro equivalent)." >&2; exit 1; }; \
+	mdir -i $(ESP_IMG) ::/boot | grep -Eq 'kernel[[:space:]]+elf' || { echo "[ZirconOSAero] ERROR: kernel.elf not listed on ESP under ::/boot (mdir lists 8.3-style name)." >&2; exit 1; }
 endif
-	@if [ -f "$(KERNEL_ELF)" ]; then \
-		mmd -i $(ESP_IMG) ::/boot 2>/dev/null || true; \
-		mcopy -i $(ESP_IMG) $(KERNEL_ELF) ::/boot/kernel.elf 2>/dev/null || true; \
-	fi
-endif
-	@echo "[ZirconOSAero] ESP image: $(ESP_IMG)"
+	@echo "[ZirconOSAero] ESP image: $(ESP_IMG)  (self-check: mdir -i $(ESP_IMG) ::/boot)"
 
 # ══════════════════════════════════════════════════════
 #  ISO (UEFI only — embedded FAT ESP + xorriso)
@@ -833,12 +844,17 @@ _run-zbm-uefi: build-esp
 		$(QEMU_COMMON_X86_UEFI)
 
 # ── Debug mode (GDB) — ZBM MBR disk (same kernel path as build-zbm-disk) ──
+ifeq ($(ZIRCON_NO_LOG),1)
 run-debug: build-zbm-disk
 	@echo "[ZirconOSAero] Debug mode (GDB on :1234), ZBM MBR disk..."
 	qemu-system-x86_64 \
 		-drive format=raw,file=$(ZBM_DISK_MBR) \
 		$(QEMU_COMMON) \
 		-s -S
+else
+run-debug:
+	+@$(MAKE) ZIRCON_NO_LOG=1 run-debug 2>&1 | tee $(LOG_TXT)
+endif
 
 # ══════════════════════════════════════════════════════
 #  AArch64 boot (EDK2 nightly firmware)

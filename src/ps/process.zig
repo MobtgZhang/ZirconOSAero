@@ -39,6 +39,12 @@ pub const Process = struct {
     exit_code: u32 = 0,
     name: [32]u8 = [_]u8{0} ** 32,
     name_len: usize = 0,
+    /// 前台量子加成（`scheduler.quantumTicksForThread`）；桌面会话可置位。
+    is_foreground: bool = false,
+    /// NT 6.1 里程碑：主模块首选基址（PE `OptionalHeader.ImageBase`）；未加载 PE 时为 0。
+    image_base_address: u64 = 0,
+    /// NT 6.1 里程碑：进程环境块用户 VA；由加载器/Nt 路径填写，供 syscall 与用户异常对齐。
+    peb_address: u64 = 0,
 
     pub fn init(pid: u32) Process {
         return .{
@@ -78,6 +84,8 @@ pub const Thread = struct {
     kernel_stack_top: u64 = 0,
     user_stack_top: u64 = 0,
     priority: u8 = 0,
+    /// NT 6.1 里程碑：用户线程入口 VA（与 `CONTEXT.Rip` 启动值对齐）；纯内核线程为 0。
+    user_start_address: u64 = 0,
 };
 
 var processes: [MAX_PROCESSES]Process = undefined;
@@ -254,4 +262,19 @@ pub fn getProcessCount() usize {
 
 pub fn getProcessList() []Process {
     return processes[0..process_count];
+}
+
+/// 仅 `Debug`：`createProcess` 子进程后 `duplicateUserMappingsForFork`；失败则终止子进程。
+pub fn forkProcessForTest(parent_pid: u32, frame_alloc: *FrameAllocator) ?*Process {
+    if (builtin.mode != .Debug) return null;
+    const parent = findProcess(parent_pid) orelse return null;
+    const parent_asp = parent.address_space orelse return null;
+    const child = createProcess(frame_alloc) orelse return null;
+    const child_asp = child.address_space orelse return null;
+    if (vm.duplicateUserMappingsForFork(child_asp, parent_asp) != 0) {
+        _ = terminateProcess(child.pid, 1);
+        return null;
+    }
+    child.parent_pid = parent_pid;
+    return child;
 }

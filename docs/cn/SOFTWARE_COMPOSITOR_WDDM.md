@@ -2,7 +2,7 @@
 
 ## 当前定位
 
-- **本仓库的 Aero**：主要为 **CPU / 帧缓冲** 路径上的窗口合成与主题资源（见 `src/drivers/video/`、`dwm.zig`、`renderer_aero.zig`）。  
+- **本仓库的 Aero**：主要为 **CPU / 帧缓冲** 路径上的窗口合成与主题资源（见 `src/drivers/video/root.zig` 聚合导出、`core/dwm.zig`、`desktop/renderer_aero.zig`）。  
 - **Windows 7 的 DWM**：依赖 **WDDM** 用户态与内核协作、GPU 命令缓冲与桌面合成 — **本仓库未实现 WDDM 驱动模型**。
 
 ## MVP 软件合成器（路线）
@@ -34,11 +34,17 @@
 
 ## 第七阶段验收（VirtIO-GPU，QEMU `1af4:1050`）
 
-与 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 一致：设备出现后串口应出现 **scratch `TRANSFER_FROM_HOST_2D` / `TRANSFER_TO_HOST_2D` 自检**；帧缓冲 32bpp 就绪时可出现 **4×4（或更小）display↔scratch 往返 ok**。`trySubmitFramebufferDirtyRect` 与上述往返 **同 VirtIO 命令路径**；**当前 PoC 硬顶**：单脏矩形外包 **≤32×32** 时 `display.present` 在 **flipDirty** 下 **尝试** GPU 路径（失败静默回退 CPU，不改变 `flipDirty` 语义）。
+与 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 一致：设备出现后串口应出现 **scratch `TRANSFER_FROM_HOST_2D` / `TRANSFER_TO_HOST_2D` 自检**；帧缓冲 32bpp 就绪时可出现 **4×4（或更小）display↔scratch 往返 ok**（`compositorTryRoundTripFramebufferRect`，仅诊断）。
 
-**Scanout（非 WDDM）**：当 `pitch == width×4` 且屏前缓冲 **4KiB 物理连续** 时，`bringupMmioIfProbed` 后可建立 **`CMD_SET_SCANOUT`**（resource 2）并在每次 `present` 的 `flip`/`flipDirty` 之后发 **`CMD_RESOURCE_FLUSH`**（整屏或脏外包），使设备从 guest RAM 取新像素；**不**免除 CPU 离屏合成与 back→front memcpy。**不做项**：大块 Aero 盒式模糊在 GPU 执行、WDDM 等价驱动 — 矩阵 §4.1 **Partial** 与此一致。
+**Scanout（非 WDDM）**：当 `pitch == width×4` 时，`bringupMmioIfProbed` 可建立 **`CMD_SET_SCANOUT`**（resource 2）：优先 **单段** 物理连续 `RESOURCE_ATTACH_BACKING`；否则按 4KiB 页拆成 **多枚 `virtio_gpu_mem_entry`**（`core/framebuffer.zig` 的 `fillFrontBufferVirtioBackingEntries`）。`virtio_gpu_spec.zig` 中 **`max_virtio_backing_mem_entries` / `max_attach_backing_wire_bytes`** 与 `build.conf` 注释表最大档 **3840×2160×32** 对齐（最坏每页一条 entry），`virtio_gpu_pci.zig` 的 `gpu_attach_blob` 与栈上 entry 表与此同源，避免 4K scanout 下 attach 缓冲溢出。每次 `present` 的 `flip`/`flipDirty` 之后发 **`CMD_RESOURCE_FLUSH`**（整屏或 `peekDirtyUnionPx` 脏外包）。`core/display_flip_journal.zig` 的 `noteVirtioResourceFlush` 统计整幅/局部 flush 次数。**不**免除 CPU 离屏合成与 back→front memcpy。**不做项**：大块 Aero 盒式模糊在 GPU 执行、WDDM 等价驱动 — 矩阵 §4.1 **Partial** 与此一致；VirGL 占位与后续 `SUBMIT_3D` 见 [VirtioVirglMVP.md](VirtioVirglMVP.md)。
 
-**上界变更纪律（问题三 P3-3）**：若将来放宽 **32×32** 硬顶或变更 scanout 条件，须 **同时** 更新本节、契约矩阵 §4.1 对应行、`display.zig` / `virtio_gpu_pci.zig` 中的常量与注释；**禁止**只改代码不更新文档与矩阵。
+## 离屏缓冲与高分档位（`BACK_BUF_MAX`）
+
+- `core/framebuffer.zig` 中 **`BACK_BUF_MAX = 10 MiB`** 的 **静态离屏槽** 约覆盖 **1920×1080@32bpp** 及以下的双/三缓冲决策（见 `applyBufferingFromDims`）。  
+- **高于该像素量**（如 2560×1440、3840×2160）时，离屏/多缓冲改走 **伙伴堆连续物理页** 路径；成功与否取决于内核分配器与可用 RAM，**不再**由静态槽保证。  
+- **QEMU / 客体 RAM**：4K 下若启用双缓冲或三缓冲，除屏前与离屏外仍有内核与其它子系统占用；若 `-m` 过小可能出现分配失败或合成降级。建议 **`QEMU_MEM` 不低于 512M** 做 smoke，长期开发可保持 `build.conf` 默认 **8G** 或按机器调大。
+
+**上界变更纪律（问题三 P3-3）**：若变更 scanout attach 规则或 flush 语义，须 **同时** 更新本节、契约矩阵 §4.1 对应行、`core/display.zig` / `virtio/virtio_gpu_pci.zig` / `core/framebuffer.zig` / `virtio/virtio_gpu_spec.zig` 中的注释与单一来源常量；**禁止**只改代码不更新文档与矩阵。
 
 ## 参考
 

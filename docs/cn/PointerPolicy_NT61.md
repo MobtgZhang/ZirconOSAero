@@ -16,11 +16,11 @@
 
 ## 2. 合成与刷新（非 desktop-src 内核细节）
 
-- **子步插值**：`interpolation_enabled` / `interpolation_steps`（默认开启、3 步）减轻单 tick 内大跳变；与 [`display.renderDesktopFrameEx`](../../src/drivers/video/display.zig) 中 `isInterpolating()` 协同。
+- **子步插值**：`interpolation_enabled` / `interpolation_steps`（默认开启、3 步）减轻单 tick 内大跳变；与 [`display.renderDesktopFrameEx`](../../src/drivers/video/core/display.zig) 中 `isInterpolating()` 协同。
 - **单轮合并**：`input_hub.pollAll` 包裹 `beginMotionCoalesce` / `endMotionCoalesce`，同一轮内多条 REL 合并后再缩放入队。
-- **壳层重绘 vs 光标层**：[`display.handleMouseMove`](../../src/drivers/video/display.zig) 返回 `MouseMovePaintHint`：`needs_full_scene`（开始菜单项高亮、拖动窗体位移等）走整壁纸+壳层；`needs_caption_chrome_only` 仅调用 [`renderer_aero.redrawCaptionBandsOnly`](../../src/drivers/video/renderer_aero.zig) 重画 Explorer/任务管理器**标题栏带**（最小化/最大化/关闭热态），避免整屏；**仅** `desktop_cursor_kind` 变化走 `cursor_plane` 快速路径。
+- **壳层重绘 vs 光标层**：[`display.handleMouseMove`](../../src/drivers/video/core/display.zig) 返回 `MouseMovePaintHint`：`needs_full_scene`（开始菜单项高亮、拖动窗体位移等）走整壁纸+壳层；`needs_caption_chrome_only` 仅调用 [`renderer_aero.redrawCaptionBandsOnly`](../../src/drivers/video/desktop/renderer_aero.zig) 重画 Explorer/任务管理器**标题栏带**（最小化/最大化/关闭热态），避免整屏；**仅** `desktop_cursor_kind` 变化走 `cursor_plane` 快速路径。
 - **地址栏 I-beam 迟滞**：`pointInExplorerAddressBarEx` / `pointInExplorerAddressBarHysteresis`（约 2px）减少箭头/I-beam 在边界上的抖动。
-- **标题栏三键迟滞**：[`hitTestAeroCaptionButtonsHysteresis`](../../src/drivers/video/display.zig)（约 2px 粘性区）减少三键边界上悬停状态翻转频率。
+- **标题栏三键迟滞**：[`hitTestAeroCaptionButtonsHysteresis`](../../src/drivers/video/core/display.zig)（约 2px 粘性区）减少三键边界上悬停状态翻转频率。
 
 ### 2.1 非客户区热跟踪（desktop-src 行为级，无抄码）
 

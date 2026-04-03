@@ -37,7 +37,7 @@
 | 调度器策略公式（主机） | 同上 → scheduler_policy_host | [tests/scheduler_policy_host.zig](../../tests/scheduler_policy_host.zig) |
 | 互斥继承深度模型（主机） | 同上 → mutex_inherit_depth_host | [tests/mutex_inherit_depth_host.zig](../../tests/mutex_inherit_depth_host.zig) |
 | Phase F 调度差额（文档化占位） | 同上 → nt61_phase_f_scheduler_gap | [tests/nt61_phase_f_scheduler_gap.zig](../../tests/nt61_phase_f_scheduler_gap.zig) |
-| GpuDevice / ramfb 占位 | 同上 → gpu_device_host | [src/drivers/video/gpu_device.zig](../../src/drivers/video/gpu_device.zig) |
+| GpuDevice / ramfb 占位 | 同上 → gpu_device_host | [src/drivers/video/core/gpu_device.zig](../../src/drivers/video/core/gpu_device.zig) |
 | Win32k 窗口骨架 | 同上 → win32k_host | [src/subsystems/win32k/mod.zig](../../src/subsystems/win32k/mod.zig) |
 | Aero 标志映射（内核 ↔ 用户态 `SurfaceFlags`） | 同上 → **aero_flag_mapping_host** | [src/config/aero_flag_mapping.zig](../../src/config/aero_flag_mapping.zig) |
 | COLORREF ↔ 内核 BGR（与 Aero `theme.rgb` 字节序对照） | 同上 → **color_nt61_host** | [color_nt61.zig](../../src/config/color_nt61.zig) |
@@ -69,13 +69,14 @@
 | CPU 合成性能基线（人工） | `bash scripts/qemu_desktop_perf_baseline.sh` | 记录 `getDesktopComposeTelemetry` / 串口 blur 统计步骤；非硬性 60fps |
 | aarch64 桌面相关编译闸门 | `.github/workflows/ci.yml`：`zig build kernel -Darch=aarch64 -Ddesktop-full=true` | 与 x86_64 **desktop-full** 选项一致 |
 | 分辨率与串口日志 | 改 `build.conf` 的 `RESOLUTION` → `make sync-resolution` → `make build` → QEMU/串口 | 核对 `Config: display=`、`FB tag`、`Framebuffer Driver` 宽高与 `RESOLUTION` 一致（见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §4.2.2） |
-| VirtIO-GPU 控制队列 + 2D 传输烟测 | 见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md)「VirtIO-GPU（可选）」完整 QEMU 命令行。成功：`VirtIO-GPU: GET_DISPLAY_INFO + RESOURCE_CREATE_2D + TRANSFER_* scratch loop ok`，并可能出现 `display ↔ scratch TRANSFER round-trip ok`。无设备或 2D 失败：不出现上述 info（或出现 framebuffer round-trip `warn`），`compositorOffloadAvailable()` 为 false | [virtio_gpu_pci.zig](../../src/drivers/video/virtio_gpu_pci.zig)、[display.zig](../../src/drivers/video/display.zig) |
+| x86_64 分辨率 **编译**矩阵（不改仓内单行 `RESOLUTION`） | `bash scripts/test_x86_resolution_matrix.sh`；CI：`--quick` | 与 `build.conf` 注释表同款档位；`LoongArch` 见 `scripts/test_loongarch_resolution_matrix.sh`；详 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) |
+| VirtIO-GPU 控制队列 + 2D 传输烟测 | 见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md)「VirtIO-GPU（可选）」完整 QEMU 命令行。成功：`VirtIO-GPU: GET_DISPLAY_INFO + RESOURCE_CREATE_2D + TRANSFER_* scratch loop ok`，并可能出现 `display ↔ scratch TRANSFER round-trip ok`。无设备或 2D 失败：不出现上述 info（或出现 framebuffer round-trip `warn`），`compositorOffloadAvailable()` 为 false | [virtio_gpu_pci.zig](../../src/drivers/video/virtio/virtio_gpu_pci.zig)、[display.zig](../../src/drivers/video/core/display.zig) |
 | PS/2 + VirtIO 并存 | `zig build -Dps2_mouse_with_virtio=true`（真机单指针源）；默认 QEMU 仍避免双源 | [arch/x86_64/mod.zig](../../src/arch/x86_64/mod.zig) `handleMouseIrq`；[PointerPolicy_NT61.md](PointerPolicy_NT61.md) §4 |
 | USB HID 鼠标里程碑（问题六 / 可执行拆分） | **M1**：`-Dusb_xhci=true` 枚举 + xHCI 桩；串口检索 **`USB: xhci_mvt`**（与 **`USB: xHCI active`** 同次初始化）；**M2**：**hid_boot_report_host** + `hid.zig`；**M3**：`input_hub.zig` 轮询顺序 + PointerPolicy §4 | 契约矩阵 §4.1「USB HID 鼠标」行 |
 | Flip3D shell 过滤与 Z 序模型 | 主机 **dwm_zorder_nt61_host** | [tests/nt61/dwm_zorder_nt61_host.zig](../../tests/nt61/dwm_zorder_nt61_host.zig) |
 | （可选 nightly）Flip3D 打开 | 串口人工检索 `flip3d_overlay` / 热键切换日志 | 非 CI 硬性 |
-| DWM 盒式模糊预算成本（`w×h×passes`） | `zig build test` → **dwm_blur_budget_host** | [dwm_blur_budget.zig](../../src/config/dwm_blur_budget.zig)、[dwm.zig](../../src/drivers/video/dwm.zig) |
-| Aero 每帧模糊统计 | `zig build -Ddwm_blur_stats=true`；串口检索关键字 **`dwm blur frame:`**（`box_blur_calls` / `budget_denials` / `tint_only_calls`）。相对基线表见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §3.0 | [display.zig](../../src/drivers/video/display.zig) `renderDesktopFrameEx` 末尾、`dwm.flushBlurFrameStatsDebug` |
+| DWM 盒式模糊预算成本（`w×h×passes`） | `zig build test` → **dwm_blur_budget_host** | [dwm_blur_budget.zig](../../src/config/dwm_blur_budget.zig)、[dwm.zig](../../src/drivers/video/core/dwm.zig) |
+| Aero 每帧模糊统计 | `zig build -Ddwm_blur_stats=true`；串口检索关键字 **`dwm blur frame:`**（`box_blur_calls` / `budget_denials` / `tint_only_calls`）。相对基线表见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §3.0 | [display.zig](../../src/drivers/video/core/display.zig) `renderDesktopFrameEx` 末尾、`dwm.flushBlurFrameStatsDebug` |
 | 节区 / 映射（用户态 API） | 运行依赖 `ntdll` 内 `NtCreateSection` / `NtMapViewOfSection` 的用例（随子系统扩展） | 内核实现见 [src/mm/section.zig](../../src/mm/section.zig)；x64 syscall 见 [src/arch/x86_64/syscall.zig](../../src/arch/x86_64/syscall.zig) |
 
 ## 维护约定

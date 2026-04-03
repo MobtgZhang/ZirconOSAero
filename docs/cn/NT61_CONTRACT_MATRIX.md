@@ -60,7 +60,7 @@
 | 文件 I/O | `FileIO/` | `ntdll.zig`, `src/fs/vfs.zig` | 路径、`IO_STATUS_BLOCK` |
 | GDI | `gdi/` | `src/subsystems/win32/gdi32.zig` | 与内核 win32k 无关，子系统行为 |
 | DWM | `dwm/` | `src/desktop/aero/`, `docs/cn/DesktopManagerSpec.md` | 合成/脏区语义 |
-| Shell / 命名空间 / 任务栏（概念与 UX） | `shell/`（如 `shell-namespace.md`, `taskbar.md`, `user-experience-guidelines.md`） | `src/drivers/video/renderer_aero.zig`, `shell_strings.zig`, `startmenu.zig` | 仅抽取术语与交互期望；实现独立，不抄文档示例代码 |
+| Shell / 命名空间 / 任务栏（概念与 UX） | `shell/`（如 `shell-namespace.md`, `taskbar.md`, `user-experience-guidelines.md`） | `src/drivers/video/desktop/renderer_aero.zig`, `shell_strings.zig`, `startmenu.zig` | 仅抽取术语与交互期望；实现独立，不抄文档示例代码 |
 | 安全 | `SecAuthZ/` | `src/se/token.zig` | 令牌、模拟（长期） |
 
 ### 1.1 NT 6.1 优先阅读清单（离线镜像内路径）
@@ -146,7 +146,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | 能力（文档概念 / API） | 状态 | 仓库位置 | 备注 |
 |------------------------|------|----------|------|
 | 离屏表面再合成 | 部分 | `renderer_aero.zig`, `dwm_compositor.zig`, `framebuffer.zig` | CPU 盒式模糊 + 预算：`nt61_aero_defaults.zig` |
-| 合成启用查询（`DwmIsCompositionEnabled` 语义） | 部分 | `src/drivers/video/dwm.zig` | `composition_enabled` 与 `glass_enabled` 分离；`isEnabled()` 随合成位 |
+| 合成启用查询（`DwmIsCompositionEnabled` 语义） | 部分 | `src/drivers/video/core/dwm.zig` | `composition_enabled` 与 `glass_enabled` 分离；`isEnabled()` 随合成位 |
 | `DwmEnableBlurBehindWindow` / 毛玻璃区域 | 部分 | `dwm.zig`, `material.zig`, `display.zig` | `renderGlassEffect` / `renderGlassTintOnly` |
 | `DwmExtendFrameIntoClientArea` 策略 | 部分 | `display.zig`, `dwm_surface_spec.zig` | 标志与 NC/客户区绘制顺序 |
 | `WM_DWMCOMPOSITIONCHANGED` | 部分 / 规则 Verified | `user32.zig`（`broadcastDwmCompositionChanged`） | 仅随 `dwm.setCompositionEnabled`；毛玻璃走 `setGlass` + `WM_DWMNCRENDERINGCHANGED` |
@@ -171,7 +171,7 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | `WM_DWM*` 广播 + 线程监听 `register_dwm_listener` | **Partial（当前拓扑下问题二已闭合到「有 HWND 才泵注册表差异」）** | `user32.registerDwmNotificationListener` + `broadcastDwm*`；[DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) 决策表；**`dwm_messages_nt61_host`** / **`dwm_nt61_integration_host`** / **`dwm_config_registry_sync_host`** |
 | Flip3D（Alt+Tab）CPU 近似 | **Partial / 规则 Verified** | `flip3d_needs_scene_refresh` + `collectShellWindowSurfaceIds`：**缓冲** `flip3d_shell_sid_buffer_cap=6`、**最多绘制** `flip3d_shell_thumb_paint_max=4`（`dwm_nt61_api_contract.zig`，截断取前 N 张）；过滤：`visible`、`owner_pid!=0`、`w/h≥16`、`z_order<30000`。热键 **`consumeFlip3dHotkey`** 仅在 `display` 主循环单点消费（与 `keyboard.zig` 配对）；[DesktopManagerSpec.md](DesktopManagerSpec.md) §8；主机 **dwm_zorder_nt61_host**、**win32k_api_semantics_host** |
 | 开始菜单悬停局部重绘 | **Partial** | `redrawStartMenuRegionOnly` + 飞出/所有程序/搜索行级脏区；搜索开启时 **50ms hover 节流**（`startmenu.zig`）；`-Ddesktop_bisect` + `mouse_debug` 看 `startmenu_partial` |
-| VirtIO-GPU 2D / scanout | **Partial** | **SET_SCANOUT**：屏前缓冲 guest 页 `RESOURCE_ATTACH_BACKING` + `display.present` 后 `RESOURCE_FLUSH`（整幅 flip 或 `flipDirty` 脏外包）；减轻设备侧陈旧纹理；**CPU 仍负责** back→front memcpy 与 Aero 模糊。**PoC**：scratch `TRANSFER_*`、`trySubmitFramebufferDirtyRect`（≤32×32，无 scanout 时）。光标队列 `CMD_UPDATE_CURSOR` 仅占位常量。见 `virtio_gpu_pci.zig`、`virtio_gpu_spec.zig`、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) |
+| VirtIO-GPU 2D / scanout | **Partial** | **SET_SCANOUT**：`RESOURCE_ATTACH_BACKING` **单段或** 按页多段 mem_entry + `display.present` 后 `RESOURCE_FLUSH`；**光标队列** `CMD_MOVE_CURSOR`（`present` 末尾同步位置；成功后 `cursor_plane` 可跳过软件叠加）。**VirGL**：协商 feature bit0 + `CMD_CTX_CREATE`（`virgl=on` 时）；`SUBMIT_3D` 模糊仍占位（`tryVirglBlurBoxDelegation`）。**CPU 仍负责** memcpy 与 Aero 盒式模糊。见 `virtio_gpu_pci.zig`、`framebuffer.zig`、`VirtioVirglMVP.md`、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) |
 | x86_64 PS/2 与 VirtIO 双源 | **Partial** | [arch/x86_64/mod.zig](../../src/arch/x86_64/mod.zig) `handleMouseIrq`：VirtIO-Input 活跃且未 `-Dps2_mouse_with_virtio` 时 **跳过 IRQ12**；无 VirtIO 真机可编 `-Dps2_mouse_with_virtio=true` 或仅用 PS/2 |
 | USB HID 鼠标 | **Partial（M1–M3 文档化）** | **M1**：`-Dusb_xhci=true` 枚举 + xHCI 桩，串口 **`USB: xhci_mvt`**；**M2**：`hid_boot_report.zig` Boot 报告 → `hid.zig` 注入；**M3**：`input_hub.pollAll` 顺序（USB → VirtIO → PS/2）见 `input_hub.zig` 与 PointerPolicy §4。主机 **hid_boot_report_host** |
 | 注册表 `Mouse` / `DWM` → 壳层 | **Partial / 通知规则 Verified** | 同上键名；`syncPolicyFromRegistry` 应用后按 `dwm_config_registry_sync` 差异在 **已有窗口** 时补 `WM_DWM*`（无 HWND 启动豁免）；桌面 **`mouse.syncFromRegistry` + `dwm.syncPolicyFromRegistry`** |

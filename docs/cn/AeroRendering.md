@@ -1,6 +1,6 @@
 # Aero（NT 6.1）渲染参数与实现要点
 
-本文记录 **内核帧缓冲路径**（`src/drivers/video/renderer_aero.zig`、`dwm.zig`、`display.zig`）中与 Windows 7 Aero 氛围对齐的默认参数及托盘布局。
+本文记录 **内核帧缓冲路径**（`src/drivers/video/desktop/renderer_aero.zig`、`dwm.zig`、`display.zig`）中与 Windows 7 Aero 氛围对齐的默认参数及托盘布局。
 
 **单一数值源**：`src/config/nt61_aero_defaults.zig`（内核与用户态 Aero 主题共用）。架构与职责见 [DesktopManagerSpec.md](DesktopManagerSpec.md)。
 

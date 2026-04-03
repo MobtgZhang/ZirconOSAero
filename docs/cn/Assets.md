@@ -31,4 +31,4 @@
 | 2026-03-24 | `src/desktop/aero/resources/icons/*.svg`、`start_orb.svg`、`logo.svg`、部分 `cursors/*.svg` | **原创重绘**（仓库内人工编写 SVG） | 与 `resources/DESIGN.md` 及 `theme.zig` accent 统一；未使用外部图包或 AI 出图。（壁纸已改为 2026-03-27 PNG 批次，见上表。） |
 | 2026-03-27 | 扩展图标 `recycle_bin_full`、`drive_*`、`printer`、`info`、`warning`、`error.svg`；`zig build aero-shell-icons-dll` → `zircon_shell32_res.dll` | **原创 SVG** + **宿主机脚本生成 ICO/PE** | 与 Win7 **API 形态**兼容（`LoadLibrary`/`ExtractIconEx` 等），资源号 **101–125** 为 Zircon 自有；非微软资源拷贝。说明见 [NT61_ShellIcons.md](NT61_ShellIcons.md)。 |
 | 2026-03-24 | `src/desktop/aero/src/resource_loader.zig`、`desktop.zig` | 代码 | 修正 `addIcon`/`addCursor`/`addThemeFile` 与磁盘文件名一致；控制面板桌面图标 ID 改为 13。 |
-| 2026-03-25 | `src/drivers/video/display.zig`、`icons.zig`、`mouse.zig`、`drivers/mod.zig`；`boot/zbm/uefi/menu_common.zig` | **原创代码** | 全架构光标与 mouse 坐标同步；`IconId` 与 Aero 1–13 对齐；ZBM 菜单扩展按键与 `WaitForKey` 路径。 |
+| 2026-03-25 | `src/drivers/video/core/display.zig`、`icons.zig`、`mouse.zig`、`drivers/mod.zig`；`boot/zbm/uefi/menu_common.zig` | **原创代码** | 全架构光标与 mouse 坐标同步；`IconId` 与 Aero 1–13 对齐；ZBM 菜单扩展按键与 `WaitForKey` 路径。 |

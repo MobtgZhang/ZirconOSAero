@@ -7,8 +7,8 @@
 1. `**src/main.zig`**：桌面就绪后循环调用 `input_hub.pollAll()`、`mouse.popEvent()`、`display.handleMouseMove` / `handleClick`；按 `**display.renderDesktopFrameEx(scene_dirty, caption_chrome_only, drag_repaint, startmenu_repaint, shell_geometry_repaint)**` 与 `present()`。拖窗位移走 `**needs_drag_repaint**`（`renderDragFrame`，客户区仍绘完整内容；标题栏拖动态为 TintOnly）；开始菜单 **仅悬停行变化** 时走 `**needs_startmenu_repaint**`（Harmony 壁纸预设下 `renderer_aero.redrawStartMenuRegionOnly`，避免整屏重绘）。**左键释放在标题栏拖放结束**时 `**handleMouseRelease**` 置 `**needs_post_drag_composite**`，与 `**needs_shell_frame_repaint**` 一并传入第五参：走 `**renderFrameEx**` 恢复全窗玻璃，**不**置 `**scene_dirty**`（避免 `cursor_plane.invalidate` 级整屏 save-under）。边框缩放结束仍走 `**needs_full_scene**` / `scene_dirty`。`**handleMouseMove` 默认不再将悬停/拖窗升为 `needs_full_scene**`（与 [PointerPolicy_NT61.md](PointerPolicy_NT61.md) backlog 对齐）；整场景主要由 UI 脏、插值、显式全屏刷新路径驱动。
 2. `**src/drivers/input/input_hub.zig**`：`virtio_input_pci.poll()`；在 **x86_64** 上仅当 **未** attach VirtIO-Input PCI 时调用 `mouse.poll()`（PS/2）。**IRQ12** 在 `arch/x86_64/mod.zig` 的 `handleMouseIrq` 中同样跳过，避免与 QEMU 默认 virtio-mouse/tablet 双源叠加位移。
 3. `**src/drivers/input/virtio_input_pci.zig**`：解析 Linux `input_event`，在 `syncDeliver` 中调用 `mouse.deliverMouseEvent`。
-4. `**src/drivers/video/display.zig**`：从 `mouse.getX/Y` 同步平滑坐标；场景合成走 `**renderer_aero.renderFrameEx(false)**`，指针由 **软件光标层**（save-under）叠加。
-5. `**src/drivers/video/renderer_aero.zig**`：绘制壁纸预设、桌面图标、Explorer、任务栏、开始菜单等（默认不在此绘制指针，由 `display` 光标层完成）。
+4. `**src/drivers/video/core/display.zig**`：从 `mouse.getX/Y` 同步平滑坐标；场景合成走 `**renderer_aero.renderFrameEx(false)**`，指针由 **软件光标层**（save-under）叠加。
+5. `**src/drivers/video/desktop/renderer_aero.zig**`：绘制壁纸预设、桌面图标、Explorer、任务栏、开始菜单等（默认不在此绘制指针，由 `display` 光标层完成）。
 
 `src/desktop/aero/` 提供 **资源清单**（`resource_loader.zig`）、主题默认值（`nt61_aero_defaults` 交叉引用）与可复用库；与内核路径的图标 ID、壁纸文件名应对齐。
 
@@ -107,6 +107,8 @@
 - `**zig build**`：`build.zig` 优先读 `**build.conf**` 中的 `**RESOLUTION**`，其次读 `**kernel_pref_fb_wh.txt**`；可选 `**-Dzbm_preferred_fb_width/height**` 覆盖。不经 `make` 直接 `zig build` 时，若改动了 `build.conf` 但未跑 sync，C stub 头文件可能仍旧，LoongArch UEFI 请以 `**make build**` 或至少 `**make sync-resolution**` 为准。
 - **QEMU 内存**：`make run-loongarch64` 使用 `**QEMU_MEM_LOONGARCH64`**（Makefile 默认 1536M，且须 **>1G** 以满足 EDK2 virt）。根目录 `**build.conf`** 中的 `**QEMU_MEM**`（如 8G）作用于 x86_64 / AArch64 / RISC-V 等目标，**不**自动传给 LoongArch；要增大 LoongArch 客体 RAM 请设 `**QEMU_MEM_LOONGARCH64`**（命令行或 `build.conf` 若已 `-include` 进 Makefile）。
 - **症状对照（是否「进了桌面」）**：QEMU **固件文本控制台**上出现 `**Firmware GOP … < build preferred …`**、`**Kernel draws at preferred size via ramfb+fw_cfg**`（C stub）或 Zig ZBM 的 `**Handoff has no GOP FB; kernel uses ramfb+fw_cfg**` **不代表**启动失败：意为 handoff 未带 GOP，内核按 `**build.conf` 首选** 走 **ramfb**。请以**串口**为准：若出现 `**ramfb:`**、`**Framebuffer Driver: WxH**`、`**Desktop: fb**`、`**user32: Screen synced**`、`**dwm.exe**` / `**first frame presented**`，则桌面路径已起来。固件小窗可能仍停在 UEFI 文案，而 **GTK 主窗口**扫的是 ramfb/virtio 扫描输出，属常见「双表面」现象。若串口有上述行而 **主窗口全黑**，见下文 **4.2.1.2**（宿主机图形栈）。
+- **编译矩阵（不改单行 `RESOLUTION` 惯例）**：x86_64 用 `**./scripts/test_x86_resolution_matrix.sh**`（`--quick` 为三档代表分辨率）；LoongArch 用 `**./scripts/test_loongarch_resolution_matrix.sh**`。二者 `FULL_LIST` 与 `build.conf` 注释表档位一致，通过 `**zig build … -Dzbm_preferred_fb_width/height**` 注入宽高。
+- **离屏与客体 RAM**：`core/framebuffer.zig` 的 **`BACK_BUF_MAX`（10 MiB）** 静态槽约到 **1080p@32bpp** 档；更高分辨率下双/三缓冲走 **伙伴堆**，依赖可用内存。4K + 双/三缓冲 + VirtIO scanout 时，除帧缓冲外仍有内核与其它分配；若 QEMU `-m` 过小可能分配失败。**`QEMU_MEM`** 建议保持 `build.conf` 默认量级（如 **8G**）做日常开发；仅 smoke 时亦不宜低于 **512M**（见 [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md)「离屏缓冲与高分档位」）。
 
 ### 4.2.2 QEMU GTK：`zoom-to-fit`、窗口大小与分辨率
 
@@ -121,8 +123,8 @@
 
 1. **「已进桌面」以串口关键字为准**，不以固件 ConOut 小窗是否刷新为准：`ramfb:`（或等价的扫描配置日志）、`**Desktop: fb`**、`**Desktop: first frame presented**` 等。
 2. **GUI 仅作辅助**：固件字体易把字母 **O** 与数字 **0** 混淆，勿据此推断 GOP 宽高写错；与 **§9 双缓冲 / 软件光标** 及上文「双表面」一致。
-3. `**first frame presented` 之后的 `KERNEL PANIC: integer overflow`**：按 **Debug 下有符号整数溢出** 排查桌面主循环与合成路径（见 `**desktop_bisect`**），与「GOP 未达首选」无必然关系。已审计路径：`src/drivers/input/mouse.zig`（插值差分用 i64）、`framebuffer.zig` 的 `**pixelByteOffset**`（u64 中间量）、`display.zig` 中多处 **i64 矩形/钳位**；若仍复现，用 `**-Ddesktop_bisect=true`** 区分 panic 落在 `**renderDesktopFrameEx**` 与 `**present**` 之间，并继续查 `**renderer_aero.zig**` 等窄化后的热点。
-4. **任务栏子阶段（`panic_context`，与串口 `[phase=0x…]` 对齐）**：全帧路径里 `renderer_aero` 在调用任务栏前写入 `0x00020085`。更细粒度在 `display.renderDesktopAeroTaskbar` 内：`0x00020090` 条带底色/玻璃，`0x00020091` 开始球，`0x00020092` 快速启动列，`0x00020093` 应用磁贴，`0x00020094` 托盘槽与图标，`0x00020095` 托盘飞出，`0x00020096` Show Desktop 条。拖窗路径在绘制任务栏前写入 `0x000200A0`。溢出 panic 行尾阶段号可据此落到具体几何块。
+3. `**first frame presented` 之后的 `KERNEL PANIC: integer overflow`**：按 **Debug 下有符号整数溢出** 排查桌面主循环与合成路径（见 `**desktop_bisect`**），与「GOP 未达首选」无必然关系。已审计路径：`src/drivers/input/mouse.zig`（插值差分用 i64）、`core/framebuffer.zig` 的 `**pixelByteOffset**`（u64 中间量）、`core/display.zig` 中多处 **i64 矩形/钳位**；若仍复现，用 `**-Ddesktop_bisect=true`** 区分 panic 落在 `**renderDesktopFrameEx**` 与 `**present**` 之间，并继续查 `**desktop/renderer_aero.zig**` 等窄化后的热点。
+4. **任务栏子阶段（`panic_context`，与串口 `[phase=0x…]` 对齐）**：全帧路径里 `desktop/renderer_aero` 在调用任务栏前写入 `0x00020085`。更细粒度在 `core/display.renderDesktopAeroTaskbar` 内：`0x00020090` 条带底色/玻璃，`0x00020091` 开始球，`0x00020092` 快速启动列，`0x00020093` 应用磁贴，`0x00020094` 托盘槽与图标，`0x00020095` 托盘飞出，`0x00020096` Show Desktop 条。拖窗路径在绘制任务栏前写入 `0x000200A0`。溢出 panic 行尾阶段号可据此落到具体几何块。
 5. **串口已证明首选分辨率 + 首帧成功，但 QEMU 主窗仍只见 UEFI 固件文字**：优先改 **QEMU 设备矩阵**（`**LOONGARCH64_QEMU_VIRTIO_GPU`**、`**-display gtk` / `sdl` / `vnc**`、`**GDK_BACKEND=x11**`、**View → 切换 Display**），**不要**为了「让窗口里变大」去反复改 `**build.conf` 的 `RESOLUTION`** 注入逻辑——在串口已显示与首选一致时，问题多在宿主扫哪块显存，而非构建期宽高未生效。
 
 #### 4.2.1.0 LoongArch：切换 `RESOLUTION` 检查表
@@ -261,16 +263,16 @@
 
 **QEMU x86 说明**：默认 `pc` + `-vga std` **不会出现** PCI 厂商 `0x1002` / `0x10DE` 的独立显示控制器；AMD/NVIDIA 探测会静默失败并继续使用 GOP。验证 NVIDIA 路径需 **真机**、**PCI 直通** 或自行在 QEMU 附加含 `10DE:03xx` 的设备。VirtIO 显示为 `**1af4:1050`**（`virtio-gpu-pci`），与本节 NVIDIA 路径不同。
 
-**VirtIO-GPU 复现（scanout）**：QEMU 增加 `-device virtio-gpu-pci`；内核串口在桌面初始化后可见 `VirtIO-GPU: scanout resource=2 …`（需 **32bpp**、**pitch = width×4**、屏前 RAM 页连续，见 `framebuffer.getFrontBufferPhysContiguousForVirtio`）。**NVIDIA 诊断 IOCTL**：`IOCTL_NVIDIA_BAR0_FIRST_U32`（`nvidia_gpu.zig`），仅内核/调试用途；与闭源 Windows 驱动共存时仍默认不写显示引擎。
+**VirtIO-GPU 复现（scanout）**：QEMU 增加 `-device virtio-gpu-pci`；内核串口在桌面初始化后可见 `VirtIO-GPU: scanout resource=2 …`（需 **32bpp**、**pitch = width×4**；单段连续见 `core/framebuffer.zig` 的 `getFrontBufferPhysContiguousForVirtio`，散页见多段 `mem_entry`）。**NVIDIA 诊断 IOCTL**：`IOCTL_NVIDIA_BAR0_FIRST_U32`（`nvidia_gpu.zig`），仅内核/调试用途；与闭源 Windows 驱动共存时仍默认不写显示引擎。
 
-**范围（R7 及以下）**：DID 与芯片族见 `src/drivers/video/amd/dids.zig`、`family_detect.zig`（Stoney / Carrizo / Kaveri / Kabini 等）；未知 DID 仍 handoff，但不走实验性 KMS 分派。
+**范围（R7 及以下）**：DID 与芯片族见 `src/drivers/video/vendor/amd/dids.zig`、`family_detect.zig`（Stoney / Carrizo / Kaveri / Kabini 等）；未知 DID 仍 handoff，但不走实验性 KMS 分派。
 
 ## 9. 双缓冲、大块后备与软件光标层
 
 - **配置**：`src/config/desktop.conf` 中 `display.double_buffer` 为 `false` 时直接绘制屏前缓冲；为 `true` 时优先使用静态后备（≤10MiB 帧），更大则尝试 `**FrameAllocator.allocContiguous`** 申请连续物理页（须已在 `main` 中 `setKernelFrameAllocator`）。**其它键**（同文件）：`triple_buffer`（乒乓第二离屏槽，默认关）、`present_full_flip`（双缓冲时默认整幅 `memcpy`；为 `false` 时用脏矩形 `flipDirty`，须保证光标区已 `mark dirty`）、`seed_gop_to_back`（初始化时把 GOP 拷入离屏槽，默认关）、`fall_back_single_on_alloc_fail`（超大帧堆分配失败时退化为单缓冲直写 GOP，默认开）。
 - **单缓冲语义**：`double_buffer=false` 时 `getDrawBuffer()` 即 GOP；`flipDirty()` **不执行 memcpy**，仅清空脏矩形计数（绘制已在屏前完成）。
 - **Present**：双缓冲且 `present_full_flip=true`（默认）时 `present()` 整幅提交；否则 `flipDirty()`。单缓冲下 `flipDirty` 仅清脏标记。
-- **软件光标层**：实现集中在 `**src/drivers/video/cursor_plane.zig`**（save-under）；`display.renderDesktopFrameEx` 在场景合成之后调用。仅指针移动且壳层无脏时走快速路径；形态变化会回退整场景路径。`display.hardware_cursor` 仅为预留钩子（`notifyHardwareCursorIfAvailable`），仅接公开硬件文档路径，非 WDDM 专有 API。
+- **软件光标层**：实现集中在 `**src/drivers/video/core/cursor_plane.zig`**（save-under）；`core/display.renderDesktopFrameEx` 在场景合成之后调用。仅指针移动且壳层无脏时走快速路径；形态变化会回退整场景路径。`display.hardware_cursor` 仅为预留钩子（`notifyHardwareCursorIfAvailable`），仅接公开硬件文档路径，非 WDDM 专有 API。
 - **诊断行**：进入桌面后串口有 `**DesktopPointerDiag:`**（`double_buf` / `triple_buf` / `virtio_input` / `ps2_hw` / `present_full_flip` 等），与 §3.1「坐标变 vs 画面不变」对照使用。
 - **轻量多缓冲语义**：指针下的像素快照等价于「与主帧分离的叠加」的**软件实现**，非 WDDM/DXGI 的 Flip 链。
 
@@ -280,7 +282,7 @@
 
 ### 9.2 任务栏与扫描输出前叠加（概念对照）
 
-Win7 参考模型中，任务栏与指针一样属于「提交到扫描输出前」的壳层元素。本内核中 **整幅由 `renderer_aero` 合成进帧缓冲**，任务栏由 `**display.renderDesktopAeroTaskbar`** 单一路径绘制（毛玻璃走 `dwm.renderGlassEffect` 的 `.taskbar` 分支，无 WDDM 提交队列）。这与「独立硬件叠加层」仅为**概念对照**：当前无独立扫描硬件层，一切为 CPU 绘制 + `present()`/`flip()`。
+Win7 参考模型中，任务栏与指针一样属于「提交到扫描输出前」的壳层元素。本内核中 **整幅由 `desktop/renderer_aero` 合成进帧缓冲**，任务栏由 `**core/display.renderDesktopAeroTaskbar`** 单一路径绘制（毛玻璃走 `core/dwm.renderGlassEffect` 的 `.taskbar` 分支，无 WDDM 提交队列）。这与「独立硬件叠加层」仅为**概念对照**：当前无独立扫描硬件层，一切为 CPU 绘制 + `present()`/`flip()`。
 
 ## 10. 最小复现建议（串口）
 

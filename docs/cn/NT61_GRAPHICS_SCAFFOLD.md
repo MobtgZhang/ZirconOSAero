@@ -6,8 +6,8 @@
 
 ## Phase B — `gpu_device.zig`
 
-- [`src/drivers/video/gpu_device.zig`](../../src/drivers/video/gpu_device.zig) 提供 `GpuDevice` + `VTable`，当前为 **ramfb 占位**。
-- [`src/drivers/video/virtio_gpu_spec.zig`](../../src/drivers/video/virtio_gpu_spec.zig) 为 VirtIO-GPU **命令与头布局**（公开规范常量）；[`virtio_gpu_pci.zig`](../../src/drivers/video/virtio_gpu_pci.zig) 在 PCI 枚举到 **1af4:1050** 时探针并打日志，控制队列与 scanout 接线仍待里程碑完成。
+- [`src/drivers/video/core/gpu_device.zig`](../../src/drivers/video/core/gpu_device.zig) 提供 `GpuDevice` + `VTable`，当前为 **ramfb 占位**。
+- [`src/drivers/video/virtio/virtio_gpu_spec.zig`](../../src/drivers/video/virtio/virtio_gpu_spec.zig) 为 VirtIO-GPU **命令与头布局**（公开规范常量）；[`virtio_gpu_pci.zig`](../../src/drivers/video/virtio/virtio_gpu_pci.zig) 在 PCI 枚举到 **1af4:1050** 时探针并打日志，控制队列与 scanout 接线仍待里程碑完成。
 - 后续在 `gpu_device` 上实现命令子集（`RESOURCE_CREATE_2D`、`SET_SCANOUT`、`FLUSH` 等），参考 [VirtIO 1.2 规范](https://docs.oasis-open.org/virtio/virtio-v1.2-csd01/virtio-v1.2-csd01.html)。
 - 内核构建禁用 SIMD：像素混合与模糊须用 **标量** 或架构允许的替代实现（见项目规则）。
 

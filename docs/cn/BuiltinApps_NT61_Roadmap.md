@@ -8,7 +8,7 @@
 
 ## 应用平台（宿主模型）
 
-当前桌面为**内核帧缓冲 + Aero 渲染路径**（见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md)）。内置 GUI 采用 **Phase 1-B：Shell 宿主内嵌窗口**（[`src/drivers/video/builtin_apps.zig`](../../src/drivers/video/builtin_apps.zig)），与将来「独立用户态进程 + `CreateProcess`」可并存；迁移时在路线图中将状态改为 `process`。
+当前桌面为**内核帧缓冲 + Aero 渲染路径**（见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md)）。内置 GUI 采用 **Phase 1-B：Shell 宿主内嵌窗口**（[`src/drivers/video/desktop/builtin_apps.zig`](../../src/drivers/video/desktop/builtin_apps.zig)），与将来「独立用户态进程 + `CreateProcess`」可并存；迁移时在路线图中将状态改为 `process`。
 
 | 组件 | 位置 | 说明 |
 |------|------|------|
@@ -41,7 +41,7 @@
 
 ## 资源管理器（Explorer）对齐 Checklist
 
-以下与 [`shell_strings.zig`](../../src/drivers/video/shell_strings.zig)、`renderer_aero` 导航命中**逐项对齐**（替代笼统「深化中」）：
+以下与 [`shell_strings.zig`](../../src/drivers/video/desktop/shell_strings.zig)、`renderer_aero` 导航命中**逐项对齐**（替代笼统「深化中」）：
 
 - [ ] 命令栏/库按钮字符串与 `shell_strings` 中英文一致  
 - [ ] 地址栏与 `explorer_w2k_loc` 枚举切换时页脚状态行一致  

@@ -31,7 +31,7 @@
 ## Phase B — 图形基础（大量待办）
 
 - **B1** 双缓冲、脏矩形、VSync 节拍与现有 `framebuffer`/`display` 深度整合（非仅注释）。
-- **B2** VirtIO-GPU（1af4:1050）最小 2D：**已有** PCI 探测（[virtio_gpu_pci.zig](../../src/drivers/video/virtio_gpu_pci.zig)）、命令常量与主机单测（[virtio_gpu_spec.zig](../../src/drivers/video/virtio_gpu_spec.zig)）、后端抽象（[gpu_device.zig](../../src/drivers/video/gpu_device.zig)）。**仍待办**：MMIO/virtqueue、`GET_DISPLAY_INFO`～`FLUSH` 等与 ramfb 的真实对接。
+- **B2** VirtIO-GPU（1af4:1050）最小 2D：**已有** PCI 探测（[virtio_gpu_pci.zig](../../src/drivers/video/virtio/virtio_gpu_pci.zig)）、命令常量与主机单测（[virtio_gpu_spec.zig](../../src/drivers/video/virtio/virtio_gpu_spec.zig)）、后端抽象（[gpu_device.zig](../../src/drivers/video/core/gpu_device.zig)）。**仍待办**：MMIO/virtqueue、`GET_DISPLAY_INFO`～`FLUSH` 等与 ramfb 的真实对接。
 - **B3** 标量 2D：混合、圆角、box-blur 近似（遵守内核无 SIMD 规则）。
 
 ---
@@ -48,7 +48,7 @@
 
 ## Phase D — 合成器（DWM 向）
 
-- **D1–D4** 离屏 surface、场景图、Aero 模糊、动画调度与 [dwm_compositor](../../src/drivers/video/dwm_compositor.zig) 对齐。
+- **D1–D4** 离屏 surface、场景图、Aero 模糊、动画调度与 [dwm_compositor](../../src/drivers/video/core/dwm_compositor.zig) 对齐。
 - **D5** 桌面循环事件驱动，默认降低对 `desktop_idle_spin` 的依赖（先修 IRQ 路径再改默认）。
 
 ---

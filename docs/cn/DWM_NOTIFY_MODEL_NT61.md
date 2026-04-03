@@ -16,7 +16,7 @@
 
 ## 本仓库当前实现（内核单地址空间 Shell）
 
-- **状态变更源**：`src/drivers/video/dwm.zig` 的 `setCompositionEnabled`、`setColorizationTint`、`setGlass`、`syncPolicyFromRegistry` 等。
+- **状态变更源**：`src/drivers/video/core/dwm.zig` 的 `setCompositionEnabled`、`setColorizationTint`、`setGlass`、`syncPolicyFromRegistry` 等。
 - **广播路径**：`src/subsystems/win32/user32.zig` 中 `broadcastDwmCompositionChanged` / `broadcastDwmColorizationChanged` / `broadcastDwmNcRenderingChanged` / `broadcastDwmIconicThumbnailRequested`：向 **每个有效 HWND 的消息队列** `postMessage`，并 **额外** 向已登记线程 `PostThreadMessage`（`registerDwmNotificationListener` + `dwm_listener_tids[]`，上限 8）。
 - **与典型「csrss 维护监听列表 + LPC 投递」拓扑的差异**：本阶段 **无** 独立 csrss 进程内维护列表；等价语义为「登记线程 tid + 内核侧线程投递表」。若将来引入真 LPC/csrss，可将 `registerDwmNotificationListener` 的登记迁移到 csrss，而 ** HWND 队列广播** 仍可与现路径并存（双投）或收敛为单一真源（见 [DesktopManagerSpec.md](DesktopManagerSpec.md) §3.1）。
 

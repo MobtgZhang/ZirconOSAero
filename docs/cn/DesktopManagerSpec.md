@@ -11,7 +11,7 @@
 
 当前代码路径同时存在：
 
-- **内核**：`src/drivers/video/dwm_compositor.zig`、`display.zig`、`renderer_aero.zig` — 帧缓冲上完成 Aero 任务栏、壁纸、玻璃等 **实际像素输出**。
+- **内核**：`src/drivers/video/core/dwm_compositor.zig`、`display.zig`、`renderer_aero.zig` — 帧缓冲上完成 Aero 任务栏、壁纸、玻璃等 **实际像素输出**。
 - **用户态 Aero 库**：`src/desktop/aero/src/compositor.zig` — **离屏 Surface、Z-order、脏区、光标层** 的逻辑模型（宿主或测试可接 `renderer.RenderOps`）。
 
 **方案 B**（选定）：内核负责 **扫描输出与与硬件相关的 present**；用户 Aero 库持有 **合成树与 Shell 策略的规范描述**（Surface 生命周期、Layer 类型、Hit-test 顺序）。二者必须通过 **`nt61_aero_defaults.zig` 单一数值源** 对齐玻璃默认参数，避免双轨漂移。
@@ -106,7 +106,7 @@
 
 **编译期防漂移**：[`aero_flag_mapping.zig`](../../src/config/aero_flag_mapping.zig) 内含 `KernelCompositorSurfaceFlags` 字段序与 `kernelToUserland` 语义 `comptime` 断言；用户态 [`compositor.zig`](../../src/desktop/aero/src/compositor.zig) 在文件末尾对 `SurfaceFlags` 调用 `assertUserlandSurfaceFlagsLayout`。
 
-**颜色跨界（canonical）**：**内核合成主路径**以 [`color_nt61.zig`](../../src/config/color_nt61.zig) 的 **`KernelBgr888Low24`** 为唯一打包语义（与 `drivers/video/theme.zig` 的 `rgb` 一致）；**用户态 / 注册表 / WM 载荷**以 **`ColorrefLow24`** 进出，**必须**经该模块命名转换函数。**不**将「全路径统一 ARGB u32」作为当前里程碑；上述 `KernelBgr888Low24` / `ColorrefLow24` 为当前唯一收口。
+**颜色跨界（canonical）**：**内核合成主路径**以 [`color_nt61.zig`](../../src/config/color_nt61.zig) 的 **`KernelBgr888Low24`** 为唯一打包语义（与 `drivers/video/desktop/theme.zig` 的 `rgb` 一致）；**用户态 / 注册表 / WM 载荷**以 **`ColorrefLow24`** 进出，**必须**经该模块命名转换函数。**不**将「全路径统一 ARGB u32」作为当前里程碑；上述 `KernelBgr888Low24` / `ColorrefLow24` 为当前唯一收口。
 
 **验收（防双轨）**：在 `nt61_aero_defaults.zig` 中仅修改 `KernelDwm.glass_tint_color`（或任一已由 `UserShellDwm` 镜像的字段）而**不**同步更新 `UserShellDwm` 对应别名时，应 **编译失败**（`comptime` 断言）；并 bump `compositor_config_epoch`。
 

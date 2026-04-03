@@ -48,7 +48,7 @@ Shell 引用形态与 Win7 一致（例如 `zircon_shell32_res.dll,-101`），�
 - **`LoadLibraryW` / `LoadLibraryExW`** 加载模块；
 - **`FindResource` / `LoadResource`** 或上层 **`LoadImage`**、**`ExtractIconEx`**（传入模块实例与资源 ID）按 **整数资源 ID** 取图标。
 
-这与系统自带 `shell32.dll` 的「资源 DLL」用法一致，**不涉及**复制微软导出表或实现其内部 API。Zircon 内核路径仍使用 [`icons.zig`](../../src/drivers/video/icons.zig) 内嵌位图 + SVG 清单；PE 解析留在未来用户态。
+这与系统自带 `shell32.dll` 的「资源 DLL」用法一致，**不涉及**复制微软导出表或实现其内部 API。Zircon 内核路径仍使用 [`icons.zig`](../../src/drivers/video/desktop/icons.zig) 内嵌位图 + SVG 清单；PE 解析留在未来用户态。
 
 **公开规范引用**（本地 `desktop-src` 镜像路径示例）：
 
@@ -97,7 +97,7 @@ Zig 中 ID 25 的枚举成员名为 **`err`**（`error` 为语言保留字）；
 
 ## 7. 相关源码与 PE 解析（clean-room）
 
-- 内核绘制：[`src/drivers/video/icons.zig`](../../src/drivers/video/icons.zig)
+- 内核绘制：[`src/drivers/video/desktop/icons.zig`](../../src/drivers/video/desktop/icons.zig)
 - 资源登记：[`src/desktop/aero/src/resource_loader.zig`](../../src/desktop/aero/src/resource_loader.zig)
 - PE ID 常量：[`src/desktop/aero/src/icon_resource_ids.zig`](../../src/desktop/aero/src/icon_resource_ids.zig)
 - `.rsrc` 按类型/ID 取原始字节（无 Win32 调用）：[`src/desktop/aero/src/pe_icon_resource.zig`](../../src/desktop/aero/src/pe_icon_resource.zig)

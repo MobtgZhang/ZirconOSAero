@@ -9,12 +9,15 @@
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../../docs/cn/NT61_KERNEL_TODO.md) Phase K2.4（INIT-SIPI-SIPI 与每核入口）。
 
 const klog = @import("../../rtl/klog.zig");
+const lapic_smp = @import("lapic_smp.zig");
 
 /// BSP 在唤醒 AP 后跳转的 C 约定入口（当前为停机占位）。
 ///
+/// **K2.4 进展**：`lapic_smp.installApRealModeSpinTrampoline` 已在物理 `lapic_smp.ap_trampoline_page_phys`（默认 **0x8000**）写入实模式自旋码；`smp_boot` 已发 **SIPI×2** 指向该页。以下为仍待完成项。
+///
 /// **K2.4 后续接线（Intel SDM Vol.3 / ACPI MADT 行为描述，clean-room）**：
-/// 1. BSP 在实模式/复位向量附近放置 4KiB 以内跳板（`startup_ipi` 目标物理页），含 `lgdt`/`ljmp` 入长模式。
-/// 2. 写 `LAPIC_ICR`：Delivery Mode INIT → 目标 AP；再 SIPI 两次（10ms 级间隔），`Vector` 指向跳板页号。
+/// 1. 将跳板扩展为含 `lgdt`/`ljmp` 入长模式（仍须落在低 1MiB 可寻址范围或二级跳板）。
+/// 2. 写 `LAPIC_ICR`：Delivery Mode INIT → 目标 AP；再 SIPI 两次（10ms 级间隔），`Vector` 指向跳板页号（与 `lapic_smp.ap_startup_ipi_vector` 一致）。
 /// 3. 每 AP 设置 `IA32_KERNEL_GS_BASE`、加载 `TSS.RSP0`、使能 `APIC` 软件启用位后进入 `scheduler` per-CPU 空闲。
 /// 4. TLB 与 IPI：`tlb_broadcast.zig` 扩展为真正的 shootdown 向量。
 ///

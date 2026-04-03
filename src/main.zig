@@ -604,13 +604,14 @@ fn initDesktopFramebufferFromHandoff(
 fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
     const drivers = @import("drivers/mod.zig");
     const display = drivers.video.display;
-    const startmenu_mod = @import("drivers/video/startmenu.zig");
-    const builtin_apps_mod = @import("drivers/video/builtin_apps.zig");
+    const video_root = @import("drivers/video/root.zig");
+    const startmenu_mod = video_root.startmenu;
+    const builtin_apps_mod = video_root.builtin_apps;
     const mouse = @import("drivers/input/mouse.zig");
     const input_hub = @import("drivers/input/input_hub.zig");
     const mouse_debug = @import("drivers/input/mouse_debug.zig");
     const virtio_input_pci = @import("drivers/input/virtio_input_pci.zig");
-    const display_flip_journal = @import("drivers/video/display_flip_journal.zig");
+    const display_flip_journal = video_root.display_flip_journal;
     const scheduler = @import("ke/scheduler.zig");
 
     var prev_buttons: u8 = 0;

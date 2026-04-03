@@ -16,6 +16,7 @@ const vm = @import("vm.zig");
 const arch = @import("../arch.zig");
 const paging = arch.impl.paging;
 const vfs = @import("../fs/vfs.zig");
+const cleanup_hooks = @import("../ob/cleanup_hooks.zig");
 
 // 与 `ntdll` 中 NTSTATUS 数值一致，避免模块环依赖。
 const STATUS_SUCCESS: i32 = 0;
@@ -26,6 +27,19 @@ const STATUS_INSUFFICIENT_RESOURCES: i32 = -1073741823;
 
 pub const MAX_SECTIONS: usize = 256;
 
+/// 注册 `NtClose` 最后一道引用释放时对静态节槽的回收（由 `main` 启动早期调用一次）。
+pub fn registerSectionCleanupHook() void {
+    cleanup_hooks.section_last_reference = releaseSectionObjectByPtr;
+}
+
+fn releaseSectionObjectByPtr(object_ptr: u64) void {
+    releaseSectionObject(@as(*SectionObject, @ptrFromInt(object_ptr)));
+}
+
+/// **句柄与引用**：`NtCreateSection` 经 `allocHandle` 增加 `ref_count`；`NtClose` 至 `ref_count==0` 时
+/// `object.cleanup_hooks` 调用 `releaseSectionObject` 回收 `g_sections` 槽位。
+/// 若存在仍映射的视图（`active_view_count>0`），关闭节句柄在完整 NT 语义下应失败或延迟销毁；当前为路线图项。
+///
 /// 内核静态池中的节对象（匿名或文件后备只读映射）。
 pub const SectionObject = struct {
     header: ob.ObjectHeader = .{ .obj_type = .section },
@@ -62,7 +76,7 @@ pub fn createAnonymousSection(max_size: u64, page_protection: u32) ?*SectionObje
             const aligned = if (max_size == 0) @as(u64, @intCast(paging.page_size)) else pageAlignUp(max_size);
             const cow = (page_protection & 0x88) != 0; // WRITECOPY / EXECUTE_WRITECOPY
             s.* = .{
-                .header = .{ .obj_type = .section, .ref_count = 1, .handle_count = 0 },
+                .header = .{ .obj_type = .section, .ref_count = 0, .handle_count = 0 },
                 .maximum_size = aligned,
                 .page_protection = page_protection,
                 .file_backed = false,
@@ -86,7 +100,7 @@ pub fn createFileBackedSection(max_size: u64, page_protection: u32, file: *vfs.F
             const aligned = pageAlignUp(from_file);
             const cow = (page_protection & 0x88) != 0; // WRITECOPY / EXECUTE_WRITECOPY
             s.* = .{
-                .header = .{ .obj_type = .section, .ref_count = 1, .handle_count = 0 },
+                .header = .{ .obj_type = .section, .ref_count = 0, .handle_count = 0 },
                 .maximum_size = aligned,
                 .page_protection = page_protection,
                 .file_backed = true,

@@ -6,7 +6,8 @@
 //
 // This is an independent clean-room implementation.
 // Ref: WDK — ExInitializeNPagedLookasideList (public name / behavioral overview only).
-// IRQL：与 `pool.zig` NonPaged 热路径一致；PagedPool 不得经本路径（见 `ex_pool` / `irql.assertBelowDispatchForPagedPool`）。
+// IRQL：与 `pool.zig` 热路径一致。`allocateNonPaged` / `allocatePaged` 均在 **各自 IRQL 约束**下可经本路径；
+// PagedPool 仍须 **APC_LEVEL 以下**（由 `ex_pool` + `ke/irql` 守卫，非 DISPATCH）。
 
 const std = @import("std");
 const percpu = @import("percpu_index.zig");

@@ -7,6 +7,15 @@
 // This is an independent clean-room implementation.
 // Ref: WDK — ExAllocatePoolWithTag / ExFreePoolWithTag (public behavior names only).
 //
+// ## 分配路径全景（阶段 A 文档锚点）
+//
+// 1. `exAllocatePoolWithTag` / `exFreePoolWithTag` → `pool.allocateNonPaged` / `pool.freeNonPaged`
+//    （NonPagedPool；≤512B 档位优先 **per-CPU lookaside**，否则 **全局档位链**，再大则 **`heap.zig` 空闲链表**）。
+// 2. `exAllocatePoolWithTagType(.paged)` / `exFreePoolWithTagType(.paged)` → `pool.allocatePaged` / `pool.freePaged`
+//    （须 **APC_LEVEL 以下**：`setPagedPoolIrqlGuard`；Paged 可与 NonPaged 共用 zone 页，**无真换出**；可选 **软上限** 见 `pool.setPagedPoolSoftLimitForTest`）。
+// 3. `heap.zig`：可增长 arena（`heap_boot` 接线后）+ bump 快路径 + 地址有序空闲链表合并。
+// 4. Tag 调试统计：`pool.copyTagStats`（槽满后新 tag 静默不记入，见 `pool.zig`）。
+//
 // IRQL（与 WDK 描述对齐的子集）：
 // - `exAllocatePoolWithTag` / `free`：走 **NonPagedPool** 路径，须在 **DISPATCH_LEVEL 及以下** 使用（本内核由 `pool` 自旋风格锁保证）。
 // - `exAllocatePoolWithTagType(.paged)`：须 **APC_LEVEL 以下**；由 `main` 注册的 `setPagedPoolIrqlGuard` 在违规时断言（占位换出未接真分页池）。

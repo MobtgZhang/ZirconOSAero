@@ -4,6 +4,27 @@ ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** imple
 
 **简体中文**：[cn/README.md](cn/README.md)
 
+**Full classified index** (every Markdown file under `docs/`): [DOCS_INDEX.md](DOCS_INDEX.md). **Who maintains which table**: [DOCS_MAINTAINERS.md](DOCS_MAINTAINERS.md).
+
+**Reproducible builds / CI toolchain**: [REPRODUCE_BUILD.md](REPRODUCE_BUILD.md).
+
+NT 6.1–specific contracts, verification steps, and kernel work items are documented primarily in **Chinese** (`cn/`). English readers: [en/NT61_REFERENCE.md](en/NT61_REFERENCE.md) or the table below.
+
+## NT 6.1 technical reference (authoritative in `cn/`)
+
+| Topic | Document |
+|-------|----------|
+| Contract / status matrix | [cn/NT61_CONTRACT_MATRIX.md](cn/NT61_CONTRACT_MATRIX.md) |
+| Verification (`zig build test`, paths) | [cn/MVT_NT61.md](cn/MVT_NT61.md) |
+| Kernel backlog K0–K8 | [cn/NT61_KERNEL_TODO.md](cn/NT61_KERNEL_TODO.md) |
+| PR gates + doc link check | [cn/NT61_PR_GATES.md](cn/NT61_PR_GATES.md) |
+| Win32/Native API skeleton table | [cn/API_COMPAT_MATRIX.md](cn/API_COMPAT_MATRIX.md) |
+| Long-term full API surface (not “done”) | [cn/NT61_FULL_API_BACKLOG.md](cn/NT61_FULL_API_BACKLOG.md) |
+| Process / milestone flow | [cn/PROCESS_NT61.md](cn/PROCESS_NT61.md) |
+| Implementation status snapshot | [cn/IMPLEMENTATION_STATUS_NT61.md](cn/IMPLEMENTATION_STATUS_NT61.md) |
+| Syscall / SSDT | [cn/SyscallABI.md](cn/SyscallABI.md), [cn/SSDT_Roadmap.md](cn/SSDT_Roadmap.md) |
+| Phases D–G, Phase 4 hardware | [cn/PHASE_D_WIN32_MSG_PUMP_DWM.md](cn/PHASE_D_WIN32_MSG_PUMP_DWM.md), [cn/PHASE_E_NATIVE_API.md](cn/PHASE_E_NATIVE_API.md), [cn/PHASE_F_PROCESS_CREATE.md](cn/PHASE_F_PROCESS_CREATE.md), [cn/PHASE_G_WOW64.md](cn/PHASE_G_WOW64.md), [cn/PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](cn/PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) |
+
 ## Documentation index
 
 | Document | Description |
@@ -13,7 +34,7 @@ ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** imple
 | [Boot.md](en/Boot.md) | Boot path: ZBM / UEFI, kernel init phases (Phase 0–12) |
 | [Servers.md](en/Servers.md) | System services: Process Server, Session Manager, LPC ports |
 | [Subsystems.md](en/Subsystems.md) | Subsystems: Win32 (CMD/user32/gdi32), WOW64, POSIX |
-| [BuildSystem.md](en/BuildSystem.md) | Build system: `build.conf`, Makefile, `build.zig`, `run.sh` |
+| [BuildSystem.md](en/BuildSystem.md) | Build system: primary **`zig build`**; optional `Makefile` / `build.conf` / `run.sh` wrappers |
 | [Roadmap.md](en/Roadmap.md) | Roadmap: Phase 0–11 milestones, goals, non-goals, risks |
 | [NT61_ShellIcons.md](en/NT61_ShellIcons.md) | Shell icons vs Win7, Zircon PE DLL, Win32 API notes |
 | [BuiltinApps_NT61_Roadmap.md](en/BuiltinApps_NT61_Roadmap.md) | Built-in apps matrix, status, clean-room reference policy |
@@ -49,10 +70,14 @@ ZirconOSAero/
 ├── assets/                # Screenshots and project artwork
 ├── docs/
 │   ├── README.md          # This index (English)
+│   ├── DOCS_INDEX.md      # Classified list of all docs
+│   ├── DOCS_MAINTAINERS.md# Which doc owns which tables
+│   ├── REPRODUCE_BUILD.md # Toolchain + release checklist
 │   ├── en/                # English documentation
-│   └── cn/                # Chinese documentation
+│   └── cn/                # Chinese documentation (NT61 depth)
 ├── build.zig
-├── Makefile
+├── build.zig.zon
+├── Makefile               # Optional convenience; CI uses zig build
 └── run.sh
 ```
 

@@ -36,8 +36,8 @@ comptime {
 comptime {
     const info = @typeInfo(UserlandSurfaceFlagsLayout).@"struct".fields;
     const expected: []const []const u8 = &.{
-        "has_alpha",   "needs_shadow", "is_visible", "is_opaque",
-        "needs_blur",  "is_glass",     "is_cursor",  "is_desktop",
+        "has_alpha",  "needs_shadow", "is_visible", "is_opaque",
+        "needs_blur", "is_glass",     "is_cursor",  "is_desktop",
     };
     if (info.len != expected.len) @compileError("UserlandSurfaceFlagsLayout: field count drift");
     for (info, expected) |fld, exp| {

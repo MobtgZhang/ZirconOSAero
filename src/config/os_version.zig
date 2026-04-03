@@ -105,7 +105,8 @@ pub fn productType() u8 {
     return @intCast(@min(v, 255));
 }
 
-/// Binary size of `RTL_OSVERSIONINFOEXW` on Windows (no trailing padding beyond wReserved).
+/// Binary size of `RTL_OSVERSIONINFOEXW` on Windows (no trailing padding beyond wReserved)。
+/// 主机锚点：[tests/nt61_os_version_layout_host.zig](../../tests/nt61_os_version_layout_host.zig)。
 pub const rtl_osversioninfoexw_bytes: u32 = 284;
 
 /// Writes UTF-16LE fields for `RTL_OSVERSIONINFOEXW` into `buffer` (min 284 bytes).

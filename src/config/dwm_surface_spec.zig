@@ -37,8 +37,8 @@ pub const KernelCompositorSurfaceFlags = struct {
 comptime {
     const info = @typeInfo(KernelCompositorSurfaceFlags).@"struct".fields;
     const expected: []const []const u8 = &.{
-        "topmost",         "layered",     "popup",       "child",
-        "has_caption",     "dwm_blur_behind", "dwm_ncrendering", "snap_target",
+        "topmost",     "layered",         "popup",           "child",
+        "has_caption", "dwm_blur_behind", "dwm_ncrendering", "snap_target",
     };
     if (info.len != expected.len) @compileError("KernelCompositorSurfaceFlags: field count drift vs DesktopManagerSpec");
     for (info, expected) |fld, exp| {

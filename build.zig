@@ -135,7 +135,7 @@ pub fn build(b: *std.Build) void {
         bool,
         "smp_tlb_ipi",
         "x86_64: broadcast fixed IPI (vector 254) on global TLB flush (AP must have IDT stub)",
-    ) orelse false;
+    ) orelse mem.eql(u8, arch_opt, "x86_64");
     const aero_skip_ico_build = b.option(bool, "aero-skip-ico-build", "For aero-shell-icons-dll: skip SVG→ICO script (reuse existing ico/)") orelse false;
     const aero_windres_exe = b.option([]const u8, "aero-windres", "windres executable for zircon_shell32_res.rc") orelse "x86_64-w64-mingw32-windres";
     // Reserved for Tier 2: real `zircon_shell32_res.dll` for loongarch64-windows-gnu when Zig emits COFF for that triple.

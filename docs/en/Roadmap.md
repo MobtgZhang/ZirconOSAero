@@ -135,7 +135,11 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 - WOW64 (PE32, syscall thunking, 32-bit PEB/TEB) — **partial**; modular layout under `src/subsystems/win32/wow64/`
 - AC97 / audio — stub or partial; not production-ready
 
-## 3. Next steps
+## 3. Desktop phase 4 (hardware present path + csrss + WOW64 + NTFS persistence)
+
+This is **not** the same as kernel **Phase 4 (objects/handles)**. It tracks the **Aero / Win32 desktop pipeline** over ~6–8 weeks. Scope and acceptance: **[PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](../cn/PHASE4_HARDWARE_SYSTEM_INTEGRATION.md)** (**Phase4-Core** vs optional **Phase4-Plus**). Status rows remain authoritative in [NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md).
+
+## 4. Next steps
 
 | Area | Notes | Priority |
 |------|-------|----------|
@@ -149,7 +153,7 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 | Disk drivers | AHCI/NVMe | Medium |
 | Other architectures | aarch64 / riscv64 / loongarch64 CI + QEMU docs; **mips64el** experimental (not Tier-1) | Low |
 
-## 4. Principles
+## 5. Principles
 
 | Principle | Meaning |
 |-----------|---------|
@@ -159,7 +163,7 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 | PE32+ before WOW64 | 64-bit stable, then 32-bit |
 | Interfaces first | Clear contracts before code |
 
-## 5. Risks
+## 6. Risks
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
@@ -169,7 +173,7 @@ Phase headings describe **scope**, not “all done”. See the contract matrix f
 | Unstable Native API | Weak foundation for Win32 | Solid ntdll first |
 | Scope creep | No shippable v1.0 | Clear boundaries and non-goals |
 
-## 6. Deferred surfaces (kernel-first milestone)
+## 7. Deferred surfaces (kernel-first milestone)
 
 The following tracks are **explicitly not** part of the **kernel-usable** milestone; they remain in-tree but must not block MM/SMP/isolation work:
 

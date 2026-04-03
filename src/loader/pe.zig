@@ -16,6 +16,9 @@ pub const PE_SIGNATURE: u32 = 0x00004550;
 pub const PE32_MAGIC: u16 = 0x10B;
 pub const PE32PLUS_MAGIC: u16 = 0x20B;
 
+/// 与 `ntdll.zig` `SEC_IMAGE` 一致；Learn — `NtCreateSection` / section allocation attributes。
+pub const SEC_IMAGE: u32 = 0x01000000;
+
 pub const IMAGE_FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
 pub const IMAGE_FILE_LARGE_ADDRESS_AWARE: u16 = 0x0020;
 pub const IMAGE_FILE_DLL: u16 = 0x2000;
@@ -848,10 +851,11 @@ fn initSystemDlls() void {
         img.addExport("RtlCopyMemory", 0x2020, 101);
         img.addExport("RtlZeroMemory", 0x2040, 102);
         img.addExport("RtlGetVersion", 0x2060, 103);
-        img.addExport("LdrInitializeThunk", 0x2080, 104);
-        img.addExport("LdrLoadDll", 0x20A0, 105);
-        img.addExport("LdrGetProcedureAddress", 0x20C0, 106);
-        img.addExport("RtlUserThreadStart", 0x20E0, 107);
+        img.addExport("RtlVerifyVersionInfo", 0x2070, 104);
+        img.addExport("LdrInitializeThunk", 0x2090, 105);
+        img.addExport("LdrLoadDll", 0x20B0, 106);
+        img.addExport("LdrGetProcedureAddress", 0x20D0, 107);
+        img.addExport("RtlUserThreadStart", 0x20F0, 108);
     }
 
     const k32_result = loadDll("kernel32.dll", 0x7FFD0000);
@@ -981,4 +985,10 @@ test "optionalSubsystemWordOffsetFromMagic" {
     try std.testing.expectEqual(@as(usize, 68), optionalSubsystemWordOffsetFromMagic(PE32PLUS_MAGIC).?);
     try std.testing.expectEqual(@as(usize, 68), optionalSubsystemWordOffsetFromMagic(PE32_MAGIC).?);
     try std.testing.expect(optionalSubsystemWordOffsetFromMagic(0) == null);
+}
+
+test "PE section header and SEC_IMAGE layout anchors" {
+    try std.testing.expectEqual(@as(usize, 40), @sizeOf(SectionHeader));
+    try std.testing.expectEqual(@as(u32, 0x01000000), SEC_IMAGE);
+    try std.testing.expect((SEC_IMAGE & 0x01000000) != 0);
 }

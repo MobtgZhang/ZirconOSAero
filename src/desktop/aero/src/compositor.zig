@@ -151,6 +151,8 @@ var vsync_state: VsyncState = .{};
 /// 契约对照行：[NT61_CONTRACT_MATRIX.md](../../../../docs/cn/NT61_CONTRACT_MATRIX.md) §4.1「用户态 flip3d_preview_enabled ↔ 内核 Flip3D」。
 pub var flip3d_preview_enabled: bool = false;
 
+/// 宿主若桥接内核桌面：应在得知 `display.flip3d_overlay_active`（或等价 IOCTL/LPC）时调用本函数以镜像状态；
+/// **内核 GOP 路径不链接本模块**，默认值以 `nt61_aero_defaults.KernelCompositor.flip3d_enabled` 为是否响应 Alt+Tab 的唯一切换源。
 pub fn setFlip3dPreviewEnabled(enabled: bool) void {
     flip3d_preview_enabled = enabled;
     compositor_dirty = true;

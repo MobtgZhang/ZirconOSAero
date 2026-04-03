@@ -9,10 +9,14 @@
 
 const klog = @import("../../rtl/klog.zig");
 const madt = @import("madt.zig");
+const lapic_smp = @import("lapic_smp.zig");
 
-/// BSP 侧占位：多核 QEMU 下仍仅 BSP 进入 `scheduler.tick`；AP 进入 `apKernelEntry` 停机桩前须完成本序列。
+/// BSP 侧：多核时 **INIT IPI**，随后在 `0x8000` 安装实模式自旋跳板并 **SIPI×2**（K2.4）；AP 进入长模式与 per-CPU `scheduler.tick` 仍为后续里程碑（见 `ap_entry.zig`）。
 pub fn tryStartApplicationProcessorsStub() void {
     const n = madt.logical_cpu_count;
     if (n <= 1) return;
-    klog.info("SMP: logical_cpus=%u — AP INIT-SIPI + per-CPU tick deferred (K2.4/K2.6); BSP scheduling only", .{n});
+    lapic_smp.broadcastInitAndSipiSequenceExcludingSelf();
+    klog.info("SMP: logical_cpus=%u — INIT+SIPI×2 done; trampoline phys=0x%x (real-mode spin); long-mode AP entry deferred (K2.4/K2.6)", .{
+        n, lapic_smp.ap_trampoline_page_phys,
+    });
 }

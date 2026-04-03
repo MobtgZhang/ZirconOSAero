@@ -398,6 +398,8 @@ fn populateDefaults() void {
     _ = setValueSz(cpu0, "VendorIdentifier", "GenuineIntel");
 
     const sw_key = createKey(.hklm, hklm_root, "SOFTWARE") orelse return;
+    // WOW64：`HKLM\SOFTWARE` 下 32 位视图逻辑映射的锚点（见 `wow64/redirect.zig`）。
+    _ = createKey(.hklm, sw_key, "Wow6432Node") orelse return;
     const ms_win = createKey(.hklm, sw_key, "Microsoft") orelse return;
     const win_brand = createKey(.hklm, ms_win, "Windows") orelse return;
     const dwm_key = createKey(.hklm, win_brand, "DWM") orelse return;

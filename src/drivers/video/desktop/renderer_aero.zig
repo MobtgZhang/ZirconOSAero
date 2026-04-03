@@ -74,7 +74,9 @@ pub fn renderFrame() void {
 }
 
 /// 仅 Explorer + 任务管理器标题栏带（毛玻璃/渐变 + 三键热态），供 `display.renderDesktopFrameEx` 局部刷新；不画壁纸与窗体客户区。
-/// 当前壁纸预设是否支持「开始菜单脏区」局部修补（嵌入 PNG 存在且尺寸非零；否则应回退整场景，见契约矩阵 §4.1）。
+/// 当前壁纸预设是否支持「开始菜单脏区」局部修补。
+/// 条件：`wallpaper_data` 中该预设的嵌入 PNG 宽/高非零（`presetSupportsPartialRedraw`）；**与是否「Harmony」文件名无关**，12 张构建期嵌入图均满足时均可 patch。
+/// 若未来某预设占位为 0×0，此处返回 false，`display.renderDesktopFrameEx` 对 `startmenu_repaint` 回退 `.full` 路径。
 pub fn startMenuRepaintCanPatchWallpaper() bool {
     return wallpaper_bitmap.presetSupportsPartialRedraw(wallpaperPresetIndex());
 }

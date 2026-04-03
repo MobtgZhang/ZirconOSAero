@@ -63,6 +63,7 @@ fn coverMap(dx: u32, dy: u32, sw: u32, sh: u32, dw: u32, dh: u32) struct { sx: u
 }
 
 /// 与 `renderer_aero.wallpaper_preset_count`（12）一致；用于开始菜单局部重绘门闸。
+/// 真值当且仅当该预设的嵌入位图在构建产物中非空尺寸；**非**「仅 Harmony 预设」专用逻辑。
 pub fn presetSupportsPartialRedraw(preset: u8) bool {
     const sl = presetSlice(preset % 12) orelse return false;
     return sl.w > 0 and sl.h > 0;

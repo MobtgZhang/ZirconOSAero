@@ -106,12 +106,74 @@ pub fn canOpenFileForAccess(tok: *const Token, desired_access: ob.ACCESS_MASK) b
     return checkAccess(tok, desired_access, object_grants);
 }
 
+/// 注册表键打开（`ObOpenObjectByName` / `NtOpenKey` 路径）的简化 **Key** 掩码；与文件子集同形直至独立 DACL。
+pub fn seRegistryKeyOpenAllowed(tok: *const Token, desired_access: ob.ACCESS_MASK) bool {
+    const object_grants: u32 = ob.GENERIC_READ | ob.GENERIC_WRITE | ob.GENERIC_EXECUTE | ob.SYNCHRONIZE;
+    return seAccessCheckMask(tok, desired_access, object_grants);
+}
+
+/// `ObOpenObjectByName` 前置 **分派**：`\Registry\…` → 键；`\??\`、`\DosDevices\`、`\Device\`、**剥前缀后的 `X:\`** → 文件。
+pub fn openNamedObjectAccessCheck(path: []const u8, desired: ob.ACCESS_MASK, tok: *const Token) bool {
+    const n = ob.normalizeNtObjectPath(path);
+    if (n.len >= 9 and std.mem.startsWith(u8, n, "\\Registry")) {
+        return seRegistryKeyOpenAllowed(tok, desired);
+    }
+    if (std.mem.startsWith(u8, path, "\\??\\") or std.mem.startsWith(u8, path, "\\\\?\\")) {
+        return canOpenFileForAccess(tok, desired);
+    }
+    if (std.mem.startsWith(u8, path, "\\DosDevices\\")) return canOpenFileForAccess(tok, desired);
+    if (std.mem.startsWith(u8, n, "\\Device\\")) return canOpenFileForAccess(tok, desired);
+    if (n.len >= 2 and n[1] == ':' and ((n[0] >= 'A' and n[0] <= 'Z') or (n[0] >= 'a' and n[0] <= 'z'))) {
+        return canOpenFileForAccess(tok, desired);
+    }
+    return false;
+}
+
 /// 最小 SeAccessCheck 等价路径：`desired` 须由 `object_grants` 掩码完全覆盖（与 WDK 访问掩码语义同构的简化）。
 /// Ref: https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck （行为级；无 Windows 源码）。
 pub fn seAccessCheckMask(tok: *const Token, desired: ob.ACCESS_MASK, object_grants: ob.ACCESS_MASK) bool {
     if (tok.owner.eql(SYSTEM_SID)) return true;
     if (tok.is_elevated) return true;
     return (object_grants & desired) == desired;
+}
+
+/// Win32 `PROCESS_*` 访问掩码（公开 SDK；数值为 ABI）。
+/// Ref: https://learn.microsoft.com/windows/win32/procthread/process-security-and-access-rights
+pub const PROCESS_TERMINATE: u32 = 0x0001;
+pub const PROCESS_CREATE_THREAD: u32 = 0x0002;
+pub const PROCESS_VM_OPERATION: u32 = 0x0008;
+pub const PROCESS_VM_READ: u32 = 0x0010;
+pub const PROCESS_VM_WRITE: u32 = 0x0020;
+pub const PROCESS_DUP_HANDLE: u32 = 0x0040;
+pub const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
+pub const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+pub const SYNCHRONIZE_WIN32: u32 = 0x00100000;
+
+/// 非提升 **用户**令牌仅允许查询类 + 同步（简化 DACL）；敏感 VM/终止/建线程等拒绝。
+pub fn seProcessOpenAllowed(tok: *const Token, win32_desired_access: u32) bool {
+    if (tok.is_elevated) return true;
+    if (tok.owner.eql(SYSTEM_SID)) return true;
+    const allow = PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_WIN32;
+    return (win32_desired_access & ~allow) == 0;
+}
+
+/// `THREAD_*` 子集（公开 SDK）。
+/// Ref: https://learn.microsoft.com/windows/win32/procthread/thread-security-and-access-rights
+pub const THREAD_TERMINATE: u32 = 0x0001;
+pub const THREAD_SUSPEND_RESUME: u32 = 0x0002;
+pub const THREAD_GET_CONTEXT: u32 = 0x0008;
+pub const THREAD_SET_CONTEXT: u32 = 0x0010;
+pub const THREAD_QUERY_INFORMATION: u32 = 0x0040;
+pub const THREAD_SET_THREAD_TOKEN: u32 = 0x0080;
+pub const THREAD_IMPERSONATE: u32 = 0x0100;
+pub const THREAD_DIRECT_IMPERSONATION: u32 = 0x0200;
+
+/// 非提升用户令牌仅允许查询 + 同步。
+pub fn seThreadOpenAllowed(tok: *const Token, win32_desired_access: u32) bool {
+    if (tok.is_elevated) return true;
+    if (tok.owner.eql(SYSTEM_SID)) return true;
+    const allow = THREAD_QUERY_INFORMATION | SYNCHRONIZE_WIN32;
+    return (win32_desired_access & ~allow) == 0;
 }
 
 /// 无 DACL（`dacl_present == false`）时，有效允许掩码视为「全开」子集（与公开文档中 Null DACL / 无 SACL 行为 **概念** 对齐的占位，非完整 `SeAccessCheck`）。
@@ -162,4 +224,14 @@ test "seAccessActiveDesktopForWin32k allows elevated TCB cross-desktop" {
     tok.is_elevated = true;
     tok.privileges = PRIV_TCB;
     try std.testing.expect(seAccessActiveDesktopForWin32k(&tok, 3, 0));
+}
+
+test "openNamedObjectAccessCheck registry vs file prefixes" {
+    const tok_sys = createSystemToken();
+    try std.testing.expect(openNamedObjectAccessCheck("\\Registry\\Machine\\SOFTWARE", ob.GENERIC_READ, &tok_sys));
+    try std.testing.expect(openNamedObjectAccessCheck("\\??\\C:\\x", ob.GENERIC_READ, &tok_sys));
+    var tok_user = createUserToken(0);
+    try std.testing.expect(openNamedObjectAccessCheck("\\Registry\\Machine", ob.GENERIC_READ, &tok_user));
+    // `DELETE` 不在简化 `object_grants` 内，非提升用户须拒绝。
+    try std.testing.expect(!openNamedObjectAccessCheck("\\Registry\\Machine", ob.DELETE, &tok_user));
 }

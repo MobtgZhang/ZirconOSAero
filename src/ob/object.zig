@@ -1,8 +1,16 @@
 //! Object Manager (NT style)
 //! Manages kernel objects with unified header, handle table, namespace,
 //! reference counting, waitable objects, and lifecycle management.
+//!
+//! `ObjectHeader.ref_count` / `handle_count` 使用原子更新（`@atomicRmw` / `@cmpxchgStrong`），
+//! 与公开文档中 `InterlockedIncrement` 语义同阶；SMP/ISR 与句柄路径可安全并发（仍须遵守各子系统锁序）。
+//!
+//! **句柄关闭 vs `IRP_MJ_CLEANUP`（阶段 A 审计）**：`HandleTable.closeHandle` 递减 `handle_count` 并在 `ref_count` 至零时按类型调用 `cleanup_hooks`（当前 **Section** 已接线）。**文件对象**（`vfs.FileObject`）经 `vfs.close` 在 `FsOps.close` 之前调用可选的 **`FsOps.cleanup`**（等价 **IRP_MJ_CLEANUP** 子集）；各 FS 驱动在 `mount` 时填入。
+//!
+//! **命名打开与 SE（B3）**：`obOpenObjectByNameAccessProbe` 提供 **Key + File** 路径的 `se/token.zig` 分派；完整句柄创建仍由各 `Nt*` 路径完成。
 
 const std = @import("std");
+const builtin = @import("builtin");
 const klog = @import("../rtl/klog.zig");
 const arch = @import("../arch.zig");
 
@@ -58,18 +66,38 @@ pub const ObjectHeader = struct {
     wait_list_tail: ?*WaitEntry = null,
 
     pub fn addRef(self: *ObjectHeader) void {
-        self.ref_count += 1;
+        _ = @atomicRmw(u32, &self.ref_count, .Add, 1, .seq_cst);
     }
 
+    /// 引用减一；返回 **减后** 是否为 0（与旧 `release` 布尔语义一致）。
     pub fn release(self: *ObjectHeader) bool {
-        if (self.ref_count > 0) {
-            self.ref_count -= 1;
+        var cur = @atomicLoad(u32, &self.ref_count, .seq_cst);
+        while (true) {
+            if (cur == 0) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("ObjectHeader.release: ref_count underflow", .{});
+                }
+                return false;
+            }
+            const next = cur - 1;
+            if (@cmpxchgStrong(u32, &self.ref_count, cur, next, .seq_cst, .seq_cst)) |actual| {
+                cur = actual;
+                continue;
+            }
+            return next == 0;
         }
-        return self.ref_count == 0;
+    }
+
+    pub fn refCount(self: *const ObjectHeader) u32 {
+        return @atomicLoad(u32, &self.ref_count, .seq_cst);
+    }
+
+    pub fn handleCount(self: *const ObjectHeader) u32 {
+        return @atomicLoad(u32, &self.handle_count, .seq_cst);
     }
 
     pub fn isAlive(self: *const ObjectHeader) bool {
-        return self.ref_count > 0;
+        return self.refCount() > 0;
     }
 
     pub fn isSignaled(self: *const ObjectHeader) bool {
@@ -165,7 +193,7 @@ pub const HandleTable = struct {
         // One reference per handle; balanced in closeHandle via release().
         referenceObject(object_ptr);
         const hdr = @as(*ObjectHeader, @ptrFromInt(object_ptr));
-        hdr.handle_count += 1;
+        _ = @atomicRmw(u32, &hdr.handle_count, .Add, 1, .seq_cst);
 
         for (self.entries[0..], 0..) |*entry, i| {
             if (entry.object_ptr == 0) {
@@ -177,7 +205,7 @@ pub const HandleTable = struct {
             }
         }
         // Roll back on table full
-        if (hdr.handle_count > 0) hdr.handle_count -= 1;
+        decHandleCount(hdr);
         _ = dereferenceObject(object_ptr);
         return null;
     }
@@ -190,7 +218,7 @@ pub const HandleTable = struct {
         const object_ptr = entry.object_ptr;
         const obj_type = entry.obj_type;
         const hdr = @as(*ObjectHeader, @ptrFromInt(object_ptr));
-        if (hdr.handle_count > 0) hdr.handle_count -= 1;
+        decHandleCount(hdr);
         const freed = hdr.release();
 
         entry.* = .{};
@@ -236,6 +264,24 @@ pub const HandleTable = struct {
         return self.allocHandle(entry.object_ptr, access, entry.obj_type);
     }
 };
+
+fn decHandleCount(hdr: *ObjectHeader) void {
+    var cur = @atomicLoad(u32, &hdr.handle_count, .seq_cst);
+    while (true) {
+        if (cur == 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("HandleTable: handle_count underflow on close/rollback", .{});
+            }
+            return;
+        }
+        const next = cur - 1;
+        if (@cmpxchgStrong(u32, &hdr.handle_count, cur, next, .seq_cst, .seq_cst)) |actual| {
+            cur = actual;
+            continue;
+        }
+        return;
+    }
+}
 
 // ── Object Type Registry ──
 
@@ -297,8 +343,8 @@ pub fn createObject(obj_type: ObjectType, ptr: u64) void {
     }
     const hdr = @as(*ObjectHeader, @ptrFromInt(ptr));
     hdr.obj_type = obj_type;
-    hdr.ref_count = 1;
-    hdr.handle_count = 0;
+    @atomicStore(u32, &hdr.ref_count, 1, .seq_cst);
+    @atomicStore(u32, &hdr.handle_count, 0, .seq_cst);
 }
 
 pub fn referenceObject(ptr: u64) void {
@@ -490,4 +536,11 @@ pub fn normalizeNtObjectPathResolveSymlinks(path: []const u8) []const u8 {
         current = normalizeNtObjectPath(e.link_target[0..e.link_target_len]);
     }
     return current;
+}
+
+/// B3：按 NT 路径前缀做 **SE 门闸**（不分配句柄）。`tok` 须为 `se/token.zig` 中 `Token`。
+pub fn obOpenObjectByNameAccessProbe(path: []const u8, desired: ACCESS_MASK, tok: *const anyopaque) bool {
+    const se = @import("../se/token.zig");
+    const t: *const se.Token = @alignCast(@ptrCast(tok));
+    return se.openNamedObjectAccessCheck(path, desired, t);
 }

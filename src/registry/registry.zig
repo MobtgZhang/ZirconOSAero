@@ -9,12 +9,38 @@
 //!
 //! Layout inspired by the NT registry; **no code copied** from ReactOS or Windows (see THIRD_PARTY.md).
 //!
-//! **持久化**：内存树 + 可选 **ZOSH1** 覆盖（[`hive.zig`](hive.zig) `C:\System32\Config\ZirconUser.zosh`）；**原生 RegF** 仅识别魔数，完整 NK/VK 解析仍为路线图项。
+//! **持久化**：内存树 + 可选 **ZOSH1** 覆盖（[`hive.zig`](hive.zig) `C:\System32\Config\ZirconUser.zosh`）；**RegF 只读子集**见 [`regf_parse.zig`](regf_parse.zig)；写回与 `registry` 切换见 [`regf_hive_stub.zig`](regf_hive_stub.zig)（`regfHiveBackendReady`，仍为 false 直至变异路径接线）。
 //! **K8 / syscall**：`NtOpenKey` 等内核 SSDT 接线见 [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K8；当前以 `ntdll` 内存树路径为主。
 
 const std = @import("std");
 const klog = @import("../rtl/klog.zig");
 const ob = @import("../ob/object.zig");
+const os_version = @import("../config/os_version.zig");
+const regf_hive = @import("regf_hive_stub.zig");
+
+/// B2：运行时可切换后端（**写路径** 在 `regfHiveBackendReady()==true` 之前恒为 `memory_tree`）。
+pub const RegBackend = enum(u8) {
+    memory_tree = 0,
+    regf_image = 1,
+};
+
+var active_reg_backend: RegBackend = .memory_tree;
+
+pub fn setRegBackendForTest(b: RegBackend) void {
+    active_reg_backend = b;
+}
+
+pub fn currentRegBackend() RegBackend {
+    return active_reg_backend;
+}
+
+/// `NtSetValueKey` 等变异 API 使用的有效后端（RegF 持久化未就绪前强制内存树）。
+pub fn effectiveMutationBackend() RegBackend {
+    if (active_reg_backend == .regf_image and regf_hive.regfHiveBackendReady()) {
+        return .regf_image;
+    }
+    return .memory_tree;
+}
 
 pub const ValueType = enum(u8) {
     none = 0,
@@ -421,8 +447,8 @@ fn populateDefaults() void {
     const nt_key = createKey(.hklm, ms_key, "ZirconOSAero NT") orelse return;
     const cv_key = createKey(.hklm, nt_key, "CurrentVersion") orelse return;
     _ = setValueSz(cv_key, "ProductName", "ZirconOSAero (NT 6.1)");
-    _ = setValueSz(cv_key, "CurrentVersion", "5.1");
-    _ = setValueDword(cv_key, "CurrentBuildNumber", 2600);
+    _ = setValueSz(cv_key, "CurrentVersion", "6.1");
+    _ = setValueDword(cv_key, "CurrentBuildNumber", os_version.buildNumber());
     _ = setValueSz(cv_key, "SystemRoot", "C:\\WINDOWS");
     _ = setValueSz(cv_key, "RegisteredOwner", "ZirconOSAero User");
 

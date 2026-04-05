@@ -185,6 +185,12 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
     }
     panic_ctx.setPhase(0x0005_0011);
     if (builtin.cpu.arch == .x86_64) {
+        if (!vm.linkKernelHalfMappings(space_ptr)) {
+            vm.releaseProcessAddressSpace(space_ptr);
+            freeProcessAddressSpaceSlot(space_ptr);
+            panic_ctx.setPhase(0);
+            return null;
+        }
         panic_ctx.setPhase(0x0005_0012);
         if (!kuser_shared.installInProcessAddressSpace(space_ptr)) {
             vm.releaseProcessAddressSpace(space_ptr);
@@ -332,4 +338,16 @@ pub fn releasePsThreadObject(ptr: *PsThreadObject) void {
             return;
         }
     }
+}
+
+/// `CLIENT_ID.UniqueThread` 与 `PsThreadObject.scheduler_tid` 对齐时的查找（`NtOpenThread`）。
+pub fn findPsThreadForOpen(host_pid: u32, unique_thread: usize) ?*PsThreadObject {
+    var i: usize = 0;
+    while (i < max_ps_thread_objects) : (i += 1) {
+        if (!g_ps_thread_busy[i]) continue;
+        const obj = &g_ps_threads[i];
+        if (obj.host_pid != host_pid) continue;
+        if (obj.scheduler_tid == unique_thread) return obj;
+    }
+    return null;
 }

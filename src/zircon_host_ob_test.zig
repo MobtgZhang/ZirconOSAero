@@ -19,11 +19,11 @@ test "handle table alloc increments ref_count and handle_count" {
     var table = ob.HandleTable.init(1);
     const h = table.allocHandle(@intFromPtr(&hdr), ob.GENERIC_READ, .event);
     try std.testing.expect(h != null);
-    try std.testing.expectEqual(@as(u32, 2), hdr.ref_count);
-    try std.testing.expectEqual(@as(u32, 1), hdr.handle_count);
+    try std.testing.expectEqual(@as(u32, 2), hdr.refCount());
+    try std.testing.expectEqual(@as(u32, 1), hdr.handleCount());
     try std.testing.expect(table.closeHandle(h.?));
-    try std.testing.expectEqual(@as(u32, 1), hdr.ref_count);
-    try std.testing.expectEqual(@as(u32, 0), hdr.handle_count);
+    try std.testing.expectEqual(@as(u32, 1), hdr.refCount());
+    try std.testing.expectEqual(@as(u32, 0), hdr.handleCount());
 }
 
 test "normalizeNtObjectPath strips NT prefixes" {
@@ -64,7 +64,7 @@ test "section last reference invokes cleanup hook" {
     var table = ob.HandleTable.init(1);
     const ptr: u64 = @intFromPtr(&hdr);
     const h = table.allocHandle(ptr, ob.GENERIC_ALL, .section) orelse return error.AllocHandle;
-    try std.testing.expectEqual(@as(u32, 1), hdr.ref_count);
+    try std.testing.expectEqual(@as(u32, 1), hdr.refCount());
     try std.testing.expectEqual(@as(u64, 0), g_section_cleanup_test_ptr);
     try std.testing.expect(table.closeHandle(h));
     try std.testing.expectEqual(ptr, g_section_cleanup_test_ptr);

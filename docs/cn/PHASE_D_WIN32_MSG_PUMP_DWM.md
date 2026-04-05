@@ -17,6 +17,8 @@
 | D0.1 | 冻结阶段 D「做 / 不做」：消息队列一致性、`WM_DWM*` 投递与监听、`GetMessage`/`PeekMessage` 与 Learn 的 **已知差距表** 保持可检索（矩阵 §5 + 本文） | 契约矩阵与 [msg_pm_semantics.zig](../../src/subsystems/win32/msg_pm_semantics.zig) 注释同步 |
 | D0.2 | 明确 **不做**：完整挂钩链、DDE、输入法管线、与商业 `user32` 逐位等价 | 矩阵 §5.1 非目标段已覆盖则仅交叉引用 |
 | D0.3 | 更新 [MVT_NT61.md](MVT_NT61.md)：阶段 D 每增一项可重复测试须登记命令与模块 | PR 门禁 |
+| D0.4 | **完成定义（冻结）**：阶段 D 「Done」= §D1–D3 主路径在 `zig build test` 相关主机步 + 契约矩阵 §4–§5 三态一致；**不**声称与商业 `user32` 逐位等价 | 本文 + 矩阵 |
+| D0.5 | **常量单源**：`nt61_aero_defaults.zig` / `zircon_aero_defaults.zig` / `dwm_nt61_api_contract.zig` 冲突时以矩阵 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4 脚注为准 | `comptime` 测与 **dwm_messages_nt61_host** |
 
 ---
 
@@ -64,6 +66,7 @@
 |----|------|----------|
 | D4.1 | 降低对 **`desktop_idle_spin`** 的依赖：有消息或合成脏区时唤醒主循环。**进展**：`runDesktopMainLoop` 文档注释 + `msgPumpThreadsBlockedApprox()` 时追加 `input_hub` 轮询；`idle_streak` × `display_flip_journal.extraInputPollBudget` 尾部 poll | [NT61_PLAN_REMAINING.md](NT61_PLAN_REMAINING.md) D5、`display.zig`、`main.zig` |
 | D4.2 | IRQ / 定时器路径与 **Present 提示** 绑定，避免只改 spin 或只改合成一半 | `AeroDesktopRuntime.md`、CI 烟测 |
+| D4.3 | **`display_flip_journal`** 与 `notifyFramePresented` / idle 协同：每帧 flush 计数与 `input_hub` 尾部 poll 预算同源（见 `display_flip_journal.zig` 注释） | `display_flip_journal.zig`、`display.zig` |
 
 ---
 
@@ -72,8 +75,9 @@
 | ID | 任务 | 验收 |
 |----|------|------|
 | D5.1 | 扩展现有主机测：**msg_pm_semantics**、**csr_lpc_policy**、**dwm_messages_nt61**、**dwm_nt61_integration** — 每增一语义必增一断言 | `zig build test` |
-| D5.2 | 可选 QEMU：串口检索 `get_message` / `WM_DWM*` 关键字脚本 | `scripts/`、`DesktopQA.md` |
+| D5.2 | 可选 QEMU：`scripts/qemu_desktop_perf_baseline.sh` 第 5 步 — 串口 `grep -E 'WM_DWM|get_message|present|flip_journal'` | 软门槛，非强 CI |
 | D5.3 | 更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §4–§5 行：Partial/Done 与实现一致 | PR |
+| D5.4 | **性能软门槛**：idle 下 CPU 占用或每帧 `memcpy` 上限 — 文档化于 `DesktopManagerSpec` / 本文 D4；超标不 fail CI | 文档 |
 
 ---
 

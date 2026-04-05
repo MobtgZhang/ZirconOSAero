@@ -4,11 +4,11 @@
 
 | 组件 | 路径 | 职责 |
 |------|------|------|
-| 通用堆 | `src/mm/heap.zig` | bump 为 arena 内优化；**空闲链表合并**为主路径；可增长 arena（`heap_boot.zig`）；大块与池 zone 优先 |
+| 通用堆 | `src/mm/heap.zig` | bump 为 arena 内优化；**空闲链表合并**为主路径；**`realloc`**（新块+拷贝+释放）；可增长 arena（`heap_boot.zig`）；大块与池 zone 优先 |
 | VM 接线 | `src/mm/heap_boot.zig` | 引导后把堆接到 `AddressSpace`；保持 `heap.zig` 不直接 `import vm`（便于主机 `zig test`） |
 | 池 zone | `src/mm/pool_zone.zig` | 按页 backing（可接 `setZoneBackingHooks`）；NonPaged/Paged 统计与虚拟窗文档常量 |
 | Lookaside | `src/mm/lookaside.zig` + `percpu_index.zig` | per-CPU 小对象链；BSP 下标 0 |
-| Ex 池封装 | `src/mm/ex_pool.zig` | `exAllocatePoolWithTag` / `exFreePoolWithTag` → `pool.zig`（NT 公开名，行为子集） |
+| Ex 池封装 | `src/mm/ex_pool.zig` | `exAllocatePoolWithTag` / `exFreePoolWithTag` / **`exReallocatePoolWithTag`** → `pool.zig`（NT 公开名，行为子集） |
 | 档位池 | `src/mm/pool.zig` | lookaside 热路径 + zone 页切片 + 全局档链 + **pool_gate**；tag 统计；超大档回退 `heap` |
 | 伙伴（索引级） | `src/mm/buddy.zig` | `Buddy(max_order)`：按 `2^order` 连续块分配/合并；主机单测 |
 | 物理伙伴封装 | `src/mm/phys_buddy.zig` | 自 `allocContiguous` carve arena；**`initKernelContiguousBuddy`** 在内核启动接线；`kernelAllocContiguousPhys` / `kernelFreeContiguousPhys` |

@@ -30,6 +30,10 @@
 | HPET GCAP_ID 解码 | 同上 → hpet_id | [src/hal/x86_64/hpet_id.zig](../../src/hal/x86_64/hpet_id.zig) |
 | LPC `PortKind` ABI | 同上 → lpc_portkind_host | [tests/lpc_portkind_host.zig](../../tests/lpc_portkind_host.zig) |
 | LPC `handshake_version`（v2 锚点） | 同上 → **lpc_handshake_version_host** | [tests/lpc_handshake_version_host.zig](../../tests/lpc_handshake_version_host.zig) |
+| LPC 两 PID 队列往返（镜像 `ipc.zig`） | 同上 → **lpc_two_pid_host** | [tests/lpc_two_pid_host.zig](../../tests/lpc_two_pid_host.zig) |
+| LPC `NtRequestWaitReplyPort` 坏缓冲区 NTSTATUS 锚点 | 同上 → **lpc_bad_pointer_host** | [tests/lpc_bad_pointer_host.zig](../../tests/lpc_bad_pointer_host.zig) |
+| `NtQueryInformationProcess` / `ProcessCommandLineInformation`（映像名近似 UNICODE_STRING） | 同上 → 内核 **`ntdll`** `test` / 代码审查 | [src/libs/ntdll.zig](../../src/libs/ntdll.zig) |
+| `NtAllocateVirtualMemory` 未支持 `MEM_*` 位 → `STATUS_NOT_IMPLEMENTED` | 同上 → 代码审查 + **ntdll** | [src/libs/ntdll.zig](../../src/libs/ntdll.zig) |
 | `SystemVersionInformation` / `RTL_OSVERSIONINFOEXW` 284 字节 | 同上 → **nt61_os_version_layout_host** | [tests/nt61_os_version_layout_host.zig](../../tests/nt61_os_version_layout_host.zig)、[`os_version.zig`](../../src/config/os_version.zig) |
 | `RtlVerifyVersionInfo` / `VerSetConditionMask` 语义子集 | 同上 → **rtl_verify_version_info_host** | [rtl_verify_version_info_host.zig](../../src/rtl_verify_version_info_host.zig)、[`os_version.zig`](../../src/config/os_version.zig)、[`ntdll.zig`](../../src/libs/ntdll.zig) |
 | ntdll/kernel32/user32 合成导出顺序 | 同上 → **nt61_core_dll_abi_inventory_host** | [`nt61_core_dll_abi_inventory.zig`](../../src/config/nt61_core_dll_abi_inventory.zig)、[CORE_DLL_PE_EXPORT_STRATEGY.md](CORE_DLL_PE_EXPORT_STRATEGY.md) |

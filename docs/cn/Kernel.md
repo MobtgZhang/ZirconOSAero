@@ -65,12 +65,12 @@ src/
 | `paging.zig` | 四级页表管理，identity mapping，framebuffer 映射 |
 | `idt.zig` | 中断描述符表，256 个向量 |
 | `isr_common.s` | 32 个异常 + 16 个 IRQ stub → 统一进入 `isr_common_handler` |
-| `syscall_entry.s` | `int 0x80` 入口，寄存器保存/恢复 |
+| `syscall_lstar.s` | `syscall`/`sysret` 入口（IA32_LSTAR） |
 | `syscall.zig` | 系统调用分发表 |
 
 ### 系统调用约定 (x86_64)
 
-- 入口：`syscall`/`sysret` 与 `int 0x80`（向量 128）共用分发
+- 入口：**仅 `syscall`/`sysret`**（向量 128 为默认桩；无 SYSCALL/SYSRET 的 CPU 会 bugcheck；见 [SyscallABI.md](../cn/SyscallABI.md)）
 - 调用号：`rax` = **Windows 7 SP1 x64** 公开 SSDT 索引（子集）
 - 参数：**NT x64** — 第 1 参 `r10`，第 2–4 参 `rdx`/`r8`/`r9`，其余在用户栈（见 [SyscallABI.md](../cn/SyscallABI.md)）
 
@@ -120,7 +120,7 @@ src/
 256 个中断向量：
 - 0–31：CPU 异常（除零、页错误、通用保护等）
 - 32–47：硬件 IRQ（PIT、键盘、串口、鼠标等）
-- 128：系统调用 (`int 0x80`)
+- 128：默认桩（非系统调用入口）
 
 ### PIC + PIT
 
@@ -132,7 +132,7 @@ src/
 ### 中断分发链
 
 ```
-硬件中断 / 异常 / int 0x80
+硬件中断 / 异常 / syscall（MSR 路径，非 IDT 128）
     → IDT 向量
     → ISR stub (isr_common.s)
     → isr_common_handler

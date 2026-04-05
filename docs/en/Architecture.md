@@ -47,7 +47,7 @@ The kernel provides only **mechanisms**, not policy:
 | Virtual memory | Address spaces, map/unmap, protection |
 | IPC | LPC ports, synchronous request/reply, message queues |
 | Interrupts/exceptions | IDT dispatch, IRQ handling, fault delivery |
-| System calls | `int 0x80` dispatch, stable ABI |
+| System calls | x86_64: `syscall`/`sysret` + SSDT subset ([SyscallABI.md](../cn/SyscallABI.md)) |
 | Handle primitives | Duplicate, close, cross-process transfer |
 
 #### Executive core

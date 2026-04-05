@@ -8,7 +8,7 @@
 
 | 层级 | 说明 |
 |------|------|
-| **A. NT 6.1 SSDT 子集** | `src/arch/x86_64/ssdt_nt61.zig` + `syscall.zig`：`syscall`/`int 0x80` 共用同一分发；仅公开 SSDT 索引。见 [SyscallABI.md](SyscallABI.md)。 |
+| **A. NT 6.1 SSDT 子集** | `src/arch/x86_64/ssdt_nt61.zig` + `syscall.zig`：仅 **`syscall`/`sysret`** 进入分发；仅公开 SSDT 索引。见 [SyscallABI.md](SyscallABI.md)。 |
 | **B. 文档化语义** | 每个已实现 SSDT 索引应在契约矩阵标注 **Partial / Stub** 与对应 **Nt*** 名称。 |
 | **C. Windows 二进制兼容** | 与 **完整** 微软 `ntdll` SSDT 仍不一致；需按构建版本扩充表与 Win32k 影子项。 |
 
@@ -25,7 +25,7 @@
 
 ## 阶段 B（x64 系统调用子集）完成定义（可验收）
 
-- **机制**：`main.zig` 在 IDT 就绪后调用 `initSyscallInstructionPath`；`syscall`/`sysret` 与 `int 0x80`（向量 128）共用 `syscall.zig` 分发；说明见 [SyscallABI.md](SyscallABI.md)。
+- **机制**：`main.zig` 在 IDT 就绪后调用 `initSyscallInstructionPath`；用户态仅 **`syscall`/`sysret`** 进入 `syscall.zig`；说明见 [SyscallABI.md](SyscallABI.md)。
 - **折叠槽**：`NtWaitForMultipleObjects` / `NtSetInformationObject` 与 Win7 SP1 公开 **0x58/0x59** 冲突时，本仓库使用 **0x57/0x56**（见 `ssdt_nt61.zig` 注释）。
 - **门禁**：`zig build test` 须通过 **ssdt**、**ssdt_stub_parity**（[`ntdll_syscall_win64.zig`](../../src/sdk/ntdll_syscall_win64.zig) 与 `ssdt_nt61` 同步子集）、主机 **rtl_verify_version_info_host**（[`rtl_verify_version_info_host.zig`](../../src/rtl_verify_version_info_host.zig) — `RtlVerifyVersionInfo` 语义子集）。
 - **扩展 syscall**：`NtCreateProcess`（0x9F）、`NtCreateUserProcess`（0xAA，`syscall_nt_extras.dispatchNtCreateUserProcess`）、`NtSignalAndWaitForSingleObject`（0x176）、进程/线程/同步/文件打开等 SSDT 项在 `syscall.zig` 与 [`syscall_nt_extras.zig`](../../src/arch/x86_64/syscall_nt_extras.zig) 中**逐项**分支配对（未实现项单独列于 `switch` 并返回契约 NTSTATUS）。

@@ -6,16 +6,18 @@
 
 **回归**：见 [MVT_NT61.md](MVT_NT61.md)。
 
+**DLL 分层（C4，与 NT 6.1 同向）**：商业栈中大量 **kernel32** 导出转发至 **KernelBase**，再调 **ntdll** Native API。本仓库：`kernelbase.zig` 承载 **`GetLastError`/`SetLastError`** 及 **`NtClose` 等**集中转发；`kernel32.zig` 以 **薄包装 / re-export** 为主（见 `kernel32` 文件尾 `GetLastError` 别名）。扩展 Native 入口时优先加在 `kernelbase`，避免 `kernel32` 与 `ntdll` 重复实现。
+
 | 模块        | 代表 API              | 状态     | 备注 |
 |-------------|----------------------|----------|------|
 | ntdll       | LdrInitializeThunk / RtlUserThreadStart | Stub | [`ntdll.zig`](../../src/libs/ntdll.zig)；合成导出见 [`pe.zig`](../../src/loader/pe.zig) |
 | ntdll       | NtAllocateVirtualMemory | Partial | MEM_RESERVE/COMMIT、`#PF` 惰性提交 |
 | ntdll       | NtQuerySystemInformation / NtSetSystemInformation | Partial | 多 `SYSTEM_INFORMATION_CLASS` 子集；**nt61_full_api_backlog_anchors_host** §9 |
 | ntdll       | NtDeviceIoControlFile / Lock+Unlock VM | Partial | SSDT **0x52–0x54**；RTC IOCTL 子集；VM 锁定为桩 |
-| ntdll       | NtOpenProcess / OpenProcessToken / QueryInformationToken | Partial | `CLIENT_ID`；令牌静态浅拷贝槽（8） |
+| ntdll       | NtOpenProcess / NtOpenThread / NtDuplicateObject / OpenProcessToken / QueryInformationToken | Partial | `CLIENT_ID`；**非提升令牌** `seProcessOpenAllowed` / `seThreadOpenAllowed`；句柄复制防 **扩大访问掩码**；`ProcessImageFileName`（27）+ `ThreadTimes`（1）子集 |
 | ntdll       | NtCreateUserProcess（0xAA）/ NtCreateProcess | Partial | ZOA 参数块 + `NtCreateUserProcessFromPath`；`NtCreateProcess` 仅槽位；见 [PHASE_F_PROCESS_CREATE.md](PHASE_F_PROCESS_CREATE.md) |
 | ntdll       | NtUserGetMessage / PeekMessage | Partial | SSDT 0x58/0x59；`PeekMessage` 空队列 `STATUS_NO_MORE_ENTRIES` |
-| kernelbase  | GetLastError / SetLastError | Partial | [`kernelbase.zig`](../../src/libs/kernelbase.zig)；`kernel32` 转发；TEB+0x68 为长期目标 |
+| kernelbase  | GetLastError / SetLastError / NtClose（转发） | Partial | [`kernelbase.zig`](../../src/libs/kernelbase.zig)；`kernel32` 转发；TEB+0x68 为长期目标 |
 | kernel32    | CreateFileA          | Partial | 见 VFS |
 | user32      | GetMessage / DefWindowProc / DispatchMessage | Partial | SC_MOVE 模态环、DWM 广播；`DispatchMessage`：`registerKernelWndProc` + `wndproc_id` 子集；`NtUser*`/`STATUS_PENDING` 见契约矩阵 §5 |
 | user32      | SetWindowPos / 桌面切换 | Partial | `HWND_NOTOPMOST` Learn（非 topmost 无 Z 序效果）；`CreateDesktopA`/`OpenDesktopA`/`SwitchDesktopA` ↔ `subsystem`；扩展 `SWP_*` |

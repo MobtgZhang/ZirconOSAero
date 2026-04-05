@@ -115,6 +115,18 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | USB XHCI / HID | 未 | 路线图：[HAL_USB_NET_ROADMAP.md](HAL_USB_NET_ROADMAP.md) |
 | IPv4 / ARP / UDP 原型 | 部分 | `minimal_stack.zig`：IPv4 固定头 + ARP 首部 8 字节解析；收发与 TCP 仍为路线图 |
 
+## 2.2 阶段 B/C 验收矩阵（B1 LPC · B2 REGF · B3 SE · C2 gdi32 · C3 ntdll）
+
+PR 合并时须将「状态 / 测试」列与 `src/`、`tests/`、`MVT_NT61.md` 同步；**Partial** 须写明剩余差距。
+
+| 代号 | 能力 | 主路径 | 状态 / 验收 |
+|------|------|--------|-------------|
+| **B1** | LPC：`ipc.send` 投递后唤醒阻塞在 `replyWaitReceivePort` 的服务端线程；调度开时 `NtReplyWaitReceivePort` 对偶路径可阻塞而非纯自旋 | `src/lpc/ipc.zig`、`src/lpc/port.zig`、`src/ke/scheduler.zig` | **Partial** — 大消息仍受 `MSG_DATA_SIZE`；节视图与 `STATUS_BUFFER_TOO_SMALL` 策略见 [LPC_LARGE_MESSAGE.md](LPC_LARGE_MESSAGE.md)、[LPC_NT61_HANDSHAKE.md](LPC_NT61_HANDSHAKE.md)；主机 **`lpc_two_pid_host`**、**`lpc_bad_pointer_host`** |
+| **B2** | RegF：NK/VK 只读遍历 + 合成 fixture 单测；`RegBackend`（`memory_tree` / `regf_image`）与 `regfHiveBackendReady` 策略 | `src/registry/regf_parse.zig`、`registry.zig`、`regf_hive_stub.zig` | **Partial** — 磁盘 hive 写回/事务非目标；Verified 子集：`zig build test` → **regf_parse** |
+| **B3** | `ObOpenObjectByName` 分派（Key + File）+ `seAccessCheckMask` 占位扩展 | `src/ob/object.zig`、`src/se/token.zig` | **Partial** — 完整 DACL 仍为路线图；扩展 **`se_token`** / 文档负例 |
+| **C2** | gdi32：矩阵 §5 已列 API 须 **成功非零 / 失败 0 + SetLastError** 与 Learn 一致；ROP 子集见 `gdi_rop_contract` | `src/subsystems/win32/gdi32.zig` | **Partial** — **`gdi_rop_contract_host`**、**win32k_api_semantics_host** |
+| **C3** | `NtAllocateVirtualMemory` / `NtFreeVirtualMemory` 未支持 `MEM_*` 显式 `NTSTATUS`；`ProcessCommandLineInformation` 实现或 Win7 策略注释 | `src/libs/ntdll.zig`、`src/mm/vm.zig` | **Partial** — 每增 class 须 syscall probe + 主机测命名 `tests/nt61/*_host.zig` |
+
 ## 3. 关键 Native API 与文档链接（示例）
 
 | API | 参考（公开文档） | 备注 |
@@ -194,6 +206,10 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | RegF / 原生 hive 全链；注册表 Native 子集 | **Partial** | **内存树 + ZOSH1**：[`hive.zig`](../../src/registry/hive.zig)；引导时依次尝试 `C:\System32\Config\ZirconUser.zosh` 与 **`D:\System32\Config\ZirconUser.zosh`**（NTFS 卷对称路径，阶段 4）；**RegF** 全解析仍为路线图；主机 **`registry_zosh1_host`**、**`ntfs_hive_minimum_host`**、**phase4_host_anchors** |
 
 ## 5. user32 / gdi32 与 Learn 抽样核对（返回值约定）
+
+**gdi32 矩阵审计（C2）**：上表已覆盖 **BitBlt / PatBlt / StretchBlt / Rectangle / TextOut / SelectObject / CreateCompatibleDC / DeleteDC** 等 Learn「成功非零、失败 0 + `SetLastError`」要点；扩展 API 时须同步增行并跑 **gdi_rop_contract_host**。
+
+**DLL 分层（C4）**：与 [API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md) 一致 — **`kernelbase.zig`** 集中 **LastError + `NtClose` 等 Native 转发**；**`kernel32.zig`** 保持薄层。
 
 以下为实现中**已出现**的入口与公开文档应对齐的要点（clean-room 手写，禁止粘贴示例代码）。**实现标签**：Implemented = 行为与文档要点基本覆盖；Partial = 已知简化或 NT 差异已注释；Stub = 仅占位。
 
@@ -287,6 +303,7 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 | 合规短语扫描 | `scripts/verify-compliance.sh` | CI：`Compliance phrase scan (src/boot)` |
 | `NtQuerySystemInformation` 子集 | `src/libs/ntdll.zig` | syscall + ntdll 一致性审查 |
 | `NtReadFile` / `NtWriteFile` syscall → VFS | `syscall_nt_extras.zig`、`ntdll.zig`、`vfs.zig` | 指针探测 + `zig build test`；QEMU 烟测扩展 |
+| VFS `FsOps.cleanup`（IRP_MJ_CLEANUP 子集） | `src/fs/vfs.zig` `close` | 各 `mount` 实现可选填入；矩阵 A-deep |
 | `NtDuplicateObject`（同进程） | `ntdll.zig`、`syscall_nt_extras.zig`；SSDT `0x44` | **ssdt_stub_parity**（`NtDuplicateObject` 号）；句柄表 **object** 测试 |
 | `NtRequestWaitReplyPort`（简化 ABI） | `syscall_nt_extras.zig`、`lpc/port.zig` | **lpc_portkind_host** + 代码审查 |
 | VirtIO-Blk 枚举占位 | `virtio_blk_pci.zig`、`acpi_pci_early.zig`；`pci_driver_bind` | **pci_driver_bind_host**（`virtio_blk` 绑定） |

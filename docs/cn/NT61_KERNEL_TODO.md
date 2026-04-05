@@ -144,6 +144,17 @@
 | 性能基线脚本 | 已加 | `scripts/qemu_desktop_perf_baseline.sh` |
 | K1–K8 纵深 | **并行长线** | 上表 Phase K1–K8 |
 
+## 与 NT 6.1 的 IRQL / DPC / syscall 出口差距（可跟踪清单）
+
+下列项**不要求**单次迭代做完，但须在矩阵/本段保持可见，避免与商业内核语义混淆：
+
+| 差距 | 说明 | 主路径 |
+|------|------|--------|
+| **完整 IRQL 抢占模型** | 当前为 `PASSIVE` / `APC` / `DISPATCH` / 设备 IRQ 子集；无完整 DIRQL 设备栈与 `KeRaiseIrqlToDpcLevel` 全语义 | `ke/irql.zig`, `interrupt_x86.zig` |
+| **DPC 与 syscall 返回** | DPC 在 IRQ 尾声 `drainAtDispatchLevel` 排空；与 NT 在 **DISPATCH_LEVEL** 下完成 I/O 完成例程的时序仍简化 | `ke/dpc.zig`, `syscall.zig` `dispatch` |
+| **APC 交付点** | 内核 APC 在 syscall 返回用户前交付；用户 APC / alertable 全语义仍部分 | `ke/apc.zig`, `ke/wait.zig` |
+| **时钟与 tick 源** | PIT / 可选 LAPIC 周期 tick；HPET 单调时钟与 IRQ0 迁移见 [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md) | `hal/x86_64/hpet.zig`, `scheduler.zig` |
+
 ## 维护
 
 更新本清单时同步 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) §7 链接与根 README 若涉及对外完成度表述。

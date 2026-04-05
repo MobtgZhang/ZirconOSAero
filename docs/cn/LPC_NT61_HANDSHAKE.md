@@ -33,7 +33,8 @@
 - 端口对象上与大消息 / 节区视图相关的字段（如 `section_view_handle`）为 **占位**；与 [src/mm/section.zig](../../src/mm/section.zig) 映射就绪后，须在本文与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 同步更新 **视图 token 或基址编码** 规则。
 - **字节序与对齐**：报文缓冲按 **小端**、自然对齐；固定头长度变更时递增 **握手版本常量**（`src/lpc/port.zig` 中 `Port.handshake_version`；当前为 **`2`** — 标记大消息/超时字段与 csrss 单一真源演进；小消息布局仍兼容 v1）。主机锚点：**lpc_handshake_version_host**。
 - **csrss 同步应答**：`opcode` 在 `0x10000..0x1FFFF`（`CsrApiNumber`）且已注册 `port.setCsrRequestHandler` 时，`NtRequestWaitReplyPort` 在同内核模型下由回调直接构造 `ipc.Message` 应答（`data[0..4]` 为 `i32` 状态码），无需异步服务线程。
-- **节区视图与大消息**：`Port.section_view_handle` 与 `NtMapViewOfSection` 返回 token 的绑定规则仍以 [MM_Section_Roadmap.md](MM_Section_Roadmap.md) 为准；窗口相关大 payload 须在 bump 握手版本后写入本文与契约矩阵。
+- **节区视图与大消息**：`Port.section_view_handle` 与 `NtMapViewOfSection` 返回 token 的绑定规则仍以 [MM_Section_Roadmap.md](MM_Section_Roadmap.md) 为准；**当前限制**：单条 LPC 内核消息体固定 **`ipc.MSG_DATA_SIZE`（64）** 字节；更大载荷须节视图协作或显式返回 `STATUS_NOT_IMPLEMENTED`（实现前须在 syscall 层文档化）。窗口相关大 payload 须在 bump 握手版本后写入本文与契约矩阵。
+- **调用链**：见 [LPC_NT61_CALL_CHAIN.md](LPC_NT61_CALL_CHAIN.md)（`NtCreatePort` / `NtConnectPort` / `NtRequestWaitReplyPort` 与 `owner_pid`）。
 - **csrss GUI 小消息布局**：`post_message` / `get_message` 固定字段偏移与 `subsystem.handleApiCall` 一致；主机 **`csr_lpc_policy_host`**、**`win32k_api_semantics_host`** 与 [src/subsystems/win32/csr_lpc_policy.zig](../../src/subsystems/win32/csr_lpc_policy.zig) 中 `post_message_*_off` / `get_message_*_off` 同步。
 
 ## 验证

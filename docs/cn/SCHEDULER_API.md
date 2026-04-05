@@ -34,10 +34,14 @@
 - **主调度 tick**：`ke/timer.zig`（PIC + PIT ~100Hz）；可选 **LAPIC 周期 tick** 见 `hal/x86_64/lapic_timer_tick.zig` 与 [TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md)。
 - **SMP TLB**：`hal/x86_64/tlb_broadcast.zig` — 默认 BSP `flushLocal`；**`-Dsmp_tlb_ipi=true`** 且多核时广播专用 IDT 向量；`unmap` / 进程地址空间释放路径须与 K2.5 文档一致，避免 AP 参与用户映射后仅 BSP 刷新。
 
+## 与 NT 6.1 调度 / IRQL 差距（摘要）
+
+完整表见 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 末尾「与 NT 6.1 的 IRQL / DPC / syscall 出口差距」：含 **DIRQL 全模型**、DPC 与 I/O 完成例程时序、用户 APC 交付、HPET 作为主 tick 等。
+
 ## IRQL、DPC、APC 与 syscall 返回（阶段 C 审计摘要）
 
 - **IRQL**：子集为 `PASSIVE_LEVEL` / `APC_LEVEL` / `DISPATCH_LEVEL`（`ke/irql.zig`）。x86_64 **设备 IRQ** 路径在 `interrupt_x86.handleIrq` 内先抬升再 `scheduler.tick()`，尾声降至 `DISPATCH_LEVEL` 并 **`dpc.drainAtDispatchLevel`**（每 CPU FIFO）。
-- **内核 APC**：`ke/apc.zig` — `deliverKernelApcsForCurrentThread` 仅在 **PASSIVE_LEVEL** 排空；**`arch/x86_64/syscall.zig` 的 `dispatch`** 在写回 `rax` 后统一调用**，与 `int 0x80` / `syscall` 共用同一出口（均经 `handleSyscall` → `dispatch`）。
+- **内核 APC**：`ke/apc.zig` — `deliverKernelApcsForCurrentThread` 仅在 **PASSIVE_LEVEL** 排空；**`arch/x86_64/syscall.zig` 的 `dispatch`** 在写回 `rax` 后统一调用**（经 `handleSyscall` → `dispatch`）。
 - **用户 APC**：`alertable` 等待在 `tick` 中与 **`Thread.user_apc_head`** 联动返回 `STATUS_USER_APC`；用户态例程调用链仍为后续工作。
 - **自旋锁**：`ke/spinlock.zig` — 持 `IrqSpinLock` 期间不得调用 `keWait*` 等可阻塞路径（注释已标明）。
 

@@ -47,7 +47,7 @@
 | 虚拟内存 | 地址空间、页表映射/解映射、权限控制 |
 | IPC | LPC 端口、同步 call/reply、消息队列 |
 | 中断/异常 | IDT 分发、IRQ 处理、异常上送 |
-| 系统调用 | `int 0x80` 分发、稳定 ABI |
+| 系统调用 | x86_64：`syscall`/`sysret` + SSDT 子集（见 [SyscallABI.md](SyscallABI.md)） |
 | 句柄原语 | 引用/复制/关闭/跨进程转移 |
 
 #### Executive Core

@@ -57,7 +57,7 @@ src/
 
 - [docs/cn/PROCESS_NT61.md](../cn/PROCESS_NT61.md) — phased delivery  
 - [docs/cn/NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md) — API / WDK index  
-- [docs/cn/SyscallABI.md](../cn/SyscallABI.md) — `int 0x80` vs Windows SSDT  
+- [docs/cn/SyscallABI.md](../cn/SyscallABI.md) — `syscall`/`sysret` + Windows SSDT 子集  
 
 ## 2. Architecture support (`arch/`)
 
@@ -72,12 +72,12 @@ Selected via `src/arch.zig` for the build target.
 | `paging.zig` | Four-level tables, identity map, framebuffer map |
 | `idt.zig` | 256 IDT vectors |
 | `isr_common.s` | Exception + IRQ stubs → `isr_common_handler` |
-| `syscall_entry.s` | `int 0x80` save/restore |
+| `syscall_lstar.s` | `syscall`/`sysret` entry (IA32_LSTAR) |
 | `syscall.zig` | Syscall dispatch table |
 
 ### Syscall ABI (x86_64)
 
-- Entry: `syscall`/`sysret` and `int 0x80` (vector 128) share one dispatcher  
+- Entry: **`syscall`/`sysret` only** (vector 128 is default stub; unsupported CPU → bugcheck; see [SyscallABI.md](../cn/SyscallABI.md))  
 - Number: `rax` = public **Windows 7 SP1 x64** SSDT index (subset)  
 - Args: **NT x64** — 1st in `r10`, then `rdx`/`r8`/`r9`, rest on user stack ([SyscallABI.md](../cn/SyscallABI.md))  
 
@@ -130,7 +130,7 @@ Chinese detail: [docs/cn/SCHEDULER_API.md](../cn/SCHEDULER_API.md).
 
 - 0–31: CPU exceptions  
 - 32–47: Hardware IRQs  
-- 128: syscall (`int 0x80`)  
+- 128: default stub (not syscall)  
 
 ### PIC + PIT
 
@@ -148,7 +148,7 @@ Chinese detail: [docs/cn/SCHEDULER_API.md](../cn/SCHEDULER_API.md).
 ### Dispatch chain
 
 ```
-HW interrupt / exception / int 0x80
+HW interrupt / exception / syscall path (MSR, not IDT 128)
     → IDT vector
     → ISR stub (isr_common.s)
     → isr_common_handler

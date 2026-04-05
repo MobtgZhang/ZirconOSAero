@@ -113,6 +113,28 @@ const REG_PI: usize = 0x0C;
 const GHC_AE: u32 = 1 << 31;
 const GHC_HR: u32 = 1 << 0;
 
+/// PxSIG — Port x Signature (offset 0x24 in port register block).
+/// Ref: Serial ATA AHCI 1.3.1 — initial device signature after power-on / COMRESET.
+const REG_PXSIG: usize = 0x24;
+/// PxSSTS — Port x Serial ATA Status (SStatus), lower dword of SStatus from link layer.
+/// Bits 3:0 = DET (device detection); value 3 = device detected and PHY communication established.
+/// Ref: Serial ATA AHCI 1.3.1 — table for PxSSTS / SATA phys link states.
+const REG_PXSSTS: usize = 0x28;
+/// PxTFD — Port x Task File Data (ATA status / error from last FIS update).
+/// Ref: Serial ATA AHCI 1.3.1 — PxTFD layout; ATA status bit 7 = BSY.
+const REG_PXTFD: usize = 0x20;
+const PXSSTS_DET_MASK: u32 = 0x0F;
+/// DET = 0: no device detected on this port (skip command submission).
+const PXSSTS_DET_NONE: u32 = 0;
+/// DET = 3: device detected and communication established (PxSIG may still read 0xFFFFFFFF until probed).
+const PXSSTS_DET_PHY_UP: u32 = 3;
+const ATA_STS_BSY: u32 = 0x80;
+
+/// Upper bound for PxCI bit 0 clear polling (command completion).
+const pxci_wait_max_iter: u32 = 800_000;
+/// After ST/FRE, wait for task-file BSY clear before posting IDENTIFY / READ (vacant ports often never clear).
+const tfd_not_busy_max_iter: u32 = 400_000;
+
 fn portRegBase(port: u32) usize {
     return 0x100 + @as(usize, port) * 0x80;
 }
@@ -131,6 +153,37 @@ fn portR(abar: usize, port: u32, off: usize) u32 {
 
 fn portW(abar: usize, port: u32, off: usize, v: u32) void {
     hbaW(abar, portRegBase(port) + off, v);
+}
+
+fn portReadPxSig(abar: usize, port: u32) u32 {
+    return portR(abar, port, REG_PXSIG);
+}
+
+fn portReadPxSsts(abar: usize, port: u32) u32 {
+    return portR(abar, port, REG_PXSSTS);
+}
+
+/// Skip ports that clearly have no link / no device. When DET=3 but PxSIG is still 0 or 0xFFFFFFFF
+/// (common on QEMU before full identify), we still attempt `runIdentifyDevice` — TFD + PxCI gate bad ports.
+fn portSkipStorageProbe(abar: usize, port: u32) bool {
+    const ssts = portReadPxSsts(abar, port);
+    const det = ssts & PXSSTS_DET_MASK;
+    if (det == PXSSTS_DET_NONE) return true;
+    const sig = portReadPxSig(abar, port);
+    if (det != PXSSTS_DET_PHY_UP and (sig == 0 or sig == 0xFFFF_FFFF)) return true;
+    return false;
+}
+
+fn waitPortNotBusy(abar: usize, port: u32, max_iter: u32) bool {
+    var i: u32 = 0;
+    while (i < max_iter) : (i += 1) {
+        const tfd = portR(abar, port, REG_PXTFD);
+        if ((tfd & ATA_STS_BSY) == 0) return true;
+        if (builtin.target.cpu.arch == .x86_64) {
+            asm volatile ("pause" ::: .{ .memory = true });
+        }
+    }
+    return false;
 }
 
 var g_abar_va: usize = 0;
@@ -192,6 +245,9 @@ fn waitPxCiClear(abar: usize, port: u32, max_iter: u32) bool {
     var i: u32 = 0;
     while (i < max_iter) : (i += 1) {
         if ((portR(abar, port, 0x38) & 1) == 0) return true;
+        if (builtin.target.cpu.arch == .x86_64) {
+            asm volatile ("pause" ::: .{ .memory = true });
+        }
     }
     return false;
 }
@@ -211,6 +267,11 @@ fn runIdentifyDevice(abar: usize, port: u32, fa: *frame.FrameAllocator) bool {
 
     portStop(abar, port);
     portStart(abar, port, cl_phys, fb_phys);
+    if (!waitPortNotBusy(abar, port, tfd_not_busy_max_iter)) {
+        klog.debug("AHCI: port %u skip IDENTIFY (PxTFD.BSY timeout after ST/FRE)", .{port});
+        portStop(abar, port);
+        return false;
+    }
 
     // Command list entry 0 @ cl_phys (1KiB-aligned page satisfies PxCLB).
     const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
@@ -238,7 +299,7 @@ fn runIdentifyDevice(abar: usize, port: u32, fa: *frame.FrameAllocator) bool {
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
-    if (!waitPxCiClear(abar, port, 5_000_000)) {
+    if (!waitPxCiClear(abar, port, pxci_wait_max_iter)) {
         klog.warn("AHCI: IDENTIFY timeout (PxCI)", .{});
         portStop(abar, port);
         return false;
@@ -269,6 +330,10 @@ fn runReadSector(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.Fra
 
     portStop(abar, port);
     portStart(abar, port, cl_phys, fb_phys);
+    if (!waitPortNotBusy(abar, port, tfd_not_busy_max_iter)) {
+        portStop(abar, port);
+        return false;
+    }
 
     const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
     const ct: [*]u8 = @ptrFromInt(ct_phys);
@@ -300,7 +365,7 @@ fn runReadSector(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.Fra
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
-    const ok = waitPxCiClear(abar, port, 5_000_000);
+    const ok = waitPxCiClear(abar, port, pxci_wait_max_iter);
     portStop(abar, port);
     return ok;
 }
@@ -366,6 +431,14 @@ pub fn tryInitMmioDmaPath(max_bus: u8) void {
     var p: u32 = 0;
     while (p < 32) : (p += 1) {
         if ((pi & (std.math.shl(u32, 1, p))) == 0) continue;
+        if (portSkipStorageProbe(abar, p)) {
+            klog.debug("AHCI: port %u skip probe (SSTS=0x%x SIG=0x%x)", .{
+                p,
+                portReadPxSsts(abar, p),
+                portReadPxSig(abar, p),
+            });
+            continue;
+        }
         g_active_port = p;
         const fa = frame.kernelFrameAllocatorPtr();
         if (!runIdentifyDevice(abar, p, fa)) continue;
@@ -388,7 +461,7 @@ pub fn tryInitMmioDmaPath(max_bus: u8) void {
         }
         @memcpy(&g_sector0, @as([*]const u8, @ptrFromInt(sec_phys))[0..512]);
         g_storage_ready = true;
-        klog.info("AHCI: DMA read LBA0 OK (signature 0x%x 0x%x)", .{
+        klog.info("AHCI: DMA read LBA0 OK (boot sector word @510 0x%x)", .{
             std.mem.readInt(u16, g_sector0[510..512], .little),
         });
         return;

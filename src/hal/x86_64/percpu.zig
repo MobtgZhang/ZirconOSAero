@@ -17,6 +17,8 @@ pub const PerCpu = extern struct {
 };
 
 /// BSP 块；AP 使用 `ap_percpu_blocks` 中对应项。
+/// **SMP / syscall**：`ap_entry.apTrampolineIntermediate` 在绑定 TSS 后为每 AP 填写 `kernel_rsp0` 并 `publishApPerCpuBlock`，
+/// 与 BSP 上 `syncKernelRsp0` 对称，保证 `syscall` 入口 `SWAPGS` 后 `%gs:0` 指向本核 RSP0。
 pub export var zircon_x86_64_percpu: PerCpu = .{};
 
 /// AP（`cpu_index` 1..7）的 per-CPU 块；由 `ap_entry` 在跳板第二阶段绑定 `IA32_KERNEL_GS_BASE`。

@@ -3066,6 +3066,7 @@ fn blendThumbOverBackground(fg: u32, bg: u32, alpha: u32) u32 {
 }
 
 /// `DwmRegisterThumbnail`：将源表面缩略缓冲缩放贴到 `rcDestination`（目标 HWND 的**客户区坐标**在真 Win32 上；本子集用 `GetWindowRect` 原点 + destination 为 **Partial** 近似）。
+/// **Z 序**：按槽位 `1..max` 递增绘制，后绘槽覆盖先绘槽（与登记顺序一致；更大槽号更靠上）。
 fn blitRegisteredDwmThumbnailsToFramebuffer(scr_w: i32, scr_h: i32) void {
     if (!dwm_comp.isInitialized()) return;
     const dnc = @import("../../../config/dwm_nt61_api_contract.zig");

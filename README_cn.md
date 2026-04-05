@@ -48,7 +48,7 @@
 
 **流程与契约（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md) · [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 同源；**Partial / Stub** 即非 Done）· [docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md) · [docs/cn/DWM_NOTIFY_MODEL_NT61.md](docs/cn/DWM_NOTIFY_MODEL_NT61.md) · [docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md) · [docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) / [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)
 
-状态标签：`Stub` · `Partial` · `Done` · `Verified`。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
+状态标签：`Stub` · `Partial` · `Done` · `Verified`。**工程三态**：`Verified`（CI/`zig build test` 或 QEMU 冒烟可重复）、`InProgress`（接口已建、语义对齐中）、`Planned`（仅文档/桩）。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
 更多：[`docs/README.md`](docs/README.md) · [`docs/cn/README.md`](docs/cn/README.md) · [`docs/cn/Architecture.md`](docs/cn/Architecture.md) · [`docs/cn/Kernel.md`](docs/cn/Kernel.md) · [`docs/cn/Boot.md`](docs/cn/Boot.md) · [`docs/cn/BuildSystem.md`](docs/cn/BuildSystem.md) · [`docs/cn/Roadmap.md`](docs/cn/Roadmap.md)
 
@@ -178,11 +178,11 @@ Clean-room；矩阵 **Done** = 烟测主路径可演示且与 [契约矩阵](doc
 | VGA | Done | 文本控制台 |
 | 串口 | Done | COM1 |
 | 物理帧分配器 | Partial | 位图 + mmap 过滤；伙伴连续页见 `phys_buddy.zig`（契约矩阵 §0） |
-| 分页 | Partial | 四级表、恒等映射；每进程 CR3/SMEP 见契约矩阵 |
+| 分页 | Partial | 四级表、恒等映射；每进程 CR3（`linkKernelHalfMappings` 共享高半区 PML4）+ SMEP 见契约矩阵 |
 | 内核堆 | Partial | Bump 快路径 + 空闲链表 + `mm/pool` 档位；路径见 [MM_ALLOC_PATHS.md](docs/cn/MM_ALLOC_PATHS.md)；契约矩阵 §0 |
 | Section 对象 | Partial | 匿名节 + `ntdll`/`section.zig`；syscall 分发节区 API（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)） |
 | IPC (LPC) | Partial | 队列、端口；连接/通信端口分离雏形、`section_view_handle` 占位 |
-| 系统调用 | Partial | `int 0x80` + `syscall`/`sysret`（启动链见 [SyscallABI.md](docs/cn/SyscallABI.md)）；SSDT 含 `NtCreateProcess`、`NtCreateUserProcess`（**0xAA**，ZOA 参数块见 [PHASE_F_PROCESS_CREATE.md](docs/cn/PHASE_F_PROCESS_CREATE.md)）、`NtWaitForMultipleObjects`（**0x57**）、`NtDeviceIoControlFile`（**0x52**）、Lock/Unlock VM（**0x53/0x54**）等；`NtQuerySystemInformation` 多类子集 + `probe`；**ssdt_stub_parity**；阶段 E 见 [PHASE_E_NATIVE_API.md](docs/cn/PHASE_E_NATIVE_API.md) |
+| 系统调用 | Partial | **仅 `syscall`/`sysret`**（[SyscallABI.md](docs/cn/SyscallABI.md)；无 SYSCALL/SYSRET 的 CPU 会 bugcheck）；SSDT 含 `NtCreateProcess`、`NtCreateUserProcess`（**0xAA**）、`NtWaitForMultipleObjects`（**0x57**）、`NtDeviceIoControlFile`（**0x52**）、Lock/Unlock VM（**0x53/0x54**）等；`NtQuerySystemInformation` 多类子集 + `probe`；**ssdt_stub_parity**；阶段 E 见 [PHASE_E_NATIVE_API.md](docs/cn/PHASE_E_NATIVE_API.md) |
 | IDT/ISR | Done | 256 向量 |
 | 调度器 | Partial | 多优先级就绪队列；完整 NT 32 级与饥饿策略见契约矩阵 |
 | 定时器 | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |

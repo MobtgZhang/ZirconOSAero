@@ -37,7 +37,7 @@
 
 **调度与定时（行为细节）**：[docs/cn/SCHEDULER_API.md](docs/cn/SCHEDULER_API.md)（就绪队列、时间片、饥饿与 I/O boost）· [docs/cn/TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md)（PIT 以外的高分辨率路径）
 
-状态标签：`Stub` · `Partial` · `Done` · `Verified`。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
+状态标签：`Stub` · `Partial` · `Done` · `Verified`。**工程三态（可读性）**：`Verified` = CI/`zig build test` 或 QEMU 冒烟可重复；`InProgress` = 接口已建、语义仍在对齐；`Planned` = 仅文档/桩。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
 More: `[docs/README.md](docs/README.md)` · `[docs/en/Architecture.md](docs/en/Architecture.md)` · `[docs/en/Kernel.md](docs/en/Kernel.md)` · `[docs/en/Boot.md](docs/en/Boot.md)` · `[docs/en/BuildSystem.md](docs/en/BuildSystem.md)` · `[docs/en/Roadmap.md](docs/en/Roadmap.md)`
 
@@ -166,11 +166,11 @@ Clean-room，行为以 [Microsoft Learn](https://learn.microsoft.com/)、WDK 与
 | VGA                       | Done    | Text console                                                                                                                                                                             |
 | Serial                    | Done    | COM1                                                                                                                                                                                     |
 | Frame allocator           | Partial | 位图 + mmap 过滤；连续页伙伴见 `phys_buddy.zig`（[NT61_CONTRACT_MATRIX §0](docs/cn/NT61_CONTRACT_MATRIX.md)）                                                                                         |
-| Paging                    | Partial | 四级表、恒等映射；每进程 CR3/SMEP 见契约矩阵与 `mitigations.zig`                                                                                                                                           |
+| Paging                    | Partial | 四级表、恒等映射；每进程 CR3（`linkKernelHalfMappings` 共享高半区 PML4）+ SMEP 见契约矩阵与 `mitigations.zig`                                                                                             |
 | Kernel heap               | Partial | Bump 快路径 + 空闲链表 + `mm/pool` 档位；路径/IRQL 见 [docs/cn/MM_ALLOC_PATHS.md](docs/cn/MM_ALLOC_PATHS.md)；Paged 软上限与契约矩阵 §0                                                                                                                                          |
 | Section objects           | Partial | 匿名节 + `ntdll` / `section.zig`；x64 `syscall` 分发 `NtCreateSection`/`NtMapViewOfSection`/`NtUnmapViewOfSection`（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)）                     |
 | IPC (LPC)                 | Partial | Queues, ports；连接/通信端口分离雏形、`section_view_handle` 占位（[Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md)）                                                                     |
-| Syscall                   | Partial | `int 0x80` + `syscall`/`sysret`（`main` 链见 [SyscallABI.md](docs/cn/SyscallABI.md)）；SSDT 含 `NtCreateProcess`/`NtWaitForMultipleObjects`（专用槽 **0x57**）等；`NtQuerySystemInformation` 多类子集 + `probe`；**ssdt_stub_parity**（[ntdll_syscall_win64.zig](src/sdk/ntdll_syscall_win64.zig)） |
+| Syscall                   | Partial | **仅 `syscall`/`sysret`**（[SyscallABI.md](docs/cn/SyscallABI.md)；无 SYSCALL/SYSRET 的 CPU 会 bugcheck）；SSDT 含 `NtCreateProcess`/`NtWaitForMultipleObjects`（**0x57**）等；`NtQuerySystemInformation` 子集 + `probe`；**ssdt_stub_parity**（[ntdll_syscall_win64.zig](src/sdk/ntdll_syscall_win64.zig)） |
 | IDT/ISR                   | Done    | 256 vectors                                                                                                                                                                              |
 | Scheduler                 | Partial | **已实现**：每逻辑 CPU **32** 档 FIFO 分桶、`non_empty` 位图、按 **priority class** 时间片、饥饿提升、I/O boost、互斥优先级继承（多锁深度配对 `mutex_inherit_depth`）、亲和与 `home_cpu`、tick 路径 CR3 切换；**对象等待队列** + `keWait` 阻塞与 `tick` 让出（[SCHEDULER_API.md](docs/cn/SCHEDULER_API.md) 阶段 C）。**未等同 NT**：NUMA/公平份额、完整 IRQL 抢占模型、AP **INIT-SIPI** 实路径与多核 tick 仍为路线图（K2.4/K2.6）。 |
 | Timer                     | Partial | **主 tick**：PIC + **PIT ~100Hz**（`ke/timer.zig`）。**单调时钟抽象**：`ke/timekeeping.zig`（调度 tick + 可选 HPET 主计数器只读）。**HPET**：MMIO 探测/频率解析见 `hal/x86_64/hpet.zig`（接 IRQ0 迁移与 LAPIC one-shot 见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md)）。 |

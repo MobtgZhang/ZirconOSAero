@@ -36,6 +36,16 @@ pub const Ssdt = struct {
     pub const NtSetInformationObject: u32 = 0x56;
     pub const NtSignalAndWaitForSingleObject: u32 = 0x176;
     pub const NtQueryInformationProcess: u32 = 0x16;
+    pub const NtCreateFile: u32 = 0x2C;
+    pub const NtReadFile: u32 = 0x07;
+    pub const NtWriteFile: u32 = 0x08;
+    pub const NtOpenFile: u32 = 0x33;
+    pub const NtCreateSection: u32 = 0x47;
+    pub const NtMapViewOfSection: u32 = 0x48;
+    pub const NtUnmapViewOfSection: u32 = 0x2A;
+    pub const NtTerminateProcess: u32 = 0x29;
+    pub const NtReadVirtualMemory: u32 = 0x3D;
+    pub const NtWriteVirtualMemory: u32 = 0x3E;
 };
 
 /// 原始 NT x64 syscall；`num` 为 SSDT 索引；返回值按 NTSTATUS 符号扩展。
@@ -103,4 +113,14 @@ comptime {
     _ = Ssdt.NtSetInformationObject;
     _ = Ssdt.NtSignalAndWaitForSingleObject;
     _ = Ssdt.NtQueryInformationProcess;
+    _ = Ssdt.NtCreateFile;
+    _ = Ssdt.NtReadFile;
+    _ = Ssdt.NtWriteFile;
+    _ = Ssdt.NtOpenFile;
+    _ = Ssdt.NtCreateSection;
+    _ = Ssdt.NtMapViewOfSection;
+    _ = Ssdt.NtUnmapViewOfSection;
+    _ = Ssdt.NtTerminateProcess;
+    _ = Ssdt.NtReadVirtualMemory;
+    _ = Ssdt.NtWriteVirtualMemory;
 }

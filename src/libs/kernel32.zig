@@ -138,7 +138,7 @@ pub fn CreateProcessA(
     _ = app_name;
     _ = cmd_line;
     var handle: ntdll.HANDLE = 0;
-    const status = ntdll.NtCreateProcess(
+    const status = kernelbase.NtCreateProcess(
         &handle,
         0,
         null,
@@ -155,7 +155,7 @@ pub fn CreateProcessA(
 }
 
 pub fn TerminateProcess(handle: HANDLE, exit_code: DWORD) BOOL {
-    const status = ntdll.NtTerminateProcess(handle, @intCast(exit_code));
+    const status = kernelbase.NtTerminateProcess(handle, @intCast(exit_code));
     return if (status == ntdll.STATUS_SUCCESS) TRUE else FALSE;
 }
 
@@ -213,7 +213,7 @@ pub fn WriteFile(handle: HANDLE, data: []const u8, bytes_written: *DWORD) BOOL {
 }
 
 pub fn CloseHandle(handle: HANDLE) BOOL {
-    _ = ntdll.NtClose(handle);
+    _ = kernelbase.NtClose(handle);
     return TRUE;
 }
 

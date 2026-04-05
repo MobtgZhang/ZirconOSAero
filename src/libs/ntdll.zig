@@ -3,8 +3,9 @@
 //! system information queries, RTL utilities, and debug support.
 //!
 //! ## NT 6.1 x86_64 系统调用约定（里程碑）
-//! - 用户态经 `syscall` 进入内核时，内核入口由 `LSTAR`（等效）指向 syscall 分派；`STAR`/`SFMASK` 与 `syscall` 指令语义见 Intel SDM。
-//! - 编号与参数寄存器约定与 Windows NT 6.1 x64 一致（公开 ABI）；具体数值见本仓库 `syscall_numbers*` / `ssdt` 测试锚点。
+//! - **独立用户进程 / PE 镜像**：须链接 [`sdk/ntdll_syscall_win64.zig`](../sdk/ntdll_syscall_win64.zig)（`syscall` 指令 + `Ssdt` 索引），**勿**依赖 `int 0x80` 作主路径。
+//! - 本文件为 **内核内联** Native API：直接调用子系统实现，不经 `syscall`；服务号与 `ssdt_nt61` 对齐供文档与 WOW64 对照。
+//! - 用户态经 `syscall` 进入内核时，入口由 `LSTAR` 指向分派；`STAR`/`SFMASK` 见 Intel SDM 与 `syscall_msr.zig`。
 //! - 完整 PE 进程上下文需与 `Process.peb_address` / `image_base_address` 及 `sdk/pe64_nt61.zig` 映射闭环衔接（后续里程碑）。
 //! Reference: https://learn.microsoft.com/en-us/cpp/build/overview-of-x64-calling-conventions
 
@@ -133,7 +134,12 @@ pub const ProcessBasicInformation: u32 = 0;
 pub const ProcessSessionInformation: u32 = 24;
 /// Ref: learn.microsoft.com `PROCESSINFOCLASS` — WOW64 进程返回 32 位 PEB 指针；本机 64 位进程为 0。
 pub const ProcessWow64Information: u32 = 26;
+/// `ProcessImageFileName` — 缓冲区布局为 `UNICODE_STRING` + UTF-16LE 串（本实现写于用户缓冲）。
+pub const ProcessImageFileName: u32 = 27;
+/// 较新构建可见；NT 6.1 全语义未声称，返回 `STATUS_NOT_IMPLEMENTED`。
+pub const ProcessCommandLineInformation: u32 = 60;
 pub const ThreadBasicInformation: u32 = 0;
+pub const ThreadTimes: u32 = 1;
 
 /// `THREAD_BASIC_INFORMATION` x64 布局（公开头文件描述；clean-room 字段顺序）。
 const THREAD_BASIC_INFORMATION = extern struct {
@@ -181,7 +187,7 @@ fn recycleEventObject(object_ptr: u64) void {
     while (i < MAX_KERNEL_EVENTS) : (i += 1) {
         if (g_event_used[i] and @intFromPtr(&g_event_objs[i]) == object_ptr) {
             const hdr = &g_event_objs[i];
-            if (hdr.ref_count == 0 and hdr.handle_count == 0) {
+            if (hdr.refCount() == 0 and hdr.handleCount() == 0) {
                 hdr.* = .{};
                 g_event_used[i] = false;
             }
@@ -221,7 +227,7 @@ fn recycleMutexObject(object_ptr: u64) void {
     while (i < MAX_KERNEL_MUTEXES) : (i += 1) {
         if (g_mutex_used[i] and @intFromPtr(&g_mutex_objs[i]) == object_ptr) {
             const hdr = &g_mutex_objs[i];
-            if (hdr.ref_count == 0 and hdr.handle_count == 0) {
+            if (hdr.refCount() == 0 and hdr.handleCount() == 0) {
                 hdr.* = .{ .obj_type = .mutex };
                 g_mutex_used[i] = false;
             }
@@ -253,7 +259,7 @@ fn recycleSemaphoreObject(object_ptr: u64) void {
     while (i < MAX_KERNEL_SEMAPHORES) : (i += 1) {
         if (g_sem_used[i] and @intFromPtr(&g_sem_objs[i]) == object_ptr) {
             const hdr = &g_sem_objs[i];
-            if (hdr.ref_count == 0 and hdr.handle_count == 0) {
+            if (hdr.refCount() == 0 and hdr.handleCount() == 0) {
                 hdr.* = .{ .obj_type = .semaphore };
                 g_sem_used[i] = false;
             }
@@ -306,6 +312,27 @@ pub const CLIENT_ID = extern struct {
     unique_process: usize,
     unique_thread: usize,
 };
+
+/// x64 `UNICODE_STRING`（Learn）：`Buffer` 为目标进程用户 VA。
+const UNICODE_STRING_NATIVE = extern struct {
+    length: u16,
+    maximum_length: u16,
+    _reserved: u32 = 0,
+    buffer: u64,
+};
+comptime {
+    std.debug.assert(@sizeOf(UNICODE_STRING_NATIVE) == 16);
+}
+
+const KERNEL_USER_TIMES = extern struct {
+    create_time: i64,
+    exit_time: i64,
+    kernel_time: i64,
+    user_time: i64,
+};
+comptime {
+    std.debug.assert(@sizeOf(KERNEL_USER_TIMES) == 32);
+}
 
 fn resolveTargetProcess(process_handle: HANDLE) ?*process.Process {
     const cur = process.getCurrentProcess() orelse return null;
@@ -517,6 +544,57 @@ pub fn NtQueryInformationProcess(
             out.* = if (proc.is_wow64) @as(usize, @truncate(proc.peb32_user_va)) else 0;
             return STATUS_SUCCESS;
         },
+        ProcessImageFileName => {
+            const base: usize = @intFromPtr(process_information orelse return STATUS_INVALID_PARAMETER);
+            const prefix = "\\??\\C:\\";
+            const name_len: u32 = @intCast(proc.name_len);
+            const str_u16_bytes: u32 = @intCast(prefix.len * 2 + name_len * 2 + 2);
+            const need: u32 = 16 + str_u16_bytes;
+            if (return_length) |rl| rl.* = need;
+            if (process_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const us_out: *align(1) UNICODE_STRING_NATIVE = @ptrFromInt(base);
+            const str_start: u64 = @intCast(base + 16);
+            us_out._reserved = 0;
+            us_out.buffer = str_start;
+            us_out.length = @truncate(prefix.len * 2 + name_len * 2);
+            us_out.maximum_length = us_out.length + 2;
+            const str_sl: [*]u8 = @ptrFromInt(base + 16);
+            var woff: usize = 0;
+            for (prefix) |ch| {
+                std.mem.writeInt(u16, str_sl[woff..][0..2], ch, .little);
+                woff += 2;
+            }
+            for (proc.name[0..proc.name_len]) |ch| {
+                std.mem.writeInt(u16, str_sl[woff..][0..2], ch, .little);
+                woff += 2;
+            }
+            std.mem.writeInt(u16, str_sl[woff..][0..2], 0, .little);
+            return STATUS_SUCCESS;
+        },
+        ProcessCommandLineInformation => {
+            // Win7 x64：`PROCESS_COMMAND_LINE_INFORMATION` 为 **UNICODE_STRING + 内联 UTF-16**（Learn / Winternl）。
+            // 本内核无独立 PEB 命令行块：用映像短名 **近似** 可执行路径（与 `ProcessImageFileName` 不同，无 `\??\` 前缀）。
+            const base: usize = @intFromPtr(process_information orelse return STATUS_INVALID_PARAMETER);
+            const name_len: u32 = @intCast(proc.name_len);
+            const str_u16_bytes: u32 = @intCast(name_len * 2 + 2);
+            const need: u32 = 16 + str_u16_bytes;
+            if (return_length) |rl| rl.* = need;
+            if (process_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const us_out: *align(1) UNICODE_STRING_NATIVE = @ptrFromInt(base);
+            const str_start: u64 = @intCast(base + 16);
+            us_out._reserved = 0;
+            us_out.buffer = str_start;
+            us_out.length = @truncate(name_len * 2);
+            us_out.maximum_length = us_out.length + 2;
+            const str_sl: [*]u8 = @ptrFromInt(base + 16);
+            var woff: usize = 0;
+            for (proc.name[0..proc.name_len]) |ch| {
+                std.mem.writeInt(u16, str_sl[woff..][0..2], ch, .little);
+                woff += 2;
+            }
+            std.mem.writeInt(u16, str_sl[woff..][0..2], 0, .little);
+            return STATUS_SUCCESS;
+        },
         else => {
             if (return_length) |rl| rl.* = 0;
             return STATUS_INVALID_INFO_CLASS;
@@ -583,6 +661,29 @@ pub fn NtTestAlert() NTSTATUS {
     return STATUS_SUCCESS;
 }
 
+fn resolvePsThreadFromHandle(thread_handle: HANDLE) ?*process.PsThreadObject {
+    const cur = process.getCurrentProcess() orelse return null;
+    const slot: ob.Handle = @truncate(thread_handle);
+    if (cur.handle_table.lookupHandle(slot)) |ent| {
+        if (ent.obj_type != .thread) return null;
+        const hdr = @as(*ob.ObjectHeader, @ptrFromInt(ent.object_ptr));
+        return @fieldParentPtr("header", hdr);
+    }
+    return null;
+}
+
+fn threadQuerySchedContext(thread_handle: HANDLE) ?struct { sched_tid: usize, host_pid: u32 } {
+    if (resolvePsThreadFromHandle(thread_handle)) |pto| {
+        return .{ .sched_tid = pto.scheduler_tid, .host_pid = pto.host_pid };
+    }
+    const idx: usize = @truncate(thread_handle);
+    if (scheduler.getThreadByIndex(idx)) |t| {
+        return .{ .sched_tid = idx, .host_pid = t.process_id };
+    }
+    return null;
+}
+
+/// C3：`ThreadBasicInformation` / `ThreadTimes` 子集；其余 `THREADINFOCLASS` 渐进扩展（与契约矩阵 §3 同步）。
 pub fn NtQueryInformationThread(
     thread_handle: HANDLE,
     thread_information_class: u32,
@@ -590,24 +691,41 @@ pub fn NtQueryInformationThread(
     thread_information_length: u32,
     return_length: ?*u32,
 ) NTSTATUS {
-    if (thread_information_class != ThreadBasicInformation) {
+    const ctx = threadQuerySchedContext(thread_handle) orelse {
         if (return_length) |rl| rl.* = 0;
-        return STATUS_INVALID_INFO_CLASS;
+        return STATUS_INVALID_HANDLE;
+    };
+    switch (thread_information_class) {
+        ThreadBasicInformation => {
+            const need: u32 = @intCast(@sizeOf(THREAD_BASIC_INFORMATION));
+            if (return_length) |rl| rl.* = need;
+            if (thread_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const buf = thread_information orelse return STATUS_INVALID_PARAMETER;
+            const out: *THREAD_BASIC_INFORMATION = @ptrCast(@alignCast(buf));
+            out.exit_status = STATUS_SUCCESS;
+            out._pad0 = 0;
+            out.teb_base_address = 0;
+            out.client_id_unique_process = ctx.host_pid;
+            out.client_id_unique_thread = ctx.sched_tid;
+            out.affinity_mask = 1;
+            out.priority = 0;
+            out.base_priority = 0;
+            return STATUS_SUCCESS;
+        },
+        ThreadTimes => {
+            const need: u32 = @intCast(@sizeOf(KERNEL_USER_TIMES));
+            if (return_length) |rl| rl.* = need;
+            if (thread_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const buf = thread_information orelse return STATUS_INVALID_PARAMETER;
+            const out: *KERNEL_USER_TIMES = @ptrCast(@alignCast(buf));
+            out.* = std.mem.zeroes(KERNEL_USER_TIMES);
+            return STATUS_SUCCESS;
+        },
+        else => {
+            if (return_length) |rl| rl.* = 0;
+            return STATUS_INVALID_INFO_CLASS;
+        },
     }
-    const need: u32 = @intCast(@sizeOf(THREAD_BASIC_INFORMATION));
-    if (return_length) |rl| rl.* = need;
-    if (thread_information_length < need) return STATUS_INFO_LENGTH_MISMATCH;
-    const buf = thread_information orelse return STATUS_INVALID_PARAMETER;
-    const out: *THREAD_BASIC_INFORMATION = @ptrCast(@alignCast(buf));
-    out.exit_status = STATUS_SUCCESS;
-    out._pad0 = 0;
-    out.teb_base_address = 0;
-    out.client_id_unique_process = process.getCurrentPid();
-    out.client_id_unique_thread = thread_handle;
-    out.affinity_mask = 1;
-    out.priority = 0;
-    out.base_priority = 0;
-    return STATUS_SUCCESS;
 }
 
 /// 命名管道（PHASE_E **E3.2**）：未实现；与邮件槽同属延后 I/O 表面。
@@ -793,6 +911,10 @@ pub fn NtReadFile(
         io_status.* = .{ .status = STATUS_INVALID_HANDLE, .information = 0 };
         return STATUS_INVALID_HANDLE;
     };
+    if (!token.checkHandleAccess(&proc.handle_table, h, ob.GENERIC_READ)) {
+        io_status.* = .{ .status = STATUS_ACCESS_DENIED, .information = 0 };
+        return STATUS_ACCESS_DENIED;
+    }
     if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
     const f: *vfs.FileObject = @ptrFromInt(ent.object_ptr);
     const buf = buffer orelse return STATUS_INVALID_PARAMETER;
@@ -825,6 +947,10 @@ pub fn NtWriteFile(
         io_status.* = .{ .status = STATUS_INVALID_HANDLE, .information = 0 };
         return STATUS_INVALID_HANDLE;
     };
+    if (!token.checkHandleAccess(&proc.handle_table, h, ob.GENERIC_WRITE)) {
+        io_status.* = .{ .status = STATUS_ACCESS_DENIED, .information = 0 };
+        return STATUS_ACCESS_DENIED;
+    }
     if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
     const f: *vfs.FileObject = @ptrFromInt(ent.object_ptr);
     const buf = buffer orelse return STATUS_INVALID_PARAMETER;
@@ -1001,8 +1127,8 @@ pub fn NtQueryObject(handle: HANDLE, info_class: u32, buf: ?*anyopaque, len: u32
     const out: *PUBLIC_OBJECT_BASIC_INFORMATION = @ptrCast(@alignCast(b));
     out.* = .{};
     out.GrantedAccess = ent.granted_access;
-    out.HandleCount = hdr.handle_count;
-    out.PointerCount = hdr.ref_count;
+    out.HandleCount = hdr.handleCount();
+    out.PointerCount = hdr.refCount();
     return STATUS_SUCCESS;
 }
 
@@ -1046,8 +1172,33 @@ pub fn NtQueryDirectoryObject(
     return STATUS_NOT_IMPLEMENTED;
 }
 
-pub fn NtOpenThread(_: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES, _: ?*anyopaque) NTSTATUS {
-    return STATUS_NOT_IMPLEMENTED;
+pub fn NtOpenThread(
+    thread_handle: *HANDLE,
+    desired_access: u32,
+    object_attributes: ?*OBJECT_ATTRIBUTES,
+    client_id: ?*anyopaque,
+) NTSTATUS {
+    _ = object_attributes;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const asp = proc.address_space orelse return STATUS_INVALID_PARAMETER;
+    if (client_id == null) return STATUS_INVALID_PARAMETER;
+    const cid_ptr: *CLIENT_ID = @ptrCast(@alignCast(client_id.?));
+    if (!probe.probeUserMemory(asp, @intFromPtr(cid_ptr), @sizeOf(CLIENT_ID), false))
+        return STATUS_ACCESS_VIOLATION;
+    const cid = cid_ptr.*;
+    const host_pid: u32 = @truncate(cid.unique_process);
+    const tobj = process.findPsThreadForOpen(host_pid, cid.unique_thread) orelse return STATUS_INVALID_PARAMETER;
+    if (!token.seThreadOpenAllowed(&proc.security_token, desired_access)) {
+        @import("../se/audit.zig").logObjectOpenDenied("NtOpenThread");
+        return STATUS_ACCESS_DENIED;
+    }
+    if (!probe.probeUserMemory(asp, @intFromPtr(thread_handle), @sizeOf(HANDLE), true))
+        return STATUS_ACCESS_VIOLATION;
+    const grant = desiredAccessToObMask(desired_access);
+    const h = proc.handle_table.allocHandle(@intFromPtr(&tobj.header), grant, .thread) orelse
+        return STATUS_INSUFFICIENT_RESOURCES;
+    thread_handle.* = h;
+    return STATUS_SUCCESS;
 }
 
 pub fn NtCreateEvent(
@@ -1466,6 +1617,13 @@ pub fn NtDuplicateObject(
     if ((options & DUPLICATE_SAME_ACCESS) != 0 or grant == 0)
         grant = ent.granted_access;
 
+    if ((grant & ent.granted_access) != grant) {
+        if (!proc.security_token.is_elevated and !proc.security_token.owner.eql(token.SYSTEM_SID)) {
+            @import("../se/audit.zig").logObjectOpenDenied("NtDuplicateObject_escalate");
+            return STATUS_ACCESS_DENIED;
+        }
+    }
+
     const nh = proc.handle_table.duplicateHandle(sh, grant) orelse return STATUS_INSUFFICIENT_RESOURCES;
     target_handle.* = nh;
     return STATUS_SUCCESS;
@@ -1475,6 +1633,11 @@ pub const MEM_COMMIT: u32 = 0x1000;
 pub const MEM_RESERVE: u32 = 0x2000;
 pub const MEM_DECOMMIT: u32 = 0x4000;
 pub const MEM_RELEASE: u32 = 0x8000;
+/// 以下标志在 `vm.zig` / VAD 中 **未实现**；`NtAllocateVirtualMemory` / `NtFreeVirtualMemory` 遇之返回 `STATUS_NOT_IMPLEMENTED`（显式 NTSTATUS，见契约矩阵 C3）。
+pub const MEM_RESET: u32 = 0x80000;
+pub const MEM_TOP_DOWN: u32 = 0x100000;
+pub const MEM_PHYSICAL: u32 = 0x400000;
+pub const MEM_LARGE_PAGES: u32 = 0x20000000;
 /// x64 上 `VirtualAlloc` 保留/释放粒度（Learn — Memory Management）。
 pub const MEM_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
 pub const PAGE_NOACCESS: u32 = 0x01;
@@ -1505,6 +1668,8 @@ pub fn NtAllocateVirtualMemory(
     const commit = (allocation_type & MEM_COMMIT) != 0;
     const reserve = (allocation_type & MEM_RESERVE) != 0;
     if (!commit and !reserve) return STATUS_INVALID_PARAMETER;
+    const alloc_mask = MEM_COMMIT | MEM_RESERVE;
+    if ((allocation_type & ~alloc_mask) != 0) return STATUS_NOT_IMPLEMENTED;
 
     const page_size: u64 = 4096;
     var size = region_size.*;
@@ -1573,6 +1738,8 @@ pub fn NtFreeVirtualMemory(
     const has_dec = (free_type & MEM_DECOMMIT) != 0;
     if (has_rel and has_dec) return STATUS_INVALID_PARAMETER;
     if (!has_rel and !has_dec) return STATUS_INVALID_PARAMETER;
+    const free_mask = MEM_RELEASE | MEM_DECOMMIT;
+    if ((free_type & ~free_mask) != 0) return STATUS_NOT_IMPLEMENTED;
 
     const pid = processHandleToPid(process_handle) orelse return STATUS_INVALID_HANDLE;
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
@@ -1717,6 +1884,10 @@ pub fn NtOpenProcess(
     const pid: u32 = @truncate(cid.unique_process);
     if (pid == 0) return STATUS_INVALID_PARAMETER;
     const target = process.findProcess(pid) orelse return STATUS_INVALID_PARAMETER;
+    if (!token.seProcessOpenAllowed(&proc.security_token, desired_access)) {
+        @import("../se/audit.zig").logObjectOpenDenied("NtOpenProcess");
+        return STATUS_ACCESS_DENIED;
+    }
     if (!probe.probeUserMemory(asp, @intFromPtr(process_handle), @sizeOf(HANDLE), true))
         return STATUS_ACCESS_VIOLATION;
     const grant = desiredAccessToObMask(desired_access);
@@ -1916,6 +2087,7 @@ comptime {
 /// `SYSTEM_PERFORMANCE_INFORMATION` 过大；仅返回前 **128** 字节零填充（里程碑桩）。
 const SYSTEM_PERFORMANCE_INFORMATION_PREFIX_BYTES: usize = 128;
 
+/// `SystemVersionInformation` / `SystemBasicInformation` 与 [`config/os_version.zig`](../config/os_version.zig)、注册表 `CurrentBuildNumber`（`registry.populateDefaults`）共用 **build** 真源策略。
 pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u32) NTSTATUS {
     const osv = @import("../config/os_version.zig");
     switch (info_class) {

@@ -110,6 +110,21 @@ pub fn build(b: *std.Build) void {
         "desktop-full",
         "Optional extended desktop/DWM paths (user32 hook; default off; bisect heavy shell changes)",
     ) orelse false;
+    const desktop_shell_no_caption_partial_opt = b.option(
+        bool,
+        "desktop_shell_no_caption_partial",
+        "Diagnostics: never use caption-only partial shell repaint (forces full shell layer; bisect black-border / save-under)",
+    ) orelse false;
+    const desktop_bisect_force_full_present_opt = b.option(
+        bool,
+        "desktop_bisect_force_full_present",
+        "Diagnostics: always fb.flip() full memcpy on double-buffer present (bisect partial flipDirty vs pointer/window darken)",
+    ) orelse false;
+    const desktop_bisect_disable_cursor_move_only_opt = b.option(
+        bool,
+        "desktop_bisect_disable_cursor_move_only",
+        "Diagnostics: never use cursor_plane.moveOnly (bisect save-under / pointer-fast path vs darken)",
+    ) orelse false;
     const dwm_blur_stats_opt = b.option(
         bool,
         "dwm_blur_stats",
@@ -369,6 +384,9 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "agent_ndjson", agent_ndjson_opt);
     build_opts.addOption(bool, "desktop_bisect", desktop_bisect_opt);
     build_opts.addOption(bool, "desktop_full", desktop_full_opt);
+    build_opts.addOption(bool, "desktop_shell_no_caption_partial", desktop_shell_no_caption_partial_opt);
+    build_opts.addOption(bool, "desktop_bisect_force_full_present", desktop_bisect_force_full_present_opt);
+    build_opts.addOption(bool, "desktop_bisect_disable_cursor_move_only", desktop_bisect_disable_cursor_move_only_opt);
     build_opts.addOption(bool, "dwm_blur_stats", dwm_blur_stats_opt);
     build_opts.addOption(bool, "enable_idt", enable_idt_opt);
     build_opts.addOption(bool, "lapic_periodic_tick", lapic_periodic_tick_opt);
@@ -1307,6 +1325,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_startmenu_paint_hint_nt61_tests = b.addRunArtifact(startmenu_paint_hint_nt61_tests);
 
+    const shell_partial_repaint_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/shell_partial_repaint_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const shell_partial_repaint_nt61_tests = b.addTest(.{
+        .root_module = shell_partial_repaint_nt61_host_mod,
+        .name = "shell_partial_repaint_nt61_host",
+    });
+    const run_shell_partial_repaint_nt61_tests = b.addRunArtifact(shell_partial_repaint_nt61_tests);
+
     const kernel_stub_audit_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/kernel_stub_audit_anchor_host.zig"),
         .target = b.graph.host,
@@ -1560,6 +1589,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_multimon_dpi_nt61_tests.step);
     test_step.dependOn(&run_taskbar_peek_hit_nt61_tests.step);
     test_step.dependOn(&run_startmenu_paint_hint_nt61_tests.step);
+    test_step.dependOn(&run_shell_partial_repaint_nt61_tests.step);
     test_step.dependOn(&run_kernel_stub_audit_tests.step);
     test_step.dependOn(&run_dwm_nt61_integration_tests.step);
     test_step.dependOn(&run_registry_zosh1_tests.step);

@@ -752,6 +752,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
         if (display.handleDesktopHotkeys()) needs_ui_paint = true;
         if (startmenu_mod.feedSearchFromKeyboard()) needs_ui_paint = true;
         if (builtin_apps_mod.pollKeyboardToFocused()) needs_ui_paint = true;
+        if (display.dwm_mod.takeDesktopShellRepaintAfterDwmNotify()) needs_ui_paint = true;
 
         const mx = mouse.getX();
         const my = mouse.getY();
@@ -786,9 +787,12 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
             }
             display.renderDesktopFrameEx(scene_dirty, caption_chrome_only, drag_repaint, startmenu_repaint, shell_geometry_repaint);
             if (bisect) {
-                klog.debug("%s: post renderDesktopFrameEx pre-present ticks=%u", .{
+                const tel = display.getDesktopComposeTelemetry();
+                klog.debug("%s: post renderDesktopFrameEx pre-present ticks=%u compose_full=%u compose_partial=%u", .{
                     bisect_log_prefix,
                     @as(u32, @truncate(scheduler.getTicks() - t0)),
+                    tel.full_scene_frames,
+                    tel.partial_frames,
                 });
             }
             // D-D4：`present()` 内 `dwm_compositor.notifyFramePresented` 与脏表面缩略刷新配对；无 `need_paint` 时跳过以免空 flip。

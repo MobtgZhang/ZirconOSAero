@@ -29,6 +29,9 @@ jobs:
       - name: Docs relative link check
         run: bash scripts/check-docs-links.sh
 
+      - name: Contract matrix stub scan (E3 anchor)
+        run: bash scripts/contract_matrix_scan.sh
+
       - name: Install smoke deps (QEMU MBR + binutils + ISO tools)
         run: |
           sudo apt-get update

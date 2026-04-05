@@ -200,6 +200,18 @@ pub fn build(b: *std.Build) void {
         "desktop_idle_spin",
         "x86_64 desktop loop: spin instead of sti;hlt (smoother input polling in QEMU; higher guest CPU use; Makefile DESKTOP_IDLE_SPIN)",
     ) orelse true;
+    const get_message_yield_spins_raw = b.option(
+        u32,
+        "get_message_yield_spins",
+        "NtUserGetMessage cooperative loop: max yield/spin iterations before STATUS_PENDING (default 4096; clamp 1..16_777_216)",
+    ) orelse 4096;
+    const get_message_yield_spins: u32 = switch (get_message_yield_spins_raw) {
+        1...16_777_216 => get_message_yield_spins_raw,
+        else => blk: {
+            std.log.err("Invalid -Dget_message_yield_spins={d}; allowed 1..16777216 — using 4096", .{get_message_yield_spins_raw});
+            break :blk 4096;
+        },
+    };
     const aero_blur_light_opt = b.option(
         bool,
         "aero_blur_light",
@@ -269,7 +281,7 @@ pub fn build(b: *std.Build) void {
         };
         if (cpu_arch == .x86_64 and kernel_optimize != .Debug) {
             q.cpu_features_sub = std.Target.x86.featureSet(&.{
-                .mmx, .sse, .sse2, .sse3, .ssse3, .sse4_1, .sse4_2,
+                .mmx, .sse,  .sse2,    .sse3, .ssse3, .sse4_1, .sse4_2,
                 .avx, .avx2, .avx512f,
             });
             q.cpu_features_add = std.Target.x86.featureSet(&.{.soft_float});
@@ -386,6 +398,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(u32, "kernel_preferred_fb_height", zbm_fb_h);
     build_opts.addOption(u32, "phys_track_gb", phys_track_gb);
     build_opts.addOption(u16, "max_scheduler_threads", max_scheduler_threads);
+    build_opts.addOption(u32, "get_message_yield_spins", get_message_yield_spins);
 
     const code_model: std.builtin.CodeModel = switch (cpu_arch) {
         .x86_64 => .kernel,
@@ -468,7 +481,6 @@ pub fn build(b: *std.Build) void {
         kernel.addAssemblyFile(b.path("src/arch/x86_64/start.s"));
         if (enable_idt_opt) {
             kernel.addAssemblyFile(b.path("src/arch/x86_64/isr_common.s"));
-            kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_entry.s"));
             kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_lstar.s"));
         }
         kernel.addAssemblyFile(b.path("src/arch/x86_64/kernel_end.s"));
@@ -582,6 +594,39 @@ pub fn build(b: *std.Build) void {
         .name = "se_token",
     });
     const run_se_token_tests = b.addRunArtifact(se_token_tests);
+
+    const lpc_cross_pid_queue_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/lpc_cross_pid_queue_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const lpc_cross_pid_queue_tests = b.addTest(.{
+        .root_module = lpc_cross_pid_queue_host_mod,
+        .name = "lpc_cross_pid_queue_host",
+    });
+    const run_lpc_cross_pid_queue_tests = b.addRunArtifact(lpc_cross_pid_queue_tests);
+
+    const lpc_two_pid_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/lpc_two_pid_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const lpc_two_pid_host_tests = b.addTest(.{
+        .root_module = lpc_two_pid_host_mod,
+        .name = "lpc_two_pid_host",
+    });
+    const run_lpc_two_pid_host_tests = b.addRunArtifact(lpc_two_pid_host_tests);
+
+    const lpc_bad_pointer_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/lpc_bad_pointer_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const lpc_bad_pointer_host_tests = b.addTest(.{
+        .root_module = lpc_bad_pointer_host_mod,
+        .name = "lpc_bad_pointer_host",
+    });
+    const run_lpc_bad_pointer_host_tests = b.addRunArtifact(lpc_bad_pointer_host_tests);
 
     const smp_atomic_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/smp_atomic_host.zig"),
@@ -1287,6 +1332,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "dwm_blur_budget", .module = dwm_blur_budget_host_mod },
             .{ .name = "dwm_nt61_api_contract", .module = dwm_nt61_api_contract_host_mod },
             .{ .name = "wddm_abstraction", .module = wddm_abstraction_host_mod },
+            .{ .name = "nt61_aero_defaults", .module = nt61_aero_defaults_host_mod },
         },
     });
     const dwm_nt61_integration_tests = b.addTest(.{
@@ -1305,6 +1351,17 @@ pub fn build(b: *std.Build) void {
         .name = "registry_zosh1_host",
     });
     const run_registry_zosh1_tests = b.addRunArtifact(registry_zosh1_tests);
+
+    const regf_parse_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/registry/regf_parse.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const regf_parse_tests = b.addTest(.{
+        .root_module = regf_parse_host_mod,
+        .name = "regf_parse_host",
+    });
+    const run_regf_parse_tests = b.addRunArtifact(regf_parse_tests);
 
     const wow64_ssdt_x86_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig"),
@@ -1444,6 +1501,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ssdt_tests.step);
     test_step.dependOn(&run_ssdt_stub_parity_tests.step);
     test_step.dependOn(&run_se_token_tests.step);
+    test_step.dependOn(&run_lpc_cross_pid_queue_tests.step);
+    test_step.dependOn(&run_lpc_two_pid_host_tests.step);
+    test_step.dependOn(&run_lpc_bad_pointer_host_tests.step);
     test_step.dependOn(&run_smp_atomic_tests.step);
     test_step.dependOn(&run_wow64_types_tests.step);
     test_step.dependOn(&run_ob_object_tests.step);
@@ -1503,6 +1563,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_kernel_stub_audit_tests.step);
     test_step.dependOn(&run_dwm_nt61_integration_tests.step);
     test_step.dependOn(&run_registry_zosh1_tests.step);
+    test_step.dependOn(&run_regf_parse_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
     test_step.dependOn(&run_wow64_x64_semantic_alias_tests.step);
     test_step.dependOn(&run_wow64_redirect_tests.step);

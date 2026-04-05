@@ -104,7 +104,7 @@ endif
 
 ROOT_DIR     := $(shell pwd)
 # `make` / `make run-debug`：整次会话输出覆盖写入此文件（非追加）。嵌套 make 请传 ZIRCON_NO_LOG=1 或已由内层自动设置。
-LOG_TXT      := $(ROOT_DIR)/log.txt
+LOG_TXT      := $(ROOT_DIR)/.log/log.txt
 BUILD_DIR    := $(ROOT_DIR)/build
 TMP_DIR      := $(BUILD_DIR)/tmp
 RELEASE_DIR  := $(BUILD_DIR)/release

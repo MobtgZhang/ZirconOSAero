@@ -729,6 +729,14 @@ pub fn drawSystemInfoStrip(scr_w: i32, scr_h: i32, tb_h: i32) void {
     fb.drawTextTransparentScaled(tx, ty, text, rgb(0xE4, 0xE8, 0xF2), scale);
 }
 
+/// 标题栏/开始菜单局部重绘与软件光标 save-under 叠加时，在光标移动、多窗重叠或诊断开关下降级为整壳层 `renderFrameEx`。
+fn shellPartialRepaintShouldDegradeToFullLayer(scr_w: i32, scr_h: i32, cursor_moved: bool) bool {
+    const bo = @import("build_options");
+    if (bo.desktop_shell_no_caption_partial) return true;
+    if (cursor_moved) return true;
+    return anyShellHostedWindowsOverlap(scr_w, scr_h);
+}
+
 pub fn renderDesktopFrame() void {
     renderDesktopFrameEx(true, false, false, false, false);
 }
@@ -751,7 +759,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     dwm_mod.setGlassLiteBlurEnabled(shell_glass_lite);
     defer dwm_mod.setGlassLiteBlurEnabled(false);
 
-    // 合成顺序：场景（壁纸/窗口/DWM 效果）→ 任务栏等壳层（renderer_aero 内）→ CursorPlane（save-under + 绘制）→ 调用方 present。
+    // 合成顺序：场景（壁纸/窗口/DWM 效果）→ 任务栏等壳层（renderer_aero 内）→ **DWM 缩略图** → CursorPlane（save-under + 绘制）→ 调用方 present。
     // 合成前再排空一轮输入，避免 IRQ/轮询与取样之间存在竞态导致本帧光标滞后一整帧。
     const input_hub = @import("../../../drivers/input/input_hub.zig");
     input_hub.pollAll();
@@ -786,31 +794,38 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
         panic_ctx.setPhase(0x0002_0030);
         renderSceneWithoutSoftwareCursorFlip3dAware(true);
         panic_ctx.setPhase(0x0002_0040);
+        blitRegisteredDwmThumbnailsBeforeCursor();
         cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     } else if (drag_repaint) {
         path_kind = .drag_layer;
         syncAeroGlassFastPath();
         renderer_aero.renderFrameEx(false);
         panic_ctx.setPhase(0x0002_0041);
+        blitRegisteredDwmThumbnailsBeforeCursor();
         cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     } else if (shell_geometry_repaint) {
         path_kind = .drag_layer;
         syncAeroGlassFastPath();
         renderer_aero.renderFrameEx(false);
         panic_ctx.setPhase(0x0002_0042);
+        blitRegisteredDwmThumbnailsBeforeCursor();
         cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
     } else if (startmenu_repaint and startmenu.isVisible()) {
-        if (renderer_aero.startMenuRepaintCanPatchWallpaper()) {
+        const scr_w_sm: i32 = @intCast(fb.getWidth());
+        const scr_h_sm: i32 = @intCast(fb.getHeight());
+        const cursor_moved_sm = desktop_ctx.smooth_cursor.prev_x != desktop_ctx.cursor_x or
+            desktop_ctx.smooth_cursor.prev_y != desktop_ctx.cursor_y;
+        const degrade_startmenu = shellPartialRepaintShouldDegradeToFullLayer(scr_w_sm, scr_h_sm, cursor_moved_sm);
+        if (renderer_aero.startMenuRepaintCanPatchWallpaper() and !degrade_startmenu) {
             path_kind = .startmenu_partial;
             cursor_plane.restoreSaveUnderIfPlaced();
             syncAeroGlassFastPath();
             theme_mod.setTheme(.aero);
-            const scr_w: i32 = @intCast(fb.getWidth());
-            const scr_h: i32 = @intCast(fb.getHeight());
             const t = theme_mod.getActiveTheme();
             const tb_h = theme_mod.getTaskbarHeight();
-            renderer_aero.redrawStartMenuRegionOnly(scr_w, scr_h, t, tb_h);
+            renderer_aero.redrawStartMenuRegionOnly(scr_w_sm, scr_h_sm, t, tb_h);
             panic_ctx.setPhase(0x0002_0043);
+            blitRegisteredDwmThumbnailsBeforeCursor();
             cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
             cursor_plane.markMotionDirty(
                 desktop_ctx.smooth_cursor.prev_x,
@@ -823,46 +838,75 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
             panic_ctx.setPhase(0x0002_0031);
             renderSceneWithoutSoftwareCursorFlip3dAware(true);
             panic_ctx.setPhase(0x0002_0044);
+            blitRegisteredDwmThumbnailsBeforeCursor();
             cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
         }
     } else if (caption_chrome_only) {
-        path_kind = .caption_partial;
-        cursor_plane.restoreSaveUnderIfPlaced();
-        syncAeroGlassFastPath();
-        renderer_aero.redrawCaptionBandsOnly();
-        panic_ctx.setPhase(0x0002_0045);
-        cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
-        cursor_plane.markMotionDirty(
-            desktop_ctx.smooth_cursor.prev_x,
-            desktop_ctx.smooth_cursor.prev_y,
-            desktop_ctx.cursor_x,
-            desktop_ctx.cursor_y,
-        );
+        const scr_w_cap: i32 = @intCast(fb.getWidth());
+        const scr_h_cap: i32 = @intCast(fb.getHeight());
+        const cursor_moved_cap = desktop_ctx.smooth_cursor.prev_x != desktop_ctx.cursor_x or
+            desktop_ctx.smooth_cursor.prev_y != desktop_ctx.cursor_y;
+        if (shellPartialRepaintShouldDegradeToFullLayer(scr_w_cap, scr_h_cap, cursor_moved_cap)) {
+            path_kind = .drag_layer;
+            cursor_plane.invalidate();
+            syncAeroGlassFastPath();
+            theme_mod.setTheme(.aero);
+            renderer_aero.renderFrameEx(false);
+            panic_ctx.setPhase(0x0002_0045);
+            blitRegisteredDwmThumbnailsBeforeCursor();
+            cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
+            cursor_plane.markMotionDirty(
+                desktop_ctx.smooth_cursor.prev_x,
+                desktop_ctx.smooth_cursor.prev_y,
+                desktop_ctx.cursor_x,
+                desktop_ctx.cursor_y,
+            );
+        } else {
+            path_kind = .caption_partial;
+            cursor_plane.restoreSaveUnderIfPlaced();
+            syncAeroGlassFastPath();
+            theme_mod.setTheme(.aero);
+            renderer_aero.redrawCaptionBandsOnly();
+            panic_ctx.setPhase(0x0002_0045);
+            blitRegisteredDwmThumbnailsBeforeCursor();
+            cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
+            cursor_plane.markMotionDirty(
+                desktop_ctx.smooth_cursor.prev_x,
+                desktop_ctx.smooth_cursor.prev_y,
+                desktop_ctx.cursor_x,
+                desktop_ctx.cursor_y,
+            );
+        }
     } else {
+        const ptr_bisect = @import("build_options").desktop_bisect_disable_cursor_move_only;
+        // 与 `moveOnly` 同帧：`syncAeroGlassFastPath` 在纯指针路径原先未调用，玻璃盒式模糊开关可能与邻帧不一致导致略发暗。
+        syncAeroGlassFastPath();
+        blitRegisteredDwmThumbnailsBeforeCursor();
         // 壳层打开时：场景已在上一整帧写入缓冲（含菜单/托盘），仅指针移动可走 moveOnly，避免每帧全屏 DWM。
         if (ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) {
             panic_ctx.setPhase(0x0002_0050);
-            if (cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
+            if (!ptr_bisect and cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
                 path_kind = .cursor_fast;
             } else {
                 path_kind = .full;
                 panic_ctx.setPhase(0x0002_0032);
                 renderSceneWithoutSoftwareCursorFlip3dAware(false);
                 panic_ctx.setPhase(0x0002_0046);
+                blitRegisteredDwmThumbnailsBeforeCursor();
                 cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
             }
         } else {
             panic_ctx.setPhase(0x0002_0051);
-            if (!cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
+            if (ptr_bisect or !cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
                 path_kind = .full;
                 panic_ctx.setPhase(0x0002_0033);
                 renderSceneWithoutSoftwareCursorFlip3dAware(false);
                 panic_ctx.setPhase(0x0002_0047);
+                blitRegisteredDwmThumbnailsBeforeCursor();
                 cursor_plane.composeAfterScene(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_cursor_kind, renderCursor);
             }
         }
     }
-    blitRegisteredDwmThumbnailsToFramebuffer(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
     if (flip3d_overlay_active) {
         panic_ctx.setPhase(0x0002_0067);
         renderFlip3dOverlay(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
@@ -1167,11 +1211,13 @@ pub fn handleClick(x: i32, y: i32) bool {
     }
 
     if (builtin_apps.handleClick(x, y, w, h, getTaskbarHeight())) {
+        setShellKeyboardFocus(.builtin_apps);
         return true;
     }
 
     initTaskMgrPosition(w, h);
     if (taskMgrWindowContains(x, y, w, h)) {
+        setShellKeyboardFocus(.taskmgr);
         if (taskmgr_shell_state == .normal) {
             const tedge = hitTestFrameResizeEdge(x, y, taskmgr_x, taskmgr_y, taskmgr_w, taskmgr_h);
             if (tedge != .none) {
@@ -1219,18 +1265,20 @@ pub fn handleClick(x: i32, y: i32) bool {
                 },
             }
         }
-        return false;
+        return true;
     }
     const wr = getWindowRect(w, h);
     const cap_h = shellTitlebarH();
     if (wr.w > 0 and wr.h > 0 and explorer_shell_state == .normal) {
         const ex_edge = hitTestFrameResizeEdge(x, y, wr.x, wr.y, wr.w, wr.h);
         if (ex_edge != .none) {
+            setShellKeyboardFocus(.explorer);
             explorer_edge_resize = ex_edge;
             return true;
         }
     }
     if (pointInRectI32(x, y, wr.x, wr.y, wr.w, cap_h)) {
+        setShellKeyboardFocus(.explorer);
         switch (hitTestAeroCaptionButtons(x, y, wr.x, wr.y, wr.w, cap_h)) {
             .close => {
                 klog.info("Explorer: close (stub)", .{});
@@ -1275,6 +1323,7 @@ pub fn handleClick(x: i32, y: i32) bool {
         }
     }
     if (pointInRectI32(x, y, wr.x, wr.y, wr.w, wr.h)) {
+        setShellKeyboardFocus(.explorer);
         if (aeroExplorerClientClick(x, y, w, h)) return true;
     }
     return false;
@@ -1570,6 +1619,9 @@ pub fn handleMouseRelease() MouseReleasePaintHint {
     taskmgr_edge_resize = .none;
     const was_builtin_drag = builtin_apps.onMouseRelease();
     const drag_shell = was_explorer or was_taskmgr or was_builtin_drag;
+    if (was_resize or drag_shell) {
+        cursor_plane.invalidate();
+    }
     return .{
         .needs_full_scene = was_resize,
         .needs_post_drag_composite = drag_shell and !was_resize,
@@ -2148,10 +2200,11 @@ fn renderExplorerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
 
     fb.fillRect(win_x, win_y + TITLEBAR_H, win_w, win_h - TITLEBAR_H, t.window_bg);
 
+    const ex_tb = shellExplorerTitlebarPair(t);
     if (dwm_initialized and dwm_config.glass_enabled) {
-        renderGlassEffect(win_x, win_y, win_w, TITLEBAR_H, t.titlebar_active_left, .caption);
+        renderGlassEffect(win_x, win_y, win_w, TITLEBAR_H, ex_tb.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, win_w, TITLEBAR_H, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, win_w, TITLEBAR_H, ex_tb.left, ex_tb.right);
     }
 
     renderTitlebarButtons(win_x, win_y, win_w, t);
@@ -2177,10 +2230,11 @@ fn renderTaskManagerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) voi
         fb.fillRect(win_x + 3, win_y + 3, tm_w, tm_h, rgb(0x40, 0x40, 0x40));
     }
     fb.fillRect(win_x, win_y + th, tm_w, tm_h - th, t.window_bg);
+    const tm_tb = shellTaskMgrTitlebarPair(t);
     if (dwm_initialized and dwm_config.glass_enabled) {
-        renderGlassEffect(win_x, win_y, tm_w, th, t.titlebar_active_left, .caption);
+        renderGlassEffect(win_x, win_y, tm_w, th, tm_tb.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, tm_w, th, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, tm_w, th, tm_tb.left, tm_tb.right);
     }
     drawAeroCaptionButtons(win_x, win_y, tm_w, th, t, getTaskMgrCaptionBtnHover());
     fb.drawTextTransparent(win_x + 8, win_y + 5, "Zircon Task Manager", t.titlebar_text);
@@ -2189,6 +2243,7 @@ fn renderTaskManagerW2kWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) voi
 }
 
 /// 拖动态：标题栏 TintOnly；客户区与 `renderTaskManagerW2kWindow` 一致（非白板）。
+/// 不调用 `renderShadow`：与 Explorer DragLight 相同，避免软阴影 blend 污染邻窗 Aero 边框。
 pub fn renderTaskManagerWinDragLight(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
     if (taskmgr_shell_state == .minimized) return;
     initTaskMgrPosition(scr_w, scr_h);
@@ -2198,16 +2253,13 @@ pub fn renderTaskManagerWinDragLight(scr_w: i32, scr_h: i32, t: *const ThemeColo
     const win_y = taskmgr_y;
     const th = shellTitlebarH();
 
-    if (dwm_initialized and dwm_config.shadow_enabled) {
-        renderShadow(win_x, win_y, tm_w, tm_h, 6);
-    } else {
-        fb.fillRect(win_x + 3, win_y + 3, tm_w, tm_h, rgb(0x30, 0x30, 0x30));
-    }
+    fb.fillRect(win_x + 3, win_y + 3, tm_w, tm_h, rgb(0x30, 0x30, 0x30));
     fb.fillRect(win_x, win_y + th, tm_w, tm_h - th, t.window_bg);
+    const tm_tb_d = shellTaskMgrTitlebarPair(t);
     if (dwm_initialized and dwm_config.glass_enabled) {
-        renderGlassTintOnly(win_x, win_y, tm_w, th, t.titlebar_active_left, .caption);
+        renderGlassTintOnly(win_x, win_y, tm_w, th, tm_tb_d.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, tm_w, th, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, tm_w, th, tm_tb_d.left, tm_tb_d.right);
     }
     drawAeroCaptionButtons(win_x, win_y, tm_w, th, t, getTaskMgrCaptionBtnHover());
     fb.drawTextTransparent(win_x + 8, win_y + 5, "Zircon Task Manager", t.titlebar_text);
@@ -2487,10 +2539,11 @@ fn renderSampleWindow(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
     // Client area only — titlebar keeps backdrop for true Aero glass (DesktopManagerSpec)
     fb.fillRect(win_x, win_y + TITLEBAR_H, win_w, win_h - TITLEBAR_H, t.window_bg);
 
+    const ex_s = shellExplorerTitlebarPair(t);
     if (dwm_initialized and dwm_config.glass_enabled) {
-        renderGlassEffect(win_x, win_y, win_w, TITLEBAR_H, t.titlebar_active_left, .caption);
+        renderGlassEffect(win_x, win_y, win_w, TITLEBAR_H, ex_s.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, win_w, TITLEBAR_H, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, win_w, TITLEBAR_H, ex_s.left, ex_s.right);
     }
 
     renderTitlebarButtons(win_x, win_y, win_w, t);
@@ -2735,6 +2788,75 @@ var taskmgr_edge_resize: FrameResizeEdge = .none;
 
 var explorer_dwm_surface_id: ?u16 = null;
 var taskmgr_dwm_surface_id: ?u16 = null;
+
+/// 内核壳层键盘焦点（决定 Z 序与标题栏活动/非活动态；与 Win32 `SetForegroundWindow` 概念近似，CPU Shell 专用）。
+pub const ShellKeyboardFocus = enum { explorer, taskmgr, builtin_apps };
+
+var shell_keyboard_focus: ShellKeyboardFocus = .explorer;
+
+pub fn getShellKeyboardFocus() ShellKeyboardFocus {
+    return shell_keyboard_focus;
+}
+
+pub fn setShellKeyboardFocus(f: ShellKeyboardFocus) void {
+    shell_keyboard_focus = f;
+}
+
+pub const ShellTitlebarGradient = struct { left: u32, right: u32 };
+
+pub fn shellExplorerTitlebarPair(t: *const theme_mod.ThemeColors) ShellTitlebarGradient {
+    if (getShellKeyboardFocus() == .explorer)
+        return .{ .left = t.titlebar_active_left, .right = t.titlebar_active_right };
+    return .{ .left = t.titlebar_inactive_left, .right = t.titlebar_inactive_right };
+}
+
+pub fn shellTaskMgrTitlebarPair(t: *const theme_mod.ThemeColors) ShellTitlebarGradient {
+    if (getShellKeyboardFocus() == .taskmgr)
+        return .{ .left = t.titlebar_active_left, .right = t.titlebar_active_right };
+    return .{ .left = t.titlebar_inactive_left, .right = t.titlebar_inactive_right };
+}
+
+/// 与 `renderer_aero` 中 `mat.renderShadow(..., 8, 4)` 外包一致的安全脏区膨胀（像素）。
+pub fn shellAeroShadowOutsetPx() i32 {
+    return 10;
+}
+
+pub fn shellRectWithAeroShadowUnion(r: ShellRect) ShellRect {
+    return rectInflate(r, shellAeroShadowOutsetPx());
+}
+
+pub fn anyShellHostedWindowsOverlap(scr_w: i32, scr_h: i32) bool {
+    var rects: [6]ShellRect = undefined;
+    var n: usize = 0;
+    if (explorer_shell_state != .minimized) {
+        const wr = getWindowRect(scr_w, scr_h);
+        if (wr.w > 0 and wr.h > 0) {
+            rects[n] = .{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
+            n += 1;
+        }
+    }
+    if (taskmgr_shell_state != .minimized) {
+        initTaskMgrPosition(scr_w, scr_h);
+        rects[n] = .{ .x = taskmgr_x, .y = taskmgr_y, .w = taskmgr_w, .h = taskmgr_h };
+        n += 1;
+    }
+    if (builtin_apps.anyWindowOpen()) {
+        const u = builtin_apps.openSlotsBoundsUnion();
+        if (u.w > 0 and u.h > 0) {
+            rects[n] = .{ .x = u.x, .y = u.y, .w = u.w, .h = u.h };
+            n += 1;
+        }
+    }
+    if (n < 2) return false;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        var j: usize = i + 1;
+        while (j < n) : (j += 1) {
+            if (rectsOverlap(rects[i], rects[j])) return true;
+        }
+    }
+    return false;
+}
 
 /// Explorer client size scales with resolution (fraction of work area). Font/glyph scale is unchanged.
 fn computeSampleWindowDims(scr_w: i32, scr_h: i32) ShellFrameDims {
@@ -3065,6 +3187,12 @@ fn blendThumbOverBackground(fg: u32, bg: u32, alpha: u32) u32 {
     return ob | (og << 8) | (orv << 16);
 }
 
+/// DWM 登记缩略图：必须在 **软件光标 save-under / moveOnly** 之前写入绘制缓冲，否则 paste 会用「无缩略图」快照盖住已绘缩略像素，双缓冲 `flipDirty` 下表现为跟指针相关的闪暗/残影。
+fn blitRegisteredDwmThumbnailsBeforeCursor() void {
+    if (!use_framebuffer or !fb.isInitialized()) return;
+    blitRegisteredDwmThumbnailsToFramebuffer(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
+}
+
 /// `DwmRegisterThumbnail`：将源表面缩略缓冲缩放贴到 `rcDestination`（目标 HWND 的**客户区坐标**在真 Win32 上；本子集用 `GetWindowRect` 原点 + destination 为 **Partial** 近似）。
 /// **Z 序**：按槽位 `1..max` 递增绘制，后绘槽覆盖先绘槽（与登记顺序一致；更大槽号更靠上）。
 fn blitRegisteredDwmThumbnailsToFramebuffer(scr_w: i32, scr_h: i32) void {
@@ -3116,8 +3244,15 @@ fn blitRegisteredDwmThumbnailsToFramebuffer(scr_w: i32, scr_h: i32) void {
                     const bg = fb.getPixel32(@intCast(out_x), @intCast(out_y));
                     c = blendThumbOverBackground(c, bg, alpha);
                 }
-                fb.fillRect(out_x, out_y, 1, 1, c);
+                fb.putPixel32(@intCast(out_x), @intCast(out_y), c);
             }
+        }
+        const x0c = @max(0, sx0);
+        const y0c = @max(0, sy0);
+        const x1c = @min(scr_w, sx0 + dww);
+        const y1c = @min(scr_h, sy0 + dhh);
+        if (x1c > x0c and y1c > y0c) {
+            fb.markDirtyRegion(x0c, y0c, x1c - x0c, y1c - y0c);
         }
     }
 }
@@ -3683,6 +3818,8 @@ pub fn getPresentTelemetry() struct { desktop_frames: u64, compositor_frames: u6
     };
 }
 
+/// `renderDesktopFrameEx` 路径累计：`full` 整场景 vs 其它局部路径；与 `-Ddesktop_bisect` 末尾 klog、`mouse_debug.noteDesktopRenderPath` 对照可诊断合成/黑边回归。
+/// 指针移动发暗：对照 `cursor_fast` 占比与 `-Dmouse_debug=true`；二分用 `-Ddesktop_bisect_force_full_present` / `-Ddesktop_bisect_disable_cursor_move_only`。
 pub fn getDesktopComposeTelemetry() struct { full_scene_frames: u64, partial_frames: u64 } {
     return .{
         .full_scene_frames = desktop_compose_full_scene_frames,
@@ -3704,7 +3841,7 @@ pub fn present() void {
     const dirty_before_flip: ?fb.Rect = if (scanout_vio) fb.peekDirtyUnionPx() else null;
     // 首帧强制整幅 flip：LoongArch+QEMU 双缓冲下若脏矩形与合成路径偶发不同步，屏上可长期黑/花；后续帧仍可按配置走 flipDirty。
     const first_present = (desktop_ctx.present_count == 0);
-    const will_full_flip = fb.isDoubleBuffered() and (config.isPresentFullFlipEnabled() or first_present);
+    const will_full_flip = fb.isDoubleBuffered() and (config.isPresentFullFlipEnabled() or first_present or @import("build_options").desktop_bisect_force_full_present);
     // 双缓冲：`present_full_flip` 默认整幅 memcpy（避免漏画光标区）；关则用脏矩形 flipDirty（须完整 mark dirty）。
     if (fb.isDoubleBuffered()) {
         if (will_full_flip) {

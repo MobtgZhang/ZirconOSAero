@@ -64,6 +64,20 @@ pub const GlassChrome = enum { taskbar, caption, panel };
 var config: DwmConfig = .{};
 var initialized: bool = false;
 
+/// `setGlass` / `setCompositionEnabled` / 注册表同步广播后：主循环应跑至少一帧整壳层，避免与局部 caption 快路径错位。
+var desktop_shell_repaint_after_dwm_notify: bool = false;
+
+pub fn takeDesktopShellRepaintAfterDwmNotify() bool {
+    const v = desktop_shell_repaint_after_dwm_notify;
+    desktop_shell_repaint_after_dwm_notify = false;
+    return v;
+}
+
+fn queueDesktopShellRepaintAfterDwmNotify() void {
+    desktop_shell_repaint_after_dwm_notify = true;
+    @import("cursor_plane.zig").invalidate();
+}
+
 /// 由 display 在绘制前设置：首帧（尚未 present）为 true，跳过 `boxBlurRect`。
 var skip_glass_box_blur: bool = false;
 /// 拖窗等交互期：单遍小半径模糊，减轻 CPU 负载同时保留少许磨砂感。
@@ -222,7 +236,11 @@ pub fn syncPolicyFromRegistry() void {
     if (!hints.colorization and !hints.nc_policy and !hints.composition) return;
 
     const user32 = @import("../../../subsystems/win32/user32.zig");
-    if (user32.getWindowCount() == 0) return;
+    if (user32.getWindowCount() == 0) {
+        // 无 HWND 时仍须刷新内核壳层帧缓冲（与 `WM_DWM*` 投递无关）。
+        queueDesktopShellRepaintAfterDwmNotify();
+        return;
+    }
 
     if (hints.composition) {
         user32.broadcastDwmCompositionChanged(if (config.composition_enabled) user32.TRUE else user32.FALSE);
@@ -234,6 +252,7 @@ pub fn syncPolicyFromRegistry() void {
     if (hints.nc_policy) {
         user32.broadcastDwmNcRenderingChanged(user32.TRUE);
     }
+    queueDesktopShellRepaintAfterDwmNotify();
 }
 
 /// 更新染色并广播 `WM_DWMCOLORIZATIONCOLORCHANGED`（`colorref_low24` 与 Learn 中 COLORREF 低 24 位一致）。
@@ -242,6 +261,7 @@ pub fn setColorizationTint(colorref_low24: color_nt61.ColorrefLow24, blend_enabl
     config.glass_tint_color = color_nt61.kernelDwmTintFromColorrefLow24(colorref_low24);
     const user32 = @import("../../../subsystems/win32/user32.zig");
     user32.broadcastDwmColorizationChanged(colorref_low24, if (blend_enabled) user32.TRUE else user32.FALSE);
+    queueDesktopShellRepaintAfterDwmNotify();
 }
 
 pub fn setGlass(enabled: bool) void {
@@ -250,6 +270,7 @@ pub fn setGlass(enabled: bool) void {
     const user32 = @import("../../../subsystems/win32/user32.zig");
     // 毛玻璃/非客户区绘制策略变化；`WM_DWMCOMPOSITIONCHANGED` 仅随 `composition_enabled` 变化（见 `setCompositionEnabled`）。
     user32.broadcastDwmNcRenderingChanged(user32.TRUE);
+    queueDesktopShellRepaintAfterDwmNotify();
 }
 
 /// 合成总开关变化时广播 `WM_DWMCOMPOSITIONCHANGED`（与 `glass_enabled` 独立）。
@@ -258,6 +279,7 @@ pub fn setCompositionEnabled(enabled: bool) void {
     config.composition_enabled = enabled;
     const user32 = @import("../../../subsystems/win32/user32.zig");
     user32.broadcastDwmCompositionChanged(if (enabled) user32.TRUE else user32.FALSE);
+    queueDesktopShellRepaintAfterDwmNotify();
 }
 
 pub fn getCursorLerpFactor() i32 {
@@ -367,17 +389,19 @@ pub fn renderShadow(x: i32, y: i32, w: i32, h: i32, size: i32) void {
     if (!fb.isInitialized()) return;
     if (size <= 0) return;
 
+    // 冷灰蓝 tint（与 Aero 窗框 `outer_lo` 同系），避免纯黑在叠窗/局部重绘下形成「厚重黑边」。
+    const shadow_tint = rgb(0x30, 0x48, 0x60);
     var layer: i32 = 0;
     while (layer < 4) : (layer += 1) {
         const offset = size - layer * 2;
         if (offset <= 0) break;
-        const shadow_alpha: u8 = @intCast(@as(u32, @intCast(25 - layer * 5)));
+        const shadow_alpha: u8 = @intCast(@as(u32, @intCast(18 - layer * 4)));
         fb.blendTintRect(
             clampCoordI64(@as(i64, x) + @as(i64, offset)),
             clampCoordI64(@as(i64, y) + @as(i64, offset)),
             w,
             h,
-            rgb(0x00, 0x00, 0x00),
+            shadow_tint,
             shadow_alpha,
             255,
         );

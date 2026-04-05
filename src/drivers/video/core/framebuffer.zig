@@ -1145,6 +1145,7 @@ pub fn blendTintRect(x: i32, y: i32, w: i32, h: i32, tint: u32, alpha: u8, satur
         }
     }
     total_draw_calls += 1;
+    markDirtyRegion(@intCast(x0), @intCast(y0), @intCast(x1 - x0), @intCast(y1 - y0));
 }
 
 /// Add a specular highlight (brightness boost that fades down) over a rect.

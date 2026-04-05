@@ -7,6 +7,8 @@
 //! `glass_tint_color` 此处为内核侧 **u32 字面值**（与 `dwm.zig` / `theme.rgb` 一致）；勿直接复制到 Aero 库主题常量而不换算。
 
 /// 合成参数表版本：内核 `display` 与用户态 `desktop/aero` 变更默认时应 bump，便于检测双轨漂移（DesktopManagerSpec）。
+///
+/// **阶段 D0**：与 `dwm_nt61_api_contract.zig`（`WM_DWM*`、Flip3D shell cap）的数值对齐由主机测 `dwm_nt61_integration_host` / `dwm_messages_nt61` 锚定；本文件**不** `@import` 该模块，避免与 `nt61_aero_defaults` 作为独立 module root 时 Zig 0.15「单文件仅属一 module」冲突。
 pub const compositor_config_epoch: u32 = 4;
 
 /// 内核 `dwm.zig` / `display.initAeroDwm` / `renderer_aero.initDwm` 使用的玻璃与行为开关

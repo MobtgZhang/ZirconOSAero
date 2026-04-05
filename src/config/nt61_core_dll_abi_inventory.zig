@@ -11,30 +11,28 @@ const std = @import("std");
 
 /// 与 `pe.zig` 中 `initSystemDlls` → `ntdll.dll` `addExport` 顺序一致（ordinal 递增）。
 pub const ntdll_exports_nt61: []const []const u8 = &.{
-    "NtCreateProcess",           "NtTerminateProcess",    "NtCreateThread",     "NtCreateFile",
-    "NtReadFile",               "NtWriteFile",           "NtClose",            "NtCreatePort",
-    "NtRequestWaitReplyPort",   "NtAllocateVirtualMemory", "NtFreeVirtualMemory",
-    "NtQuerySystemInformation", "NtQueryInformationProcess", "NtSetInformationProcess",
-    "NtOpenFile",               "NtCreateEvent",         "NtWaitForSingleObject",
-    "RtlInitUnicodeString",     "RtlCopyMemory",         "RtlZeroMemory",      "RtlGetVersion",
-    "RtlVerifyVersionInfo",
-    "LdrInitializeThunk",       "LdrLoadDll",            "LdrGetProcedureAddress",
-    "RtlUserThreadStart",
+    "NtCreateProcess",           "NtTerminateProcess",      "NtCreateThread",      "NtCreateFile",
+    "NtReadFile",                "NtWriteFile",             "NtClose",             "NtCreatePort",
+    "NtRequestWaitReplyPort",    "NtAllocateVirtualMemory", "NtFreeVirtualMemory", "NtQuerySystemInformation",
+    "NtQueryInformationProcess", "NtSetInformationProcess", "NtOpenFile",          "NtCreateEvent",
+    "NtWaitForSingleObject",     "RtlInitUnicodeString",    "RtlCopyMemory",       "RtlZeroMemory",
+    "RtlGetVersion",             "RtlVerifyVersionInfo",    "LdrInitializeThunk",  "LdrLoadDll",
+    "LdrGetProcedureAddress",    "RtlUserThreadStart",
 };
 
 /// 与 `pe.zig` → `kernel32.dll` 导出顺序一致。
 pub const kernel32_exports_nt61: []const []const u8 = &.{
-    "CreateProcessA",      "CreateProcessW",      "ExitProcess",           "GetCurrentProcessId",
-    "GetCurrentProcess",   "CreateFileA",       "CreateFileW",         "ReadFile",
-    "WriteFile",           "CloseHandle",       "DeleteFileA",         "FindFirstFileA",
-    "FindNextFileA",       "FindClose",         "GetStdHandle",        "WriteConsoleA",
-    "ReadConsoleA",        "SetConsoleTitleA",  "GetProcessHeap",      "HeapAlloc",
-    "HeapFree",            "VirtualAlloc",      "VirtualFree",         "LoadLibraryA",
-    "GetProcAddress",      "FreeLibrary",       "GetModuleHandleA",    "GetModuleFileNameA",
-    "GetLastError",        "SetLastError",      "GetTickCount",        "Sleep",
-    "GetSystemInfo",       "GetVersionExA",     "GetCurrentDirectoryA", "SetCurrentDirectoryA",
+    "CreateProcessA",      "CreateProcessW",       "ExitProcess",             "GetCurrentProcessId",
+    "GetCurrentProcess",   "CreateFileA",          "CreateFileW",             "ReadFile",
+    "WriteFile",           "CloseHandle",          "DeleteFileA",             "FindFirstFileA",
+    "FindNextFileA",       "FindClose",            "GetStdHandle",            "WriteConsoleA",
+    "ReadConsoleA",        "SetConsoleTitleA",     "GetProcessHeap",          "HeapAlloc",
+    "HeapFree",            "VirtualAlloc",         "VirtualFree",             "LoadLibraryA",
+    "GetProcAddress",      "FreeLibrary",          "GetModuleHandleA",        "GetModuleFileNameA",
+    "GetLastError",        "SetLastError",         "GetTickCount",            "Sleep",
+    "GetSystemInfo",       "GetVersionExA",        "GetCurrentDirectoryA",    "SetCurrentDirectoryA",
     "GetSystemDirectoryA", "GetWindowsDirectoryA", "GetEnvironmentVariableA", "SetEnvironmentVariableA",
-    "GetFileSize",         "GetFileAttributesA", "CreateDirectoryA",   "RemoveDirectoryA",
+    "GetFileSize",         "GetFileAttributesA",   "CreateDirectoryA",        "RemoveDirectoryA",
 };
 
 /// 与 `pe.zig` → `user32.dll` 导出顺序一致。

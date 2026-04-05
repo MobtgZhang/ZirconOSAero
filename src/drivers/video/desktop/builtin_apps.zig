@@ -1188,11 +1188,8 @@ fn renderOneWindowLight(w: *WinSlot, t: *const theme.ThemeColors) void {
     const wx = w.x;
     const wy = w.y;
     const dwm = @import("../core/dwm.zig");
-    if (dwm.isInitialized() and dwm.getConfig().shadow_enabled) {
-        fb.fillRect(wx + 4, wy + 4, DEF_W, DEF_H, rgb(0x28, 0x28, 0x30));
-    } else {
-        fb.fillRect(wx + 3, wy + 3, DEF_W, DEF_H, rgb(0x30, 0x30, 0x30));
-    }
+    // 拖动态与 Explorer DragLight 一致：仅用偏移纯色底，不画 DWM 软阴影条带，避免叠在邻窗边框上发灰。
+    fb.fillRect(wx + 3, wy + 3, DEF_W, DEF_H, rgb(0x30, 0x30, 0x30));
     fb.fillRect(wx, wy + CAPTION_H, DEF_W, DEF_H - CAPTION_H, t.window_bg);
     if (dwm.isGlassEnabled()) {
         dwm.renderGlassTintOnly(wx, wy, DEF_W, CAPTION_H, t.titlebar_active_left, .caption);

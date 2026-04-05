@@ -17,6 +17,8 @@
 
 const std = @import("std");
 const fb = @import("../core/framebuffer.zig");
+const theme = @import("theme.zig");
+const rgb = theme.rgb;
 
 fn clampCoordI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
@@ -251,14 +253,16 @@ pub fn renderShadow(x: i32, y: i32, w: i32, h: i32, size: u8, layers: u8) void {
     while (layer < max_layers) : (layer += 1) {
         const offset = sz - layer * 2;
         if (offset <= 0) break;
-        const alpha_val: u32 = @intCast(25 - @min(layer * 5, 24));
+        const alpha_val: u32 = @intCast(18 - @min(layer * 4, 14));
         const shadow_alpha: u8 = @intCast(alpha_val);
+        // 与 `dwm.renderShadow` 一致：冷灰蓝而非纯黑，减轻多窗重叠与局部重绘下的黑边观感。
+        const shadow_tint = rgb(0x30, 0x48, 0x60);
         fb.blendTintRect(
             clampCoordI64(@as(i64, x) + @as(i64, offset)),
             clampCoordI64(@as(i64, y) + @as(i64, offset)),
             w,
             h,
-            0x00000000,
+            shadow_tint,
             shadow_alpha,
             255,
         );
@@ -281,6 +285,7 @@ pub fn applyRoundedClip(x: i32, y: i32, w: i32, h: i32, radius: u8) void {
     const r: i32 = @intCast(radius);
     const w_i32: i32 = @intCast(fb.getWidth());
     const h_i32: i32 = @intCast(fb.getHeight());
+    if (w_i32 <= 0 or h_i32 <= 0) return;
 
     const corners = [_][2]i32{
         .{ x, y },
@@ -298,8 +303,11 @@ pub fn applyRoundedClip(x: i32, y: i32, w: i32, h: i32, radius: u8) void {
 
     for (corners, 0..) |corner, idx| {
         const co = center_offsets[idx];
-        const center_x = corner[0] + co[0];
-        const center_y = corner[1] + co[1];
+        const cx = corner[0] + co[0];
+        const cy = corner[1] + co[1];
+        const samp_x: u32 = @intCast(std.math.clamp(cx, 0, w_i32 - 1));
+        const samp_y: u32 = @intCast(std.math.clamp(cy, 0, h_i32 - 1));
+        const corner_fill: u32 = fb.getPixel32(samp_x, samp_y) & 0x00FFFFFF;
 
         var dy: i32 = 0;
         while (dy < r) : (dy += 1) {
@@ -307,13 +315,11 @@ pub fn applyRoundedClip(x: i32, y: i32, w: i32, h: i32, radius: u8) void {
             while (dx < r) : (dx += 1) {
                 const cdx = dx - co[0];
                 const cdy = dy - co[1];
-                _ = center_x;
-                _ = center_y;
                 if (cdx * cdx + cdy * cdy > r * r) {
                     const px = corner[0] + dx;
                     const py = corner[1] + dy;
                     if (px >= 0 and px < w_i32 and py >= 0 and py < h_i32) {
-                        fb.putPixel32(@intCast(px), @intCast(py), 0x00000000);
+                        fb.putPixel32(@intCast(px), @intCast(py), corner_fill);
                     }
                 }
             }

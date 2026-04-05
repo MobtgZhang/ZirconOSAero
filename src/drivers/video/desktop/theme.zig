@@ -16,6 +16,9 @@ pub const ThemeColors = struct {
     start_btn_text: u32,
     titlebar_active_left: u32,
     titlebar_active_right: u32,
+    /// 非活动壳窗标题栏（与 `dwm.renderAeroTitlebar` 玻璃 inactive 路径对齐）
+    titlebar_inactive_left: u32,
+    titlebar_inactive_right: u32,
     titlebar_text: u32,
     window_bg: u32,
     window_border: u32,
@@ -48,6 +51,8 @@ pub const THEME_AERO = ThemeColors{
     .start_btn_text = rgb(0xFF, 0xFF, 0xFF),
     .titlebar_active_left = rgb(0x41, 0x80, 0xC8),
     .titlebar_active_right = rgb(0x6B, 0xA0, 0xD8),
+    .titlebar_inactive_left = rgb(0x80, 0x90, 0xA0),
+    .titlebar_inactive_right = rgb(0x70, 0x84, 0x94),
     .titlebar_text = rgb(0x00, 0x00, 0x00),
     .window_bg = rgb(0xFF, 0xFF, 0xFF),
     .window_border = rgb(0x50, 0x78, 0xA8),

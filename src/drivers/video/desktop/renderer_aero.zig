@@ -63,7 +63,8 @@ pub fn renderFrameEx(draw_cursor: bool) void {
     const any_drag = drag_state.explorer_active or drag_state.taskmgr_active or drag_state.builtin_active;
 
     if (any_drag) {
-        renderDragFrame(w, h, t, tb_h, drag_state, draw_cursor);
+        const overlap = display.anyShellHostedWindowsOverlap(w, h);
+        renderDragFrame(w, h, t, tb_h, drag_state, draw_cursor, overlap);
     } else {
         renderFullFrame(w, h, t, tb_h, draw_cursor);
     }
@@ -106,26 +107,29 @@ pub fn redrawStartMenuRegionOnly(w: i32, h: i32, t: *const theme.ThemeColors, tb
 
     const wr = display.getWindowRect(w, h);
     const win_r = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
-    if (display.rectsOverlap(dirty, win_r)) {
+    const win_r_shadow = display.shellRectWithAeroShadowUnion(win_r);
+    if (display.rectsOverlap(dirty, win_r_shadow)) {
         renderExplorerWindow(w, h, t);
-        dirty = display.rectUnion(dirty, win_r);
+        dirty = display.rectUnion(dirty, win_r_shadow);
     }
 
     display.initTaskMgrPosition(w, h);
     const tm = display.getTaskMgrPos();
     const tm_sz = display.getTaskMgrSize();
     const tm_r = display.ShellRect{ .x = tm.x, .y = tm.y, .w = tm_sz.w, .h = tm_sz.h };
-    if (display.rectsOverlap(dirty, tm_r)) {
+    const tm_r_shadow = display.shellRectWithAeroShadowUnion(tm_r);
+    if (display.rectsOverlap(dirty, tm_r_shadow)) {
         display.renderTaskManagerWin(w, h, t);
-        dirty = display.rectUnion(dirty, tm_r);
+        dirty = display.rectUnion(dirty, tm_r_shadow);
     }
 
     if (builtin_apps.anyWindowOpen()) {
         const bu_b = builtin_apps.openSlotsBoundsUnion();
         const bu = display.ShellRect{ .x = bu_b.x, .y = bu_b.y, .w = bu_b.w, .h = bu_b.h };
-        if (bu.w > 0 and bu.h > 0 and display.rectsOverlap(dirty, bu)) {
+        const bu_shadow = display.shellRectWithAeroShadowUnion(bu);
+        if (bu.w > 0 and bu.h > 0 and display.rectsOverlap(dirty, bu_shadow)) {
             builtin_apps.renderShellHostedApps(w, h, t, .normal);
-            dirty = display.rectUnion(dirty, bu);
+            dirty = display.rectUnion(dirty, bu_shadow);
         }
     }
 
@@ -164,6 +168,7 @@ pub fn redrawCaptionBandsOnly() void {
     const wr = display.getWindowRect(scr_w, scr_h);
     if (wr.w > 0) {
         redrawExplorerCaptionBand(wr.x, wr.y, wr.w, aero_tb_h, t);
+        display.drawAeroWindowFrameBorder(wr.x, wr.y, wr.w, wr.h);
     }
 
     display.initTaskMgrPosition(scr_w, scr_h);
@@ -172,12 +177,15 @@ pub fn redrawCaptionBandsOnly() void {
     const tm_pos = display.getTaskMgrPos();
     if (!display.isTaskMgrWindowMinimized()) {
         redrawTaskMgrCaptionBand(tm_pos.x, tm_pos.y, tm_w, aero_tb_h, t);
+        display.drawAeroWindowFrameBorder(tm_pos.x, tm_pos.y, tm_w, tm_sz.h);
     }
 
-    var dirty = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = if (wr.w > 0) aero_tb_h else 0 };
+    var dirty = display.ShellRect{ .x = 0, .y = 0, .w = 0, .h = 0 };
+    if (wr.w > 0) {
+        dirty = display.rectUnion(dirty, display.shellRectWithAeroShadowUnion(.{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h }));
+    }
     if (!display.isTaskMgrWindowMinimized()) {
-        const tm_dirty = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_w, .h = aero_tb_h };
-        dirty = display.rectUnion(dirty, tm_dirty);
+        dirty = display.rectUnion(dirty, display.shellRectWithAeroShadowUnion(.{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_w, .h = tm_sz.h }));
     }
 
     if (display.isContextMenuVisible()) {
@@ -193,24 +201,95 @@ pub fn redrawCaptionBandsOnly() void {
 }
 
 fn redrawExplorerCaptionBand(win_x: i32, win_y: i32, win_w: i32, aero_tb_h: i32, t: *const theme.ThemeColors) void {
+    const pair = display.shellExplorerTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
         // 热态刷新每帧全宽 boxBlur 极重；与任务栏一致用 TintOnly。
-        dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+        dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, pair.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, pair.left, pair.right);
     }
     drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);
     display.drawAeroCaptionButtons(win_x, win_y, win_w, aero_tb_h, t, display.getExplorerCaptionBtnHover());
 }
 
 fn redrawTaskMgrCaptionBand(win_x: i32, win_y: i32, tm_w: i32, th: i32, t: *const theme.ThemeColors) void {
+    const pair = display.shellTaskMgrTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassTintOnly(win_x, win_y, tm_w, th, t.titlebar_active_left, .caption);
+        dwm.renderGlassTintOnly(win_x, win_y, tm_w, th, pair.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, tm_w, th, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, tm_w, th, pair.left, pair.right);
     }
     display.drawAeroCaptionButtons(win_x, win_y, tm_w, th, t, display.getTaskMgrCaptionBtnHover());
     fb.drawTextTransparent(win_x + 8, win_y + 5, "Zircon Task Manager", t.titlebar_text);
+}
+
+/// 按 `display.getShellKeyboardFocus()` 从后往前绘制，保证顶窗与点击焦点一致。
+fn renderShellWindowsInFocusOrder(w: i32, h: i32, t: *const theme.ThemeColors) void {
+    const f = display.getShellKeyboardFocus();
+    const expl_ok = !display.isExplorerWindowMinimized();
+    const tm_ok = !display.isTaskMgrWindowMinimized();
+    const bu_ok = builtin_apps.anyWindowOpen();
+
+    switch (f) {
+        .explorer => {
+            if (tm_ok) display.renderTaskManagerWin(w, h, t);
+            if (bu_ok) builtin_apps.renderShellHostedApps(w, h, t, .normal);
+            if (expl_ok) renderExplorerWindow(w, h, t);
+        },
+        .taskmgr => {
+            if (expl_ok) renderExplorerWindow(w, h, t);
+            if (bu_ok) builtin_apps.renderShellHostedApps(w, h, t, .normal);
+            if (tm_ok) display.renderTaskManagerWin(w, h, t);
+        },
+        .builtin_apps => {
+            if (expl_ok) renderExplorerWindow(w, h, t);
+            if (tm_ok) display.renderTaskManagerWin(w, h, t);
+            if (bu_ok) builtin_apps.renderShellHostedApps(w, h, t, .normal);
+        },
+    }
+}
+
+fn renderShellWindowsInFocusOrderDrag(w: i32, h: i32, t: *const theme.ThemeColors, ds: display.DragState) void {
+    const f = display.getShellKeyboardFocus();
+    const expl_ok = !display.isExplorerWindowMinimized();
+    const tm_ok = !display.isTaskMgrWindowMinimized();
+    const bu_ok = builtin_apps.anyWindowOpen();
+
+    switch (f) {
+        .explorer => {
+            if (tm_ok) {
+                if (ds.taskmgr_active) display.renderTaskManagerWinDragLight(w, h, t) else display.renderTaskManagerWin(w, h, t);
+            }
+            if (bu_ok) {
+                if (ds.builtin_active) builtin_apps.renderShellHostedApps(w, h, t, .drag_light) else builtin_apps.renderShellHostedApps(w, h, t, .normal);
+            }
+            if (expl_ok) {
+                if (ds.explorer_active) renderExplorerWindowDragLight(w, h, t) else renderExplorerWindow(w, h, t);
+            }
+        },
+        .taskmgr => {
+            if (expl_ok) {
+                if (ds.explorer_active) renderExplorerWindowDragLight(w, h, t) else renderExplorerWindow(w, h, t);
+            }
+            if (bu_ok) {
+                if (ds.builtin_active) builtin_apps.renderShellHostedApps(w, h, t, .drag_light) else builtin_apps.renderShellHostedApps(w, h, t, .normal);
+            }
+            if (tm_ok) {
+                if (ds.taskmgr_active) display.renderTaskManagerWinDragLight(w, h, t) else display.renderTaskManagerWin(w, h, t);
+            }
+        },
+        .builtin_apps => {
+            if (expl_ok) {
+                if (ds.explorer_active) renderExplorerWindowDragLight(w, h, t) else renderExplorerWindow(w, h, t);
+            }
+            if (tm_ok) {
+                if (ds.taskmgr_active) display.renderTaskManagerWinDragLight(w, h, t) else display.renderTaskManagerWin(w, h, t);
+            }
+            if (bu_ok) {
+                if (ds.builtin_active) builtin_apps.renderShellHostedApps(w, h, t, .drag_light) else builtin_apps.renderShellHostedApps(w, h, t, .normal);
+            }
+        },
+    }
 }
 
 fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_cursor: bool) void {
@@ -220,15 +299,7 @@ fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_
     panic_ctx.setPhase(0x0002_0081);
     display.renderDesktopIcons(w, h, t);
     panic_ctx.setPhase(0x0002_0082);
-    if (!display.isExplorerWindowMinimized()) {
-        renderExplorerWindow(w, h, t);
-    }
-    panic_ctx.setPhase(0x0002_0083);
-    if (!display.isTaskMgrWindowMinimized()) {
-        display.renderTaskManagerWin(w, h, t);
-    }
-    panic_ctx.setPhase(0x0002_0084);
-    builtin_apps.renderShellHostedApps(w, h, t, .normal);
+    renderShellWindowsInFocusOrder(w, h, t);
     panic_ctx.setPhase(0x0002_0085);
     renderTaskbar(w, h, t, tb_h);
 
@@ -276,39 +347,29 @@ fn dragFrameDirtyUnion(scr_w: i32, scr_h: i32, ds: display.DragState, pad: i32) 
     return acc;
 }
 
-fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: display.DragState, draw_cursor: bool) void {
+fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: display.DragState, draw_cursor: bool, shell_windows_overlap: bool) void {
     // 略大于拖影/伪阴影外扩，避免局部重绘与 `paint_icons`/`paint_taskbar` 判定漏区。
     const dirty_pad: i32 = 22;
     const dirty_u = dragFrameDirtyUnion(w, h, ds, dirty_pad);
     // `paint_icons` / `paint_taskbar` 仅在脏区与图标带/任务栏相交时重画，避免每像素移动全屏副产物。
 
-    patchDragBackground(w, h);
+    if (shell_windows_overlap) {
+        // 多窗重叠时局部 patch + 拖窗底块可能污染邻窗边框；整幅壁纸重绘代价更高但像素一致。
+        renderBackground(w, h);
+    } else {
+        patchDragBackground(w, h);
+    }
 
     const icon_b = display.desktopIconStripBounds(w, h);
     const tb_b = display.taskbarBoundsRect(w, h);
-    const paint_icons = if (dirty_u) |du| display.rectsOverlap(du, icon_b) else true;
-    const paint_taskbar = if (dirty_u) |du| display.rectsOverlap(du, tb_b) else true;
+    const paint_icons = shell_windows_overlap or if (dirty_u) |du| display.rectsOverlap(du, icon_b) else true;
+    const paint_taskbar = shell_windows_overlap or if (dirty_u) |du| display.rectsOverlap(du, tb_b) else true;
 
     if (paint_icons) {
         display.renderDesktopIcons(w, h, t);
     }
 
-    if (ds.explorer_active) {
-        renderExplorerWindowDragLight(w, h, t);
-    } else {
-        renderExplorerWindow(w, h, t);
-    }
-    if (ds.taskmgr_active) {
-        display.renderTaskManagerWinDragLight(w, h, t);
-    } else {
-        display.renderTaskManagerWin(w, h, t);
-    }
-
-    if (ds.builtin_active) {
-        builtin_apps.renderShellHostedApps(w, h, t, .drag_light);
-    } else {
-        builtin_apps.renderShellHostedApps(w, h, t, .normal);
-    }
+    renderShellWindowsInFocusOrderDrag(w, h, t, ds);
 
     if (paint_taskbar) {
         const panic_ctx = @import("../../../rtl/panic_context.zig");
@@ -356,9 +417,14 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     }
 
     display.markCursorMotionDirtyRegions();
+
+    if (shell_windows_overlap) {
+        fb.markFullScreenDirty();
+    }
 }
 
 /// 拖动态：标题栏仍为 TintOnly（无盒式模糊）；客户区与常态相同，避免「白板」观感。
+/// 不调用 `mat.renderShadow`：软阴影会 blend 到已绘制的邻窗 Aero 边框上，拖动态表现为「邻窗发灰」。
 fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
     const wr = display.getWindowRect(scr_w, scr_h);
     const win_w = wr.w;
@@ -367,16 +433,13 @@ fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeCo
     const win_y = wr.y;
     const aero_tb_h: i32 = display.AERO_TITLEBAR_H;
 
-    if (dwm.isShadowEnabled() and display.getPresentCount() > 0) {
-        mat.renderShadow(win_x, win_y, win_w, win_h, 8, 4);
-    } else {
-        fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
-    }
+    fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
     fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
+    const ex_dl = display.shellExplorerTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+        dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, ex_dl.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, ex_dl.left, ex_dl.right);
     }
 
     drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);
@@ -397,10 +460,11 @@ fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors)
 
     fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
     fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
+    const ex_f = display.shellExplorerTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, ex_f.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, ex_f.left, ex_f.right);
     }
 
     drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);
@@ -479,10 +543,11 @@ fn renderExplorerWindow(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) voi
 
     fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
 
+    const ex_pair = display.shellExplorerTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, .caption);
+        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, ex_pair.left, .caption);
     } else {
-        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, t.titlebar_active_left, t.titlebar_active_right);
+        fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, ex_pair.left, ex_pair.right);
     }
 
     drawExplorerTitlebarChrome(win_x, win_y, aero_tb_h, t);

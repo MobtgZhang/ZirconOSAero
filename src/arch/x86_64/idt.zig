@@ -1,9 +1,9 @@
 //! x86_64 IDT (Interrupt Descriptor Table) setup
 //! Reference: https://wiki.osdev.org/Interrupt_Descriptor_Table
+//!
+//! 用户态系统调用仅经 **`syscall`/`sysret`**（`syscall_lstar.s` + `syscall_msr.zig`）。IDT 向量 **128** 与其它未用向量相同，指向默认桩（**不**再作为 syscall 入口）。
 
 const isr = @import("isr.zig");
-
-extern fn syscall_entry() void;
 
 const IdtEntry = packed struct {
     offset_low: u16,
@@ -37,7 +37,6 @@ fn makeEntry(addr: usize) IdtEntry {
 }
 
 pub fn init() void {
-    const syscall_addr = @intFromPtr(&syscall_entry);
     const default_addr = isr.getDefaultAddr();
 
     var i: usize = 0;
@@ -45,9 +44,7 @@ pub fn init() void {
         idt_entries[i] = makeEntry(isr.getStubAddr(i));
     }
     while (i < 256) : (i += 1) {
-        if (i == 128) {
-            idt_entries[i] = makeEntry(syscall_addr);
-        } else if (i == isr.ipi_tlb_flush_vector) {
+        if (i == isr.ipi_tlb_flush_vector) {
             idt_entries[i] = makeEntry(isr.ipiTlbFlushStubAddr());
         } else {
             idt_entries[i] = makeEntry(default_addr);

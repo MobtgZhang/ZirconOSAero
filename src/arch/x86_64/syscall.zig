@@ -1,4 +1,4 @@
-//! x86_64 系统调用分发：`syscall` 与 `int 0x80`（向量 128）共用本模块与同一 **NT 6.1 x64** 寄存器约定。
+//! x86_64 系统调用分发：经 **`syscall`/`sysret`**（`syscall_lstar.s`）进入，本模块使用 **NT 6.1 x64** 寄存器约定。
 //! - **服务号**：`ssdt_nt61.zig` 中公开 SSDT 索引（Windows 7 SP1 x64 参考：j00ru/windows-syscalls）。
 //! - **约定**：第 1 参在 **R10**（`syscall` 时 RCX 存用户 RIP，故不用 RCX 传参）；第 2–4 参为 **RDX/R8/R9**；其余在用户栈。
 
@@ -149,7 +149,7 @@ pub fn dispatch(frame: *InterruptFrame) void {
     const syscall_no = frame.rax;
     const result: i64 = dispatchNtSsdt(frame, @truncate(syscall_no));
     frame.rax = @bitCast(result);
-    // 与 `int 0x80` 共用本出口（见 `interrupt_x86.handleSyscall`）：返用户前在 PASSIVE 排空内核 APC。
+    // 返用户前在 PASSIVE 排空内核 APC（与 `interrupt_x86.handleSyscall` 路径一致）。
     @import("../../ke/apc.zig").deliverKernelApcsForCurrentThread();
     // 返回用户态前确保当前线程 CR3 与所属进程一致（与调度器 `activateCr3ForProcessId` 互补；见 docs/cn/VM_ISOLATION.md）。
     if (process.getCurrentProcess()) |proc| {

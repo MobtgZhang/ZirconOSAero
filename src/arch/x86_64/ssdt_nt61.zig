@@ -14,7 +14,7 @@
 
 //! x64 `syscall` 调用约定（与 AMD64 长模式一致）：`RAX`=下表索引；第 1 参在 **`R10`**（因 `RCX` 存返回 RIP）；
 //! 第 2–4 参为 `RDX`、`R8`、`R9`；更多参数在**用户栈**上（相对于 SYSCALL 时 `RSP`，第 5 参常为 `+0x28`）。
-//! `int 0x80`（向量 128）使用同一 `InterruptFrame` 与同一分发器；调用方须遵守 **NT x64 寄存器约定**（第 1 参在 **R10**），而非 Linux `int 0x80` 风格。
+//! 用户态仅经 `syscall` 进入；`InterruptFrame` 与分发器见 `syscall.zig`。第 1 参在 **R10**（NT x64 AMD64 约定）。
 
 pub const NtClose = 0x0C;
 pub const NtWaitForSingleObject = 0x04;

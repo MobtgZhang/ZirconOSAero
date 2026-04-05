@@ -237,7 +237,7 @@ pub fn waitForInterrupt() void {
 
 /// 桌面主循环空闲：
 /// - **LoongArch64**：始终短自旋。QEMU/UEFI 下 VirtIO 等设备 IRQ 经 PCH/LIOINTC 唤醒 `idle 0` 不可靠时，会退化为仅定时器 ~100Hz 唤醒，表现为鼠标「动一下卡一下」。
-/// - **x86_64**：`-Ddesktop_idle_spin=true`（默认）时用短自旋代替 `sti;hlt`，便于 VirtIO/8042 轮询。
+/// - **x86_64**：`-Ddesktop_idle_spin=true`（默认）时用短自旋代替 `sti;hlt`，便于 VirtIO/8042 轮询；**降 guest CPU** 时可设 `-Ddesktop_idle_spin=false` 走 `waitForInterrupt`（依赖 IRQ 唤醒路径可靠）。
 pub fn waitForInterruptDesktop() void {
     const b = @import("builtin");
     if (b.target.cpu.arch == .loongarch64) {

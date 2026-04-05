@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# x86_64 `syscall` 入口（IA32_LSTAR）：构造与 `int 0x80` 一致的 InterruptFrame 后调用 `isr_common_handler`；
+# x86_64 `syscall` 入口（IA32_LSTAR）：构造 `InterruptFrame` 后调用 `isr_common_handler`；
 # 返回时使用 **sysretq**（需 GDT 中用户 SS 选择子比用户 CS 小 8，见 `hal/x86_64/gdt.zig`）。
 # 约定：RAX=服务号；NT 路径第 1 参在 R10（RCX/R11 由 SYSCALL 破坏）；与 `syscall.zig` 一致。
 # 使用 SWAPGS + %gs:0 读取 per-CPU RSP0（`hal/x86_64/percpu.zig`），与 IA32_KERNEL_GS_BASE 配对。

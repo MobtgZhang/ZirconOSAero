@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/arch/x86_64/syscall_msr.zig
-// Purpose: Enable AMD64 `syscall`/`sysret` via IA32_EFER.SCE and STAR/LSTAR/FMASK (与 IDT 向量 128 并存).
+// Purpose: Enable AMD64 `syscall`/`sysret` via IA32_EFER.SCE and STAR/LSTAR/FMASK（x86_64 唯一用户态 syscall 入口）。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
@@ -10,6 +10,7 @@
 
 const gdt = @import("../../hal/x86_64/gdt.zig");
 const klog = @import("../../rtl/klog.zig");
+const bugcheck = @import("../../ke/bugcheck.zig");
 
 extern fn syscall_lstar_entry() void;
 
@@ -58,7 +59,10 @@ fn cpuidExt80000001_edx() u32 {
     return edx;
 }
 
-/// 若 CPU 支持且 `zircon_x86_64_kernel_rsp0` 已初始化，则启用 `syscall` 入口；`int 0x80`（向量 128）与 `syscall` 共用同一 NT x64 分发（第 1 参在 R10）。
+/// 若 CPU 支持且 `zircon_x86_64_kernel_rsp0` 已初始化，则启用 `syscall` 入口。
+/// **启动序**：须于 `main` 在 `arch.initGdt`（设 TSS.RSP0 / `zircon_x86_64_kernel_rsp0`）**之后**调用（见 `main.zig` Phase 2 注释）。
+/// 无 SYSCALL/SYSRET 时 **停机**：已移除 IDT `int 0x80` 路径，用户态无法进入内核 syscall 分发器。
+/// Ref: Intel SDM — SYSCALL/SYSRET feature bit (CPUID 80000001H:EDX bit 11).
 pub fn initSyscallInstructionPath() void {
     if (gdt.zircon_x86_64_kernel_rsp0 == 0) {
         klog.warn("syscall: skipped (kernel RSP0 not set yet)", .{});
@@ -66,8 +70,8 @@ pub fn initSyscallInstructionPath() void {
     }
     const feat = cpuidExt80000001_edx();
     if ((feat & (1 << 11)) == 0) {
-        klog.warn("syscall: CPU lacks SYSCALL/SYSRET (cpuid 80000001h.edx.11); use int 0x80 only", .{});
-        return;
+        klog.crit("syscall: CPU lacks SYSCALL/SYSRET (cpuid 80000001h.edx.11); no user syscall path — halting", .{});
+        bugcheck.keBugCheckEx(.unexpected_kernel_mode_trap, 0x8000_0001, 11, feat, 0);
     }
 
     var efer = rdmsr(IA32_EFER);
@@ -86,7 +90,7 @@ pub fn initSyscallInstructionPath() void {
     const percpu = @import("../../hal/x86_64/percpu.zig");
     percpu.syncKernelRsp0(gdt.zircon_x86_64_kernel_rsp0);
 
-    klog.info("syscall/sysret: enabled (IA32_LSTAR=syscall_lstar_entry; int 0x80 vector 128 still valid)", .{});
+    klog.info("syscall/sysret: enabled (IA32_LSTAR=syscall_lstar_entry)", .{});
     if (klog.DEBUG_MODE) {
         klog.debug("syscall: per-CPU KERNEL_GS_BASE (SWAPGS) synced to RSP0", .{});
     }

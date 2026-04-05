@@ -273,6 +273,7 @@
 - **单缓冲语义**：`double_buffer=false` 时 `getDrawBuffer()` 即 GOP；`flipDirty()` **不执行 memcpy**，仅清空脏矩形计数（绘制已在屏前完成）。
 - **Present**：双缓冲且 `present_full_flip=true`（默认）时 `present()` 整幅提交；否则 `flipDirty()`。单缓冲下 `flipDirty` 仅清脏标记。
 - **软件光标层**：实现集中在 `**src/drivers/video/core/cursor_plane.zig`**（save-under）；`core/display.renderDesktopFrameEx` 在场景合成之后调用。仅指针移动且壳层无脏时走快速路径；形态变化会回退整场景路径。`display.hardware_cursor` 仅为预留钩子（`notifyHardwareCursorIfAvailable`），仅接公开硬件文档路径，非 WDDM 专有 API。
+- **cursor_fast 与 DWM 缩略图 / `flipDirty` 契约**：`DwmRegisterThumbnail` 的 `blitRegisteredDwmThumbnailsToFramebuffer` **必须**在 **`composeAfterScene` / `moveOnly` 之前**执行（`display.blitRegisteredDwmThumbnailsBeforeCursor`）。若在光标之后才画缩略图，下一帧 `moveOnly` 的 paste 会用「无缩略图」的 save-under 盖回绘制缓冲，再叠加 `present` 仅拷贝光标脏区时，易出现 **跟指针相关的闪暗、窗缘发灰**。凡在光标之后写入帧缓冲的路径（如 Flip3D 全屏 `blendTintRect`）须 **`fb.markDirtyRegion`**（或等价整屏脏），否则 `present_full_flip=false` 时 `flipDirty` 会漏拷贝。诊断二分：`zig build -Ddesktop_bisect_force_full_present=true`（强制整幅 flip）、`-Ddesktop_bisect_disable_cursor_move_only=true`（禁用指针快路径）；遥测见 `display.getDesktopComposeTelemetry` 与 `-Dmouse_debug=true`。
 - **诊断行**：进入桌面后串口有 `**DesktopPointerDiag:`**（`double_buf` / `triple_buf` / `virtio_input` / `ps2_hw` / `present_full_flip` 等），与 §3.1「坐标变 vs 画面不变」对照使用。
 - **轻量多缓冲语义**：指针下的像素快照等价于「与主帧分离的叠加」的**软件实现**，非 WDDM/DXGI 的 Flip 链。
 

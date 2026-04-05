@@ -78,6 +78,24 @@ test "seAccessCheckMask grants must cover desired" {
     try std.testing.expect(!seAccessCheckMask(&user, GENERIC_READ | GENERIC_WRITE, GENERIC_READ));
 }
 
+// 与 `src/se/token.zig` `seProcessOpenAllowed` 非提升分支同构（主机镜像）。
+const PROCESS_TERMINATE: u32 = 0x0001;
+const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
+const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+const SYNCHRONIZE_WIN32: u32 = 0x00100000;
+
+fn seProcessOpenAllowedNonElevated(win32_desired_access: u32) bool {
+    const allow = PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_WIN32;
+    return (win32_desired_access & ~allow) == 0;
+}
+
+test "seProcessOpenAllowed user may query not terminate" {
+    try std.testing.expect(seProcessOpenAllowedNonElevated(PROCESS_QUERY_INFORMATION));
+    try std.testing.expect(seProcessOpenAllowedNonElevated(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_WIN32));
+    try std.testing.expect(!seProcessOpenAllowedNonElevated(PROCESS_TERMINATE));
+    try std.testing.expect(!seProcessOpenAllowedNonElevated(PROCESS_QUERY_INFORMATION | PROCESS_TERMINATE));
+}
+
 /// 与 `src/se/token.zig` `seAccessActiveDesktopForWin32k` 同构（主机镜像，供 GUI LPC 门闸文档锚点）。
 fn seAccessActiveDesktopForWin32kMirror(tok: *const Token, process_desktop_idx: u32, active_desktop_idx: u32) bool {
     if (process_desktop_idx == active_desktop_idx) return true;

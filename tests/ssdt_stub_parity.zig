@@ -39,4 +39,14 @@ test "user syscall stub Ssdt matches ssdt_nt61" {
     try std.testing.expectEqual(ssdt.NtSetInformationObject, stub.Ssdt.NtSetInformationObject);
     try std.testing.expectEqual(ssdt.NtSignalAndWaitForSingleObject, stub.Ssdt.NtSignalAndWaitForSingleObject);
     try std.testing.expectEqual(ssdt.NtQueryInformationProcess, stub.Ssdt.NtQueryInformationProcess);
+    try std.testing.expectEqual(ssdt.NtCreateFile, stub.Ssdt.NtCreateFile);
+    try std.testing.expectEqual(ssdt.NtReadFile, stub.Ssdt.NtReadFile);
+    try std.testing.expectEqual(ssdt.NtWriteFile, stub.Ssdt.NtWriteFile);
+    try std.testing.expectEqual(ssdt.NtOpenFile, stub.Ssdt.NtOpenFile);
+    try std.testing.expectEqual(ssdt.NtCreateSection, stub.Ssdt.NtCreateSection);
+    try std.testing.expectEqual(ssdt.NtMapViewOfSection, stub.Ssdt.NtMapViewOfSection);
+    try std.testing.expectEqual(ssdt.NtUnmapViewOfSection, stub.Ssdt.NtUnmapViewOfSection);
+    try std.testing.expectEqual(ssdt.NtTerminateProcess, stub.Ssdt.NtTerminateProcess);
+    try std.testing.expectEqual(ssdt.NtReadVirtualMemory, stub.Ssdt.NtReadVirtualMemory);
+    try std.testing.expectEqual(ssdt.NtWriteVirtualMemory, stub.Ssdt.NtWriteVirtualMemory);
 }

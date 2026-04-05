@@ -9,6 +9,7 @@ const dwm_registry_sync = @import("dwm_config_registry_sync");
 const dwm_blur_budget = @import("dwm_blur_budget");
 const dnc = @import("dwm_nt61_api_contract");
 const wddm = @import("wddm_abstraction");
+const nt61_aero = @import("nt61_aero_defaults");
 
 const WM_DWMSENDICONICTHUMBNAIL: u32 = 0x0323;
 const WM_DWMSENDICONICLIVEPREVIEWBITMAP: u32 = 0x0326;
@@ -40,6 +41,12 @@ test "WM_DWMSENDICONICLIVEPREVIEWBITMAP id and same lParam packing as iconic thu
 test "classifyVirtioRuntimePhase submit3d noop ranks above ctx-only" {
     try std.testing.expectEqual(wddm.WddmRuntimePhase.virgl_submit3d_noop_ok, wddm.classifyVirtioRuntimePhase(false, false, true, true));
     try std.testing.expectEqual(wddm.WddmRuntimePhase.virgl_context_up, wddm.classifyVirtioRuntimePhase(false, false, true, false));
+}
+
+test "KernelCompositor flip3d enabled implies contract thumb caps ordered" {
+    if (nt61_aero.KernelCompositor.flip3d_enabled) {
+        try std.testing.expect(dnc.flip3d_shell_sid_buffer_cap >= dnc.flip3d_shell_thumb_paint_max);
+    }
 }
 
 test "WM_DWMSENDICONICTHUMBNAIL lParam MAKELPARAM-style width height" {

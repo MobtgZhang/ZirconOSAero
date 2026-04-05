@@ -20,3 +20,25 @@ test "KUSER_SHARED_DATA VA and version field offsets" {
     try std.testing.expect(kuser.kuser_nt_major_version_offset < 4096);
     try std.testing.expect(kuser.kuser_nt_minor_version_offset < 4096);
 }
+
+/// 与 `ntdll.zig` `ProcessImageFileName` 写出布局一致（x64 `UNICODE_STRING`）。
+const UNICODE_STRING_NATIVE = extern struct {
+    length: u16,
+    maximum_length: u16,
+    _reserved: u32 = 0,
+    buffer: u64,
+};
+const KERNEL_USER_TIMES = extern struct {
+    create_time: i64,
+    exit_time: i64,
+    kernel_time: i64,
+    user_time: i64,
+};
+
+test "UNICODE_STRING_NATIVE 16 bytes for ProcessImageFileName buffer header" {
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(UNICODE_STRING_NATIVE));
+}
+
+test "KERNEL_USER_TIMES 32 bytes for ThreadTimes" {
+    try std.testing.expectEqual(@as(usize, 32), @sizeOf(KERNEL_USER_TIMES));
+}

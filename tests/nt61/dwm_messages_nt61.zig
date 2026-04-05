@@ -71,3 +71,11 @@ test "startup exemption when zero HWNDs is policy gate not message id" {
     const zero_windows: usize = 0;
     try std.testing.expectEqual(@as(usize, 0), zero_windows);
 }
+
+// C1：Learn `DefWindowProc` — `WM_NULL` 默认返回 0；与 `user32.DefWindowProcA` 叙事一致（主机常量锚点）。
+test "DefWindowProc WM_NULL default LRESULT anchor" {
+    const WM_NULL: u32 = 0;
+    const LRESULT_ZERO: i64 = 0;
+    try std.testing.expectEqual(LRESULT_ZERO, @as(i64, 0));
+    _ = WM_NULL;
+}

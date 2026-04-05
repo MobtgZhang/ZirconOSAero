@@ -54,6 +54,7 @@ comptime {
     _ = @import("ke/apc_object.zig");
     _ = @import("ke/roadmap_hooks.zig");
     _ = @import("mm/slab.zig");
+    _ = @import("registry/regf_hive_stub.zig");
     _ = @import("mm/phys_buddy.zig");
     _ = @import("mm/heap_boot.zig");
     _ = @import("mm/ex_pool.zig");
@@ -261,12 +262,15 @@ fn startX86_64(magic: u32, info_addr: usize) noreturn {
     scheduler.init();
     @import("ke/apc.zig").init();
 
+    // x86_64 syscall/sysret 前置条件（S1 启动序）：`arch.initGdt` 已设 `TSS.RSP0` 与
+    // `gdt.zircon_x86_64_kernel_rsp0`，且 `percpu.syncKernelRsp0` 在 GDT init 内已执行。
+    // 须 **早于** `initSyscallInstructionPath`（写 STAR/LSTAR/FMASK 与 KERNEL_GS_BASE）。
     if (@import("build_options").enable_idt) {
         const idt = @import("arch/x86_64/idt.zig");
         idt.init();
         const syscall_msr = @import("arch/x86_64/syscall_msr.zig");
         syscall_msr.initSyscallInstructionPath();
-        klog.info("IDT initialized (256 vectors, vector 128 = syscall)", .{});
+        klog.info("IDT initialized (256 vectors; user syscall via syscall/sysret MSR only)", .{});
 
         timer.init();
         klog.info("Timer: PIC + PIT ready (~100Hz)", .{});
@@ -787,6 +791,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
                     @as(u32, @truncate(scheduler.getTicks() - t0)),
                 });
             }
+            // D-D4：`present()` 内 `dwm_compositor.notifyFramePresented` 与脏表面缩略刷新配对；无 `need_paint` 时跳过以免空 flip。
             display.present();
             last_draw_cx = mouse.getX();
             last_draw_cy = mouse.getY();

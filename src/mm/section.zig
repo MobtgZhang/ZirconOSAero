@@ -54,6 +54,8 @@ pub const SectionObject = struct {
     is_image_section: bool = false,
     /// 写时拷贝：**文件后备**仍为路线图；**匿名**节上 `PAGE_WRITECOPY` 与私有 RW 等价（fork 时由 `duplicateUserMappingsForFork` 做 CoW）。
     cow_requested: bool = false,
+    /// A2b：**多进程共享只读映像**（DLL `SEC_IMAGE`）须在独立 CR3 上映射同一 `SectionObject` 后备帧；当前为标志位 + 文档锚点，完整引用计数与视图令牌生命周期见 `MM_Section_Roadmap.md`。
+    shared_image_candidate: bool = false,
 };
 
 var g_sections: [MAX_SECTIONS]SectionObject = undefined;

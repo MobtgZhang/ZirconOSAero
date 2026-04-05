@@ -1,4 +1,4 @@
-//! x86_64：IDT 异常 / PIC IRQ / int 0x80 系统调用分发（原 `interrupt.zig` 主体）
+//! x86_64：IDT 异常 / PIC IRQ / 系统调用帧处理（`syscall` 经 `isr_common_handler` 进入 `handleSyscall`）
 
 const builtin = @import("builtin");
 const arch = @import("../arch.zig");

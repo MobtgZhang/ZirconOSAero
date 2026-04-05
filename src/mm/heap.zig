@@ -293,6 +293,31 @@ pub fn free(ptr: [*]u8, user_size: usize, alignment: usize) void {
     live_bytes -|= total;
 }
 
+/// 调整已分配块大小：`ptr == null` 时等价 `alloc`；`new_user_size == 0` 时释放并返回 null。
+/// 非平凡变长：新分配 + 拷贝 + 释放旧块（与空闲链表/合并语义一致，避免错误拆块）。
+pub fn realloc(
+    ptr: ?[*]u8,
+    old_user_size: usize,
+    old_alignment: usize,
+    new_user_size: usize,
+    new_alignment: usize,
+) ?[*]u8 {
+    if (!heap_initialized or new_alignment == 0) return null;
+    if (new_user_size == 0) {
+        if (ptr) |p| free(p, old_user_size, old_alignment);
+        return null;
+    }
+    if (ptr == null) return alloc(new_user_size, new_alignment);
+    if (new_user_size == old_user_size and new_alignment == old_alignment)
+        return ptr;
+
+    const newp = alloc(new_user_size, new_alignment) orelse return null;
+    const copy_n = @min(old_user_size, new_user_size);
+    @memcpy(newp[0..copy_n], ptr.?[0..copy_n]);
+    free(ptr.?, old_user_size, old_alignment);
+    return newp;
+}
+
 pub fn allocSlice(comptime T: type, count: usize) ?[]T {
     const size = @sizeOf(T) * count;
     const ptr = alloc(size, @alignOf(T)) orelse return null;
@@ -340,6 +365,24 @@ pub fn capacityBytes() usize {
 }
 
 pub const pool = @import("pool.zig");
+
+test "heap realloc grow and shrink" {
+    init();
+    const p = alloc(32, 8) orelse return error.Oom;
+    @memset(p[0..32], 0xAB);
+    const q = realloc(p, 32, 8, 64, 8) orelse return error.Realloc;
+    try std.testing.expectEqual(@as(u8, 0xAB), q[0]);
+    try std.testing.expectEqual(@as(u8, 0xAB), q[31]);
+    const r = realloc(q, 64, 8, 16, 8) orelse return error.Realloc2;
+    try std.testing.expectEqual(@as(u8, 0xAB), r[0]);
+    kfree(r, 16, 8);
+}
+
+test "heap realloc null is alloc" {
+    init();
+    const p = realloc(null, 0, 8, 40, 8) orelse return error.Oom;
+    kfree(p, 40, 8);
+}
 
 test "heap alloc kfree roundtrip" {
     init();

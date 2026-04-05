@@ -449,6 +449,8 @@ pub const Thread = struct {
     pending_wait_status: ?i32 = null,
     /// `NtAlertThread` 置位；可告警等待路径在 `STATUS_USER_APC` 之前消费并返回 `STATUS_ALERTED`。
     alert_pending: bool = false,
+    /// 非 0：阻塞在 **该 receiver_pid** 的 LPC 入站队列上（`ipc`）；与 `wakeLpcWaitersForReceiverPid` 配对。
+    lpc_wait_receiver_pid: u32 = 0,
 };
 
 fn effectivePriority(t: *const Thread) u8 {
@@ -530,6 +532,7 @@ fn terminateThreadsForProcess(pid: u32) void {
         if (threads[i].process_id == pid) {
             detachThreadFromWaitQueues(i);
             removeFromReadyQueue(i);
+            threads[i].lpc_wait_receiver_pid = 0;
             threads[i].state = .terminated;
             threads[i].mutex_inherit_floor = 0;
             threads[i].mutex_inherit_depth = 0;
@@ -732,6 +735,28 @@ pub fn blockThread(tid: usize) void {
     if (tid < thread_count) {
         removeFromReadyQueue(tid);
         threads[tid].state = .blocked;
+    }
+}
+
+/// 持 `sched_irq_lock`：将线程标为阻塞在 `receiver_pid` 的 LPC 队列上（须已 `removeFromReadyQueue` 等价效果由本函数完成）。
+pub fn prepareLpcReceiveBlockLocked(tid: usize, receiver_pid: u32) void {
+    if (tid >= thread_count) return;
+    threads[tid].lpc_wait_receiver_pid = receiver_pid;
+    removeFromReadyQueue(tid);
+    threads[tid].state = .blocked;
+}
+
+/// `ipc` 在成功 `push` 后调用：唤醒所有等待该接收方队列的阻塞线程。
+pub fn wakeLpcWaitersForReceiverPid(receiver_pid: u32) void {
+    if (receiver_pid == 0) return;
+    sched_irq_lock.lock();
+    defer sched_irq_lock.unlock();
+    var i: usize = 0;
+    while (i < thread_count) : (i += 1) {
+        if (threads[i].state != .blocked) continue;
+        if (threads[i].lpc_wait_receiver_pid != receiver_pid) continue;
+        threads[i].lpc_wait_receiver_pid = 0;
+        unblockThread(i);
     }
 }
 

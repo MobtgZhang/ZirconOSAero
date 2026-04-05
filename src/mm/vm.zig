@@ -140,6 +140,22 @@ pub fn kernelAddressSpace() ?*AddressSpace {
     return g_kernel_space;
 }
 
+/// 将内核 `AddressSpace` 的 PML4 槽 **256..512**（canonical 高半区入口）复制到进程页表，使 `CR3` 切换后仍可达内核映射。
+/// 与 `paging.releaseUserHalfAddressSpace` 仅回收 **0..256** 一致；子进程 PML4 与内核 **共享** 高半区所指 PDPT/PD/PT 物理帧（不复制整棵子树）。
+/// Ref: Intel SDM — 4-level paging；行为描述见 `docs/cn/VM_ISOLATION.md`。
+pub fn linkKernelHalfMappings(dst: *AddressSpace) bool {
+    if (builtin.cpu.arch != .x86_64) return true;
+    const ks = kernelAddressSpace() orelse return false;
+    // 恒等映射下 PML4 物理页可解引用（与 `unmapPage` / `translateVirtualToPhysical` 路径一致）。
+    const dst_pml4: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
+    const src_pml4: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
+    var i: usize = 256;
+    while (i < 512) : (i += 1) {
+        dst_pml4.entries[i] = src_pml4.entries[i];
+    }
+    return true;
+}
+
 fn freeFrameForRelease(ctx: ?*anyopaque, phys: u64) void {
     const a = ctx orelse return;
     const fa: *FrameAllocator = @ptrCast(@alignCast(a));

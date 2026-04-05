@@ -258,6 +258,35 @@ pub fn freeNonPaged(ptr: [*]u8, size: usize, tag: u32) void {
     freeNonPagedImplLocked(ptr, size);
 }
 
+/// `ExReallocatePoolWithTag` 语义子集：新分配 + 拷贝 + 释放旧块（跨档位安全）；`old_size == new_size` 时原指针返回。
+pub fn reallocateNonPaged(ptr: [*]u8, old_size: usize, new_size: usize, tag: u32) ?[*]u8 {
+    if (old_size == new_size) return ptr;
+    const p = allocateNonPaged(new_size, tag) orelse return null;
+    const n = @min(old_size, new_size);
+    @memcpy(p[0..n], ptr[0..n]);
+    freeNonPaged(ptr, old_size, tag);
+    return p;
+}
+
+pub fn reallocatePaged(ptr: [*]u8, old_size: usize, new_size: usize, tag: u32) ?[*]u8 {
+    if (old_size == new_size) return ptr;
+    const p = allocatePaged(new_size, tag) orelse return null;
+    const n = @min(old_size, new_size);
+    @memcpy(p[0..n], ptr[0..n]);
+    freePaged(ptr, old_size, tag);
+    return p;
+}
+
+test "pool reallocateNonPaged crosses slot" {
+    heap.init();
+    tag_stats_len = 0;
+    const p = allocateNonPaged(32, 0xABCD) orelse return error.A;
+    @memset(p[0..32], 0xCD);
+    const q = reallocateNonPaged(p, 32, 128, 0xABCD) orelse return error.R;
+    try std.testing.expectEqual(@as(u8, 0xCD), q[0]);
+    freeNonPaged(q, 128, 0xABCD);
+}
+
 test "pool slot roundtrip uses heap then freelist" {
     heap.init();
     tag_stats_len = 0;

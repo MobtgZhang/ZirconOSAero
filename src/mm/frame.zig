@@ -100,8 +100,7 @@ pub fn memsetPhysicalPage(phys: u64) void {
             asm volatile ("outb %[t], $0xe9"
                 :
                 : [t] "{al}" (@as(u8, 0xA1)),
-                : .{ .memory = true }
-            );
+                : .{ .memory = true });
         }
         asm volatile (
             \\cld
@@ -110,14 +109,12 @@ pub fn memsetPhysicalPage(phys: u64) void {
             : [rdi] "{rdi}" (phys),
               [rcx] "{rcx}" (@as(usize, 512)),
               [rax] "{rax}" (@as(usize, 0)),
-            : .{ .rdi = true, .rcx = true, .rax = true, .memory = true }
-        );
+            : .{ .rdi = true, .rcx = true, .rax = true, .memory = true });
         if (klog.DEBUG_MODE) {
             asm volatile ("outb %[t], $0xe9"
                 :
                 : [t] "{al}" (@as(u8, 0xA2)),
-                : .{ .memory = true }
-            );
+                : .{ .memory = true });
         }
         return;
     }
@@ -136,8 +133,7 @@ pub fn memcpyPhysicalPage(dst_phys: u64, src_phys: u64) void {
             : [rdi] "{rdi}" (dst_phys),
               [rsi] "{rsi}" (src_phys),
               [rcx] "{rcx}" (@as(usize, 512)),
-            : .{ .rdi = true, .rsi = true, .rcx = true, .memory = true }
-        );
+            : .{ .rdi = true, .rsi = true, .rcx = true, .memory = true });
         return;
     }
     var i: usize = 0;

@@ -9,7 +9,7 @@
 //
 // ## 分配路径全景（阶段 A 文档锚点）
 //
-// 1. `exAllocatePoolWithTag` / `exFreePoolWithTag` → `pool.allocateNonPaged` / `pool.freeNonPaged`
+// 1. `exAllocatePoolWithTag` / `exFreePoolWithTag` / **`exReallocatePoolWithTag`** → `pool.allocateNonPaged` / `pool.freeNonPaged` / `pool.reallocateNonPaged`
 //    （NonPagedPool；≤512B 档位优先 **per-CPU lookaside**，否则 **全局档位链**，再大则 **`heap.zig` 空闲链表**）。
 // 2. `exAllocatePoolWithTagType(.paged)` / `exFreePoolWithTagType(.paged)` → `pool.allocatePaged` / `pool.freePaged`
 //    （须 **APC_LEVEL 以下**：`setPagedPoolIrqlGuard`；Paged 可与 NonPaged 共用 zone 页，**无真换出**；可选 **软上限** 见 `pool.setPagedPoolSoftLimitForTest`）。
@@ -61,4 +61,19 @@ pub fn exFreePoolWithTagType(ptr: [*]u8, size: usize, tag: u32, pool_type: pool.
         .non_paged => pool.freeNonPaged(ptr, size, tag),
         .paged => pool.freePaged(ptr, size, tag),
     }
+}
+
+/// 非分页池变长；`tag` 参与统计（先 `allocate` 后 `free` 旧块）。
+pub fn exReallocatePoolWithTag(ptr: [*]u8, old_size: usize, new_size: usize, tag: u32) ?[*]u8 {
+    return pool.reallocateNonPaged(ptr, old_size, new_size, tag);
+}
+
+pub fn exReallocatePoolWithTagType(ptr: [*]u8, old_size: usize, new_size: usize, tag: u32, pool_type: pool.PoolType) ?[*]u8 {
+    return switch (pool_type) {
+        .non_paged => pool.reallocateNonPaged(ptr, old_size, new_size, tag),
+        .paged => blk: {
+            assertPagedPoolIrqlOk();
+            break :blk pool.reallocatePaged(ptr, old_size, new_size, tag);
+        },
+    };
 }

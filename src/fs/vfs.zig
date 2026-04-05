@@ -86,6 +86,8 @@ pub const MAX_MOUNT_POINTS: usize = 16;
 
 pub const FsOps = struct {
     open: ?*const fn (*FileObject, []const u8, FileAccessMode) FileStatus = null,
+    /// 最后一道句柄关闭时的驱动收尾（等价 **IRP_MJ_CLEANUP** 子集）；在 `close` 之前调用。
+    cleanup: ?*const fn (*FileObject) FileStatus = null,
     close: ?*const fn (*FileObject) FileStatus = null,
     read: ?*const fn (*FileObject, []u8) ReadResult = null,
     write: ?*const fn (*FileObject, []const u8) WriteResult = null,
@@ -445,6 +447,9 @@ pub fn close(f: *FileObject) FileStatus {
 
     if (f.mount_idx < mount_count) {
         const mp = &mounts[f.mount_idx];
+        if (mp.ops.cleanup) |cleanup_fn| {
+            _ = cleanup_fn(f);
+        }
         if (mp.ops.close) |close_fn| {
             _ = close_fn(f);
         }

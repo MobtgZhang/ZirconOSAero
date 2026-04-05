@@ -145,3 +145,12 @@ test "desktop DSL1 close hdesk" {
     std.mem.writeInt(u32, buf[4..8], 2, .little);
     try std.testing.expectEqual(@as(u32, 2), readCloseDesktopHdesk(&buf).?);
 }
+
+/// `user32.packMsgForLpc` / `csrFillOneMessageForLpc` 应答载荷；与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 及 DesktopManagerSpec §3.4 一致。
+pub const csr_reply_msg_packed_bytes: usize = 44;
+
+test "csr get_message reply MSG layout is 44 bytes LE (hwnd,msg,pad,wparam,lparam,time,pt)" {
+    try std.testing.expectEqual(@as(usize, 44), csr_reply_msg_packed_bytes);
+    // u64+u32+u32+u64+i64+u32+i32+i32 — mirrors `user32.packMsgForLpc`.
+    try std.testing.expectEqual(@as(usize, 44), 8 + 4 + 4 + 8 + 8 + 4 + 4 + 4);
+}

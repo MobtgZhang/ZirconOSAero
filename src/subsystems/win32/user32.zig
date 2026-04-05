@@ -1,6 +1,7 @@
 //! user32 - Win32 User Interface API Subset
 //! Phase 10: Window management, message queue, window classes,
 //! message loop, input processing, and basic UI primitives.
+//! C1：`DefWindowProcA` 处理 `WM_NCHITTEST` / `WM_NCCALCSIZE` / `WM_NCPAINT` 等默认 NC 路径；`broadcastDwm*` 与 `dwm.zig` 合成状态挂钩（`WM_DWM*`）。
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -90,6 +91,7 @@ pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_NCPAINT: u32 = 0x0085;
+pub const WM_NCCALCSIZE: u32 = 0x0083;
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_KEYDOWN: u32 = 0x0100;
@@ -587,13 +589,16 @@ pub fn getScreenHeight() i32 {
     return screen_height;
 }
 
-/// 向已创建窗口投递 `WM_DWMCOMPOSITIONCHANGED`（合成启用/关闭）；供 csrss / 壳层在 DWM 状态变化时调用。
+/// 向已创建 **顶级**（`parent == 0`）窗口投递 `WM_DWMCOMPOSITIONCHANGED`（合成启用/关闭）；供 csrss / 壳层在 DWM 状态变化时调用。
+/// **尚无 HWND**：不向窗口队列投递（与 `dwm.syncPolicyFromRegistry` 启动豁免一致）；仍向 `register_dwm_listener` 线程投递，以便 `initGuiSubsystem` 等引导路径可收通知。
 pub fn broadcastDwmCompositionChanged(composition_on: BOOL) void {
     const wp: WPARAM = dwm_nt61_contract.compositionChangedWParam(composition_on != 0);
-    var wi: usize = 0;
-    while (wi < window_count) : (wi += 1) {
-        if (windows[wi].is_valid) {
-            _ = windows[wi].postMessage(WM_DWMCOMPOSITIONCHANGED, wp, 0);
+    if (getWindowCount() != 0) {
+        var wi: usize = 0;
+        while (wi < window_count) : (wi += 1) {
+            if (windows[wi].is_valid and windows[wi].parent == 0) {
+                _ = windows[wi].postMessage(WM_DWMCOMPOSITIONCHANGED, wp, 0);
+            }
         }
     }
     broadcastDwmToListenerThreads(WM_DWMCOMPOSITIONCHANGED, wp, 0);
@@ -603,10 +608,12 @@ pub fn broadcastDwmCompositionChanged(composition_on: BOOL) void {
 pub fn broadcastDwmColorizationChanged(argb: u32, blend_enabled: BOOL) void {
     const wp: WPARAM = argb;
     const lp: LPARAM = dwm_nt61_contract.colorizationChangedLParam(blend_enabled != 0);
-    var wi: usize = 0;
-    while (wi < window_count) : (wi += 1) {
-        if (windows[wi].is_valid) {
-            _ = windows[wi].postMessage(WM_DWMCOLORIZATIONCOLORCHANGED, wp, lp);
+    if (getWindowCount() != 0) {
+        var wi: usize = 0;
+        while (wi < window_count) : (wi += 1) {
+            if (windows[wi].is_valid and windows[wi].parent == 0) {
+                _ = windows[wi].postMessage(WM_DWMCOLORIZATIONCOLORCHANGED, wp, lp);
+            }
         }
     }
     broadcastDwmToListenerThreads(WM_DWMCOLORIZATIONCOLORCHANGED, wp, lp);
@@ -614,10 +621,12 @@ pub fn broadcastDwmColorizationChanged(argb: u32, blend_enabled: BOOL) void {
 
 pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
     const wp: WPARAM = dwm_nt61_contract.ncRenderingChangedWParam(policy_enabled != 0);
-    var wi: usize = 0;
-    while (wi < window_count) : (wi += 1) {
-        if (windows[wi].is_valid) {
-            _ = windows[wi].postMessage(WM_DWMNCRENDERINGCHANGED, wp, 0);
+    if (getWindowCount() != 0) {
+        var wi: usize = 0;
+        while (wi < window_count) : (wi += 1) {
+            if (windows[wi].is_valid and windows[wi].parent == 0) {
+                _ = windows[wi].postMessage(WM_DWMNCRENDERINGCHANGED, wp, 0);
+            }
         }
     }
     broadcastDwmToListenerThreads(WM_DWMNCRENDERINGCHANGED, wp, 0);
@@ -626,10 +635,12 @@ pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
 /// Ref: Learn — WM_DWMSENDICONICTHUMBNAIL；`lParam` 低 16 位为请求最大宽度、高 16 位为最大高度（与 `MAKELPARAM` 布局一致）。
 pub fn broadcastDwmIconicThumbnailRequested(max_w: u32, max_h: u32) void {
     const lp: LPARAM = dwm_nt61_contract.iconicSizeRequestLParam(max_w, max_h);
-    var wi: usize = 0;
-    while (wi < window_count) : (wi += 1) {
-        if (windows[wi].is_valid) {
-            _ = windows[wi].postMessage(WM_DWMSENDICONICTHUMBNAIL, 0, lp);
+    if (getWindowCount() != 0) {
+        var wi: usize = 0;
+        while (wi < window_count) : (wi += 1) {
+            if (windows[wi].is_valid and windows[wi].parent == 0) {
+                _ = windows[wi].postMessage(WM_DWMSENDICONICTHUMBNAIL, 0, lp);
+            }
         }
     }
     broadcastDwmToListenerThreads(WM_DWMSENDICONICTHUMBNAIL, 0, lp);
@@ -638,10 +649,12 @@ pub fn broadcastDwmIconicThumbnailRequested(max_w: u32, max_h: u32) void {
 /// Ref: Learn — `WM_DWMWINDOWMAXIMIZEDCHANGE`；`wParam` 非零表示最大化状态。
 pub fn broadcastDwmWindowMaximizedChanged(maximized: BOOL) void {
     const wp: WPARAM = dwm_nt61_contract.windowMaximizedChangeWParam(maximized != 0);
-    var wi: usize = 0;
-    while (wi < window_count) : (wi += 1) {
-        if (windows[wi].is_valid) {
-            _ = windows[wi].postMessage(WM_DWMWINDOWMAXIMIZEDCHANGE, wp, 0);
+    if (getWindowCount() != 0) {
+        var wi: usize = 0;
+        while (wi < window_count) : (wi += 1) {
+            if (windows[wi].is_valid and windows[wi].parent == 0) {
+                _ = windows[wi].postMessage(WM_DWMWINDOWMAXIMIZEDCHANGE, wp, 0);
+            }
         }
     }
     broadcastDwmToListenerThreads(WM_DWMWINDOWMAXIMIZEDCHANGE, wp, 0);
@@ -650,10 +663,12 @@ pub fn broadcastDwmWindowMaximizedChanged(maximized: BOOL) void {
 /// Ref: Learn — `WM_DWMSENDICONICLIVEPREVIEWBITMAP`；`lParam` 与缩略图请求相同的宽高打包。
 pub fn broadcastDwmIconicLivePreviewBitmapRequested(max_w: u32, max_h: u32) void {
     const lp: LPARAM = dwm_nt61_contract.iconicSizeRequestLParam(max_w, max_h);
-    var wi: usize = 0;
-    while (wi < window_count) : (wi += 1) {
-        if (windows[wi].is_valid) {
-            _ = windows[wi].postMessage(WM_DWMSENDICONICLIVEPREVIEWBITMAP, 0, lp);
+    if (getWindowCount() != 0) {
+        var wi: usize = 0;
+        while (wi < window_count) : (wi += 1) {
+            if (windows[wi].is_valid and windows[wi].parent == 0) {
+                _ = windows[wi].postMessage(WM_DWMSENDICONICLIVEPREVIEWBITMAP, 0, lp);
+            }
         }
     }
     broadcastDwmToListenerThreads(WM_DWMSENDICONICLIVEPREVIEWBITMAP, 0, lp);
@@ -1300,7 +1315,7 @@ pub fn GetMessageA(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
 
 /// 与 `GetMessageA` 相同语义；空队列时多线程下可经 `blockThread` + 投递路径 `wakeOneMsgWaiter` 近似 Learn 的阻塞；单线程或仅一调度线程时仍为协作式 `yield`，耗尽后 `NtUserGetMessage` 返回 `STATUS_PENDING`（与 Learn「无限阻塞直至有消息」有差距，见契约矩阵）。
 pub fn getMessageAWithYield(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
-    const max_spins: u32 = 4096;
+    const max_spins: u32 = build_options.get_message_yield_spins;
     var s: u32 = 0;
     const sched_tid: usize = if (sched_mod.isInitialized()) sched_mod.getCurrentThreadId() else 0;
     while (s < max_spins) : (s += 1) {
@@ -1342,7 +1357,7 @@ fn userVirtRangeMapped(va: u64, len: u64) bool {
 /// `NtUserGetMessage` 内核路径：AMD64 约定第 1 参在 `R10`（`MSG *`）。
 /// 与 Learn：`GetMessage` 在空队列时应阻塞直至有消息；本实现 **不** 在内核里无限阻塞用户线程：
 /// - 多线程：`getMessageAWithYield` 可 `blockThread`，由 `PostMessage`/`wakeOneMsgWaiter` 唤醒；
-/// - 单线程：协作式 `yield` 后仍无消息则 **`STATUS_PENDING`** 且将用户 `MSG*` 清零（与 Win32 `GetMessage` 不返回直到有消息 **不同**，用户态须轮询或接调度器）。
+/// - 单线程：协作式 `yield` 至多 `build_options.get_message_yield_spins` 次后仍无消息则 **`STATUS_PENDING`** 且将用户 `MSG*` 清零（与 Win32 `GetMessage` 不返回直到有消息 **不同**，用户态须轮询或接调度器）。
 /// `syscall.zig` 将 `NTSTATUS` 透传为 syscall 结果；勿假设与真 NT `NtUserGetMessage` 阻塞语义逐位一致。
 pub fn ntUserGetMessageSyscall(msg_user_va: u64, hwnd: HWND, min_msg: u32, max_msg: u32) ntdll.NTSTATUS {
     const msg_len: u64 = @sizeOf(MSG);
@@ -1500,6 +1515,7 @@ pub fn TranslateMessage(_: *const MSG) BOOL {
 }
 
 /// Ref: Learn — `DispatchMessage` 调用窗口 `WndProc`；本仓库以 `class_id`（ATOM）→ `WindowClass.wndproc_id`，命中 `registerKernelWndProc` 表则先调内核例程，否则 `DefWindowProcA`（矩阵 §5）。
+/// **D-D1-7**：`WM_DWM*` 的默认应答在 `DefWindowProcA`（返回 0）；内核 `wndproc_id` 若需拦截须自行处理或显式再调 `DefWindowProcA`，勿假定表项自动转发。
 pub fn DispatchMessageA(msg: *const MSG) LRESULT {
     total_messages_processed += 1;
     if (msg.hwnd != 0) {
@@ -1744,7 +1760,7 @@ fn pointFromLParam(lp: LPARAM) POINT {
     };
 }
 
-/// 与 MSDN `DwmDefWindowProc` 对齐的占位：扩展 NC / 玻璃命中由 DWM 处理时可在此返回 TRUE。
+/// 与 MSDN `DwmDefWindowProc` 对齐的占位：**TRUE** 表示消息已由 DWM 消费且调用方应使用合成器提供的 `lResult`（本仓库合成在 `dwm_compositor`，此处恒 **FALSE**，`DefWindowProcA` 继续走 `defNcHitTestForWindow` 等内核默认 NC）。
 pub fn DwmDefWindowProcA(_: HWND, _: u32, _: WPARAM, _: LPARAM) BOOL {
     return FALSE;
 }
@@ -1848,7 +1864,9 @@ fn defNcHitTestForWindow(wnd: *const Window, screen_x: i32, screen_y: i32) LRESU
 pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRESULT {
     switch (msg) {
         WM_NCHITTEST => {
-            _ = DwmDefWindowProcA(hwnd, msg, wparam, lparam);
+            if (DwmDefWindowProcA(hwnd, msg, wparam, lparam) != FALSE) {
+                return 0;
+            }
             const wnd = findWindow(hwnd) orelse return HTNOWHERE;
             const pt = pointFromLParam(lparam);
             return defNcHitTestForWindow(wnd, pt.x, pt.y);
@@ -1867,6 +1885,7 @@ pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRES
             return 0;
         },
         WM_NCMOUSEMOVE => return 0,
+        WM_NCCALCSIZE => return 0,
         WM_NCPAINT => return 0,
         WM_ERASEBKGND => return 1,
         // DWM 通知：应用通常自行处理以刷新主题/缩略图；未处理时 `DefWindowProc` 返回 0 即可（与 Learn「须处理」不冲突——无默认绘制）。

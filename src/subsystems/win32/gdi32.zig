@@ -491,7 +491,10 @@ pub fn MoveToEx(hdc: HDC, x: i32, y: i32, old_point: ?*user32.POINT) BOOL {
 }
 
 pub fn LineTo(hdc: HDC, x: i32, y: i32) BOOL {
-    const dc = findDC(hdc) orelse return FALSE;
+    const dc = findDC(hdc) orelse {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    };
     dc.pen_pos_x = x;
     dc.pen_pos_y = y;
     total_draw_calls += 1;
@@ -508,16 +511,21 @@ pub fn Rectangle(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32) BOOL {
         return FALSE;
     }
     total_draw_calls += 1;
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return TRUE;
 }
 
 pub fn Ellipse(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32) BOOL {
-    _ = hdc;
     _ = left;
     _ = top;
     _ = right;
     _ = bottom;
+    if (!hdcAcceptsStubDraw(hdc)) {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
     total_draw_calls += 1;
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return TRUE;
 }
 
@@ -568,6 +576,7 @@ pub fn TextOutA(hdc: HDC, _: i32, _: i32, text: []const u8) BOOL {
         return FALSE;
     }
     total_draw_calls += 1;
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return TRUE;
 }
 
@@ -621,6 +630,7 @@ pub fn BitBlt(
         return FALSE;
     }
     total_draw_calls += 1;
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return TRUE;
 }
 
@@ -646,6 +656,7 @@ pub fn StretchBlt(
         return FALSE;
     }
     total_draw_calls += 1;
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return TRUE;
 }
 
@@ -672,6 +683,7 @@ pub fn AlphaBlend(
         return FALSE;
     }
     total_draw_calls += 1;
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return TRUE;
 }
 
@@ -685,6 +697,7 @@ pub fn PatBlt(hdc: HDC, _: i32, _: i32, _: i32, _: i32, rop: DWORD) BOOL {
         return FALSE;
     }
     total_draw_calls += 1;
+    kernel32.SetLastError(kernel32.ERROR_SUCCESS);
     return TRUE;
 }
 

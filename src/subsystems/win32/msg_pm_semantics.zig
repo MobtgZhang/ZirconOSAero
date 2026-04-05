@@ -112,6 +112,11 @@ test "min max well-formed" {
     try std.testing.expect(!minMaxRangeWellFormed(10, 1));
 }
 
+test "min max well-formed inclusive u32 max" {
+    try std.testing.expect(minMaxRangeWellFormed(0x031E, std.math.maxInt(u32)));
+    try std.testing.expect(minMaxRangeWellFormed(std.math.maxInt(u32), std.math.maxInt(u32)));
+}
+
 // ── GetMessage / PeekMessage 与 Learn 的差距表（问题四 / 矩阵 §5）────────────────
 // | 主题 | Learn 期望（摘要） | 本仓库 `user32` 当前行为 |
 // |------|-------------------|---------------------------|
@@ -120,3 +125,4 @@ test "min max well-formed" {
 // | `GetMessage` 阻塞 | 无消息时阻塞至有消息或 WM_QUIT | 协作式：`STATUS_PENDING` + `blockThread`；与真 NT 抢占差异见 syscall 注释 |
 // | `NtUserPeekMessage` | 无消息时 `FALSE` + 清零输出 | **`STATUS_NO_MORE_ENTRIES` + 清零 `MSG*`**（用户态映射 FALSE；与 `GetMessage` 空队列 `STATUS_PENDING` 区分；亦避免与 `WM_NULL`/`message==0` 混淆） |
 // | 过滤范围 min/max | 仅返回区间内消息 | `getMessageFiltered` 轮转放回非匹配消息（简化语义）；纯函数镜像见 `messageMatchesMinMaxFilter` |
+// | `GetMessage` 单线程空转上限 | 真 NT 无限阻塞 | 协作式：`build_options.get_message_yield_spins`（默认 4096）次后 `STATUS_PENDING`；可调以避免极端忙等 |

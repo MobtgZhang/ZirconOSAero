@@ -146,13 +146,14 @@ var csrss_port_id: u32 = 0;
 var csrss_initialized: bool = false;
 var api_call_count: u64 = 0;
 
-/// K6.3：`seAccessActiveDesktopForWin32k` 的占位主令牌（每进程独立令牌接入后以进程表为准）。
+/// K6.3：GUI LPC 门闸用 **系统类** 主令牌（与 csrss 服务进程概念对齐）；`seAccessActiveDesktopForWin32k` 仍执行桌面一致性检查。
+/// 未来接入每进程 `Token` 时替换本桩，见矩阵 §4.1。
 var lpc_gui_client_stub_token: token.Token = undefined;
 var lpc_gui_client_stub_ready: bool = false;
 
 fn ensureLpcGuiPolicyToken() void {
     if (!lpc_gui_client_stub_ready) {
-        lpc_gui_client_stub_token = token.createUserToken(0);
+        lpc_gui_client_stub_token = token.createSystemToken();
         lpc_gui_client_stub_ready = true;
     }
 }
@@ -164,7 +165,7 @@ fn lpcGuiAllowedOnActiveDesktop(wp: *const Win32Process) bool {
 
 // ── Subsystem Management ──
 
-/// 未来：在此挂接 **每进程** `Token`（替换 `lpc_gui_client_stub_token` 占位）时，须在矩阵 §4.1 / §9.2 登记并与 `seAccessActiveDesktopForWin32k` 一致。
+/// 未来：在此挂接 **每进程** `Token`（替换 `lpc_gui_client_stub_token` 系统桩）时，须在矩阵 §4.1 / §9.2 登记并与 `seAccessActiveDesktopForWin32k` 一致。
 pub fn registerProcess(pid: u32, subsystem: SubsystemType, image_name: []const u8, parent_pid: u32) ?*Win32Process {
     if (win32_process_count >= MAX_WIN32_PROCESSES) return null;
 
@@ -384,6 +385,8 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             return -1;
         },
         .register_dwm_listener => {
+            const wp = findWin32Process(pid) orelse return -1;
+            if (!lpcGuiAllowedOnActiveDesktop(wp)) return -1;
             const tid_raw: u32 = if (data_opt) |d| csr_lpc_policy.readRegisterDwmListenerRawTid(d[0..ipc.MSG_DATA_SIZE]) else 0;
             const tid = csr_lpc_policy.resolveDwmListenerTid(tid_raw, pid);
             csr_dwm_listeners.register(tid);

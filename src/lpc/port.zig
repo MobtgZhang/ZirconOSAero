@@ -11,6 +11,7 @@ const arch = @import("../arch.zig");
 const ipc = @import("ipc.zig");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
+const sched = @import("../ke/scheduler.zig");
 
 /// P4-C4：端口表与 `port_count` 的细粒度锁；与 `ipc` 队列锁独立，避免与消息环死锁嵌套顺序混乱。
 var port_gate: std.atomic.Value(u32) = .init(0);
@@ -216,6 +217,7 @@ pub fn requestWaitReply(
 }
 
 /// Client-side: `port_id` is the handle returned by `createPort` / `connectPort` (1-based id).
+/// **跨进程（B1）**：载荷指针须 **内核可访问**；独立用户 VA 的探测/拷贝或节视图共享为路线图项（见 VM `probe` 与 `section_view_handle`）。
 pub fn requestWaitReplyPort(
     client_pid: u32,
     port_id: u32,
@@ -250,7 +252,8 @@ pub fn requestWaitReplyPort(
     return ipc.receive(client_pid);
 }
 
-/// 服务端：`reply` 非空时先向客户端队列投递 `reply`（`msg_type=.reply`），再自旋等待下一条入站消息（与 `NtRequestWaitReplyPort` 对偶）。
+/// 服务端：`reply` 非空时先向客户端队列投递 `reply`（`msg_type=.reply`），再等待下一条入站消息（与 `NtReplyWaitReceivePort` 对偶）。
+/// 调度启用且线程数 > 1 时经 `scheduler` 阻塞；否则回退自旋（单线程 / 早期引导）。
 /// Ref: learn.microsoft.com — LPC `NtReplyWaitReceivePort` 行为级描述（clean-room）。
 pub fn replyWaitReceivePort(
     server_pid: u32,
@@ -263,13 +266,37 @@ pub fn replyWaitReceivePort(
     if (reply) |r| {
         _ = ipc.sendTyped(server_pid, r.sender, r.opcode, .reply, &r.data);
     }
-    var n: usize = 0;
-    while (n < 10000) : (n += 1) {
-        if (ipc.receive(server_pid)) |m| {
+    while (true) {
+        ipc.lockMessageQueues();
+        if (ipc.popReceiveLocked(server_pid)) |m| {
+            ipc.unlockMessageQueues();
             out_receive.* = m;
             return true;
         }
-        arch.spinCpuRelax();
+        if (!sched.schedulingIsEnabled() or sched.getThreadCount() <= 1) {
+            ipc.unlockMessageQueues();
+            var n: usize = 0;
+            while (n < 10000) : (n += 1) {
+                if (ipc.receive(server_pid)) |m2| {
+                    out_receive.* = m2;
+                    return true;
+                }
+                arch.spinCpuRelax();
+            }
+            return false;
+        }
+        const tid = sched.getCurrentThreadId();
+        sched.lockSchedIrq();
+        if (ipc.peekReceiveLocked(server_pid) != null) {
+            const m = ipc.popReceiveLocked(server_pid).?;
+            sched.unlockSchedIrq();
+            ipc.unlockMessageQueues();
+            out_receive.* = m;
+            return true;
+        }
+        sched.prepareLpcReceiveBlockLocked(tid, server_pid);
+        ipc.unlockMessageQueues();
+        sched.unlockSchedIrq();
+        sched.tick();
     }
-    return false;
 }

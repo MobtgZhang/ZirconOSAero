@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const arch = @import("../arch.zig");
+const sched = @import("../ke/scheduler.zig");
 
 pub const MSG_DATA_SIZE: usize = 64;
 
@@ -19,6 +20,27 @@ fn lockIpcQueues() void {
 
 fn unlockIpcQueues() void {
     ipc_queue_gate.store(0, .release);
+}
+
+/// 与 `port.replyWaitReceivePort` 协同：`send` 路径持同一把队列锁。
+pub fn lockMessageQueues() void {
+    lockIpcQueues();
+}
+
+pub fn unlockMessageQueues() void {
+    unlockIpcQueues();
+}
+
+/// 调用方已持 `lockMessageQueues`：非空则弹出一条入站消息。
+pub fn popReceiveLocked(receiver_pid: u32) ?Message {
+    const idx = pidToIndex(receiver_pid) orelse return null;
+    return message_queues[idx].pop();
+}
+
+/// 持锁下窥视队首（不弹出）；用于丢唤醒后的二次确认。
+pub fn peekReceiveLocked(receiver_pid: u32) ?*const Message {
+    const idx = pidToIndex(receiver_pid) orelse return null;
+    return message_queues[idx].peek();
 }
 
 pub const MessageType = enum(u8) {
@@ -146,6 +168,8 @@ pub fn send(sender_pid: u32, receiver_pid: u32, opcode: u32, data: ?*const [MSG_
     if (!message_queues[recv_idx].push(msg)) {
         return -2;
     }
+    const wake_pid = receiver_pid;
+    defer sched.wakeLpcWaitersForReceiverPid(wake_pid);
     return 0;
 }
 
@@ -167,6 +191,8 @@ pub fn sendTyped(sender_pid: u32, receiver_pid: u32, opcode: u32, msg_type: Mess
     if (!message_queues[recv_idx].push(msg)) {
         return -2;
     }
+    const wake_pid = receiver_pid;
+    defer sched.wakeLpcWaitersForReceiverPid(wake_pid);
     return 0;
 }
 

@@ -19,4 +19,5 @@ echo "[perf-baseline] 1) Build: make build-zbm-disk ARCH=x86_64 DESKTOP=aero OPT
 echo "[perf-baseline] 2) QEMU: bash scripts/ci-qemu-smoke.sh (或本地 smoke-qemu-mbr 延长 timeout)"
 echo "[perf-baseline] 3) 目标：同机多次运行比较串口日志长度与 klog blur 统计行（若启用）"
 echo "[perf-baseline] 4) 分项目标：提高 partial_frames / (partial+full) 比值；降低 full_scene 热路径占比"
+echo "[perf-baseline] 5) 阶段 D 软烟测（可选）：串口日志中检索关键字 WM_DWM、get_message、present、flip_journal（grep -E 'WM_DWM|get_message|present|flip_journal'）"
 echo "[perf-baseline] Root: $ROOT"

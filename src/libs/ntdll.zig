@@ -26,6 +26,7 @@ const probe = @import("../mm/probe.zig");
 const scheduler = @import("../ke/scheduler.zig");
 const wait_mod = @import("../ke/wait.zig");
 const wow64_redirect = @import("../subsystems/win32/wow64/redirect.zig");
+const system_info_nt61 = @import("../sdk/system_info_nt61.zig");
 
 pub const NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
@@ -33,6 +34,7 @@ pub const STATUS_PENDING: NTSTATUS = 259;
 pub const STATUS_INVALID_PARAMETER: NTSTATUS = -1073741811;
 pub const STATUS_ACCESS_VIOLATION: NTSTATUS = -1073741819;
 pub const STATUS_ACCESS_DENIED: NTSTATUS = -1073741790;
+pub const STATUS_PRIVILEGE_NOT_HELD: NTSTATUS = @bitCast(@as(u32, 0xC0000061));
 pub const STATUS_NO_MEMORY: NTSTATUS = -1073741801;
 pub const STATUS_OBJECT_NAME_NOT_FOUND: NTSTATUS = -1073741772;
 pub const STATUS_NOT_IMPLEMENTED: NTSTATUS = -1073741822;
@@ -453,11 +455,48 @@ pub fn NtCreateUserProcessFromPath(
     if (pe_loader.resolveImports(img) != .success)
         return STATUS_ENTRYPOINT_NOT_FOUND;
 
+    const map_st = pe_loader.mapLoadedImageWithAnonymousSection(child, img);
+    if (map_st != 0) return map_st;
+
     child.image_base_address = base;
-    child.peb_address = 0;
 
     const sched_tid = scheduler.createThread(img.entry_point, child.pid) orelse
         return STATUS_NO_MEMORY;
+
+    if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .riscv64) {
+        const peb_nt61 = @import("../sdk/peb_nt61_x64.zig");
+        const teb_nt61 = @import("../sdk/teb_nt61_x64.zig");
+        const asp = child.address_space orelse return STATUS_NO_MEMORY;
+        const peb_va = peb_nt61.stubUserPebPageVa(child.pid);
+        const teb_va = peb_nt61.stubUserTebPageVa(sched_tid);
+        const user_rw = vm.MapFlags{ .writable = true, .user = true, .executable = false };
+        if (asp.mapPageAlloc(peb_va, user_rw) == null) return STATUS_NO_MEMORY;
+        if (asp.mapPageAlloc(teb_va, user_rw) == null) {
+            _ = asp.unmapAndFree(peb_va);
+            return STATUS_NO_MEMORY;
+        }
+        const peb_phys = asp.getPhysical(peb_va) orelse {
+            _ = asp.unmapAndFree(peb_va);
+            _ = asp.unmapAndFree(teb_va);
+            return STATUS_NO_MEMORY;
+        };
+        const teb_phys = asp.getPhysical(teb_va) orelse {
+            _ = asp.unmapAndFree(peb_va);
+            _ = asp.unmapAndFree(teb_va);
+            return STATUS_NO_MEMORY;
+        };
+        peb_nt61.writePebToPhysicalPage(peb_phys, base, 0, 0);
+        var ut: teb_nt61.TebNt61X64 = .{};
+        ut.NtTib.Self = teb_va;
+        ut.ClientIdUniqueProcess = child.pid;
+        ut.ClientIdUniqueThread = sched_tid;
+        ut.ProcessEnvironmentBlock = peb_va;
+        peb_nt61.writeBytesToPhysicalPage(teb_phys, std.mem.asBytes(&ut));
+        child.peb_address = peb_va;
+        scheduler.setTebUserVaForSchedIndex(sched_tid, teb_va);
+    } else {
+        child.peb_address = 0;
+    }
 
     const h_proc = parent.handle_table.allocHandle(@intFromPtr(&child.header), ob.GENERIC_ALL, .process) orelse
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -490,6 +529,37 @@ pub fn NtCreateUserProcessFromPath(
     keep_proc_handle = true;
     keep_child = true;
     return STATUS_SUCCESS;
+}
+
+/// `SHUTDOWN_*`：`ShutdownNoReboot`=0、`ShutdownReboot`=1（未实现）、`ShutdownPowerOff`=2。
+pub fn NtShutdownSystem(action: u32) NTSTATUS {
+    const tok = @import("../se/token.zig");
+    if (action == 1) return STATUS_NOT_IMPLEMENTED;
+    if (action != 0 and action != 2) return STATUS_INVALID_PARAMETER;
+    const proc = process.getCurrentProcess() orelse return STATUS_ACCESS_DENIED;
+    if (!tok.checkPrivilege(&proc.security_token, tok.PRIV_SHUTDOWN))
+        return STATUS_PRIVILEGE_NOT_HELD;
+    if (builtin.target.cpu.arch == .x86_64) {
+        const acpi_pm = @import("../hal/x86_64/acpi_pm.zig");
+        const arch_mod = @import("../arch.zig");
+        acpi_pm.trySystemPowerOffAssumingS5Typ();
+        arch_mod.shutdown();
+    }
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+/// 子集：仅将 **PowerActionShutdown（0）** 映射到 `NtShutdownSystem(ShutdownPowerOff)`；睡眠/休眠返回 `STATUS_NOT_IMPLEMENTED`。
+pub fn NtInitiatePowerAction(
+    system_action: u32,
+    min_device_state: u32,
+    flags: u32,
+    asynchronous: u8,
+) NTSTATUS {
+    _ = min_device_state;
+    _ = flags;
+    _ = asynchronous;
+    if (system_action != 0) return STATUS_NOT_IMPLEMENTED;
+    return NtShutdownSystem(2);
 }
 
 pub fn NtTerminateProcess(process_handle: HANDLE, exit_status: NTSTATUS) NTSTATUS {
@@ -704,7 +774,7 @@ pub fn NtQueryInformationThread(
             const out: *THREAD_BASIC_INFORMATION = @ptrCast(@alignCast(buf));
             out.exit_status = STATUS_SUCCESS;
             out._pad0 = 0;
-            out.teb_base_address = 0;
+            out.teb_base_address = scheduler.getTebUserVaForSchedIndex(ctx.sched_tid);
             out.client_id_unique_process = ctx.host_pid;
             out.client_id_unique_thread = ctx.sched_tid;
             out.affinity_mask = 1;
@@ -785,6 +855,10 @@ pub fn NtCreateFile(
             var wow_path_buf: [512]u8 = undefined;
             const path = wow64_redirect.applyWow64FilePathUtf16Le(proc.is_wow64, path_src, &wow_path_buf) orelse path_src;
             const resolved = vfs.resolvePath(path);
+            if (!token.openNamedObjectAccessCheck(resolved, want, &proc.security_token)) {
+                io_status.status = STATUS_ACCESS_DENIED;
+                return STATUS_ACCESS_DENIED;
+            }
             const faccess = desiredAccessToFileAccess(access);
             var de: vfs.DirEntry = undefined;
             const stat_st = vfs.stat(resolved, &de);
@@ -871,6 +945,10 @@ pub fn NtOpenFile(
             var wow_path_buf: [512]u8 = undefined;
             const path = wow64_redirect.applyWow64FilePathUtf16Le(proc.is_wow64, path_src, &wow_path_buf) orelse path_src;
             const resolved = vfs.resolvePath(path);
+            if (!token.openNamedObjectAccessCheck(resolved, want, &proc.security_token)) {
+                io_status.status = STATUS_ACCESS_DENIED;
+                return STATUS_ACCESS_DENIED;
+            }
             const sh = if (share_access == 0)
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
             else
@@ -922,6 +1000,7 @@ pub fn NtReadFile(
         .major_function = .read,
         .buffer_ptr = @intFromPtr(buf),
         .buffer_size = length,
+        .io_status_block_ptr = @intFromPtr(io_status),
     };
     _ = vfs.dispatchFileObjectIrp(f, &irp);
     io_status.status = ioStatusFromIrpNtStatus(irp.status);
@@ -958,6 +1037,7 @@ pub fn NtWriteFile(
         .major_function = .write,
         .buffer_ptr = @intFromPtr(buf),
         .buffer_size = length,
+        .io_status_block_ptr = @intFromPtr(io_status),
     };
     _ = vfs.dispatchFileObjectIrp(f, &irp);
     io_status.status = ioStatusFromIrpNtStatus(irp.status);
@@ -971,6 +1051,10 @@ pub fn NtClose(handle: HANDLE) NTSTATUS {
     const ent = proc.handle_table.lookupMut(h) orelse return STATUS_INVALID_HANDLE;
     const obj_type = ent.obj_type;
     const optr = ent.object_ptr;
+    if (obj_type == .section) {
+        const sec: *section_mm.SectionObject = @ptrFromInt(optr);
+        if (sec.active_view_count != 0) return STATUS_INVALID_PARAMETER;
+    }
     if (obj_type == .file) {
         const f: *vfs.FileObject = @ptrFromInt(optr);
         var irp = io.Irp{ .major_function = .close };
@@ -1468,6 +1552,8 @@ pub fn NtSignalAndWaitForSingleObject(
 /// Ref: https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-createfilemappingw — `SEC_*` 与节区属性。
 pub const SEC_FILE: u32 = 0x00800000;
 pub const SEC_IMAGE: u32 = 0x01000000;
+/// 物理内存后备节（需固件/驱动配合）；本内核无 pagefile/物理节实现。
+pub const SEC_PHYSICAL: u32 = 0x04000000;
 
 pub fn NtCreateSection(
     section_handle: *HANDLE,
@@ -1482,6 +1568,8 @@ pub fn NtCreateSection(
     _ = object_attributes;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const max_sz = if (maximum_size) |p| p.* else return STATUS_INVALID_PARAMETER;
+
+    if ((allocation_attributes & SEC_PHYSICAL) != 0) return STATUS_NOT_IMPLEMENTED;
 
     if (file_handle != 0) {
         const is_image = (allocation_attributes & SEC_IMAGE) != 0;
@@ -1683,15 +1771,24 @@ pub fn NtAllocateVirtualMemory(
     var base = base_address.*;
     if (base == 0) {
         user_alloc_va_salt = user_alloc_va_salt *% 1664525 +% 1013904223;
-        const slide_pages: u64 = @as(u64, user_alloc_va_salt % 512);
-        base = 0x0000_0000_4000_0000 + slide_pages * page_size;
-        base &= ~(MEM_ALLOCATION_GRANULARITY - 1);
+        const gran = MEM_ALLOCATION_GRANULARITY;
+        const min_u = vm.USER_VA_MIN_X64_NT;
+        const slide_grans: u64 = @as(u64, user_alloc_va_salt % 4096);
+        var cand = std.mem.alignForward(u64, min_u + slide_grans * gran, gran);
+        if (!vm.userVaRangeAllowedNt61(cand, size)) {
+            cand = std.mem.alignForward(u64, min_u, gran);
+            if (!vm.userVaRangeAllowedNt61(cand, size)) return STATUS_NO_MEMORY;
+        }
+        base = cand;
         while (space.getPhysical(base) != null or vm.isVirtInReservedRange(space, base, num_pages)) {
-            base += MEM_ALLOCATION_GRANULARITY;
+            if (base > vm.USER_VA_MAX_NT61 - size) return STATUS_NO_MEMORY;
+            base += gran;
+            if (!vm.userVaRangeAllowedNt61(base, size)) return STATUS_NO_MEMORY;
         }
     }
     if (base & (page_size - 1) != 0) return STATUS_INVALID_PARAMETER;
     if (reserve and (base & (MEM_ALLOCATION_GRANULARITY - 1)) != 0) return STATUS_INVALID_PARAMETER;
+    if (!vm.userVaRangeAllowedNt61(base, size)) return STATUS_INVALID_PARAMETER;
 
     const prot: u32 = if (protect != 0) protect else PAGE_READWRITE;
     const flags = vm.mapFlagsFromNtProtect(prot);
@@ -2023,33 +2120,13 @@ pub fn NtDelayExecution(alertable: u8, delay_interval: i64) NTSTATUS {
 
 // ── System Information ──
 
-pub const SYSTEM_BASIC_INFO = extern struct {
-    reserved: u32 = 0,
-    timer_resolution: u32 = 100000,
-    page_size: u32 = 4096,
-    number_of_physical_pages: u32 = 65536,
-    lowest_physical_page: u32 = 1,
-    highest_physical_page: u32 = 65536,
-    allocation_granularity: u32 = 65536,
-    minimum_user_address: u64 = 0x10000,
-    maximum_user_address: u64 = 0x7FFFFFFEFFFF,
-    active_processors: u64 = 1,
-    number_of_processors: u8 = 1,
-    _pad: [7]u8 = .{0} ** 7,
-};
-comptime {
-    std.debug.assert(@sizeOf(SYSTEM_BASIC_INFO) == 64);
-}
+/// 与 MS Learn `SYSTEM_BASIC_INFORMATION` 对齐（主机/契约测依赖 64B 与 `NumberOfProcessors@56`）。
+pub const SYSTEM_BASIC_INFO = system_info_nt61.SYSTEM_BASIC_INFORMATION_NT61_X64;
 
-/// `SYSTEM_PROCESSOR_INFORMATION` 公开字段子集（架构/级别）；完整 WDK 结构更大，调用方须按 `ReturnLength` 扩展。
-pub const SYSTEM_PROCESSOR_INFORMATION_STUB = extern struct {
-    processor_architecture: u16 = 0,
-    processor_level: u16 = 0,
-    processor_revision: u16 = 0,
-    reserved: u16 = 0,
-};
+/// `SystemProcessorInformation`：12 字节公开前缀（Win7 x64 子集）。
+pub const SYSTEM_PROCESSOR_INFORMATION_STUB = system_info_nt61.SYSTEM_PROCESSOR_INFORMATION_NT61;
 comptime {
-    std.debug.assert(@sizeOf(SYSTEM_PROCESSOR_INFORMATION_STUB) == 8);
+    std.debug.assert(@sizeOf(SYSTEM_PROCESSOR_INFORMATION_STUB) == 12);
 }
 
 /// Ref: WDK `SYSTEM_TIMEOFDAY_INFORMATION` 公开字段子集；本阶段填零，供 `ReturnLength` / 缓冲探测。
@@ -2066,26 +2143,107 @@ comptime {
     std.debug.assert(@sizeOf(SYSTEM_TIMEOFDAY_INFORMATION) == 48);
 }
 
-/// 单进程桩：与真实 Windows 布局**不完全**一致；`NextEntryOffset == 0` 表示枚举结束。
-const SYSTEM_PROCESS_INFORMATION_STUB = extern struct {
-    NextEntryOffset: u32 = 0,
-    NumberOfThreads: u32 = 1,
-    Reserved1: [48]u8 = [_]u8{0} ** 48,
-    ImageName_Length: u16 = 0,
-    ImageName_MaximumLength: u16 = 0,
-    ImageName_Pad: u32 = 0,
-    ImageName_Buffer: u64 = 0,
-    BasePriority: i32 = 0,
-    BasePriorityPad: u32 = 0,
-    UniqueProcessId: u64 = 0,
-    InheritedFromUniqueProcessId: u64 = 0,
-};
-comptime {
-    std.debug.assert(@sizeOf(SYSTEM_PROCESS_INFORMATION_STUB) == 96);
-}
-
 /// `SYSTEM_PERFORMANCE_INFORMATION` 过大；仅返回前 **128** 字节零填充（里程碑桩）。
 const SYSTEM_PERFORMANCE_INFORMATION_PREFIX_BYTES: usize = 128;
+
+fn countLiveSchedulerThreadsForPid(pid: u32) u32 {
+    var n: u32 = 0;
+    var i: usize = 0;
+    while (i < scheduler.getThreadCount()) : (i += 1) {
+        const t = scheduler.getThreadByIndex(i) orelse continue;
+        if (t.process_id == pid and t.state != .terminated) n += 1;
+    }
+    return n;
+}
+
+fn systemProcessInformationChainBytesNeeded() u32 {
+    const si = system_info_nt61;
+    var total: u32 = 0;
+    for (process.getProcessList()) |*p| {
+        if (p.state == .terminated) continue;
+        const n_thr = countLiveSchedulerThreadsForPid(p.pid);
+        const name_utf16_bytes: u32 = @intCast(p.name_len * 2 + 2);
+        const spi_sz: u32 = @intCast(@sizeOf(si.SYSTEM_PROCESS_INFORMATION_NT61_X64));
+        const sti_sz: u32 = @intCast(@sizeOf(si.SYSTEM_THREAD_INFORMATION_NT61_X64));
+        total +%= spi_sz +% (n_thr *% sti_sz) +% name_utf16_bytes;
+    }
+    return total;
+}
+
+fn writeSystemProcessInformationChain(buffer: []u8, return_length: *u32) NTSTATUS {
+    const si = system_info_nt61;
+    const needed = systemProcessInformationChainBytesNeeded();
+    return_length.* = needed;
+    if (buffer.len < needed) return STATUS_INFO_LENGTH_MISMATCH;
+    if (needed == 0) return STATUS_SUCCESS;
+
+    const base = @intFromPtr(buffer.ptr);
+    var off: u32 = 0;
+    var live_procs: u32 = 0;
+    for (process.getProcessList()) |*p| {
+        if (p.state != .terminated) live_procs += 1;
+    }
+    var seen: u32 = 0;
+
+    for (process.getProcessList()) |*p| {
+        if (p.state == .terminated) continue;
+        seen += 1;
+        const is_last = seen == live_procs;
+        const block_begin: u32 = off;
+        const n_thr = countLiveSchedulerThreadsForPid(p.pid);
+        const name_utf16_bytes: u32 = @intCast(p.name_len * 2 + 2);
+
+        off +%= @as(u32, @intCast(@sizeOf(si.SYSTEM_PROCESS_INFORMATION_NT61_X64)));
+        off +%= n_thr *% @as(u32, @intCast(@sizeOf(si.SYSTEM_THREAD_INFORMATION_NT61_X64)));
+        const str_off: u32 = off;
+        off +%= name_utf16_bytes;
+        const block_end: u32 = off;
+
+        var spi = si.SYSTEM_PROCESS_INFORMATION_NT61_X64{
+            .NextEntryOffset = if (is_last) 0 else (block_end - block_begin),
+            .NumberOfThreads = n_thr,
+            .ImageName = .{
+                .Length = @truncate(p.name_len * 2),
+                .MaximumLength = @truncate(p.name_len * 2 + 2),
+                .Buffer = base + @as(u64, str_off),
+            },
+            .BasePriority = 0,
+            .UniqueProcessId = p.pid,
+            .InheritedFromUniqueProcessId = p.parent_pid,
+            .HandleCount = 0,
+            .SessionId = p.security_token.session_id,
+        };
+        @memcpy(buffer[block_begin..][0..@sizeOf(si.SYSTEM_PROCESS_INFORMATION_NT61_X64)], std.mem.asBytes(&spi));
+
+        var ti_cursor: u32 = block_begin +% @as(u32, @intCast(@sizeOf(si.SYSTEM_PROCESS_INFORMATION_NT61_X64)));
+        var i: usize = 0;
+        while (i < scheduler.getThreadCount()) : (i += 1) {
+            const pt = scheduler.getThreadByIndex(i) orelse continue;
+            if (pt.process_id != p.pid or pt.state == .terminated) continue;
+            var sti = si.SYSTEM_THREAD_INFORMATION_NT61_X64{
+                .StartAddress = pt.context.rip,
+                .ClientId = .{
+                    .UniqueProcess = p.pid,
+                    .UniqueThread = i,
+                },
+                .Priority = @intCast(pt.priority),
+                .BasePriority = @intCast(pt.priority_class),
+            };
+            @memcpy(buffer[ti_cursor..][0..@sizeOf(si.SYSTEM_THREAD_INFORMATION_NT61_X64)], std.mem.asBytes(&sti));
+            ti_cursor +%= @as(u32, @intCast(@sizeOf(si.SYSTEM_THREAD_INFORMATION_NT61_X64)));
+        }
+
+        const str_base: usize = @intFromPtr(buffer.ptr) + @as(usize, str_off);
+        const str_sl: [*]u8 = @ptrFromInt(str_base);
+        var w: usize = 0;
+        for (p.name[0..p.name_len]) |ch| {
+            std.mem.writeInt(u16, str_sl[w..][0..2], ch, .little);
+            w += 2;
+        }
+        std.mem.writeInt(u16, str_sl[w..][0..2], 0, .little);
+    }
+    return STATUS_SUCCESS;
+}
 
 /// `SystemVersionInformation` / `SystemBasicInformation` 与 [`config/os_version.zig`](../config/os_version.zig)、注册表 `CurrentBuildNumber`（`registry.populateDefaults`）共用 **build** 真源策略。
 pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u32) NTSTATUS {
@@ -2095,12 +2253,13 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             const need = @sizeOf(SYSTEM_BASIC_INFO);
             return_length.* = need;
             if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
-            var sample = SYSTEM_BASIC_INFO{};
+            var sample = std.mem.zeroes(SYSTEM_BASIC_INFO);
             if (builtin.cpu.arch == .x86_64) {
                 const madt = @import("../hal/x86_64/madt.zig");
                 const n = madt.logical_cpu_count;
-                sample.number_of_processors = @truncate(@min(n, 255));
-                sample.active_processors = n;
+                sample.NumberOfProcessors = @truncate(@min(n, 255));
+            } else {
+                sample.NumberOfProcessors = 1;
             }
             @memcpy(buffer[0..need], std.mem.asBytes(&sample));
             return STATUS_SUCCESS;
@@ -2110,13 +2269,17 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             return_length.* = need;
             if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
             var inf = SYSTEM_PROCESSOR_INFORMATION_STUB{
-                .processor_architecture = switch (builtin.cpu.arch) {
+                .ProcessorArchitecture = switch (builtin.cpu.arch) {
                     .x86_64 => 9, // PROCESSOR_ARCHITECTURE_AMD64 (public winnt.h)
+                    .loongarch64 => 0x6264, // LoongArch64（本项目自定义；无 MS 公开值）
+                    .aarch64 => 12, // PROCESSOR_ARCHITECTURE_ARM64
+                    .riscv64 => 0x5064, // RISC-V 64（本项目自定义；对齐 PE machine type）
                     else => 0,
                 },
-                .processor_level = 6,
-                .processor_revision = 0,
-                .reserved = 0,
+                .ProcessorLevel = 6,
+                .ProcessorRevision = 0,
+                .Reserved = 0,
+                .ProcessorFeatureBits = 0,
             };
             @memcpy(buffer[0..need], std.mem.asBytes(&inf));
             return STATUS_SUCCESS;
@@ -2130,16 +2293,7 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             return STATUS_SUCCESS;
         },
         SystemProcessInformation => {
-            const need = @sizeOf(SYSTEM_PROCESS_INFORMATION_STUB);
-            return_length.* = need;
-            if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
-            var stub = SYSTEM_PROCESS_INFORMATION_STUB{};
-            stub.UniqueProcessId = process.getCurrentPid();
-            if (process.getCurrentProcess()) |cp| {
-                stub.InheritedFromUniqueProcessId = cp.parent_pid;
-            }
-            @memcpy(buffer[0..need], std.mem.asBytes(&stub));
-            return STATUS_SUCCESS;
+            return writeSystemProcessInformationChain(buffer, return_length);
         },
         SystemPerformanceInformation => {
             const need = SYSTEM_PERFORMANCE_INFORMATION_PREFIX_BYTES;
@@ -2167,8 +2321,22 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             return STATUS_SUCCESS;
         },
         SystemModuleInformation => {
-            return_length.* = 0;
-            return STATUS_NOT_IMPLEMENTED;
+            const si = system_info_nt61;
+            const hdr_l = @sizeOf(si.RTL_PROCESS_MODULES_HEADER_NT61_X64);
+            const mod_l = @sizeOf(si.RTL_PROCESS_MODULE_INFORMATION_NT61_X64);
+            const need: u32 = @intCast(hdr_l + mod_l);
+            return_length.* = need;
+            if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
+            const hdr = si.RTL_PROCESS_MODULES_HEADER_NT61_X64{ .NumberOfModules = 1 };
+            @memcpy(buffer[0..hdr_l], std.mem.asBytes(&hdr));
+            var mod = std.mem.zeroes(si.RTL_PROCESS_MODULE_INFORMATION_NT61_X64);
+            mod.ImageBase = 0xFFFFF80000000000;
+            mod.ImageSize = 0x00A0_0000;
+            const narrow = "System\\zircon_nt61.sys";
+            @memcpy(mod.FullPathName[0..narrow.len], narrow);
+            mod.OffsetToFileName = 7;
+            @memcpy(buffer[hdr_l..need], std.mem.asBytes(&mod));
+            return STATUS_SUCCESS;
         },
         SystemPoolTagInformation => {
             return_length.* = 0;
@@ -2196,6 +2364,47 @@ pub fn NtSetSystemInformation(info_class: u32, _: ?*anyopaque, _: u32) NTSTATUS 
 }
 
 // ── Registry APIs ──
+
+/// 将 Win32 `KEY_*` / `desired_access` 映射到 `ob.ACCESS_MASK` 子集，供 `seRegistryKeyOpenAllowed` 与句柄 `granted_access` 共用。
+fn registryDesiredAccessToObMask(desired_access: u32) ob.ACCESS_MASK {
+    if (desired_access == 0) return ob.GENERIC_READ;
+    const KEY_QUERY_VALUE: u32 = 0x0001;
+    const KEY_SET_VALUE: u32 = 0x0002;
+    const KEY_CREATE_SUB_KEY: u32 = 0x0004;
+    const KEY_ENUMERATE_SUB_KEYS: u32 = 0x0008;
+    const KEY_NOTIFY: u32 = 0x0010;
+    const KEY_CREATE_LINK: u32 = 0x0020;
+    const KEY_WOW64_64KEY: u32 = 0x0100;
+    const KEY_WOW64_32KEY: u32 = 0x0200;
+    const KEY_READ: u32 = 0x20019;
+    const KEY_WRITE: u32 = 0x20006;
+    const KEY_EXECUTE: u32 = 0x20019;
+    const KEY_ALL_ACCESS: u32 = 0xF003F;
+    _ = KEY_WOW64_64KEY;
+    _ = KEY_WOW64_32KEY;
+    var m: ob.ACCESS_MASK = 0;
+    if ((desired_access & KEY_READ) == KEY_READ or
+        (desired_access & KEY_EXECUTE) == KEY_EXECUTE or
+        (desired_access & KEY_QUERY_VALUE) != 0 or
+        (desired_access & KEY_ENUMERATE_SUB_KEYS) != 0 or
+        (desired_access & KEY_NOTIFY) != 0)
+    {
+        m |= ob.GENERIC_READ;
+    }
+    if ((desired_access & KEY_WRITE) == KEY_WRITE or
+        (desired_access & KEY_SET_VALUE) != 0 or
+        (desired_access & KEY_CREATE_SUB_KEY) != 0 or
+        (desired_access & KEY_CREATE_LINK) != 0)
+    {
+        m |= ob.GENERIC_WRITE;
+    }
+    if ((desired_access & KEY_ALL_ACCESS) == KEY_ALL_ACCESS) {
+        m = ob.GENERIC_READ | ob.GENERIC_WRITE | ob.GENERIC_EXECUTE | ob.SYNCHRONIZE;
+    }
+    if ((desired_access & ob.SYNCHRONIZE) != 0) m |= ob.SYNCHRONIZE;
+    if (m == 0) m = ob.GENERIC_READ;
+    return m;
+}
 
 /// 从 `UNICODE_STRING` 抽出注册表 NT 路径字节：若为 UTF-16LE 且各 WCHAR 高字节为 0（ASCII 子集），压成窄路径；否则按窄字节路径原样使用（与历史桩一致）。
 fn extractRegistryPathBytes(uname: *const UNICODE_STRING, out: *[512]u8) ?[]const u8 {
@@ -2226,7 +2435,6 @@ fn extractRegistryPathBytes(uname: *const UNICODE_STRING, out: *[512]u8) ?[]cons
 }
 
 pub fn NtOpenKey(key_handle: *HANDLE, desired_access: u32, object_attributes: ?*OBJECT_ATTRIBUTES) NTSTATUS {
-    _ = desired_access;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const attrs = object_attributes orelse return STATUS_INVALID_PARAMETER;
     const uname = attrs.object_name orelse return STATUS_INVALID_PARAMETER;
@@ -2236,9 +2444,12 @@ pub fn NtOpenKey(key_handle: *HANDLE, desired_access: u32, object_attributes: ?*
     const narrow = extractRegistryPathBytes(uname, &narrow_buf) orelse return STATUS_INVALID_PARAMETER;
     const path_norm = ob.normalizeNtObjectPath(narrow);
     const path_open = wow64_redirect.applyWow64RegistryMachineSoftwarePath(proc.is_wow64, path_norm, &redir_buf) orelse path_norm;
+    const mask = registryDesiredAccessToObMask(desired_access);
+    if (!token.openNamedObjectAccessCheck(path_open, mask, &proc.security_token)) {
+        return STATUS_ACCESS_DENIED;
+    }
     const idx = registry.openKeyByNtPath(path_open) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     const hdr = registry.keyHeaderPtr(idx) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
-    const mask = ob.GENERIC_READ;
     const h = proc.handle_table.allocHandle(@intFromPtr(hdr), mask, .key) orelse return STATUS_INSUFFICIENT_RESOURCES;
     key_handle.* = h;
     return STATUS_SUCCESS;
@@ -2471,7 +2682,6 @@ pub fn NtCreateKey(
     create_options: u32,
     disposition: ?*u32,
 ) NTSTATUS {
-    _ = desired_access;
     _ = title_index;
     _ = class;
     _ = create_options;
@@ -2485,11 +2695,15 @@ pub fn NtCreateKey(
     const narrow_ck = extractRegistryPathBytes(uname, &narrow_buf_ck) orelse return STATUS_INVALID_PARAMETER;
     const path_norm_ck = ob.normalizeNtObjectPath(narrow_ck);
     const path_open_ck = wow64_redirect.applyWow64RegistryMachineSoftwarePath(proc_ck.is_wow64, path_norm_ck, &redir_buf_ck) orelse path_norm_ck;
+    const mask_ck = registryDesiredAccessToObMask(desired_access);
+    if (!token.openNamedObjectAccessCheck(path_open_ck, mask_ck, &proc_ck.security_token)) {
+        return STATUS_ACCESS_DENIED;
+    }
     const cr = registry.createKeyFromNtPath(path_open_ck) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     if (disposition) |d| d.* = if (cr.created) REG_CREATED_NEW_KEY else REG_OPENED_EXISTING_KEY;
     const hdr = registry.keyHeaderPtr(cr.idx) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
-    const mask = ob.GENERIC_READ | ob.GENERIC_WRITE;
+    const mask = mask_ck | ob.GENERIC_WRITE;
     const h = proc.handle_table.allocHandle(@intFromPtr(hdr), mask, .key) orelse return STATUS_INSUFFICIENT_RESOURCES;
     kh.* = h;
     return STATUS_SUCCESS;

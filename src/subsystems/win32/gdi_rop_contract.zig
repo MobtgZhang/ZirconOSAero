@@ -7,6 +7,9 @@
 // Clean-room. Ref: https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-bitblt (rop)
 
 /// `SRCCOPY` — 本仓库 `BitBlt` / `StretchBlt` **唯一**实现完整语义的 ROP（其余返回 FALSE + `ERROR_INVALID_PARAMETER`）。
+///
+/// 与 `kernel32.ERROR_INVALID_PARAMETER` 数值一致；供主机测试锁定矩阵 §5。
+pub const bitblt_unsupported_rop_last_error: u32 = 87;
 pub const SRCCOPY: u32 = 0x00CC0020;
 /// `PATCOPY` / `BLACKNESS` / `WHITENESS` / `PATINVERT` — `PatBlt` 子集。
 pub const PATCOPY: u32 = 0x00F00021;

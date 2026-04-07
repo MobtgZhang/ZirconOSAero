@@ -5,8 +5,7 @@
 
 const console = @import("console.zig");
 const vfs = @import("../../fs/vfs.zig");
-const fat32 = @import("../../fs/fat32.zig");
-const ntfs = @import("../../fs/ntfs.zig");
+const explorer_vol_snap = @import("../../fs/explorer_volume_snapshot.zig");
 const klog = @import("../../rtl/klog.zig");
 
 pub const DISKPART_VERSION = "DiskPart version 1.0.0 (ZirconOS)";
@@ -108,115 +107,80 @@ pub const DiskPartState = struct {
     }
 
     fn populateFromSystem(self: *DiskPartState) void {
-        // Disk 0: System disk (contains C: and D:)
-        {
-            var d = &self.disks[0];
-            d.* = .{};
-            d.number = 0;
-            d.size_mb = 256;
-            d.free_mb = 64;
-            d.style = .mbr;
-            d.status = .online;
-            d.is_boot = true;
-            d.is_system = true;
-            d.in_use = true;
-            const model = "QEMU HARDDISK";
-            @memcpy(d.model[0..model.len], model);
-            d.model_len = model.len;
+        var vol_buf: [vfs.MAX_MOUNT_POINTS]explorer_vol_snap.ExplorerVolume = undefined;
+        const nv = explorer_vol_snap.refreshVolumes(vol_buf[0..]);
+        const n = @min(nv, MAX_VOLUMES);
 
-            // Partition 1: C: (FAT32)
-            var p1 = &d.partitions[0];
-            p1.* = .{};
-            p1.number = 1;
-            p1.part_type = .primary;
-            p1.size_mb = 128;
-            p1.offset_mb = 1;
-            p1.fs_type = .fat32;
-            p1.is_active = true;
-            p1.is_system = true;
-            p1.is_boot = true;
-            p1.drive_letter = 'C';
-            p1.status = .healthy;
-            p1.in_use = true;
-            const l1 = "ZIRCONOS";
-            @memcpy(p1.label[0..l1.len], l1);
-            p1.label_len = l1.len;
-
-            // Partition 2: D: (NTFS)
-            var p2 = &d.partitions[1];
-            p2.* = .{};
-            p2.number = 2;
-            p2.part_type = .primary;
-            p2.size_mb = 64;
-            p2.offset_mb = 129;
-            p2.fs_type = .ntfs;
-            p2.is_active = false;
-            p2.drive_letter = 'D';
-            p2.status = .healthy;
-            p2.in_use = true;
-            const l2 = "Data";
-            @memcpy(p2.label[0..l2.len], l2);
-            p2.label_len = l2.len;
-
-            d.partition_count = 2;
-            self.disk_count = 1;
-        }
-
-        // Disk 1: Secondary disk (unpartitioned)
-        {
-            var d = &self.disks[1];
-            d.* = .{};
-            d.number = 1;
-            d.size_mb = 512;
-            d.free_mb = 512;
-            d.style = .raw;
-            d.status = .online;
-            d.in_use = true;
-            const model = "QEMU HARDDISK";
-            @memcpy(d.model[0..model.len], model);
-            d.model_len = model.len;
-            d.partition_count = 0;
-            self.disk_count = 2;
-        }
-
-        // Volume 0: C:
-        {
-            var v = &self.volumes[0];
+        self.volume_count = @intCast(n);
+        var total_mb: u64 = 0;
+        var vi: u32 = 0;
+        while (vi < n) : (vi += 1) {
+            const ev = vol_buf[vi];
+            var v = &self.volumes[vi];
             v.* = .{};
-            v.number = 0;
-            v.drive_letter = 'C';
-            v.fs_type = .fat32;
-            v.size_mb = 128;
-            const fc = fat32.getVolume().getFreeClusters();
-            v.free_mb = @intCast((fc * fat32.CLUSTER_SIZE) / (1024 * 1024));
-            if (v.free_mb == 0) v.free_mb = 112;
+            v.number = vi;
+            v.drive_letter = ev.letter;
+            v.fs_type = ev.fs_type;
+            v.label_len = @min(ev.label_len, v.label.len);
+            @memcpy(v.label[0..v.label_len], ev.label[0..v.label_len]);
+            v.size_mb = if (ev.space_known and ev.total_mb > 0) ev.total_mb else 0;
+            v.free_mb = if (ev.space_known) ev.free_mb else 0;
             v.status = .healthy;
             v.in_use = true;
-            const l1 = "ZIRCONOS";
-            @memcpy(v.label[0..l1.len], l1);
-            v.label_len = l1.len;
-            const inf = "Boot";
-            @memcpy(v.info[0..inf.len], inf);
-            v.info_len = inf.len;
+            if (vi == 0) {
+                const inf = "Boot";
+                @memcpy(v.info[0..inf.len], inf);
+                v.info_len = inf.len;
+            }
+            total_mb += @max(@as(u64, v.size_mb), 1);
+        }
+        var j: u32 = n;
+        while (j < MAX_VOLUMES) : (j += 1) {
+            self.volumes[j] = .{};
         }
 
-        // Volume 1: D:
-        {
-            var v = &self.volumes[1];
-            v.* = .{};
-            v.number = 1;
-            v.drive_letter = 'D';
-            v.fs_type = .ntfs;
-            v.size_mb = 64;
-            v.free_mb = 48;
-            v.status = .healthy;
-            v.in_use = true;
-            const l2 = "Data";
-            @memcpy(v.label[0..l2.len], l2);
-            v.label_len = l2.len;
+        if (n == 0) {
+            self.disk_count = 0;
+            return;
         }
 
-        self.volume_count = 2;
+        var d = &self.disks[0];
+        d.* = .{};
+        d.number = 0;
+        d.size_mb = @intCast(@min(total_mb, 0xFFFF_FFFF));
+        d.free_mb = d.size_mb;
+        d.style = .mbr;
+        d.status = .online;
+        d.is_boot = true;
+        d.is_system = true;
+        d.in_use = true;
+        const model = "VFS";
+        @memcpy(d.model[0..model.len], model);
+        d.model_len = model.len;
+
+        var off: u32 = 1;
+        var pi: u32 = 0;
+        while (pi < n and pi < d.partitions.len) : (pi += 1) {
+            const ev = vol_buf[pi];
+            var p = &d.partitions[pi];
+            p.* = .{};
+            p.number = pi + 1;
+            p.part_type = .primary;
+            p.size_mb = if (ev.space_known and ev.total_mb > 0) ev.total_mb else 128;
+            p.offset_mb = off;
+            off +%= p.size_mb;
+            p.fs_type = ev.fs_type;
+            p.is_active = (pi == 0);
+            p.is_system = (pi == 0);
+            p.is_boot = (pi == 0);
+            p.drive_letter = ev.letter;
+            p.status = .healthy;
+            p.in_use = true;
+            p.label_len = @min(ev.label_len, p.label.len);
+            @memcpy(p.label[0..p.label_len], ev.label[0..p.label_len]);
+        }
+        d.partition_count = pi;
+        self.disk_count = 1;
     }
 
     pub fn showBanner(self: *DiskPartState) void {

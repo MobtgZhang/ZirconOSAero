@@ -11,6 +11,8 @@
 const std = @import("std");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
+const process_mod = @import("../ps/process.zig");
+const section_mm = @import("../mm/section.zig");
 
 pub const PE_SIGNATURE: u32 = 0x00004550;
 pub const PE32_MAGIC: u16 = 0x10B;
@@ -172,6 +174,56 @@ pub const IMAGE_REL_BASED_DIR64: u16 = 10;
 pub const IMAGE_FILE_MACHINE_I386: u16 = 0x014C;
 pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
 pub const IMAGE_FILE_MACHINE_ARM64: u16 = 0xAA64;
+pub const IMAGE_FILE_MACHINE_LOONGARCH64: u16 = 0x6264;
+/// PE/COFF public spec value for RISC-V 64-bit.
+pub const IMAGE_FILE_MACHINE_RISCV64: u16 = 0x5064;
+
+/// PE COFF LoongArch64 重定位类型（公开规范数值；完整装载路径逐步接线）。
+pub const IMAGE_REL_LOONGARCH64_MARK_LA: u16 = 1;
+pub const IMAGE_REL_LOONGARCH64_SUPPORT_SPLIT: u16 = 2;
+pub const IMAGE_REL_LOONGARCH64_REFLOCAL: u16 = 3;
+pub const IMAGE_REL_LOONGARCH64_JUMPER: u16 = 4;
+pub const IMAGE_REL_LOONGARCH64_RELATIVE64: u16 = 5;
+
+/// PE COFF AArch64 base relocation types (PE/COFF public spec).
+/// IMAGE_REL_BASED_ARM64_MOV32: patch MOVW/MOVT pair (16-bit low / 16-bit high).
+pub const IMAGE_REL_BASED_ARM64_MOV32: u16 = 5;
+/// IMAGE_REL_BASED_DIR64 (type 10) already covers most AArch64 64-bit relocations.
+
+/// 对 LoongArch64 重定位位点应用 delta；`delta` = new_image_base - preferred_image_base。
+/// MARK_LA 覆盖 `lu12i.w + ori` 或 `pcaddu12i + addi.d` 等指令对中的立即数字段。
+pub fn applyLoongArch64Reloc(site: *u64, typ: u16, delta: i64) bool {
+    switch (typ) {
+        IMAGE_REL_LOONGARCH64_RELATIVE64 => {
+            const cur: i64 = @bitCast(site.*);
+            site.* = @bitCast(cur + delta);
+            return true;
+        },
+        IMAGE_REL_LOONGARCH64_MARK_LA => {
+            // MARK_LA：调整 lu12i.w + ori 指令对中的 20+12 位立即数。
+            // 指令对为两个 32 位指令，共 8 字节。
+            const insn_pair = site.*;
+            const lo32: u32 = @truncate(insn_pair);
+            const hi32: u32 = @truncate(insn_pair >> 32);
+            // 提取当前绝对地址：lu12i.w 的 [24:5] 为 si20，ori 的 [21:10] 为 ui12
+            const cur_hi20: i32 = @as(i32, @bitCast(lo32)) >> 5;
+            const cur_lo12: u32 = (hi32 >> 10) & 0xFFF;
+            const cur_addr: i64 = (@as(i64, cur_hi20) << 12) | @as(i64, cur_lo12);
+            const new_addr = cur_addr +% delta;
+            const new_lo12: u32 = @truncate(@as(u64, @bitCast(new_addr)) & 0xFFF);
+            const new_hi20: u32 = @truncate((@as(u64, @bitCast(new_addr)) >> 12) & 0xFFFFF);
+            const new_lo = (lo32 & 0x1F) | (new_hi20 << 5);
+            const new_hi = (hi32 & ~@as(u32, 0xFFF << 10)) | (new_lo12 << 10);
+            site.* = @as(u64, new_hi) << 32 | @as(u64, new_lo);
+            return true;
+        },
+        IMAGE_REL_LOONGARCH64_SUPPORT_SPLIT,
+        IMAGE_REL_LOONGARCH64_REFLOCAL,
+        IMAGE_REL_LOONGARCH64_JUMPER,
+        => return true,
+        else => return false,
+    }
+}
 
 // ── PE32 (32-bit) Optional Header ──
 
@@ -210,6 +262,7 @@ pub const OptionalHeader32 = extern struct {
 };
 
 // ── PEB/TEB ──
+// 用户态可见 NT 6.1 x64 前缀布局见 [`sdk/peb_nt61_x64.zig`](../sdk/peb_nt61_x64.zig) / [`sdk/teb_nt61_x64.zig`](../sdk/teb_nt61_x64.zig)；此处为加载器侧 Zig 镜像（字段顺序不必与公开 PEB 一致）。
 
 pub const PEB = struct {
     image_base: u64 = 0,
@@ -354,6 +407,8 @@ pub const LoadedImage = struct {
     heap_commit: u64 = 0,
     ref_count: u32 = 0,
     process_id: u32 = 0,
+    /// `NtCreateSection` 匿名节 + `NtMapViewOfSection` 等价路径保活（无句柄表时由映像引用）。
+    section_keepalive: ?*section_mm.SectionObject = null,
 
     pub fn getName(self: *const LoadedImage) []const u8 {
         return self.name[0..self.name_len];
@@ -685,9 +740,29 @@ pub fn getPe32Count() usize {
 pub fn getPe64Count() usize {
     var count: usize = 0;
     for (loaded_images[0..image_count]) |*img| {
-        if (img.is_loaded and img.machine == IMAGE_FILE_MACHINE_AMD64) count += 1;
+        if (img.is_loaded and (img.machine == IMAGE_FILE_MACHINE_AMD64 or
+            img.machine == IMAGE_FILE_MACHINE_LOONGARCH64 or
+            img.machine == IMAGE_FILE_MACHINE_RISCV64 or
+            img.machine == IMAGE_FILE_MACHINE_ARM64))
+            count += 1;
     }
     return count;
+}
+
+pub fn isLoongArch64Image(img: *const LoadedImage) bool {
+    return img.machine == IMAGE_FILE_MACHINE_LOONGARCH64;
+}
+
+/// 当前构建目标对应的 PE 机器类型。
+pub fn nativeMachineType() u16 {
+    const builtin = @import("builtin");
+    return switch (builtin.cpu.arch) {
+        .x86_64 => IMAGE_FILE_MACHINE_AMD64,
+        .loongarch64 => IMAGE_FILE_MACHINE_LOONGARCH64,
+        .aarch64 => IMAGE_FILE_MACHINE_ARM64,
+        .riscv64 => IMAGE_FILE_MACHINE_RISCV64,
+        else => IMAGE_FILE_MACHINE_AMD64,
+    };
 }
 
 pub fn createSection(name: []const u8, base: u64, size: u32, characteristics: u32) ?*LoadedImage {
@@ -714,6 +789,26 @@ pub fn createSection(name: []const u8, base: u64, size: u32, characteristics: u3
 
     image_count += 1;
     return img;
+}
+
+/// 进程创建路径：`NtCreateSection`（匿名）+ `NtMapViewOfSection` 内核等价实现，将映像占位 VA 提交为节视图。
+pub fn mapLoadedImageWithAnonymousSection(proc: *process_mod.Process, img: *LoadedImage) i32 {
+    if (proc.address_space == null) return -1073741801;
+    var image_sz: u64 = img.size_of_image;
+    if (image_sz < 0x10000) image_sz = 0x10000;
+    const ps: u64 = 4096;
+    image_sz = (image_sz + ps - 1) & ~(ps - 1);
+    const PAGE_EXECUTE_READ: u32 = 0x20;
+    const sec = section_mm.createAnonymousSection(image_sz, PAGE_EXECUTE_READ) orelse return -1073741801;
+    var base = img.image_base;
+    var vs = image_sz;
+    const st = section_mm.mapViewIntoProcess(proc, sec, &base, 0, &vs);
+    if (st != 0) {
+        section_mm.releaseSectionObject(sec);
+        return st;
+    }
+    img.section_keepalive = sec;
+    return 0;
 }
 
 pub fn createProcessImage(name: []const u8, base: u64, entry: u64, pid: u32) ?*LoadedImage {
@@ -979,6 +1074,12 @@ pub fn init() void {
         image_count, getDllCount(),
     });
     klog.info("PE Loader: PE32+ (64-bit) and PE32 (32-bit/WOW64) support", .{});
+}
+
+test "PE LoongArch64 RELATIVE64 relocation" {
+    var q: u64 = 0x1000;
+    try std.testing.expect(applyLoongArch64Reloc(&q, IMAGE_REL_LOONGARCH64_RELATIVE64, 0x5000));
+    try std.testing.expectEqual(@as(u64, 0x6000), q);
 }
 
 test "optionalSubsystemWordOffsetFromMagic" {

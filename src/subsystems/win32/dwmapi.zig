@@ -34,6 +34,11 @@ fn requireComposition() HRESULT {
     return S_OK;
 }
 
+/// 与 `DwmIsCompositionEnabled` 同源判断；壳/测试可调用以避免与 PE 导出桩双实现漂移。
+pub fn internalCompositionEnabled() bool {
+    return dwm.isInitialized() and dwm.isEnabled();
+}
+
 fn user32RectToDwm(r: user32.RECT) dnc.DWM_RECT {
     return .{
         .left = r.left,
@@ -45,11 +50,7 @@ fn user32RectToDwm(r: user32.RECT) dnc.DWM_RECT {
 
 /// Ref: Learn — `DwmIsCompositionEnabled`.
 pub fn DwmIsCompositionEnabled(pfEnabled: *BOOL) HRESULT {
-    if (dwm.isInitialized() and dwm.isEnabled()) {
-        pfEnabled.* = user32.TRUE;
-    } else {
-        pfEnabled.* = user32.FALSE;
-    }
+    pfEnabled.* = if (internalCompositionEnabled()) user32.TRUE else user32.FALSE;
     return S_OK;
 }
 

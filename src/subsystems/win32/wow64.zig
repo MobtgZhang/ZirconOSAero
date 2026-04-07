@@ -415,6 +415,31 @@ pub fn init() void {
 
     wow64_state = .active;
 
+    if (builtin.target.cpu.arch == .loongarch64) {
+        @import("wow64/la64_engine_stub.zig").logBringUpStub();
+        const lbt = @import("wow64/lbt_hw.zig");
+        if (lbt.binaryTranslationExtensionsPresent()) {
+            klog.info("wow64(la64): LBT hardware detected; translation engine NOT_IMPLEMENTED", .{});
+        } else {
+            klog.info("wow64(la64): no LBT; x86 emulation STATUS_NOT_IMPLEMENTED", .{});
+        }
+    }
+
+    if (builtin.target.cpu.arch == .riscv64) {
+        klog.info("wow64(rv64): x86 binary translation NOT_IMPLEMENTED on RISC-V; PE32 load disabled", .{});
+    }
+
+    if (builtin.target.cpu.arch == .aarch64) {
+        klog.info("wow64(a64): ARM32 (Thumb-2) binary translation NOT_IMPLEMENTED; PE32 load disabled", .{});
+        klog.info("wow64(a64): future path: ARM32-on-AArch64 (analogous to Windows on ARM WOW64)", .{});
+    }
+
+    if (builtin.target.cpu.arch == .mips64el) {
+        @import("wow64/mips64_engine_stub.zig").logBringUpStub();
+        klog.info("wow64(mips64el): x86 binary translation NOT_IMPLEMENTED; DBT engine stub loaded", .{});
+        klog.info("wow64(mips64el): future path: x86-on-MIPS64 dynamic binary translation", .{});
+    }
+
     klog.info("wow64: WOW64 Compatibility Layer initialized", .{});
     klog.info("wow64: Syscall thunk table: %u entries", .{thunk_count});
     klog.info("wow64: 32-bit DLLs: ntdll32.dll, kernel3232.dll, wow64.dll, wow64cpu.dll, wow64win.dll", .{});

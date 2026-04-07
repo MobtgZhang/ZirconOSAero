@@ -19,6 +19,11 @@ const pm_sem = @import("msg_pm_semantics.zig");
 const sched_mod = @import("../../ke/scheduler.zig");
 const dwm_nt61_contract = @import("../../config/dwm_nt61_api_contract.zig");
 const csr_dwm_listeners = @import("csr_dwm_listeners.zig");
+const compositor_sync_nt61 = @import("../../config/compositor_sync_nt61.zig");
+
+comptime {
+    _ = @import("user32/split_anchor.zig");
+}
 
 /// 未绑定 DWM 重定向表面（`dwm_compositor` 未初始化或分配失败）。
 pub const no_compositor_surface: u16 = 0xFFFF;
@@ -301,6 +306,7 @@ pub const PAINTSTRUCT = struct {
     reserved: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// `min=max=0` 时 **不过滤**（含 `WM_DWMCOMPOSITIONCHANGED` 等 DWM 广播）；否则为半开区间 `[min,max]`。
 fn msgMatchesFilter(message: u32, min: u32, max: u32) bool {
     if (min == 0 and max == 0) return true;
     return message >= min and message <= max;
@@ -619,6 +625,25 @@ pub fn broadcastDwmColorizationChanged(argb: u32, blend_enabled: BOOL) void {
     broadcastDwmToListenerThreads(WM_DWMCOLORIZATIONCOLORCHANGED, wp, lp);
 }
 
+/// 内核 `dwm.zig` → **专用 inbox（PID 62）** → `handleApiCall` → `broadcastDwm*`，避免 `dwm` 直接依赖 `subsystem` 产生模块环。
+pub fn notifyDwmCompositionKernelToUserspace(composition_on: BOOL) void {
+    const wp: u32 = @truncate(dwm_nt61_contract.compositionChangedWParam(composition_on != 0));
+    subsystem.queueKernelDwmNotifyLpc(.composition, wp, 0);
+    subsystem.drainKernelDwmLpcInbox(16);
+}
+
+pub fn notifyDwmColorizationKernelToUserspace(argb: u32, blend_enabled: BOOL) void {
+    const lp: i64 = dwm_nt61_contract.colorizationChangedLParam(blend_enabled != 0);
+    subsystem.queueKernelDwmNotifyLpc(.colorization, argb, lp);
+    subsystem.drainKernelDwmLpcInbox(16);
+}
+
+pub fn notifyDwmNcRenderingKernelToUserspace(policy_enabled: BOOL) void {
+    const wp: u32 = @truncate(dwm_nt61_contract.ncRenderingChangedWParam(policy_enabled != 0));
+    subsystem.queueKernelDwmNotifyLpc(.nc_rendering, wp, 0);
+    subsystem.drainKernelDwmLpcInbox(16);
+}
+
 pub fn broadcastDwmNcRenderingChanged(policy_enabled: BOOL) void {
     const wp: WPARAM = dwm_nt61_contract.ncRenderingChangedWParam(policy_enabled != 0);
     if (getWindowCount() != 0) {
@@ -749,15 +774,24 @@ fn notifyCompositorWindowGeometry(w: *Window) void {
     dwm_comp.markSurfaceDirty(id);
 }
 
+var compositor_tree_sync_gen: u32 = 0;
+
 fn syncCompositorZOrderForUserWindows() void {
     if (!dwm_comp.isInitialized()) return;
+    compositor_tree_sync_gen +%= 1;
+    if (compositor_tree_sync_gen == 0) compositor_tree_sync_gen = 1;
+    const gen = compositor_tree_sync_gen;
+
+    var buf: [MAX_WINDOWS]compositor_sync_nt61.TreeSurfaceEntryV1 = undefined;
+    var n: usize = 0;
     var zi: i16 = 10;
     var i: usize = 0;
     while (i < window_count) : (i += 1) {
         const w = &windows[i];
         if (!w.is_valid or w.is_topmost) continue;
         if (w.compositor_surface_id == no_compositor_surface) continue;
-        dwm_comp.setSurfaceZOrder(w.compositor_surface_id, zi);
+        buf[n] = .{ .surface_id = w.compositor_surface_id, .z_order = zi };
+        n += 1;
         zi += 10;
     }
     i = 0;
@@ -765,9 +799,18 @@ fn syncCompositorZOrderForUserWindows() void {
         const w = &windows[i];
         if (!w.is_valid or !w.is_topmost) continue;
         if (w.compositor_surface_id == no_compositor_surface) continue;
-        dwm_comp.setSurfaceZOrder(w.compositor_surface_id, zi);
+        buf[n] = .{ .surface_id = w.compositor_surface_id, .z_order = zi };
+        n += 1;
         zi += 10;
     }
+    const max_chunk: usize = compositor_sync_nt61.compositor_tree_sync_v1_max_entries;
+    var off: usize = 0;
+    while (off < n) {
+        const take = @min(max_chunk, n - off);
+        subsystem.queueCompositorTreeSyncLpc(gen, buf[off..][0..take]);
+        off += take;
+    }
+    if (n > 0) subsystem.drainKernelDwmLpcInbox(64);
 }
 
 var user32_initialized: bool = false;
@@ -1331,6 +1374,10 @@ pub fn getMessageAWithYield(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
             sched_mod.yield();
         } else if (builtin.target.cpu.arch == .x86_64) {
             asm volatile ("pause" ::: .{ .memory = true });
+        } else if (builtin.target.cpu.arch == .loongarch64) {
+            asm volatile ("idle 0" ::: .{ .memory = true });
+        } else if (builtin.target.cpu.arch == .aarch64) {
+            asm volatile ("yield" ::: .{ .memory = true });
         }
     }
     if (sched_tid < 32) clearMsgWaitBit(sched_tid);

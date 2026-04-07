@@ -4,6 +4,7 @@
 // Module: src/sdk/ntdll_syscall_win64.zig
 // Purpose: **用户态** NT x64 `syscall` 薄封装（与内核 `syscall.zig` 中 SSDT 号一致）。
 // 供未来用户进程或测试 PE 与 `src/libs/ntdll.zig`（内核内联桩）分离。
+// 目录约定：`sdk/` 放 **可观测 ABI / 布局 / 调用约定** 工件；`libs/` 放内核内 **Win32 API 桩**（ntdll/kernel32 等）。
 //
 // This is an independent clean-room implementation.
 // Ref: Intel SDM SYSCALL/SYSRET；索引与 `src/arch/x86_64/ssdt_nt61.zig` **须一致**（`zig build test` → **ssdt_stub_parity**）。
@@ -46,6 +47,8 @@ pub const Ssdt = struct {
     pub const NtTerminateProcess: u32 = 0x29;
     pub const NtReadVirtualMemory: u32 = 0x3D;
     pub const NtWriteVirtualMemory: u32 = 0x3E;
+    pub const NtShutdownSystem: u32 = 0x40;
+    pub const NtInitiatePowerAction: u32 = 0x41;
 };
 
 /// 原始 NT x64 syscall；`num` 为 SSDT 索引；返回值按 NTSTATUS 符号扩展。

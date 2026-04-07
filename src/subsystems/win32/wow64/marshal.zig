@@ -114,6 +114,20 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         @as(*align(1) volatile ntdll.IO_STATUS_BLOCK, @ptrFromInt(ios_va)).* = iob;
         return st;
     }
+    if (syscall_num == x86.NtProtectVirtualMemory) {
+        if (args.len < 5) return ntdll.STATUS_SUCCESS;
+        const vb = userVaFromWow64Ptr32(args[1]) orelse return ntdll.STATUS_INVALID_PARAMETER;
+        const vs = userVaFromWow64Ptr32(args[2]) orelse return ntdll.STATUS_INVALID_PARAMETER;
+        const vo = userVaFromWow64Ptr32(args[4]) orelse return ntdll.STATUS_INVALID_PARAMETER;
+        var base_u: u64 = @as(u64, @as(*align(1) const volatile u32, @ptrFromInt(vb)).*);
+        var sz_u: u64 = @as(u64, @as(*align(1) const volatile u32, @ptrFromInt(vs)).*);
+        var old: u32 = 0;
+        const st = ntdll.NtProtectVirtualMemory(@as(u64, args[0]), &base_u, &sz_u, args[3], &old);
+        @as(*align(1) volatile u32, @ptrFromInt(vb)).* = @truncate(base_u);
+        @as(*align(1) volatile u32, @ptrFromInt(vs)).* = @truncate(sz_u);
+        @as(*align(1) volatile u32, @ptrFromInt(vo)).* = old;
+        return st;
+    }
     if (syscall_num == x86.NtWriteFile) {
         if (args.len < 7) return ntdll.STATUS_SUCCESS;
         const ios_va = userVaFromWow64Ptr32(args[4]) orelse return ntdll.STATUS_INVALID_PARAMETER;

@@ -40,10 +40,13 @@ pub const TebNt61X64 = extern struct {
 };
 
 comptime {
+    std.debug.assert(@offsetOf(TebNt61X64, "ProcessEnvironmentBlock") == 0x60);
     std.debug.assert(@offsetOf(TebNt61X64, "LastErrorValue") == 0x68);
 }
 
 test "TebNt61X64 LastErrorValue at x64 offset 0x68" {
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(TebNt61X64, "NtTib"));
+    try std.testing.expectEqual(@as(usize, 0x38), @sizeOf(NtTibX64));
+    try std.testing.expectEqual(@as(usize, 0x60), @offsetOf(TebNt61X64, "ProcessEnvironmentBlock"));
     try std.testing.expectEqual(@as(usize, 0x68), @offsetOf(TebNt61X64, "LastErrorValue"));
-    try std.testing.expectEqual(@as(usize, 0x38), @offsetOf(TebNt61X64, "NtTib"));
 }

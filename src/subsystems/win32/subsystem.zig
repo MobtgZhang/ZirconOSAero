@@ -15,6 +15,8 @@ const gdi32 = @import("gdi32.zig");
 const csr_lpc_policy = @import("csr_lpc_policy.zig");
 const csr_dwm_listeners = @import("csr_dwm_listeners.zig");
 const token = @import("../../se/token.zig");
+const compositor_sync_nt61 = @import("../../config/compositor_sync_nt61.zig");
+const dwm_comp_core = @import("../../drivers/video/core/dwm_compositor.zig");
 
 pub const CSRSS_VERSION: []const u8 = "ZirconOSAero CSRSS v1.0";
 
@@ -66,8 +68,15 @@ pub const CsrApiNumber = enum(u32) {
     /// vNext：关闭非 Default 的 1-based 桌面句柄（魔数 DSL1）。
     close_desktop_lpc = 0x1002A,
     shutdown_system = 0x10030,
+    /// 阶段 C：内核 DWM 策略变更 → 专用 inbox（PID 62）→ `handleApiCall` → `user32.broadcastDwm*`。
+    kernel_dwm_notify = 0x1002B,
+    /// 阶段 C：用户态 compositor 权威 Z 序快照 → 内核 `dwm_compositor.applyAuthorityTreeSyncV1`。
+    compositor_tree_sync = 0x1002C,
     _,
 };
+
+/// 仅承载 **内核→csrss DWM 通知** 与 **合成树 LPC**，与用户态发往 `CsrApiPort` owner（PID 1）的队列分离，避免争用。
+pub const kernel_dwm_lpc_inbox_pid: u32 = 62;
 
 // ── Window Station ──
 
@@ -308,6 +317,35 @@ pub fn setProcessDesktop(pid: u32, desktop_index: u32) bool {
     return true;
 }
 
+pub fn queueKernelDwmNotifyLpc(kind: compositor_sync_nt61.KernelDwmNotifyKind, wp: u32, lp: i64) void {
+    var buf: [ipc.MSG_DATA_SIZE]u8 = undefined;
+    compositor_sync_nt61.encodeKernelDwmNotifyV1(&buf, kind, wp, lp);
+    _ = ipc.send(0, kernel_dwm_lpc_inbox_pid, @intFromEnum(CsrApiNumber.kernel_dwm_notify), &buf);
+}
+
+pub fn queueCompositorTreeSyncLpc(generation: u32, entries: []const compositor_sync_nt61.TreeSurfaceEntryV1) void {
+    var buf: [ipc.MSG_DATA_SIZE]u8 = undefined;
+    compositor_sync_nt61.encodeCompositorTreeSyncV1(&buf, generation, entries);
+    _ = ipc.send(0, kernel_dwm_lpc_inbox_pid, @intFromEnum(CsrApiNumber.compositor_tree_sync), &buf);
+}
+
+/// 排空 PID 62 inbox；须在主循环或 DWM 通知路径上调用，以免积压。
+pub fn drainKernelDwmLpcInbox(max_messages: u32) void {
+    var n: u32 = 0;
+    while (n < max_messages) : (n += 1) {
+        const m = ipc.receive(kernel_dwm_lpc_inbox_pid) orelse break;
+        switch (m.opcode) {
+            @intFromEnum(CsrApiNumber.kernel_dwm_notify) => {
+                _ = handleApiCall(.kernel_dwm_notify, m.sender, &m.data);
+            },
+            @intFromEnum(CsrApiNumber.compositor_tree_sync) => {
+                _ = handleApiCall(.compositor_tree_sync, m.sender, &m.data);
+            },
+            else => {},
+        }
+    }
+}
+
 // ── API Dispatch ──
 //
 // **单一真源（DesktopManagerSpec §3.3）**：GUI 相关 LPC（register/destroy/post/get_message）仅做活动桌面校验后
@@ -443,6 +481,22 @@ pub fn handleApiCall(api: CsrApiNumber, pid: u32, data_opt: ?*const [ipc.MSG_DAT
             const client_tid = csr_lpc_policy.resolveGetMessageClientTid(tid_in) orelse return -1;
             return user32.csrFillOneMessageForLpc(client_tid, hwnd, min_v, max_v, remove);
         },
+        .kernel_dwm_notify => {
+            const d = data_opt orelse return -1;
+            const dec = compositor_sync_nt61.decodeKernelDwmNotifyV1(d) orelse return -1;
+            switch (dec.kind) {
+                .composition => user32.broadcastDwmCompositionChanged(if (dec.wp != 0) user32.TRUE else user32.FALSE),
+                .colorization => user32.broadcastDwmColorizationChanged(dec.wp, if (dec.lp != 0) user32.TRUE else user32.FALSE),
+                .nc_rendering => user32.broadcastDwmNcRenderingChanged(if (dec.wp != 0) user32.TRUE else user32.FALSE),
+            }
+            return 0;
+        },
+        .compositor_tree_sync => {
+            const d = data_opt orelse return -1;
+            const dec = compositor_sync_nt61.decodeCompositorTreeSyncV1(d) orelse return -1;
+            dwm_comp_core.applyAuthorityTreeSyncV1(dec.generation, dec.entries[0..dec.count]);
+            return 0;
+        },
         else => return -1,
     }
 }
@@ -462,9 +516,10 @@ pub fn initGuiSubsystem() void {
     gui_subsystem_active = true;
     klog.info("csrss: GUI subsystem activated", .{});
     csr_dwm_listeners.register(3);
-    user32.broadcastDwmCompositionChanged(user32.TRUE);
-    user32.broadcastDwmColorizationChanged(0xFF_70_90_D0, user32.TRUE);
-    user32.broadcastDwmNcRenderingChanged(user32.TRUE);
+    queueKernelDwmNotifyLpc(.composition, 1, 0);
+    queueKernelDwmNotifyLpc(.colorization, 0xFF_70_90_D0, 1);
+    queueKernelDwmNotifyLpc(.nc_rendering, 1, 0);
+    drainKernelDwmLpcInbox(16);
 }
 
 pub fn registerGuiWindow(pid: u32, hwnd: u64) bool {

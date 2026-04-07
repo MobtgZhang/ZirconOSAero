@@ -1,5 +1,6 @@
 pub const boot = @import("boot.zig");
 pub const paging = @import("paging.zig");
+pub const thread_switch = @import("thread_switch.zig");
 pub const framebuffer = @import("../../hal/loongarch64/framebuffer.zig");
 const uart = @import("../../hal/loongarch64/uart.zig");
 const traps = @import("traps.zig");

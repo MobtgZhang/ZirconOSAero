@@ -37,6 +37,8 @@ pub const FramebufferInfo = struct {
     height: u32,
     bpp: u8,
     fb_type: u8,
+    /// 与 `multiboot2_parse.FramebufferInfo` / GOP 手递一致：线性 32bpp 时常为 BGRA。
+    pixel_bgr: u8 = 1,
 };
 
 pub const BootInfo = struct {

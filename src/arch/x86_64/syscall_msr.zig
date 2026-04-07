@@ -85,7 +85,8 @@ pub fn initSyscallInstructionPath() void {
     const lstar = @intFromPtr(&syscall_lstar_entry);
     wrmsr(IA32_LSTAR, lstar);
 
-    wrmsr(IA32_FMASK, 1 << 9);
+    // 清 IF（位 9）与 DF（位 10）：避免用户态方向标志/中断屏蔽泄漏进内核路径（Intel SDM Vol.2 SYSCALL）。
+    wrmsr(IA32_FMASK, (@as(u64, 1) << 9) | (@as(u64, 1) << 10));
 
     const percpu = @import("../../hal/x86_64/percpu.zig");
     percpu.syncKernelRsp0(gdt.zircon_x86_64_kernel_rsp0);

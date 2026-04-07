@@ -1,5 +1,6 @@
 pub const boot = @import("boot.zig");
 pub const paging = @import("paging.zig");
+pub const thread_switch = @import("thread_switch.zig");
 pub const framebuffer = @import("../../hal/aarch64/framebuffer.zig");
 const uart = @import("../../hal/aarch64/uart.zig");
 const gic = @import("../../hal/aarch64/gic.zig");
@@ -7,6 +8,16 @@ const arm_timer = @import("../../hal/aarch64/timer.zig");
 
 pub const name: []const u8 = "aarch64";
 pub const PAGE_SIZE: usize = 4096;
+
+extern const _kernel_end: u8;
+
+pub fn linkerKernelEndExclusive() usize {
+    return @intFromPtr(&_kernel_end);
+}
+
+pub fn serialReadByte() ?u8 {
+    return uart.readByte();
+}
 
 pub fn initFramebuffer(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8) void {
     framebuffer.init(addr, width, height, pitch, bpp);

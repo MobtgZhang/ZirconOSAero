@@ -69,6 +69,27 @@ ISR_NOERR 45
 ISR_NOERR 46
 ISR_NOERR 47
 
+# PIC 重映射后主片 IRQ0–7 → 向量 48–55，从片 IRQ8–15 → 56–63（与 `pic.zig` ICW2 0x30/0x38 一致）。
+ISR_NOERR 48
+ISR_NOERR 49
+ISR_NOERR 50
+ISR_NOERR 51
+ISR_NOERR 52
+ISR_NOERR 53
+ISR_NOERR 54
+ISR_NOERR 55
+ISR_NOERR 56
+ISR_NOERR 57
+ISR_NOERR 58
+ISR_NOERR 59
+ISR_NOERR 60
+ISR_NOERR 61
+ISR_NOERR 62
+ISR_NOERR 63
+
+# Debug / 后备：`int 0x80` → 向量 128，与 `syscall_lstar.s` 压入的 vector 一致，走 `handleSyscall`。
+ISR_NOERR 128
+
 # IPI：TLB flush（与 `isr.zig` 中 `ipi_tlb_flush_vector` 一致）
 ISR_NOERR 254
 
@@ -96,6 +117,10 @@ isr_table:
     .quad isr_stub_36, isr_stub_37, isr_stub_38, isr_stub_39
     .quad isr_stub_40, isr_stub_41, isr_stub_42, isr_stub_43
     .quad isr_stub_44, isr_stub_45, isr_stub_46, isr_stub_47
+    .quad isr_stub_48, isr_stub_49, isr_stub_50, isr_stub_51
+    .quad isr_stub_52, isr_stub_53, isr_stub_54, isr_stub_55
+    .quad isr_stub_56, isr_stub_57, isr_stub_58, isr_stub_59
+    .quad isr_stub_60, isr_stub_61, isr_stub_62, isr_stub_63
 isr_default_entry:
     .quad isr_stub_default
 

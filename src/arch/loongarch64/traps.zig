@@ -2,8 +2,15 @@
 
 const klog = @import("../../rtl/klog.zig");
 const interrupt_la = @import("../../ke/interrupt_loongarch.zig");
+const syscall_la = @import("syscall_la.zig");
 
 /// `exc_vec.S` 中全局符号；勿用 `@intFromPtr(&extern …)` —— 与 `_kernel_end` 相同，部分 Zig 版本在 LoongArch 上会得到 0，CSR.EENTRY=0 会导致定时器/中断入口跳转到空地址，桌面刚起来即崩溃或 QEMU 退出。
+fn haltForever() noreturn {
+    while (true) {
+        asm volatile ("idle 0");
+    }
+}
+
 fn excVectorsBase() usize {
     return asm volatile ("la.local %[o], loongarch_exc_vectors"
         : [o] "=r" (-> usize),
@@ -30,11 +37,25 @@ fn csrWrEentry(val: u64) void {
     );
 }
 
-export fn loongarch_dispatch_trap() callconv(.c) void {
+export fn loongarch_dispatch_trap(frame_sp: usize) callconv(.c) void {
     const estat = asm volatile ("csrrd %[o], 0x5"
         : [o] "=r" (-> u64),
     );
-    interrupt_la.dispatchFromEstat(estat);
+    const exc = interrupt_la.resolvedExcCode(estat);
+    if (exc == 11) {
+        syscall_la.handleFromTrapFrame(frame_sp);
+        return;
+    }
+    if (exc >= 1 and exc <= 4) {
+        interrupt_la.handleTlbPageFault(exc);
+        return;
+    }
+    if (exc < 64) {
+        const ew = @as(u32, @truncate(estat));
+        klog.err("LoongArch: exception EC=%u ESTAT.lo=0x%x (see ESTAT/BADV)", .{ exc, ew });
+        haltForever();
+    }
+    interrupt_la.dispatchHardwareInterrupts(exc, @as(u32, @truncate(estat)));
 }
 
 /// CSR.ECFG VS 域：向量间距 = 4 << VS；512B → VS=7

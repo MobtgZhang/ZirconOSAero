@@ -1,8 +1,11 @@
 pub const boot = @import("boot.zig");
 pub const paging = @import("paging.zig");
 pub const framebuffer = @import("../../hal/riscv64/framebuffer.zig");
+pub const traps = @import("traps.zig");
+pub const thread_switch = @import("thread_switch.zig");
 const uart = @import("../../hal/riscv64/uart.zig");
 const plic = @import("../../hal/riscv64/plic.zig");
+const sbi = @import("../../hal/riscv64/sbi.zig");
 
 extern fn riscv_early_trap_entry() align(4) void;
 
@@ -21,7 +24,6 @@ pub fn consoleClear() void {}
 
 pub fn initSerial() void {
     uart.init();
-    // stvec：在完整 trap 框架前，异常时 UART 输出 `>` 并停机，避免无声崩溃
     asm volatile ("csrw stvec, %[p]"
         :
         : [p] "r" (@intFromPtr(&riscv_early_trap_entry)),
@@ -72,11 +74,13 @@ pub fn initTimer() void {
     var sie: u64 = asm ("csrr %[result], sie"
         : [result] "=r" (-> u64),
     );
-    sie |= (1 << 5);
+    sie |= (1 << 5); // STIE — S-mode timer interrupt enable
+    sie |= (1 << 9); // SEIE — S-mode external interrupt enable
     asm volatile ("csrw sie, %[val]"
         :
         : [val] "r" (sie),
     );
+    sbi.setTimer(sbi.readTime() + 100_000);
 }
 
 pub fn initPic() void {
@@ -84,6 +88,7 @@ pub fn initPic() void {
 }
 
 pub fn unmaskIrq(irq: u8) void {
+    if (irq == 0) return;
     plic.enableIrq(@as(u32, irq));
 }
 
@@ -95,7 +100,8 @@ pub fn disableInterrupts() void {
     asm volatile ("csrci sstatus, 0x2");
 }
 
-/// `sstatus.SIE`（bit 1）为 1 表示 S 模式中断曾允许。\n/// Ref: RISC-V Privileged Spec — sstatus。
+/// `sstatus.SIE` (bit 1): 1 means S-mode interrupts were enabled.
+/// Ref: RISC-V Privileged Spec — sstatus.
 pub fn saveAndDisableInterrupts() bool {
     const s: usize = asm volatile ("csrr %[r], sstatus"
         : [r] "=r" (-> usize),
@@ -108,4 +114,9 @@ pub fn restoreInterrupts(were_enabled: bool) void {
     if (were_enabled) {
         asm volatile ("csrsi sstatus, 0x2" ::: .{ .memory = true });
     }
+}
+
+pub fn linkerKernelEndExclusive() usize {
+    const end_ptr: *const u8 = &@extern(*const u8, .{ .name = "_kernel_end" });
+    return @intFromPtr(end_ptr);
 }

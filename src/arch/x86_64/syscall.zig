@@ -524,6 +524,13 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
         ssdt.NtCancelIoFile => syscall_nt_extras.dispatchNtCancelIoFile(frame),
         ssdt.NtCancelIoFileEx => syscall_nt_extras.dispatchNtCancelIoFileEx(frame),
         ssdt.NtCreateUserProcess => syscall_nt_extras.dispatchNtCreateUserProcess(frame),
+        ssdt.NtShutdownSystem => ntResult(ntdll.NtShutdownSystem(@truncate(frame.r10))),
+        ssdt.NtInitiatePowerAction => ntResult(ntdll.NtInitiatePowerAction(
+            @truncate(frame.r10),
+            @truncate(frame.rdx),
+            @truncate(frame.r8),
+            @truncate(frame.r9),
+        )),
         ssdt.NtCreateThreadEx,
         ssdt.NtAlpcConnectPort,
         ssdt.NtAlpcCreatePort,

@@ -16,7 +16,19 @@ loongarch_exc_vectors:
 	st.d $t1, $sp, 40
 	st.d $t2, $sp, 48
 	st.d $t3, $sp, 56
+	st.d $a7, $sp, 64
+	st.d $a3, $sp, 72
+	st.d $a4, $sp, 80
+	st.d $a5, $sp, 88
+	st.d $a6, $sp, 96
+	/* a0 = trap frame 指针，供 syscall / 统一分发 */
+	move $a0, $sp
 	bl loongarch_dispatch_trap
+	ld.d $a6, $sp, 96
+	ld.d $a5, $sp, 88
+	ld.d $a4, $sp, 80
+	ld.d $a3, $sp, 72
+	ld.d $a7, $sp, 64
 	ld.d $t3, $sp, 56
 	ld.d $t2, $sp, 48
 	ld.d $t1, $sp, 40

@@ -168,6 +168,10 @@ pub const NtAlpcConnectPort = 0x2D;
 pub const NtAlpcCreatePort = 0x6D;
 /// Ref: j00ru/windows-syscalls — Windows 7 SP1 x64。
 pub const NtAlpcSendWaitReceivePort = 0x6E;
+/// 电源：本仓库 **ZOA 锚点槽**（与 j00ru Win7 SP1 数值可能不同）；须与 `ntdll`/`syscall` 同步。
+pub const NtShutdownSystem = 0x40;
+/// 同上，`NtInitiatePowerAction` 子集。
+pub const NtInitiatePowerAction = 0x41;
 
 const std = @import("std");
 
@@ -205,6 +209,8 @@ test "SSDT NT 6.1 x64 public indices (Win7 SP1 reference)" {
     try std.testing.expect(NtWaitForMultipleObjects == 0x57);
     try std.testing.expect(NtSetInformationObject == 0x56);
     try std.testing.expect(NtSignalAndWaitForSingleObject == 0x176);
+    try std.testing.expect(NtShutdownSystem == 0x40);
+    try std.testing.expect(NtInitiatePowerAction == 0x41);
     try std.testing.expect(NtDeviceIoControlFile == 0x52);
     try std.testing.expect(NtLockVirtualMemory == 0x53);
     try std.testing.expect(NtUnlockVirtualMemory == 0x54);

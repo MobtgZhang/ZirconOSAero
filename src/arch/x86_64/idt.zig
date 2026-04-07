@@ -1,8 +1,10 @@
 //! x86_64 IDT (Interrupt Descriptor Table) setup
 //! Reference: https://wiki.osdev.org/Interrupt_Descriptor_Table
 //!
-//! 用户态系统调用仅经 **`syscall`/`sysret`**（`syscall_lstar.s` + `syscall_msr.zig`）。IDT 向量 **128** 与其它未用向量相同，指向默认桩（**不**再作为 syscall 入口）。
+//! 主路径：**`syscall`/`sysret`**（`syscall_lstar.s` + `syscall_msr.zig`）。**Debug** 下 IDT 向量 **128**（`int 0x80`）登记专用桩，与 `syscall` 入口共用 `handleSyscall`；非 Debug 时 128 仍为默认桩。
+//! **WOW64 / 兼容调用**：向量 **0x2E**（`int 0x2E`）经 `interrupt_x86` → `wow64_syscall.dispatchInt2e`；8259 重映射后硬件 IRQ 不占 0x2E（见 `hal/x86_64/pic.zig`）。
 
+const builtin = @import("builtin");
 const isr = @import("isr.zig");
 
 const IdtEntry = packed struct {
@@ -46,6 +48,8 @@ pub fn init() void {
     while (i < 256) : (i += 1) {
         if (i == isr.ipi_tlb_flush_vector) {
             idt_entries[i] = makeEntry(isr.ipiTlbFlushStubAddr());
+        } else if (i == 128 and builtin.mode == .Debug) {
+            idt_entries[i] = makeEntry(isr.int80DebugVectorStubAddr());
         } else {
             idt_entries[i] = makeEntry(default_addr);
         }

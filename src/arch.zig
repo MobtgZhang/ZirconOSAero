@@ -225,7 +225,23 @@ pub fn waitForInterrupt() void {
                 }
             }
         },
-        // AArch64 / RISC-V 等：无完整 trap 或未开中断时避免 WFI 卡死主循环轮询。
+        .aarch64 => {
+            // DAIF.I clear (interrupts enabled) → safe to WFI; timer IRQ will wake.
+            const daif: u64 = asm volatile ("mrs %[r], daif"
+                : [r] "=r" (-> u64),
+            );
+            if ((daif & (1 << 7)) == 0) {
+                asm volatile ("wfi");
+            } else {
+                var i: u32 = 0;
+                while (i < 65536) : (i += 1) {
+                    asm volatile ("" ::: .{ .memory = true });
+                }
+            }
+        },
+        .mips64el => {
+            asm volatile ("wait");
+        },
         else => {
             var i: u32 = 0;
             while (i < 65536) : (i += 1) {
@@ -241,6 +257,22 @@ pub fn waitForInterrupt() void {
 pub fn waitForInterruptDesktop() void {
     const b = @import("builtin");
     if (b.target.cpu.arch == .loongarch64) {
+        var i: u32 = 0;
+        while (i < 65536) : (i += 1) {
+            asm volatile ("" ::: .{ .memory = true });
+        }
+        return;
+    }
+    if (b.target.cpu.arch == .aarch64) {
+        // Short spin for desktop: VirtIO/GIC polling reliability on QEMU varies;
+        // use spin + yield to keep mouse/keyboard responsive at ~100Hz timer tick rate.
+        var i: u32 = 0;
+        while (i < 65536) : (i += 1) {
+            asm volatile ("yield" ::: .{ .memory = true });
+        }
+        return;
+    }
+    if (b.target.cpu.arch == .mips64el) {
         var i: u32 = 0;
         while (i < 65536) : (i += 1) {
             asm volatile ("" ::: .{ .memory = true });

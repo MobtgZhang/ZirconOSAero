@@ -77,8 +77,9 @@ pub const VirtAddr = struct {
     pub fn pdptIndex(self: VirtAddr) u9 {
         return @truncate((self.value >> VPN1_SHIFT) & VPN_MASK);
     }
+    /// Sv39 alias: same as pdptIndex (three-level walk only uses pml4/pdpt/pt).
     pub fn pdIndex(self: VirtAddr) u9 {
-        return @truncate((self.value >> VPN1_SHIFT) & VPN_MASK);
+        return @truncate((self.value >> VPN0_SHIFT) & VPN_MASK);
     }
     pub fn ptIndex(self: VirtAddr) u9 {
         return @truncate((self.value >> VPN0_SHIFT) & VPN_MASK);

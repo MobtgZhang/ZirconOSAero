@@ -50,6 +50,7 @@ def main() -> None:
         sys.exit(1)
 
     qemu = os.environ.get("QEMU_SYSTEM_LOONGARCH64", "qemu-system-loongarch64")
+    cpu = os.environ.get("QEMU_LOONGARCH64_CPU", "max")
     # 与 Makefile QEMU_LOONGARCH64_BASE + DEVICES 一致；无头 CI 可设 ZIRCON_QEMU_DISPLAY=none
     disp = os.environ.get(
         "ZIRCON_QEMU_DISPLAY", "gtk,zoom-to-fit=on,show-cursor=on"
@@ -59,7 +60,7 @@ def main() -> None:
         "-M",
         "virt",
         "-cpu",
-        "la464",
+        cpu,
         "-m",
         mem,
         "-serial",

@@ -15,6 +15,7 @@ fi
 export ZIRCON_ESP="$ESP"
 export LOONGARCH64_EFI_CODE="$CODE"
 export QEMU_MEM_LOONGARCH64="${QEMU_MEM_LOONGARCH64:-1536M}"
+export QEMU_LOONGARCH64_CPU="${QEMU_LOONGARCH64_CPU:-max}"
 
 if command -v python3 >/dev/null 2>&1; then
 	exec python3 -u "$ROOT/scripts/qemu/loongarch-uefi-autorun.py"
@@ -27,7 +28,7 @@ fi
 
 exec expect <<'EOS'
 set timeout 120
-spawn qemu-system-loongarch64 -M virt -cpu la464 -m $env(QEMU_MEM_LOONGARCH64) -serial stdio -display none -no-reboot -bios $env(LOONGARCH64_EFI_CODE) -drive if=none,id=zircon-esp0,file=$env(ZIRCON_ESP),format=raw -device virtio-blk-pci,drive=zircon-esp0,bootindex=0 -boot order=d
+spawn qemu-system-loongarch64 -M virt -cpu $env(QEMU_LOONGARCH64_CPU) -m $env(QEMU_MEM_LOONGARCH64) -serial stdio -display none -no-reboot -bios $env(LOONGARCH64_EFI_CODE) -drive if=none,id=zircon-esp0,file=$env(ZIRCON_ESP),format=raw -device virtio-blk-pci,drive=zircon-esp0,bootindex=0 -boot order=d
 expect {
 	-re {Shell>} { send "fs0:\r" }
 	timeout { exit 1 }

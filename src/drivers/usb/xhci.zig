@@ -128,6 +128,8 @@ var g_slot_port: [4]u8 = .{0} ** 4;
 var g_slot_valid: [4]bool = .{false} ** 4;
 var g_hid_ep_id: [4]u8 = .{0} ** 4;
 var g_hid_mps: [4]u16 = .{0} ** 4;
+/// USB HID：`bInterfaceProtocol` 1=Boot Keyboard，2=Boot Mouse。
+var g_hid_boot_proto: [4]u8 = .{0} ** 4;
 var g_hid_ready: [4]bool = .{false} ** 4;
 var g_hid_await: [4]bool = .{false} ** 4;
 
@@ -551,6 +553,7 @@ fn attachDeviceOnPort(port1: u8) void {
 
     g_hid_ep_id[si] = ep_id;
     g_hid_mps[si] = mps;
+    g_hid_boot_proto[si] = hid_path.protocol;
     g_hid_ready[si] = true;
     g_hid_await[si] = false;
     g_intr_enq[si] = 0;
@@ -558,7 +561,7 @@ fn attachDeviceOnPort(port1: u8) void {
     dma.prepareDmaSlice(&g_intr_buf[si]);
     dma.prepareDmaSlice(std.mem.sliceAsBytes(&g_intr_ring[si]));
 
-    klog.info("USB: HID boot mouse slot=%u ep=%u mps=%u", .{ sid, ep_id, mps });
+    klog.info("USB: HID boot slot=%u ep=%u mps=%u proto=%u (1=key 2=mouse)", .{ sid, ep_id, mps, hid_path.protocol });
 }
 
 fn hidQueueIn(si: usize, slot: u8) void {
@@ -584,7 +587,12 @@ fn pollHidOne(si: usize, slot: u8) void {
     drainEvents(96);
     if (g_xfer_done and g_xfer_slot == slot and g_xfer_ep == g_hid_ep_id[si] and g_xfer_cc == CC_SUCCESS) {
         g_hid_await[si] = false;
-        hid.deliverBootMouseReport(g_intr_buf[si][0..@min(g_hid_mps[si], 64)]);
+        const slice = g_intr_buf[si][0..@min(g_hid_mps[si], 64)];
+        if (g_hid_boot_proto[si] == 1) {
+            hid.deliverBootKeyboardReport(slice);
+        } else {
+            hid.deliverBootMouseReport(slice);
+        }
     }
 }
 

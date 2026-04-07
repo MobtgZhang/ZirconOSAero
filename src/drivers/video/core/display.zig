@@ -2,8 +2,11 @@
 //!
 //! Screen space (same as Windows / top-left origin): **(0,0) = top-left**, X increases
 //! **right**, Y increases **down**. Taskbar occupies `y ∈ [scr_h - tb_h, scr_h)`.
+//!
+//! **阶段 C**：窗口 **`RedirectedSurface.z_order`** 仅反映 user32 经 `COMPOSITOR_TREE_SYNC_V1` 下推的权威快照（见 `SOFTWARE_COMPOSITOR_WDDM.md`）；本模块合成/命中与 `dwm_comp` 一致消费该顺序，不在此维护第二套逻辑树。
 
 const std = @import("std");
+const builtin = @import("builtin");
 const io = @import("../../../io/io.zig");
 const klog = @import("../../../rtl/klog.zig");
 const vga_driver = @import("../legacy/vga.zig");
@@ -14,6 +17,10 @@ const startmenu = @import("../desktop/startmenu.zig");
 const dwm_comp = @import("dwm_compositor.zig");
 const mat = @import("../desktop/material.zig");
 const shell_strings = @import("../desktop/shell_strings.zig");
+const shell_mui = @import("../desktop/shell_mui.zig");
+const vfs = @import("../../../fs/vfs.zig");
+const explorer_vol_snap = @import("../../../fs/explorer_volume_snapshot.zig");
+const explorer_format = @import("../desktop/explorer_format.zig");
 const aero_tray = @import("../desktop/aero_tray.zig");
 const aero_cursor_shape = @import("../desktop/aero_cursor_shape.zig");
 const cursor_plane = @import("cursor_plane.zig");
@@ -31,34 +38,15 @@ pub const renderer_aero = @import("../desktop/renderer_aero.zig");
 const wallpaper_bitmap = @import("../desktop/wallpaper_bitmap.zig");
 const display_flip_journal = @import("display_flip_journal.zig");
 const display_backend = @import("display_backend.zig");
+const display_primitives = @import("display/display_primitives.zig");
 
 pub const ThemeColors = theme_mod.ThemeColors;
 
-fn rgb(r: u32, g: u32, b: u32) u32 {
-    return theme_mod.rgb(r, g, b);
-}
+const rgb = display_primitives.rgb;
+const clampRectDimI64 = display_primitives.clampRectDimI64;
 
-pub fn clampI32FromI64(v: i64) i32 {
-    return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
-}
-
-/// 矩形宽/高：非负，且可安全落回 i32（用于 rectUnion 等 i64 差分）。
-fn clampRectDimI64(d: i64) i32 {
-    if (d <= 0) return 0;
-    if (d > std.math.maxInt(i32)) return std.math.maxInt(i32);
-    return @intCast(d);
-}
-
-/// 轴对齐矩形命中：`x ∈ [rx, rx+rw)`、`y ∈ [ry, ry+rh)`，加法在 i64 上避免 i32 溢出。
-pub fn pointInRectI32(px: i32, py: i32, rx: i32, ry: i32, rw: i32, rh: i32) bool {
-    const pxi = @as(i64, px);
-    const pyi = @as(i64, py);
-    const x0 = @as(i64, rx);
-    const y0 = @as(i64, ry);
-    const w0 = @as(i64, rw);
-    const h0 = @as(i64, rh);
-    return pxi >= x0 and pyi >= y0 and pxi < x0 + w0 and pyi < y0 + h0;
-}
+pub const clampI32FromI64 = display_primitives.clampI32FromI64;
+pub const pointInRectI32 = display_primitives.pointInRectI32;
 
 // ── Theme Definitions (canonical source: theme.zig) ──
 
@@ -204,7 +192,8 @@ pub const FrameResizeEdge = enum(u8) {
 
 /// 与 `hitTestFrameResizeEdge` 一致：边框命中带宽度（像素）。
 const frame_resize_hit_px: i32 = 6;
-const explorer_min_frame_w: i32 = 320;
+/// 侧栏图标列后仍保留可读宽度；与 `renderer_aero` Explorer 导航 `nav_w` 下限一致。
+const explorer_min_frame_w: i32 = 340;
 const explorer_min_frame_h: i32 = 200;
 const taskmgr_min_frame_w: i32 = 260;
 const taskmgr_min_frame_h: i32 = 160;
@@ -267,6 +256,7 @@ pub fn aeroCaptionButtonLayout(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i
     };
 }
 
+/// Aero 标题栏三键几何命中（关闭/最大/最小）。与 [PointerPolicy_NT61.md](../../../docs/cn/PointerPolicy_NT61.md) **D2**（NC 热区）及 `needs_caption_chrome_only` → `renderer_aero.redrawCaptionBandsOnly` 路径对齐。
 pub fn hitTestAeroCaptionButtons(px: i32, py: i32, win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32) AeroCaptionBtnHover {
     if (titlebar_h < 4 or win_w < 96) return .none;
     const pxi = @as(i64, px);
@@ -323,7 +313,7 @@ pub fn hitTestAeroCaptionButtonsHysteresis(px: i32, py: i32, win_x: i32, win_y: 
 }
 
 /// 与 renderer_aero.renderExplorerContent 中命令栏/地址栏高度一致（用于命中测试）。
-pub const AERO_EXPLORER_CMD_H: i32 = 28;
+pub const AERO_EXPLORER_CMD_H: i32 = 52;
 pub const AERO_EXPLORER_ADDR_H: i32 = 26;
 /// 与 `renderer_aero.renderExplorerContent` 地址栏「Go」按钮一致（命中测试必须同源）。
 pub const AERO_EXPLORER_GO_BTN_W: i32 = 40;
@@ -331,17 +321,343 @@ pub const AERO_EXPLORER_GO_MARGIN_END: i32 = 6;
 /// 库视图地址行：面包屑字段起点（相对客户区左缘 + inset）、右侧搜索框宽度（与 renderer_aero 一致）。
 pub const AERO_EXPLORER_LIB_ADDR_FIELD_X: i32 = 54;
 pub const AERO_EXPLORER_LIB_SEARCH_W: i32 = 140;
+pub const AERO_EXPLORER_STATUS_H: i32 = 22;
 
 pub const ExplorerShellView = enum { computer, libraries };
 
+/// 资源管理器导航位置（与 `ExplorerShellView` 组合；路径语义 `X:\`）。
+pub const ExplorerLocation = union(enum) {
+    libraries_root,
+    computer_root,
+    drive_root: u8,
+};
+
+pub const EXPLORER_LIST_SEL_NONE: u32 = 0xFFFF_FFFF;
+
 var explorer_shell_view_state: ExplorerShellView = .libraries;
+var explorer_location: ExplorerLocation = .libraries_root;
+var explorer_list_selected: u32 = EXPLORER_LIST_SEL_NONE;
+
+var explorer_vol_snapshot_buf: [vfs.MAX_MOUNT_POINTS]explorer_vol_snap.ExplorerVolume = undefined;
+var explorer_vol_snapshot_count: usize = 0;
+/// `computer_root` 主区磁贴选中盘符；0 未选。
+var explorer_computer_drive_selected: u8 = 0;
+
+pub fn explorerEnsureVolumeSnapshot() void {
+    explorer_vol_snapshot_count = explorer_vol_snap.refreshVolumes(explorer_vol_snapshot_buf[0..]);
+}
+
+pub fn explorerVolumes() []const explorer_vol_snap.ExplorerVolume {
+    return explorer_vol_snapshot_buf[0..explorer_vol_snapshot_count];
+}
+
+pub fn explorerComputerDriveSelected() u8 {
+    return explorer_computer_drive_selected;
+}
+
+fn explorerClearComputerDriveSelection() void {
+    explorer_computer_drive_selected = 0;
+}
 
 pub fn getExplorerShellView() ExplorerShellView {
     return explorer_shell_view_state;
 }
 
+pub fn getExplorerLocation() ExplorerLocation {
+    return explorer_location;
+}
+
+pub fn getExplorerListSelectedRow() u32 {
+    return explorer_list_selected;
+}
+
+fn explorerInvalidateTaskbarThumb() void {
+    taskbar_explorer_thumb_valid = false;
+}
+
 pub fn setExplorerShellView(v: ExplorerShellView) void {
     explorer_shell_view_state = v;
+    switch (v) {
+        .libraries => {
+            explorer_location = .libraries_root;
+            explorer_list_selected = EXPLORER_LIST_SEL_NONE;
+        },
+        .computer => {
+            if (explorer_location == .libraries_root) {
+                explorer_location = .computer_root;
+            }
+            explorer_list_selected = EXPLORER_LIST_SEL_NONE;
+        },
+    }
+    explorerInvalidateTaskbarThumb();
+}
+
+pub fn getExplorerAddressBarKind() explorer_format.AddressBarKind {
+    switch (explorer_shell_view_state) {
+        .libraries => return .libraries,
+        .computer => switch (explorer_location) {
+            .drive_root => return .drive,
+            else => return .computer,
+        },
+    }
+}
+
+pub fn getExplorerAddressDriveLetter() u8 {
+    return switch (explorer_location) {
+        .drive_root => |L| L,
+        else => 'C',
+    };
+}
+
+/// 标题栏副行：`C:\` 或空。
+pub fn getExplorerTitleSubline(buf: []u8) []const u8 {
+    switch (explorer_shell_view_state) {
+        .libraries => return "",
+        .computer => switch (explorer_location) {
+            .drive_root => |L| return explorer_format.formatDriveRootPath(buf, L),
+            else => return "",
+        },
+    }
+}
+
+fn navigateExplorerLibrariesRoot() void {
+    explorer_shell_view_state = .libraries;
+    explorer_location = .libraries_root;
+    explorer_list_selected = EXPLORER_LIST_SEL_NONE;
+    explorerClearComputerDriveSelection();
+    explorerInvalidateTaskbarThumb();
+}
+
+fn navigateExplorerComputerRoot() void {
+    explorer_shell_view_state = .computer;
+    explorer_location = .computer_root;
+    explorer_list_selected = EXPLORER_LIST_SEL_NONE;
+    explorerClearComputerDriveSelection();
+    explorerInvalidateTaskbarThumb();
+}
+
+fn navigateExplorerDriveRoot(letter: u8) void {
+    explorer_shell_view_state = .computer;
+    explorer_location = .{ .drive_root = letter };
+    explorer_list_selected = EXPLORER_LIST_SEL_NONE;
+    explorerClearComputerDriveSelection();
+    explorerInvalidateTaskbarThumb();
+}
+
+fn selectExplorerComputerDriveTile(letter: u8) void {
+    var L = letter;
+    if (L >= 'a' and L <= 'z') L -= 32;
+    explorer_computer_drive_selected = L;
+    explorerInvalidateTaskbarThumb();
+}
+
+// ── Explorer 客户区布局（与 `renderer_aero` 同源，供命中测试）──
+
+pub fn explorerComputerNavWidth(client_w: i32) i32 {
+    return @min(160, @max(100, @divTrunc(client_w, 4)));
+}
+
+pub fn explorerLibrariesNavWidth(client_w: i32) i32 {
+    return @min(168, @max(104, @divTrunc(client_w, 4)));
+}
+
+fn explorerDriveRowsForCount(count: u32, list_w: i32) u32 {
+    if (count == 0) return 0;
+    const tile_w: i32 = 220;
+    const inner = @max(list_w - 16, 40);
+    const ncols = @max(1, @as(u32, @intCast(@divTrunc(inner + tile_w - 1, tile_w))));
+    return (count + ncols - 1) / ncols;
+}
+
+/// 计算机视图主区顶部「驱动器」分区高度（`body_h` 过小时为 0）。
+pub fn explorerComputerDriveSectionHeight(client_w: i32, body_h: i32) i32 {
+    if (body_h <= 130) return 0;
+    explorerEnsureVolumeSnapshot();
+    const vols = explorerVolumes();
+    const nav_w = explorerComputerNavWidth(client_w);
+    const list_w = client_w - nav_w - 1;
+    var n_fixed: u32 = 0;
+    var n_rem: u32 = 0;
+    for (vols) |v| {
+        switch (v.kind) {
+            .fixed => n_fixed += 1,
+            .removable_block, .optical => n_rem += 1,
+        }
+    }
+    const tile_h: i32 = 60;
+    var h: i32 = 4 + 16;
+    if (n_fixed > 0) h += @as(i32, @intCast(explorerDriveRowsForCount(n_fixed, list_w))) * tile_h;
+    if (n_rem > 0) h += 8 + 16 + @as(i32, @intCast(explorerDriveRowsForCount(n_rem, list_w))) * tile_h;
+    return h;
+}
+
+pub const ExplorerDriveTileLayout = struct {
+    count: u8,
+    /// 首个可移动/光驱项在 `letter` 中的下标；无则 `255`。
+    first_removable_idx: u8,
+    letter: [vfs.MAX_MOUNT_POINTS]u8,
+    rx: [vfs.MAX_MOUNT_POINTS]i32,
+    ry: [vfs.MAX_MOUNT_POINTS]i32,
+    rw: i32,
+    rh: i32,
+
+    pub fn hit(self: *const ExplorerDriveTileLayout, lx: i32, ly: i32) ?u8 {
+        var i: u32 = 0;
+        while (i < self.count) : (i += 1) {
+            const ix = @as(usize, @intCast(i));
+            if (lx >= self.rx[ix] and ly >= self.ry[ix] and lx < self.rx[ix] + self.rw and ly < self.ry[ix] + self.rh) {
+                return self.letter[ix];
+            }
+        }
+        return null;
+    }
+};
+
+fn pushExplorerDriveTilesClient(
+    out: *ExplorerDriveTileLayout,
+    list_x: i32,
+    y: *i32,
+    list_w: i32,
+    vols: []const explorer_vol_snap.ExplorerVolume,
+) void {
+    const tile_w: i32 = 220;
+    const tile_h: i32 = 60;
+    const pad_l: i32 = 8;
+    const inner = @max(list_w - pad_l * 2, 40);
+    const ncols = @max(1, @as(u32, @intCast(@divTrunc(inner + tile_w - 1, tile_w))));
+    var col: u32 = 0;
+    const x0 = list_x + pad_l;
+    var yi = y.*;
+    for (vols) |v| {
+        const tx = x0 + @as(i32, @intCast(col * @as(u32, @intCast(tile_w))));
+        const idx = out.count;
+        if (idx < out.letter.len) {
+            out.letter[idx] = v.letter;
+            out.rx[idx] = tx;
+            out.ry[idx] = yi;
+            out.count += 1;
+        }
+        col += 1;
+        if (col >= ncols) {
+            col = 0;
+            yi += tile_h;
+        }
+    }
+    if (col != 0) yi += tile_h;
+    y.* = yi;
+}
+
+/// `lx`/`ly` 为客户区坐标；`rx`/`ry` 为相对客户区左上角的磁贴矩形。
+pub fn layoutExplorerComputerDriveTilesClient(nav_w: i32, body_y: i32, client_w: i32) ExplorerDriveTileLayout {
+    explorerEnsureVolumeSnapshot();
+    const vols_all = explorerVolumes();
+    const list_x = nav_w + 1;
+    const list_w = client_w - nav_w - 1;
+    var out: ExplorerDriveTileLayout = .{
+        .count = 0,
+        .first_removable_idx = 255,
+        .letter = [_]u8{0} ** vfs.MAX_MOUNT_POINTS,
+        .rx = [_]i32{0} ** vfs.MAX_MOUNT_POINTS,
+        .ry = [_]i32{0} ** vfs.MAX_MOUNT_POINTS,
+        .rw = 200,
+        .rh = 52,
+    };
+    var fixed: [vfs.MAX_MOUNT_POINTS]explorer_vol_snap.ExplorerVolume = undefined;
+    var rem: [vfs.MAX_MOUNT_POINTS]explorer_vol_snap.ExplorerVolume = undefined;
+    var nf: usize = 0;
+    var nr: usize = 0;
+    for (vols_all) |v| {
+        switch (v.kind) {
+            .fixed => {
+                fixed[nf] = v;
+                nf += 1;
+            },
+            .removable_block, .optical => {
+                rem[nr] = v;
+                nr += 1;
+            },
+        }
+    }
+    var y = body_y + 4;
+    if (nf > 0) {
+        y += 16;
+        pushExplorerDriveTilesClient(&out, list_x, &y, list_w, fixed[0..nf]);
+    }
+    if (nr > 0) {
+        out.first_removable_idx = out.count;
+        if (nf > 0) y += 8;
+        y += 16;
+        pushExplorerDriveTilesClient(&out, list_x, &y, list_w, rem[0..nr]);
+    }
+    return out;
+}
+
+fn explorerComputerDetailPaneRelHeight() i32 {
+    if (explorer_location != .computer_root) return 0;
+    if (explorer_computer_drive_selected == 0) return 0;
+    return 64;
+}
+
+pub fn explorerComputerClientLayout(client_w: i32, client_h: i32) struct {
+    cmd_h: i32,
+    addr_h: i32,
+    status_h: i32,
+    body_y: i32,
+    body_h: i32,
+    nav_w: i32,
+    list_x: i32,
+    list_w: i32,
+    drive_sec_h: i32,
+    detail_h: i32,
+    list_top_rel: i32,
+} {
+    const cmd_h = AERO_EXPLORER_CMD_H;
+    const addr_h = AERO_EXPLORER_ADDR_H;
+    const status_h = AERO_EXPLORER_STATUS_H;
+    const body_y = cmd_h + 1 + addr_h;
+    const body_h = client_h - body_y - status_h - 1;
+    const nav_w = explorerComputerNavWidth(client_w);
+    const list_x = nav_w + 1;
+    const list_w = client_w - nav_w - 1;
+    const drive_sec_h = explorerComputerDriveSectionHeight(client_w, body_h);
+    const detail_h = explorerComputerDetailPaneRelHeight();
+    return .{
+        .cmd_h = cmd_h,
+        .addr_h = addr_h,
+        .status_h = status_h,
+        .body_y = body_y,
+        .body_h = body_h,
+        .nav_w = nav_w,
+        .list_x = list_x,
+        .list_w = list_w,
+        .drive_sec_h = drive_sec_h,
+        .detail_h = detail_h,
+        .list_top_rel = drive_sec_h + detail_h,
+    };
+}
+
+pub fn explorerLibrariesClientLayout(client_w: i32, client_h: i32) struct {
+    cmd_h: i32,
+    addr_h: i32,
+    status_h: i32,
+    body_y: i32,
+    body_h: i32,
+    nav_w: i32,
+} {
+    const cmd_h = AERO_EXPLORER_CMD_H;
+    const addr_h = AERO_EXPLORER_ADDR_H;
+    const status_h = AERO_EXPLORER_STATUS_H;
+    const body_y = cmd_h + 1 + addr_h;
+    const body_h = client_h - body_y - status_h - 1;
+    const nav_w = explorerLibrariesNavWidth(client_w);
+    return .{
+        .cmd_h = cmd_h,
+        .addr_h = addr_h,
+        .status_h = status_h,
+        .body_y = body_y,
+        .body_h = body_h,
+        .nav_w = nav_w,
+    };
 }
 
 fn shellTitlebarH() i32 {
@@ -357,6 +673,23 @@ pub const IOCTL_DISPLAY_SET_BG_COLOR: u32 = 0x000A000C;
 pub const IOCTL_DISPLAY_SET_CURSOR: u32 = 0x000A0010;
 pub const IOCTL_DISPLAY_PRESENT: u32 = 0x000A0014;
 pub const IOCTL_DISPLAY_ENUMERATE: u32 = 0x000A0018;
+
+/// 与 `docs/specs/DisplayModeChange_NT61.md` 一致；little-endian，32 字节。
+pub const DisplaySetModeRequestV1 = extern struct {
+    version: u32,
+    flags: u32,
+    width: u32,
+    height: u32,
+    bpp: u8,
+    pixel_bgr: u8,
+    _pad: [2]u8,
+    pitch: u32,
+    fb_address: u64,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(DisplaySetModeRequestV1) == 32);
+}
 
 // ── Display Initialization ──
 
@@ -387,6 +720,105 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
 
     const app_cfg = @import("../../../config/config.zig");
     @import("../desktop/shell_strings.zig").explorer_use_zh = app_cfg.isExplorerShellLangZh();
+    shell_mui.setLangFromConfig();
+}
+
+/// 运行期改分辨率（`IOCTL_DISPLAY_SET_MODE`）；契约见 `docs/specs/DisplayModeChange_NT61.md`。
+pub fn applyDesktopResolutionChange(req: *const DisplaySetModeRequestV1) io.NTSTATUS {
+    if (!isDesktopReady()) return io.STATUS_INVALID_DEVICE_REQUEST;
+    if (req.version != 1 or req.flags != 0) return io.STATUS_INVALID_PARAMETER;
+    const w = req.width;
+    const h = req.height;
+    if (w < 320 or w > 16384 or h < 240 or h > 16384) return io.STATUS_INVALID_PARAMETER;
+    if (req.bpp != 32) return io.STATUS_INVALID_PARAMETER;
+    const pixel_bgr = req.pixel_bgr != 0;
+    var pitch_out: u32 = req.pitch;
+    if (pitch_out == 0) pitch_out = w * 4;
+    const min_pitch = w *| @as(u32, 4);
+    if (pitch_out < min_pitch) return io.STATUS_INVALID_PARAMETER;
+
+    const req_phys: u64 = req.fb_address;
+    var base_usize: usize = if (req_phys == 0) desktop_ctx.surface.address else @truncate(req_phys);
+    const cur_surf = desktop_ctx.surface.address;
+    if (req_phys != 0 and base_usize != cur_surf) {
+        if (builtin.target.cpu.arch == .loongarch64) {
+            const ramfb = @import("../../../hal/loongarch64/ramfb.zig");
+            const arch_pg = @import("../../../arch.zig").PAGE_SIZE;
+            if (base_usize % arch_pg != 0) return io.STATUS_INVALID_PARAMETER;
+            if (ramfb.runtimeReconfigureAtGuestPhys(req_phys, w, h)) |info| {
+                base_usize = @truncate(info.addr);
+                pitch_out = info.pitch;
+            } else {
+                return io.STATUS_INSUFFICIENT_RESOURCES;
+            }
+        } else if (builtin.target.cpu.arch == .mips64el) {
+            const mips_ramfb = @import("../../../hal/mips64el/ramfb.zig");
+            if (mips_ramfb.runtimeReconfigureAtGuestPhys(req_phys, w, h)) {
+                pitch_out = w * 4;
+            } else {
+                return io.STATUS_INSUFFICIENT_RESOURCES;
+            }
+        } else {
+            return io.STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    if (builtin.target.cpu.arch == .loongarch64) {
+        const ramfb = @import("../../../hal/loongarch64/ramfb.zig");
+        if (base_usize == ramfb.RAMFB_PHYS and req_phys == 0) {
+            if (ramfb.runtimeReconfigure(w, h) == null) return io.STATUS_INSUFFICIENT_RESOURCES;
+            pitch_out = w * 4;
+            base_usize = ramfb.RAMFB_PHYS;
+        } else if (base_usize != ramfb.RAMFB_PHYS) {
+            const old_bytes = @as(u64, fb.getPitch()) * @as(u64, fb.getHeight());
+            const new_bytes = @as(u64, pitch_out) * @as(u64, h);
+            if (new_bytes > old_bytes) return io.STATUS_NOT_SUPPORTED;
+        }
+    } else {
+        const old_bytes = @as(u64, fb.getPitch()) * @as(u64, fb.getHeight());
+        const new_bytes = @as(u64, pitch_out) * @as(u64, h);
+        if (new_bytes > old_bytes) return io.STATUS_NOT_SUPPORTED;
+    }
+
+    // 与 `docs/specs/DisplayModeChange_NT61.md` §4：先 invalidate → VirtIO scanout 拆除 → ramfb/表面重建。
+    cursor_plane.invalidate();
+    if (virtio_gpu_pci.isScanoutActive()) virtio_gpu_pci.tearDownScanoutResource();
+
+    fb.init(base_usize, w, h, pitch_out, 32, pixel_bgr);
+    use_framebuffer = true;
+
+    desktop_ctx.surface = .{
+        .width = w,
+        .height = h,
+        .bpp = 32,
+        .pitch = pitch_out,
+        .address = base_usize,
+        .format = .xrgb8888,
+    };
+    display_state = .desktop_mode;
+    display_mode = .desktop;
+
+    dwm_mod.applyPlatformAndResolutionTuning(w, h);
+    hdmi_driver.syncFramebufferMode(w, h, 32);
+
+    const mouse = @import("../../input/mouse.zig");
+    const vi = @import("../../input/virtio_input_pci.zig");
+    mouse.setPosition(@intCast(w / 2), @intCast(h / 2));
+    mouse.setScreenBounds(@intCast(w), @intCast(h));
+    vi.resetPointerBaseline();
+    if (builtin.target.cpu.arch == .x86_64) {
+        mouse.reassertStreamEnable();
+    }
+    syncCursorFromMouse();
+
+    if (virtio_gpu_pci.compositorOffloadAvailable()) {
+        _ = virtio_gpu_pci.trySetupScanoutFromFramebuffer();
+    }
+
+    klog.info("Display: set mode %ux%u pitch=%u phys=0x%x BGR=%u", .{
+        w, h, pitch_out, base_usize, @intFromBool(pixel_bgr),
+    });
+    return io.STATUS_SUCCESS;
 }
 
 pub fn initTextMode() void {
@@ -1073,22 +1505,143 @@ fn explorerClientRect(scr_w: i32, scr_h: i32) struct { x: i32, y: i32, w: i32, h
     };
 }
 
+fn explorerComputerNavHitRow(lx: i32, ly: i32, body_y: i32, body_h: i32, nav_w: i32) ?usize {
+    if (lx < 0 or lx >= nav_w or ly < body_y or ly >= body_y + body_h) return null;
+    const row_h: i32 = 20;
+    const rel = ly - (body_y + 4);
+    if (rel < 0) return null;
+    const ri = @as(usize, @intCast(@divTrunc(rel, row_h)));
+    explorerEnsureVolumeSnapshot();
+    const nvol = explorerVolumes().len;
+    const max_r = 8 + nvol + 1;
+    if (ri >= max_r) return null;
+    return ri;
+}
+
+fn explorerLibrariesNavHitRow(lx: i32, ly: i32, body_y: i32, body_h: i32, nav_w: i32) ?usize {
+    if (lx < 0 or lx >= nav_w or ly < body_y or ly >= body_y + body_h) return null;
+    explorerEnsureVolumeSnapshot();
+    const nvol = explorerVolumes().len;
+    var heights: [8 + vfs.MAX_MOUNT_POINTS + 8]i32 = undefined;
+    var nh: usize = 0;
+    heights[nh] = 18;
+    nh += 1;
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        heights[nh] = 16;
+        nh += 1;
+    }
+    heights[nh] = 18;
+    nh += 1;
+    i = 0;
+    while (i < 4) : (i += 1) {
+        heights[nh] = 16;
+        nh += 1;
+    }
+    heights[nh] = 18;
+    nh += 1;
+    i = 0;
+    while (i < nvol) : (i += 1) {
+        heights[nh] = 16;
+        nh += 1;
+    }
+    heights[nh] = 18;
+    nh += 1;
+    var ny = body_y + 6;
+    var hi: usize = 0;
+    while (hi < nh) : (hi += 1) {
+        const h = heights[hi];
+        if (ly >= ny and ly < ny + h) return hi;
+        ny += h;
+    }
+    return null;
+}
+
+fn explorerComputerListSelectFromPoint(lx: i32, ly: i32, client_w: i32, client_h: i32) void {
+    const Lc = explorerComputerClientLayout(client_w, client_h);
+    if (lx < Lc.list_x or ly < Lc.body_y + Lc.list_top_rel) return;
+    if (ly >= Lc.body_y + Lc.body_h) return;
+    const scroll_w: i32 = 16;
+    if (lx >= Lc.list_x + Lc.list_w - scroll_w) return;
+    const letter: u8 = switch (explorer_location) {
+        .drive_root => |L| L,
+        else => return,
+    };
+    var list_buf: [64]explorer_vol_snap.ExplorerListEntry = undefined;
+    const n = explorer_vol_snap.readDriveRootList(letter, list_buf[0..]);
+    if (n == 0) return;
+    const list_top_abs = Lc.body_y + Lc.list_top_rel;
+    const rel_y = ly - (list_top_abs + 22);
+    if (rel_y < 0) return;
+    const row: u32 = @intCast(@divTrunc(rel_y, 20));
+    if (row < n) {
+        explorer_list_selected = row;
+        explorerInvalidateTaskbarThumb();
+    }
+}
+
 /// Aero 壳窗口客户端布局与 renderer_aero.renderExplorerContent 一致。
 fn aeroExplorerClientClick(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
     const cr = explorerClientRect(scr_w, scr_h);
     if (!pointInRectI32(px, py, cr.x, cr.y, cr.w, cr.h)) return false;
     const lx = px - cr.x;
     const ly = py - cr.y;
-    const cmd_h: i32 = AERO_EXPLORER_CMD_H;
-    const addr_h: i32 = AERO_EXPLORER_ADDR_H;
-    const status_h: i32 = 22;
-    const body_top_off: i32 = cmd_h + 1 + addr_h;
-    if (ly < body_top_off) return true;
+    const status_h = AERO_EXPLORER_STATUS_H;
     if (ly >= cr.h - status_h) return true;
-    const nav_w = @min(160, @max(100, @divTrunc(cr.w, 4)));
-    _ = lx;
-    _ = nav_w;
-    return true;
+
+    switch (explorer_shell_view_state) {
+        .computer => {
+            const Lc = explorerComputerClientLayout(cr.w, cr.h);
+            if (ly < Lc.body_y) return true;
+            if (lx < Lc.nav_w) {
+                if (explorerComputerNavHitRow(lx, ly, Lc.body_y, Lc.body_h, Lc.nav_w)) |ri| {
+                    if (ri == 3) {
+                        navigateExplorerLibrariesRoot();
+                    } else if (ri == 7) {
+                        navigateExplorerComputerRoot();
+                    } else {
+                        explorerEnsureVolumeSnapshot();
+                        const vols = explorerVolumes();
+                        if (ri >= 8 and ri < 8 + vols.len) {
+                            navigateExplorerDriveRoot(vols[ri - 8].letter);
+                        }
+                    }
+                    return true;
+                }
+            } else {
+                if (explorer_location == .computer_root and Lc.drive_sec_h > 0) {
+                    const tiles = layoutExplorerComputerDriveTilesClient(Lc.nav_w, Lc.body_y, cr.w);
+                    if (tiles.hit(lx, ly)) |dl| {
+                        selectExplorerComputerDriveTile(dl);
+                        return true;
+                    }
+                }
+                explorerComputerListSelectFromPoint(lx, ly, cr.w, cr.h);
+            }
+            return true;
+        },
+        .libraries => {
+            const Ll = explorerLibrariesClientLayout(cr.w, cr.h);
+            if (ly < Ll.body_y) return true;
+            if (lx < Ll.nav_w) {
+                if (explorerLibrariesNavHitRow(lx, ly, Ll.body_y, Ll.body_h, Ll.nav_w)) |row| {
+                    if (row == 4) {
+                        navigateExplorerLibrariesRoot();
+                    } else if (row == 9) {
+                        navigateExplorerComputerRoot();
+                    } else {
+                        explorerEnsureVolumeSnapshot();
+                        const vols = explorerVolumes();
+                        if (row >= 10 and row < 10 + vols.len) {
+                            navigateExplorerDriveRoot(vols[row - 10].letter);
+                        }
+                    }
+                    return true;
+                }
+            }
+            return true;
+        },
+    }
 }
 
 pub fn handleClick(x: i32, y: i32) bool {
@@ -1419,6 +1972,7 @@ pub const MouseMovePaintHint = struct {
     }
 };
 
+/// 指针移动 → 壳层局部脏提示（开始菜单、拖窗、`caption_partial` 等）。合并 REL/插值见 **D1**；NC vs 客户区与标题栏带见 **D2**；光标形态见 **D3**；悬停/离开见 **D4**（与 `PointerPolicy_NT61.md` §2–3 对照表）。
 pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
     desktop_ctx.smooth_cursor.target_x = x;
     desktop_ctx.smooth_cursor.target_y = y;
@@ -3974,6 +4528,16 @@ fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
         IOCTL_DISPLAY_ENUMERATE => {
             irp.complete(io.STATUS_SUCCESS, if (use_hdmi) hdmi_driver.getOutputCount() else 1);
             return io.STATUS_SUCCESS;
+        },
+        IOCTL_DISPLAY_SET_MODE => {
+            if (irp.buffer_size < @sizeOf(DisplaySetModeRequestV1)) {
+                irp.complete(io.STATUS_BUFFER_TOO_SMALL, 0);
+                return io.STATUS_BUFFER_TOO_SMALL;
+            }
+            const req_ptr: *const DisplaySetModeRequestV1 = @ptrFromInt(irp.buffer_ptr);
+            const st = applyDesktopResolutionChange(req_ptr);
+            irp.complete(st, 0);
+            return st;
         },
         else => {
             irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);

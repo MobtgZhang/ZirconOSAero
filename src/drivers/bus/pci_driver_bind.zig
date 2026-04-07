@@ -7,6 +7,7 @@
 // This is an independent clean-room implementation.
 // Ref: PCI-SIG PCI Code and ID Assignment Specification (class/subclass); VirtIO 1.0 vendor 0x1AF4.
 // Milestone: 计划 HW-1 / HW-2；与 [docs/cn/NT61_CONTRACT_MATRIX.md](../../../docs/cn/NT61_CONTRACT_MATRIX.md) §8、SOFTWARE_COMPOSITOR_WDDM（Virtio-GPU）一致。
+// 存储：`main` 探测顺序宜 **NVMe → AHCI → VirtIO-blk**（块设备优先高速控制器）；详见 [docs/cn/NVMe_E2_PARTIAL.md](../../../docs/cn/NVMe_E2_PARTIAL.md)。
 
 const std = @import("std");
 

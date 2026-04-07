@@ -9,6 +9,7 @@
 
 pub const framebuffer = @import("core/framebuffer.zig");
 pub const display = @import("core/display.zig");
+pub const display_primitives = @import("core/display/display_primitives.zig");
 pub const dwm = @import("core/dwm.zig");
 pub const dwm_compositor = @import("core/dwm_compositor.zig");
 pub const display_flip_journal = @import("core/display_flip_journal.zig");

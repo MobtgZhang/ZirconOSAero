@@ -357,7 +357,7 @@ fn submitCursor(req_len: u32, rsp_len: u32) ?u32 {
     return null;
 }
 
-fn trySetupScanoutFromFramebuffer() bool {
+pub fn trySetupScanoutFromFramebuffer() bool {
     scanout_active = false;
     scanout_w = 0;
     scanout_h = 0;
@@ -410,6 +410,35 @@ fn trySetupScanoutFromFramebuffer() bool {
         gpu_scanout_res_id, w, h, @as(u32, @truncate(n)), if (n > 1) "yes" else "no",
     });
     return true;
+}
+
+/// 释放 scanout 资源以便在帧缓冲尺寸变化后重建（`CMD_SET_SCANOUT` resource=0 → detach → unref）。
+pub fn tearDownScanoutResource() void {
+    const had_scanout = scanout_active;
+    scanout_active = false;
+    scanout_w = 0;
+    scanout_h = 0;
+    scanout_multipage_backing = false;
+    if (!gpu_offload_ready or !had_scanout) return;
+
+    var cmd: [64]u8 = undefined;
+    spec.writeSetScanout(cmd[0..spec.set_scanout_req_len], 0, 0, 0, 0, 0, 0);
+    _ = submitControl(cmd[0..spec.set_scanout_req_len], 64);
+
+    spec.writeResourceDetachBacking(cmd[0..spec.resource_detach_backing_req_len], gpu_scanout_res_id);
+    _ = submitControl(cmd[0..spec.resource_detach_backing_req_len], 64);
+
+    spec.writeResourceUnref(cmd[0..spec.resource_unref_req_len], gpu_scanout_res_id);
+    _ = submitControl(cmd[0..spec.resource_unref_req_len], 64);
+}
+
+/// 帧缓冲 `fb.init` 改几何后重建 guest-RAM scanout（失败则保持 `scanout_active=false`）。
+pub fn refreshScanoutAfterFramebufferResize() void {
+    if (!gpu_offload_ready) return;
+    tearDownScanoutResource();
+    if (trySetupScanoutFromFramebuffer()) {
+        klog.info("VirtIO-GPU: scanout refreshed after framebuffer resize", .{});
+    }
 }
 
 /// `true` 当 `SET_SCANOUT` 已绑定屏前缓冲；与 `compositorOffloadAvailable`（scratch 自检）独立。

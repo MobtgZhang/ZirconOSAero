@@ -17,6 +17,7 @@ const vm = @import("../../mm/vm.zig");
 const frame = @import("../../mm/frame.zig");
 const io = @import("../../io/io.zig");
 const block_common = @import("block_dev_common.zig");
+const part = @import("partition_table.zig");
 const vfs = @import("../../fs/vfs.zig");
 
 pub const AhciPciDev = struct {
@@ -191,6 +192,9 @@ var g_active_port: u32 = 0;
 var g_storage_ready: bool = false;
 var g_identify_model: [40]u8 = [_]u8{0} ** 40;
 var g_sector0: [512]u8 = [_]u8{0} ** 512;
+/// 首个数据分区起始 LBA（MBR 首项或 GPT 首项）；无分区表或未解析时为 0。
+var g_partition_start_lba: u64 = 0;
+var g_ahci_blk_ctx: u8 = 0;
 
 fn hbaReset(abar: usize) bool {
     var v = hbaR(abar, REG_GHC);
@@ -318,7 +322,7 @@ fn runIdentifyDevice(abar: usize, port: u32, fa: *frame.FrameAllocator) bool {
     return true;
 }
 
-fn runReadSector(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.FrameAllocator) bool {
+fn runReadSectorLba28(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.FrameAllocator) bool {
     const cl_phys = fa.allocZeroed() orelse return false;
     const fb_phys = fa.allocZeroed() orelse return false;
     const ct_phys = fa.allocZeroed() orelse return false;
@@ -370,22 +374,113 @@ fn runReadSector(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.Fra
     return ok;
 }
 
-var g_ahci_blk_ctx: u8 = 0;
+/// READ DMA EXT (0x25)，48 位 LBA + 16 位扇区计数；用于分区起始 LBA 超过 LBA28 上限（>0x0FFFFFFF）的盘。
+/// Ref: Serial ATA — Register — Host to Device FIS 20 字节寄存器布局；ACS READ DMA EXT。
+fn runReadSectorDmaExt(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.FrameAllocator) bool {
+    const cl_phys = fa.allocZeroed() orelse return false;
+    const fb_phys = fa.allocZeroed() orelse return false;
+    const ct_phys = fa.allocZeroed() orelse return false;
+    defer {
+        fa.free(cl_phys);
+        fa.free(fb_phys);
+        fa.free(ct_phys);
+    }
+
+    portStop(abar, port);
+    portStart(abar, port, cl_phys, fb_phys);
+    if (!waitPortNotBusy(abar, port, tfd_not_busy_max_iter)) {
+        portStop(abar, port);
+        return false;
+    }
+
+    const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
+    const ct: [*]u8 = @ptrFromInt(ct_phys);
+    @memset(ct[0..256], 0);
+    // Register — H2D FIS: cmd 0x25, sector count 1, LBA 0..47, device LBA(0x40).
+    ct[0] = 0x27;
+    ct[1] = 0x80;
+    ct[2] = 0x25;
+    ct[3] = 0;
+    ct[4] = 1;
+    ct[5] = 0;
+    ct[6] = @truncate(lba);
+    ct[7] = @truncate(lba >> 8);
+    ct[8] = @truncate(lba >> 16);
+    ct[9] = 0x40;
+    ct[10] = 0;
+    ct[11] = 0;
+    ct[12] = @truncate(lba >> 24);
+    ct[13] = @truncate(lba >> 32);
+    ct[14] = @truncate(lba >> 40);
+    ct[15] = 0;
+
+    const prdt_off: usize = 0x80;
+    const le_out = std.mem.nativeToLittle(u64, out_phys);
+    @memcpy(ct[prdt_off .. prdt_off + 8], std.mem.asBytes(&le_out));
+    @memset(ct[prdt_off + 8 .. prdt_off + 12], 0);
+    const le_bc2 = std.mem.nativeToLittle(u32, (@as(u32, 511)) | (@as(u32, 1) << 31));
+    @memcpy(ct[prdt_off + 12 .. prdt_off + 16], std.mem.asBytes(&le_bc2));
+
+    cl[0] = 5 | (@as(u32, 1) << 16);
+    cl[1] = 0;
+    cl[2] = @truncate(ct_phys);
+    cl[3] = @truncate(ct_phys >> 32);
+
+    asm volatile ("" ::: .{ .memory = true });
+    portW(abar, port, 0x10, 0xFFFF_FFFF);
+    portW(abar, port, 0x38, 1);
+
+    const ok = waitPxCiClear(abar, port, pxci_wait_max_iter);
+    portStop(abar, port);
+    return ok;
+}
+
+fn runReadSector(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.FrameAllocator) bool {
+    if (lba > 0x0FFF_FFFF) return runReadSectorDmaExt(abar, port, lba, out_phys, fa);
+    return runReadSectorLba28(abar, port, lba, out_phys, fa);
+}
 
 fn readBlocksImpl(ctx: *anyopaque, lba: u64, buf: []u8) io.NTSTATUS {
     _ = ctx;
     if (!g_storage_ready or buf.len < 512 or (buf.len % 512) != 0) return io.STATUS_INVALID_PARAMETER;
     const fa = frame.kernelFrameAllocatorPtr();
     const sectors = buf.len / 512;
+    const base = lba +% g_partition_start_lba;
     var s: u64 = 0;
     while (s < sectors) : (s += 1) {
         const slice = buf[s * 512 ..][0..512];
         const p = fa.allocZeroed() orelse return io.STATUS_INSUFFICIENT_RESOURCES;
         defer fa.free(p);
-        if (!runReadSector(g_abar_va, g_active_port, lba + s, p, fa)) return io.STATUS_IO_DEVICE_ERROR;
+        const phys_lba = base +% s;
+        if (!runReadSector(g_abar_va, g_active_port, phys_lba, p, fa)) return io.STATUS_IO_DEVICE_ERROR;
         @memcpy(slice, @as([*]const u8, @ptrFromInt(p))[0..512]);
     }
     return io.STATUS_SUCCESS;
+}
+
+fn probePartitionStartLba(abar: usize, port: u32, fa: *frame.FrameAllocator) void {
+    g_partition_start_lba = 0;
+    if (part.isGptProtectiveMbr(&g_sector0)) {
+        const sec1_phys = fa.allocZeroed() orelse return;
+        defer fa.free(sec1_phys);
+        if (!runReadSector(abar, port, 1, sec1_phys, fa)) return;
+        var hdr: [512]u8 = undefined;
+        @memcpy(&hdr, @as([*]const u8, @ptrFromInt(sec1_phys))[0..512]);
+        const meta = part.parseGptHeaderMeta(&hdr) orelse return;
+        if (meta.partition_entry_count == 0 or meta.partition_entry_size < 128) return;
+        const ent_phys = fa.allocZeroed() orelse return;
+        defer fa.free(ent_phys);
+        if (!runReadSector(abar, port, meta.partition_entry_lba, ent_phys, fa)) return;
+        var tab: [512]u8 = undefined;
+        @memcpy(&tab, @as([*]const u8, @ptrFromInt(ent_phys))[0..512]);
+        if (part.firstGptPartitionFromHeaderAndTable(&hdr, &tab)) |sl| {
+            g_partition_start_lba = sl.start_lba;
+            klog.info("AHCI: GPT first partition LBA start=0x{x} size=0x{x}", .{ sl.start_lba, sl.size_lba });
+        }
+    } else if (part.firstMbrPartition(&g_sector0)) |sl| {
+        g_partition_start_lba = sl.start_lba;
+        klog.info("AHCI: MBR first partition LBA start=0x{x} size=0x{x}", .{ sl.start_lba, sl.size_lba });
+    }
 }
 
 /// 供 NVMe/AHCI 共享的块读表（当前仅 AHCI 就绪时有效）。
@@ -460,9 +555,11 @@ pub fn tryInitMmioDmaPath(max_bus: u8) void {
             continue;
         }
         @memcpy(&g_sector0, @as([*]const u8, @ptrFromInt(sec_phys))[0..512]);
+        probePartitionStartLba(abar, p, fa);
         g_storage_ready = true;
-        klog.info("AHCI: DMA read LBA0 OK (boot sector word @510 0x%x)", .{
+        klog.info("AHCI: DMA read LBA0 OK (boot sector word @510 0x%x partition_base_LBA=0x{x})", .{
             std.mem.readInt(u16, g_sector0[510..512], .little),
+            g_partition_start_lba,
         });
         return;
     }
@@ -482,8 +579,11 @@ fn ahciProbeClose(_: *vfs.FileObject) vfs.FileStatus {
 
 fn ahciProbeRead(f: *vfs.FileObject, buffer: []u8) vfs.ReadResult {
     if (f.fs_data == 0) return .{ .status = .invalid_parameter };
-    const n = @min(buffer.len, g_sector0.len);
-    @memcpy(buffer[0..n], g_sector0[0..n]);
+    var tmp: [512]u8 = undefined;
+    const st = readBlocksImpl(@ptrCast(&g_ahci_blk_ctx), 0, &tmp);
+    if (st != io.STATUS_SUCCESS) return .{ .status = .io_error };
+    const n = @min(buffer.len, tmp.len);
+    @memcpy(buffer[0..n], tmp[0..n]);
     return .{ .status = .success, .bytes_read = n };
 }
 
@@ -499,5 +599,5 @@ fn getProbeFsOps() vfs.FsOps {
 pub fn mountVfsProbeIfReady() void {
     if (!g_storage_ready) return;
     _ = vfs.mount("E:\\", .devfs, getProbeFsOps(), 0, "AHCI-LBA0");
-    klog.info("VFS: AHCI probe mount E:\\ (512-byte LBA0 read)", .{});
+    klog.info("VFS: AHCI probe mount E:\\ (first partition-relative LBA0 via BlockDevVTable)", .{});
 }

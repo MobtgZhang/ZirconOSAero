@@ -17,6 +17,15 @@
 //!   `syncPolicyFromRegistry`、`setColorizationTint`、`setGlass`、`setCompositionEnabled`。
 //! - **不写入 `DwmConfig`（实现细节，不广播）**：`setSkipGlassBoxBlur`、`setGlassLiteBlurEnabled`、帧内 `blur_budget_*`。
 //! - **广播决策表**（须广播 / 启动豁免）：见 [docs/cn/DWM_NOTIFY_MODEL_NT61.md](../../docs/cn/DWM_NOTIFY_MODEL_NT61.md) §「广播策略决策表」。
+//!
+//! ### 阶段 C：`KERNEL_DWM_NOTIFY_V1` → PID 62 inbox → `broadcastDwm*`（与 `dwm_config_registry_sync` 对齐）
+//! | 触发点 | `KernelDwmNotifyKind` | 备注 |
+//! |--------|------------------------|------|
+//! | `syncPolicyFromRegistry` 字段变化 | `composition` / `colorization` / `nc_rendering` | 无 HWND 时启动豁免，仅 `queueDesktopShellRepaintAfterDwmNotify` |
+//! | `setCompositionEnabled` | `composition` | |
+//! | `setGlass` | `nc_rendering` | 毛玻璃影响 NC 绘制策略 |
+//! | `setColorizationTint` | `colorization` | |
+//! | `initGuiSubsystem` | 三者各一 | `subsystem.queueKernelDwmNotifyLpc` + `drainKernelDwmLpcInbox` |
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
@@ -243,14 +252,14 @@ pub fn syncPolicyFromRegistry() void {
     }
 
     if (hints.composition) {
-        user32.broadcastDwmCompositionChanged(if (config.composition_enabled) user32.TRUE else user32.FALSE);
+        user32.notifyDwmCompositionKernelToUserspace(if (config.composition_enabled) user32.TRUE else user32.FALSE);
     }
     if (hints.colorization) {
         const cref = color_nt61.colorrefLow24FromKernelBgr24(config.glass_tint_color);
-        user32.broadcastDwmColorizationChanged(cref, user32.TRUE);
+        user32.notifyDwmColorizationKernelToUserspace(cref, user32.TRUE);
     }
     if (hints.nc_policy) {
-        user32.broadcastDwmNcRenderingChanged(user32.TRUE);
+        user32.notifyDwmNcRenderingKernelToUserspace(user32.TRUE);
     }
     queueDesktopShellRepaintAfterDwmNotify();
 }
@@ -260,7 +269,7 @@ pub fn setColorizationTint(colorref_low24: color_nt61.ColorrefLow24, blend_enabl
     if (!initialized) return;
     config.glass_tint_color = color_nt61.kernelDwmTintFromColorrefLow24(colorref_low24);
     const user32 = @import("../../../subsystems/win32/user32.zig");
-    user32.broadcastDwmColorizationChanged(colorref_low24, if (blend_enabled) user32.TRUE else user32.FALSE);
+    user32.notifyDwmColorizationKernelToUserspace(colorref_low24, if (blend_enabled) user32.TRUE else user32.FALSE);
     queueDesktopShellRepaintAfterDwmNotify();
 }
 
@@ -269,7 +278,7 @@ pub fn setGlass(enabled: bool) void {
     config.glass_enabled = enabled;
     const user32 = @import("../../../subsystems/win32/user32.zig");
     // 毛玻璃/非客户区绘制策略变化；`WM_DWMCOMPOSITIONCHANGED` 仅随 `composition_enabled` 变化（见 `setCompositionEnabled`）。
-    user32.broadcastDwmNcRenderingChanged(user32.TRUE);
+    user32.notifyDwmNcRenderingKernelToUserspace(user32.TRUE);
     queueDesktopShellRepaintAfterDwmNotify();
 }
 
@@ -278,7 +287,7 @@ pub fn setCompositionEnabled(enabled: bool) void {
     if (config.composition_enabled == enabled) return;
     config.composition_enabled = enabled;
     const user32 = @import("../../../subsystems/win32/user32.zig");
-    user32.broadcastDwmCompositionChanged(if (enabled) user32.TRUE else user32.FALSE);
+    user32.notifyDwmCompositionKernelToUserspace(if (enabled) user32.TRUE else user32.FALSE);
     queueDesktopShellRepaintAfterDwmNotify();
 }
 

@@ -78,10 +78,30 @@ pub const en = struct {
     pub const ex_lib_status = "4 items";
     pub const ex_lib_disk_c = "Local Disk (C:)";
     pub const ex_lib_dvd = "DVD Drive (G:)";
+
+    /// 「计算机」视图与地址栏
+    pub const ex_addr_computer = "Computer";
+    pub const ex_grp_hard_disks = "Hard disk drives";
+    pub const ex_grp_removable = "Devices with removable storage";
+    pub const ex_cmp_address = "Address";
+    pub const ex_cmp_go = "Go";
+    pub const ex_cmp_organize = "Organize";
+    pub const ex_cmp_open = "Open";
+    pub const ex_cmp_more = "▼";
+    pub const ex_cmp_include_lib = "Include in library";
+    pub const ex_cmp_share_with = "Share with";
+    pub const ex_col_date_modified = "Date modified";
+    pub const ex_pc_dvd_fmt = "DVD RW Drive ({c}:)";
+    pub const ex_pc_free_fmt = "{d} GB free of {d} GB";
+    pub const ex_expl_empty_list = "Choose a drive in the navigation pane.";
+    pub const ex_status_brand = "Aero DWM";
+    pub const ex_status_items_fmt = "{d} items | {s} | {s}";
 };
 
 /// 与 Win7 资源管理器「库」参考布局一致的中文串（clean-room 文案）
 pub const zh_cn_explorer = struct {
+    pub const col_name = "名称";
+    pub const col_size = "大小";
     pub const ex_lib_title = "库";
     pub const ex_lib_subtitle = "使用此文件夹访问您的库。";
     pub const ex_lib_search = "搜索库";
@@ -101,6 +121,23 @@ pub const zh_cn_explorer = struct {
     pub const ex_lib_status = "4 个对象";
     pub const ex_lib_disk_c = "本地磁盘 (C:)";
     pub const ex_lib_dvd = "DVD 驱动器 (G:)";
+
+    pub const ex_addr_computer = "计算机";
+    pub const ex_grp_hard_disks = "硬盘驱动器";
+    pub const ex_grp_removable = "有可移动存储的设备";
+    pub const ex_cmp_address = "地址";
+    pub const ex_cmp_go = "转到";
+    pub const ex_cmp_organize = "组织";
+    pub const ex_cmp_open = "打开";
+    pub const ex_cmp_more = "▼";
+    pub const ex_cmp_include_lib = "包含到库中";
+    pub const ex_cmp_share_with = "共享给";
+    pub const ex_col_date_modified = "修改日期";
+    pub const ex_pc_dvd_fmt = "DVD RW 驱动器 ({c}:)";
+    pub const ex_pc_free_fmt = "可用 {d} GB，共 {d} GB";
+    pub const ex_expl_empty_list = "请在导航窗格中选择一个驱动器。";
+    pub const ex_status_brand = "Aero DWM";
+    pub const ex_status_items_fmt = "{d} 个项目 | {s} | {s}";
 };
 
 /// 开始菜单（NT 6.1 Shell）— 英文默认串，无产品营销文案。

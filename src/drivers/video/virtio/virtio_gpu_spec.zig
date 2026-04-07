@@ -104,6 +104,10 @@ pub const transfer_host_2d_req_len: usize = @sizeOf(CtrlHdr) + 16 + 8 + 8;
 pub const set_scanout_req_len: usize = @sizeOf(CtrlHdr) + 16 + 4 + 4;
 pub const resource_flush_req_len: usize = set_scanout_req_len;
 
+/// `CMD_RESOURCE_DETACH_BACKING` / `CMD_RESOURCE_UNREF`: hdr + resource_id + padding u32.
+pub const resource_detach_backing_req_len: usize = @sizeOf(CtrlHdr) + 8;
+pub const resource_unref_req_len: usize = @sizeOf(CtrlHdr) + 8;
+
 /// Variable-size attach: hdr + resource_id + nr_entries + 16*nr_entries.
 pub fn resourceAttachBackingReqLen(nr_entries: usize) usize {
     return @sizeOf(CtrlHdr) + 8 + 16 * nr_entries;
@@ -190,6 +194,21 @@ pub fn writeResourceFlush(out: []u8, resource_id: u32, rx: u32, ry: u32, rw: u32
     std.mem.writeInt(u32, out[44..][0..4], 0, .little); // padding
 }
 
+/// Detach guest RAM backing before `CMD_RESOURCE_UNREF` on an in-use scanout resource.
+pub fn writeResourceDetachBacking(out: []u8, resource_id: u32) void {
+    std.debug.assert(out.len >= resource_detach_backing_req_len);
+    writeCtrlHdrType(out[0..24], CMD_RESOURCE_DETACH_BACKING);
+    std.mem.writeInt(u32, out[24..][0..4], resource_id, .little);
+    std.mem.writeInt(u32, out[28..][0..4], 0, .little);
+}
+
+pub fn writeResourceUnref(out: []u8, resource_id: u32) void {
+    std.debug.assert(out.len >= resource_unref_req_len);
+    writeCtrlHdrType(out[0..24], CMD_RESOURCE_UNREF);
+    std.mem.writeInt(u32, out[24..][0..4], resource_id, .little);
+    std.mem.writeInt(u32, out[28..][0..4], 0, .little);
+}
+
 pub const GpuMemEntry = struct {
     addr: u64,
     length: u32,
@@ -252,4 +271,9 @@ pub fn writeResourceAttachBackingN(out: []u8, resource_id: u32, entries: []const
 test "4k scanout backing entry and wire caps" {
     try std.testing.expectEqual(@as(usize, 8100), max_virtio_backing_mem_entries);
     try std.testing.expectEqual(@as(usize, 32 + 16 * 8100), max_attach_backing_wire_bytes);
+}
+
+test "resource detach and unref wire sizes" {
+    try std.testing.expectEqual(@as(usize, 32), resource_detach_backing_req_len);
+    try std.testing.expectEqual(resource_unref_req_len, resource_detach_backing_req_len);
 }

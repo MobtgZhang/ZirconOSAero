@@ -12,6 +12,7 @@
 //! 单进程内等价：`renderFrame` 顺序绘制背景 → 图标 → 小工具 → 壳窗口 → 任务栏；
 //! 毛玻璃：`dwm.renderGlassEffect`（backdrop 采样区 boxBlur → blendTint → 高光边）。
 
+const std = @import("std");
 const fb = @import("../core/framebuffer.zig");
 const theme = @import("theme.zig");
 const dwm = @import("../core/dwm.zig");
@@ -21,7 +22,9 @@ const dwm_comp = @import("../core/dwm_compositor.zig");
 const mat = @import("material.zig");
 const display = @import("../core/display.zig");
 const builtin_apps = @import("builtin_apps.zig");
-const shell_strings = @import("shell_strings.zig");
+const shell_mui = @import("shell_mui.zig");
+const explorer_vol_snap = @import("../../../fs/explorer_volume_snapshot.zig");
+const explorer_format = @import("explorer_format.zig");
 const wallpaper_bitmap = @import("wallpaper_bitmap.zig");
 const rgb = theme.rgb;
 
@@ -155,6 +158,7 @@ pub fn redrawStartMenuRegionOnly(w: i32, h: i32, t: *const theme.ThemeColors, tb
     display.incFrameCount();
 }
 
+/// 仅重绘 Explorer / 任务管理器等待办窗口的 **标题栏带**（`render_cap`），避免指针在标题栏三键上热跟踪时升舱为整帧 `render_full`。验收：`zig build -Dmouse_debug=true` 下横扫标题栏应见 `render_cap` 显著多于 `render_full`（[PointerPolicy_NT61.md](../../../docs/cn/PointerPolicy_NT61.md) **D2**、[AeroDesktopRuntime.md](../../../docs/cn/AeroDesktopRuntime.md)）。
 pub fn redrawCaptionBandsOnly() void {
     if (!fb.isInitialized()) return;
     theme.setTheme(.aero);
@@ -501,22 +505,17 @@ fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32)
 }
 
 fn explorerCaptionMain() []const u8 {
+    var scratch: [1]u8 = undefined;
     return switch (display.getExplorerShellView()) {
-        .computer => "Computer",
-        .libraries => shell_strings.explorerLine("ex_lib_title"),
-    };
-}
-
-fn explorerCaptionSub() []const u8 {
-    return switch (display.getExplorerShellView()) {
-        .computer => "Local Disk (C:)",
-        .libraries => "",
+        .computer => shell_mui.loadString(.ex_addr_computer, &scratch),
+        .libraries => shell_mui.loadString(.ex_lib_title, &scratch),
     };
 }
 
 fn drawExplorerTitlebarChrome(win_x: i32, win_y: i32, aero_tb_h: i32, t: *const theme.ThemeColors) void {
     icons.drawThemedIcon(.computer, win_x + 6, win_y + 8, 1, .aero);
-    const sub = explorerCaptionSub();
+    var sub_buf: [16]u8 = undefined;
+    const sub = display.getExplorerTitleSubline(&sub_buf);
     if (sub.len == 0) {
         const ty = win_y + @divTrunc(aero_tb_h - 14, 2);
         fb.drawTextTransparentUi(win_x + 26, ty, explorerCaptionMain(), t.titlebar_text);
@@ -565,36 +564,103 @@ fn renderExplorerContent(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeCo
     }
 }
 
+fn explorerNavLetterUpper(c: u8) u8 {
+    if (c >= 'a' and c <= 'z') return c - 32;
+    return c;
+}
+
+fn explorerComputerNavRowHilite(ri: usize) bool {
+    return switch (display.getExplorerLocation()) {
+        .computer_root => ri == 7,
+        .drive_root => |L| {
+            const u = explorerNavLetterUpper(L);
+            display.explorerEnsureVolumeSnapshot();
+            const vols = display.explorerVolumes();
+            var di: usize = 0;
+            while (di < vols.len) : (di += 1) {
+                if (ri == 8 + di and vols[di].letter == u) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn drawExplorerComputerNavLine(
+    win_x: i32,
+    ny: *i32,
+    row_index: *usize,
+    body_bottom: i32,
+    nav_w: i32,
+    label: []const u8,
+    indent: i32,
+    icon_id: icons.IconId,
+) void {
+    const ri = row_index.*;
+    if (ny.* + 18 > body_bottom) return;
+    const hilite = explorerComputerNavRowHilite(ri);
+    if (hilite) {
+        fb.fillRect(win_x + 2, ny.*, nav_w - 4, 18, rgb(0xD8, 0xE8, 0xF8));
+        fb.drawRect(win_x + 2, ny.*, nav_w - 4, 18, rgb(0xA8, 0xC8, 0xE0));
+    }
+    const tc: u32 = if (hilite) rgb(0x00, 0x3C, 0x80) else rgb(0x1A, 0x1A, 0x1A);
+    const ix = win_x + 4 + indent;
+    icons.drawThemedIcon(icon_id, ix, ny.* + 1, 1, .aero);
+    fb.drawTextTransparent(ix + 20, ny.* + 2, label, tc);
+    ny.* += 20;
+    row_index.* += 1;
+}
+
 fn renderExplorerComputerClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeColors) void {
     _ = t;
-    const cmd_h: i32 = display.AERO_EXPLORER_CMD_H;
-    const addr_h: i32 = display.AERO_EXPLORER_ADDR_H;
+    var mui_scratch: [1]u8 = undefined;
+    const Lc = display.explorerComputerClientLayout(w, h);
+    const cmd_h = Lc.cmd_h;
+    const addr_h = Lc.addr_h;
+    const status_h = Lc.status_h;
+
     fb.drawGradientH(x, y, w, cmd_h, rgb(0xF2, 0xF4, 0xF8), rgb(0xE4, 0xE8, 0xF0));
     fb.drawHLine(x, y + cmd_h, w, rgb(0xB8, 0xC4, 0xD4));
-    const cmds = [_][]const u8{ "Organize", "Open", "▼" };
-    const cmd_ty = y + @divTrunc(cmd_h - 14, 2);
+    const cmd_row1_ty = y + 6;
+    const cmds = [_][]const u8{
+        shell_mui.loadString(.ex_cmp_organize, &mui_scratch),
+        shell_mui.loadString(.ex_cmp_open, &mui_scratch),
+        shell_mui.loadString(.ex_cmp_more, &mui_scratch),
+    };
     var bx64 = @as(i64, x) + 8;
     for (cmds, 0..cmds.len) |cmd, ci| {
         const tc: u32 = if (ci == 2) rgb(0x40, 0x40, 0x40) else rgb(0x00, 0x51, 0x9E);
-        fb.drawTextTransparent(display.clampI32FromI64(bx64), cmd_ty, cmd, tc);
+        fb.drawTextTransparent(display.clampI32FromI64(bx64), cmd_row1_ty, cmd, tc);
         bx64 += @as(i64, fb.textWidth(cmd)) + @as(i64, if (ci == 1) 16 else 12);
     }
     const div_x = display.clampI32FromI64(bx64 + 4);
-    fb.drawVLine(div_x, y + 6, cmd_h - 12, rgb(0xC8, 0xD0, 0xDC));
-    const inc = "Include in library";
-    const share = "Share with";
+    fb.drawVLine(div_x, y + 4, cmd_h - 8, rgb(0xC8, 0xD0, 0xDC));
+    const inc = shell_mui.loadString(.ex_cmp_include_lib, &mui_scratch);
+    const share = shell_mui.loadString(.ex_cmp_share_with, &mui_scratch);
     const inc_w = fb.textWidth(inc);
     const share_w = fb.textWidth(share);
     const link_gap: i32 = 18;
-    const lx: i32 = div_x + 8;
+    const lx_div: i32 = div_x + 8;
     const cmd_right = display.clampI32FromI64(@as(i64, x) + @as(i64, w) - 6);
-    const fits_all = @as(i64, lx) + @as(i64, inc_w) + @as(i64, link_gap) + @as(i64, share_w) <= @as(i64, cmd_right);
-    const fits_inc = @as(i64, lx) + @as(i64, inc_w) <= @as(i64, cmd_right);
+    const fits_all = @as(i64, lx_div) + @as(i64, inc_w) + @as(i64, link_gap) + @as(i64, share_w) <= @as(i64, cmd_right);
+    const fits_inc = @as(i64, lx_div) + @as(i64, inc_w) <= @as(i64, cmd_right);
     if (fits_all) {
-        fb.drawTextTransparent(lx, cmd_ty, inc, rgb(0x00, 0x51, 0x9E));
-        fb.drawTextTransparent(display.clampI32FromI64(@as(i64, lx) + @as(i64, inc_w) + @as(i64, link_gap)), cmd_ty, share, rgb(0x00, 0x51, 0x9E));
+        fb.drawTextTransparent(lx_div, cmd_row1_ty, inc, rgb(0x00, 0x51, 0x9E));
+        fb.drawTextTransparent(display.clampI32FromI64(@as(i64, lx_div) + @as(i64, inc_w) + @as(i64, link_gap)), cmd_row1_ty, share, rgb(0x00, 0x51, 0x9E));
     } else if (fits_inc) {
-        fb.drawTextTransparent(lx, cmd_ty, inc, rgb(0x00, 0x51, 0x9E));
+        fb.drawTextTransparent(lx_div, cmd_row1_ty, inc, rgb(0x00, 0x51, 0x9E));
+    }
+
+    const cmd_row2_ty = y + 30;
+    const cmd2 = [_][]const u8{
+        shell_mui.loadString(.ex_cmd_properties, &mui_scratch),
+        shell_mui.loadString(.ex_cmd_system_properties, &mui_scratch),
+        shell_mui.loadString(.ex_cmd_view, &mui_scratch),
+    };
+    var bx2 = @as(i64, x) + 8;
+    for (cmd2, 0..cmd2.len) |cmd, ci| {
+        fb.drawTextTransparent(display.clampI32FromI64(bx2), cmd_row2_ty, cmd, rgb(0x00, 0x51, 0x9E));
+        bx2 += @as(i64, fb.textWidth(cmd)) + @as(i64, if (ci + 1 < cmd2.len) 14 else 0);
     }
 
     const addr_y = y + cmd_h + 1;
@@ -604,111 +670,264 @@ fn renderExplorerComputerClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.
     const addr_field_w = @max(64, go_x - 4 - addr_field_x);
     fb.fillRect(x, addr_y, w, addr_h, rgb(0xF8, 0xF9, 0xFC));
     fb.drawHLine(x, addr_y + addr_h, w, rgb(0xC0, 0xC8, 0xD4));
-    fb.drawTextTransparent(x + 8, addr_y + @divTrunc(addr_h - 14, 2), "Address", rgb(0x50, 0x58, 0x60));
+    fb.drawTextTransparent(x + 8, addr_y + @divTrunc(addr_h - 14, 2), shell_mui.loadString(.ex_cmp_address, &mui_scratch), rgb(0x50, 0x58, 0x60));
     fb.fillRect(addr_field_x, addr_y + 3, addr_field_w, 20, rgb(0xFF, 0xFF, 0xFF));
     fb.drawRect(addr_field_x, addr_y + 3, addr_field_w, 20, rgb(0x9C, 0xA8, 0xB8));
-    fb.drawTextTransparent(addr_field_x + 6, addr_y + @divTrunc(addr_h - 14, 2), "Computer ▸ Local Disk (C:)", rgb(0x00, 0x00, 0x00));
+    var addr_buf: [200]u8 = undefined;
+    const addr_line = explorer_format.formatAddressBar(&addr_buf, display.getExplorerAddressBarKind(), display.getExplorerAddressDriveLetter());
+    fb.drawTextTransparent(addr_field_x + 6, addr_y + @divTrunc(addr_h - 14, 2), addr_line, rgb(0x00, 0x00, 0x00));
+    const go_lbl = shell_mui.loadString(.ex_cmp_go, &mui_scratch);
     fb.fillRoundedRect(go_x, addr_y + 4, go_btn_w, 18, 2, rgb(0xE8, 0xEC, 0xF2));
-    fb.drawTextTransparent(go_x + @divTrunc(go_btn_w - fb.textWidth("Go"), 2), addr_y + @divTrunc(addr_h - 14, 2), "Go", rgb(0x00, 0x00, 0x00));
+    fb.drawTextTransparent(go_x + @divTrunc(go_btn_w - fb.textWidth(go_lbl), 2), addr_y + @divTrunc(addr_h - 14, 2), go_lbl, rgb(0x00, 0x00, 0x00));
 
     const body_y = addr_y + addr_h;
-    const status_h: i32 = 22;
-    const body_h = h - cmd_h - 1 - addr_h - status_h - 1;
+    const body_h = Lc.body_h;
     if (body_h <= 10) return;
 
-    const nav_w: i32 = @min(160, @max(100, @divTrunc(w, 4)));
+    display.explorerEnsureVolumeSnapshot();
+    const vols_all = display.explorerVolumes();
+
+    const nav_w = Lc.nav_w;
     const nav_hdr_h: i32 = @min(24, body_h);
     fb.drawGradientV(x, body_y, nav_w, nav_hdr_h, rgb(0xF0, 0xF4, 0xFA), rgb(0xE8, 0xEC, 0xF4));
     fb.fillRect(x, body_y + nav_hdr_h, nav_w, body_h - nav_hdr_h, rgb(0xFC, 0xFC, 0xFE));
     fb.drawVLine(x + nav_w, body_y, body_h, rgb(0xC8, 0xD0, 0xD8));
 
-    const nav_items = [_]struct { label: []const u8, indent: i32, sel: bool }{
-        .{ .label = shell_strings.explorerLine("ex_lib_nav_fav"), .indent = 0, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_desktop"), .indent = 10, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_downloads"), .indent = 10, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_nav_lib"), .indent = 0, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_documents"), .indent = 10, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_music"), .indent = 10, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_pictures"), .indent = 10, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_nav_comp"), .indent = 0, .sel = true },
-        .{ .label = shell_strings.explorerLine("ex_lib_disk_c"), .indent = 10, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_dvd"), .indent = 10, .sel = false },
-        .{ .label = shell_strings.explorerLine("ex_lib_nav_net"), .indent = 0, .sel = false },
-    };
+    var ri: usize = 0;
     var ny: i32 = body_y + 4;
-    for (nav_items) |item| {
-        if (ny + 18 > body_y + body_h) break;
-        if (item.sel) {
-            fb.fillRect(x + 2, ny, nav_w - 4, 18, rgb(0xD8, 0xE8, 0xF8));
-            fb.drawRect(x + 2, ny, nav_w - 4, 18, rgb(0xA8, 0xC8, 0xE0));
-        }
-        const tc: u32 = if (item.sel) rgb(0x00, 0x3C, 0x80) else rgb(0x1A, 0x1A, 0x1A);
-        fb.drawTextTransparent(x + 8 + item.indent, ny + 2, item.label, tc);
-        ny += 20;
-    }
+    const body_bottom = body_y + body_h;
+    var vol_label_buf: [48]u8 = undefined;
 
-    const list_x = x + nav_w + 1;
-    const list_w = w - nav_w - 1;
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_fav, &mui_scratch), 0, .favorites);
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_desktop, &mui_scratch), 10, .shell_desktop);
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_downloads, &mui_scratch), 10, .downloads);
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_lib, &mui_scratch), 0, .library_root);
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_documents, &mui_scratch), 10, .documents);
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_music, &mui_scratch), 10, .music);
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_pictures, &mui_scratch), 10, .pictures);
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_comp, &mui_scratch), 0, .computer);
+    for (vols_all) |v| {
+        const vlab = explorer_format.formatDriveNavLabel(&vol_label_buf, v.letter);
+        drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, vlab, 10, v.iconId());
+    }
+    drawExplorerComputerNavLine(x, &ny, &ri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_net, &mui_scratch), 0, .network);
+
+    const list_x = x + Lc.list_x;
+    const list_w = Lc.list_w;
+    const drive_sec_h = Lc.drive_sec_h;
     fb.fillRect(list_x, body_y, list_w, body_h, rgb(0xFF, 0xFF, 0xFF));
 
-    fb.fillRect(list_x, body_y, list_w, 20, rgb(0xF5, 0xF5, 0xF8));
-    fb.drawHLine(list_x, body_y + 20, list_w, rgb(0xD0, 0xD0, 0xD5));
-    const hdr_y = body_y + 3;
-    const col_date_x = list_x + @max(160, list_w - 200);
-    const col_size_x = list_x + list_w - 56;
-    const hdr_extra = @as(i64, col_date_x) + @as(i64, fb.textWidth("Date modified")) + 8 < @as(i64, col_size_x);
-    fb.drawTextTransparent(list_x + 28, hdr_y, "Name", rgb(0x40, 0x40, 0x40));
-    if (hdr_extra) {
-        fb.drawTextTransparent(col_date_x, hdr_y, "Date modified", rgb(0x40, 0x40, 0x40));
-        fb.drawTextTransparent(col_size_x, hdr_y, "Size", rgb(0x40, 0x40, 0x40));
+    if (drive_sec_h > 0) {
+        var any_fixed = false;
+        for (vols_all) |v| {
+            if (v.kind == .fixed) {
+                any_fixed = true;
+                break;
+            }
+        }
+        if (any_fixed) {
+            fb.drawTextTransparent(list_x + 8, body_y + 4, shell_mui.loadString(.ex_grp_hard_disks, &mui_scratch), rgb(0x38, 0x40, 0x48));
+        }
+        const tiles = display.layoutExplorerComputerDriveTilesClient(Lc.nav_w, body_y - y, w);
+        if (tiles.first_removable_idx != 255 and tiles.first_removable_idx < tiles.count) {
+            const fr = tiles.first_removable_idx;
+            fb.drawTextTransparent(list_x + 8, y + tiles.ry[fr] - 16, shell_mui.loadString(.ex_grp_removable, &mui_scratch), rgb(0x38, 0x40, 0x48));
+        }
+        var cap_buf: [80]u8 = undefined;
+        const sel_letter = display.explorerComputerDriveSelected();
+        var ti: u32 = 0;
+        while (ti < tiles.count) : (ti += 1) {
+            const ix = @as(usize, @intCast(ti));
+            const letter = tiles.letter[ix];
+            const vol = explorer_vol_snap.volumeByLetter(vols_all, letter) orelse continue;
+            const tx = x + tiles.rx[ix];
+            const ty = y + tiles.ry[ix];
+            if (sel_letter != 0 and explorerNavLetterUpper(letter) == sel_letter) {
+                fb.fillRect(tx - 2, ty - 2, tiles.rw + 24, tiles.rh + 8, rgb(0xE8, 0xF0, 0xFA));
+                fb.drawRect(tx - 2, ty - 2, tiles.rw + 24, tiles.rh + 8, rgb(0x78, 0xB0, 0xE8));
+            }
+            icons.drawThemedIcon(vol.iconId(), tx, ty, 1, .aero);
+            const sub = explorer_format.formatDriveTileSubtitle(&cap_buf, letter, vol.kind);
+            fb.drawTextTransparent(tx + 20, ty + 2, sub, rgb(0x00, 0x00, 0x00));
+            const bbx = tx + 20;
+            const bby = ty + 22;
+            fb.fillRect(bbx, bby, 100, 6, rgb(0xE4, 0xE8, 0xEC));
+            const pct: i32 = if (vol.space_known and vol.total_mb > 0)
+                @intCast(@min(@as(u64, 100), @as(u64, vol.free_mb) * 100 / @max(@as(u64, vol.total_mb), 1)))
+            else
+                0;
+            const bar_rgb = if (!vol.space_known)
+                rgb(0xC8, 0xCC, 0xD0)
+            else if (pct < 10)
+                rgb(0xE0, 0x68, 0x58)
+            else
+                rgb(0x38, 0xB8, 0xD0);
+            fb.fillRect(bbx, bby, pct, 6, bar_rgb);
+            const cap_txt = explorer_format.formatVolumeFreeCaption(&cap_buf, vol.free_mb, vol.total_mb, vol.space_known);
+            fb.drawTextTransparent(bbx + 106, bby - 2, cap_txt, rgb(0x50, 0x58, 0x60));
+        }
     }
 
-    const entries = [_]struct { name: []const u8, date: []const u8, size: []const u8, icon: icons.IconId }{
-        .{ .name = "Users", .date = "2026/01/15", .size = "", .icon = .documents },
-        .{ .name = "Program Files", .date = "2026/03/20", .size = "", .icon = .documents },
-        .{ .name = "ZirconOSAero", .date = "2026/02/10", .size = "", .icon = .documents },
-        .{ .name = "PerfLogs", .date = "2026/01/01", .size = "", .icon = .documents },
-        .{ .name = "boot.ini", .date = "2026/01/01", .size = "1 KB", .icon = .text_editor },
-        .{ .name = "pagefile.sys", .date = "2026/03/21", .size = "2 GB", .icon = .text_editor },
+    if (Lc.detail_h > 0) {
+        const dpy = body_y + drive_sec_h;
+        const sel = display.explorerComputerDriveSelected();
+        if (explorer_vol_snap.volumeByLetter(vols_all, sel)) |dv| {
+            fb.fillRect(list_x, dpy, list_w, Lc.detail_h, rgb(0xF4, 0xF7, 0xFC));
+            fb.drawHLine(list_x, dpy, list_w, rgb(0xD0, 0xD4, 0xDC));
+            fb.drawHLine(list_x, dpy + Lc.detail_h - 1, list_w, rgb(0xD0, 0xD4, 0xDC));
+            icons.drawThemedIcon(dv.iconId(), list_x + 10, dpy + 10, 2, .aero);
+            var dtitle: [96]u8 = undefined;
+            const title_ln = explorer_format.formatDriveTileSubtitle(&dtitle, dv.letter, dv.kind);
+            fb.drawTextTransparent(list_x + 48, dpy + 12, title_ln, rgb(0x00, 0x00, 0x00));
+            const fs_lbl = shell_mui.loadString(.ex_detail_fs_label, &mui_scratch);
+            var fs_scratch: [32]u8 = undefined;
+            const fs_val = shell_mui.fsTypeLabel(dv.fs_type, &fs_scratch);
+            fb.drawTextTransparent(list_x + 48, dpy + 28, fs_lbl, rgb(0x50, 0x58, 0x60));
+            fb.drawTextTransparent(list_x + 48 + fb.textWidth(fs_lbl) + 6, dpy + 28, fs_val, rgb(0x20, 0x20, 0x20));
+            const free_lbl = shell_mui.loadString(.ex_detail_free_label, &mui_scratch);
+            const tot_lbl = shell_mui.loadString(.ex_detail_total_label, &mui_scratch);
+            var free_cap: [80]u8 = undefined;
+            const free_txt = explorer_format.formatVolumeFreeCaption(&free_cap, dv.free_mb, dv.total_mb, dv.space_known);
+            var sz_buf: [64]u8 = undefined;
+            const tot_txt = if (dv.space_known)
+                std.fmt.bufPrint(&sz_buf, "{d} GB", .{@max(dv.total_mb / 1024, 1)}) catch free_txt
+            else
+                shell_mui.loadString(.ex_space_unknown, &mui_scratch);
+            fb.drawTextTransparent(list_x + 48, dpy + 42, free_lbl, rgb(0x50, 0x58, 0x60));
+            fb.drawTextTransparent(list_x + 48 + fb.textWidth(free_lbl) + 6, dpy + 42, free_txt, rgb(0x20, 0x20, 0x20));
+            fb.drawTextTransparent(list_x + 260, dpy + 42, tot_lbl, rgb(0x50, 0x58, 0x60));
+            fb.drawTextTransparent(list_x + 260 + fb.textWidth(tot_lbl) + 6, dpy + 42, tot_txt, rgb(0x20, 0x20, 0x20));
+        }
+    }
+
+    const list_top = body_y + Lc.list_top_rel;
+    fb.fillRect(list_x, list_top, list_w, 20, rgb(0xF5, 0xF5, 0xF8));
+    fb.drawHLine(list_x, list_top + 20, list_w, rgb(0xD0, 0xD0, 0xD5));
+    const hdr_y = list_top + 3;
+    const col_date_x = list_x + @max(160, list_w - 200);
+    const col_size_x = list_x + list_w - 56;
+    const date_hdr = shell_mui.loadString(.ex_col_date_modified, &mui_scratch);
+    const hdr_extra = @as(i64, col_date_x) + @as(i64, fb.textWidth(date_hdr)) + 8 < @as(i64, col_size_x);
+    fb.drawTextTransparent(list_x + 28, hdr_y, shell_mui.loadString(.col_name, &mui_scratch), rgb(0x40, 0x40, 0x40));
+    if (hdr_extra) {
+        fb.drawTextTransparent(col_date_x, hdr_y, date_hdr, rgb(0x40, 0x40, 0x40));
+        fb.drawTextTransparent(col_size_x, hdr_y, shell_mui.loadString(.col_size, &mui_scratch), rgb(0x40, 0x40, 0x40));
+    }
+
+    var list_entries: [64]explorer_vol_snap.ExplorerListEntry = undefined;
+    const entry_n: usize = switch (display.getExplorerLocation()) {
+        .drive_root => |L| explorer_vol_snap.readDriveRootList(L, list_entries[0..]),
+        else => 0,
     };
-    var ey: i32 = body_y + 22;
-    for (entries, 0..) |entry, i| {
-        if (ey + 20 > body_y + body_h) break;
-        if (i % 2 == 1) {
-            fb.fillRect(list_x, ey, list_w - 16, 20, rgb(0xF5, 0xF8, 0xFC));
+    const entries = list_entries[0..entry_n];
+
+    var ey: i32 = list_top + 22;
+    if (entries.len == 0 and display.getExplorerLocation() == .computer_root) {
+        fb.drawTextTransparent(list_x + 28, ey + 4, shell_mui.loadString(.ex_expl_empty_list, &mui_scratch), rgb(0x78, 0x80, 0x88));
+    } else {
+        const sel = display.getExplorerListSelectedRow();
+        for (entries, 0..) |entry, i| {
+            if (ey + 20 > body_y + body_h) break;
+            if (sel == i) {
+                fb.fillRect(list_x, ey, list_w - 16, 20, rgb(0xD0, 0xE8, 0xF8));
+            } else if (i % 2 == 1) {
+                fb.fillRect(list_x, ey, list_w - 16, 20, rgb(0xF5, 0xF8, 0xFC));
+            }
+            const row_text_y = ey + 4;
+            const name_slice = entry.name[0..entry.name_len];
+            const date_slice = entry.date[0..entry.date_len];
+            const size_slice = entry.size[0..entry.size_len];
+            icons.drawThemedIcon(entry.icon, list_x + 6, ey + 2, 1, .aero);
+            fb.drawTextTransparent(list_x + 28, row_text_y, name_slice, rgb(0x00, 0x00, 0x00));
+            if (hdr_extra) {
+                fb.drawTextTransparent(col_date_x, row_text_y, date_slice, rgb(0x60, 0x60, 0x60));
+                fb.drawTextTransparent(col_size_x, row_text_y, size_slice, rgb(0x60, 0x60, 0x60));
+            }
+            ey += 20;
         }
-        const row_text_y = ey + 4;
-        icons.drawThemedIcon(entry.icon, list_x + 6, ey + 2, 1, .aero);
-        fb.drawTextTransparent(list_x + 28, row_text_y, entry.name, rgb(0x00, 0x00, 0x00));
-        if (hdr_extra) {
-            fb.drawTextTransparent(col_date_x, row_text_y, entry.date, rgb(0x60, 0x60, 0x60));
-            fb.drawTextTransparent(col_size_x, row_text_y, entry.size, rgb(0x60, 0x60, 0x60));
-        }
-        ey += 20;
     }
 
     const sb_x = list_x + list_w - 16;
-    fb.fillRect(sb_x, body_y + 21, 16, body_h - 21, rgb(0xF0, 0xF0, 0xF2));
-    fb.drawVLine(sb_x, body_y + 21, body_h - 21, rgb(0xD0, 0xD0, 0xD5));
-    fb.fillRect(sb_x + 3, body_y + 24, 10, 40, rgb(0xC0, 0xC4, 0xCC));
+    const sb_h = body_h - (list_top + 21 - body_y);
+    fb.fillRect(sb_x, list_top + 21, 16, sb_h, rgb(0xF0, 0xF0, 0xF2));
+    fb.drawVLine(sb_x, list_top + 21, sb_h, rgb(0xD0, 0xD0, 0xD5));
+    fb.fillRect(sb_x + 3, list_top + 24, 10, 40, rgb(0xC0, 0xC4, 0xCC));
 
     const status_y = y + h - status_h;
     fb.fillRect(x, status_y, w, status_h, rgb(0xF0, 0xF0, 0xF2));
     fb.drawHLine(x, status_y, w, rgb(0xD0, 0xD0, 0xD5));
-    fb.drawTextTransparent(x + 8, status_y + 3, "6 items | Computer | Aero DWM", rgb(0x40, 0x40, 0x40));
+    var place_buf: [24]u8 = undefined;
+    const place_line: []const u8 = switch (display.getExplorerLocation()) {
+        .computer_root => shell_mui.loadString(.ex_addr_computer, &mui_scratch),
+        .drive_root => |L| explorer_format.formatDriveRootPath(&place_buf, L),
+        .libraries_root => shell_mui.loadString(.ex_lib_title, &mui_scratch),
+    };
+    var st_buf: [160]u8 = undefined;
+    const brand = shell_mui.loadString(.ex_status_brand, &mui_scratch);
+    const status_txt = shell_mui.formatExplorerStatusBar(&st_buf, entries.len, place_line, brand);
+    fb.drawTextTransparent(x + 8, status_y + 3, status_txt, rgb(0x40, 0x40, 0x40));
+}
+
+fn explorerLibrariesNavRowHilite(row_index: usize) bool {
+    if (display.getExplorerShellView() != .libraries) return false;
+    if (row_index == 4) return true;
+    if (row_index == 9 and display.getExplorerLocation() == .computer_root) return true;
+    display.explorerEnsureVolumeSnapshot();
+    const vols = display.explorerVolumes();
+    if (row_index >= 10 and row_index < 10 + vols.len) {
+        switch (display.getExplorerLocation()) {
+            .drive_root => |L| {
+                const u = explorerNavLetterUpper(L);
+                return vols[row_index - 10].letter == u;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn drawExplorerLibNavLine(
+    win_x: i32,
+    ny: *i32,
+    row_index: *usize,
+    body_bottom: i32,
+    nav_w: i32,
+    label: []const u8,
+    indent: i32,
+    heading: bool,
+    icon_id: icons.IconId,
+) void {
+    const ri = row_index.*;
+    const row_h: i32 = if (heading) 18 else 16;
+    if (ny.* + row_h > body_bottom) return;
+    const hilite = explorerLibrariesNavRowHilite(ri);
+    if (hilite) {
+        fb.fillRect(win_x + 2, ny.*, nav_w - 4, row_h, rgb(0xD8, 0xE8, 0xF8));
+        fb.drawRect(win_x + 2, ny.*, nav_w - 4, row_h, rgb(0xA8, 0xC8, 0xE0));
+    }
+    const tc: u32 = if (heading) rgb(0x50, 0x58, 0x60) else if (hilite) rgb(0x00, 0x3C, 0x80) else rgb(0x18, 0x18, 0x18);
+    const ixl = win_x + 4 + indent;
+    const iy = ny.* + if (heading) @as(i32, 1) else @as(i32, 0);
+    icons.drawThemedIcon(icon_id, ixl, iy, 1, .aero);
+    fb.drawTextTransparent(ixl + 18, ny.*, label, tc);
+    ny.* += row_h;
+    row_index.* += 1;
 }
 
 /// Win7「库」视图：命令栏、圆形导航钮、面包屑与搜索、侧栏分区、四库大图标与状态栏。
 fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme.ThemeColors) void {
     _ = t;
-    const cmd_h: i32 = display.AERO_EXPLORER_CMD_H;
-    const addr_h: i32 = display.AERO_EXPLORER_ADDR_H;
+    var lib_mui: [1]u8 = undefined;
+    const Ll = display.explorerLibrariesClientLayout(w, h);
+    const cmd_h = Ll.cmd_h;
+    const addr_h = Ll.addr_h;
+    const status_h = Ll.status_h;
 
     fb.drawGradientH(x, y, w, cmd_h, rgb(0xF2, 0xF4, 0xF8), rgb(0xE4, 0xE8, 0xF0));
     fb.drawHLine(x, y + cmd_h, w, rgb(0xB8, 0xC4, 0xD4));
     const cmd_ty = y + @divTrunc(cmd_h - 14, 2);
-    const org = shell_strings.explorerLine("ex_lib_organize");
-    const nl = shell_strings.explorerLine("ex_lib_new_lib");
+    const org = shell_mui.loadString(.ex_lib_organize, &lib_mui);
+    const nl = shell_mui.loadString(.ex_lib_new_lib, &lib_mui);
     fb.drawTextTransparent(x + 8, cmd_ty, org, rgb(0x00, 0x51, 0x9E));
     const nl_x = display.clampI32FromI64(@as(i64, x) + 8 + @as(i64, fb.textWidth(org)) + 18);
     fb.drawTextTransparent(nl_x, cmd_ty, nl, rgb(0x00, 0x51, 0x9E));
@@ -730,55 +949,53 @@ fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme
     fb.fillRect(field_x, addr_y + 3, field_w, 20, rgb(0xFF, 0xFF, 0xFF));
     fb.drawRect(field_x, addr_y + 3, field_w, 20, rgb(0x9C, 0xA8, 0xB8));
     icons.drawThemedIcon(.folder, field_x + 4, addr_y + 5, 1, .aero);
-    const crumb = shell_strings.explorerLine("ex_lib_title");
+    var lib_addr_buf: [120]u8 = undefined;
+    const crumb = explorer_format.formatAddressBar(&lib_addr_buf, .libraries, 0);
     fb.drawTextTransparent(field_x + 24, addr_y + @divTrunc(addr_h - 14, 2), crumb, rgb(0x00, 0x00, 0x00));
 
     fb.fillRect(search_x, addr_y + 3, search_w, 20, rgb(0xFF, 0xFF, 0xFF));
     fb.drawRect(search_x, addr_y + 3, search_w, 20, rgb(0x9C, 0xA8, 0xB8));
-    const sh = shell_strings.explorerLine("ex_lib_search");
+    const sh = shell_mui.loadString(.ex_lib_search, &lib_mui);
     fb.drawTextTransparent(search_x + 6, addr_y + @divTrunc(addr_h - 14, 2), sh, rgb(0x78, 0x80, 0x88));
 
     const body_y = addr_y + addr_h;
-    const status_h: i32 = 22;
-    const body_h = h - cmd_h - 1 - addr_h - status_h - 1;
+    const body_h = Ll.body_h;
     if (body_h <= 10) return;
 
-    const nav_w: i32 = @min(168, @max(104, @divTrunc(w, 4)));
+    const nav_w = Ll.nav_w;
     fb.fillRect(x, body_y, nav_w, body_h, rgb(0xFC, 0xFC, 0xFE));
     fb.drawVLine(x + nav_w, body_y, body_h, rgb(0xC8, 0xD0, 0xD8));
 
     var ny: i32 = body_y + 6;
-    const nav_rows = [_]struct { s: []const u8, indent: i32, heading: bool }{
-        .{ .s = shell_strings.explorerLine("ex_lib_nav_fav"), .indent = 0, .heading = true },
-        .{ .s = shell_strings.explorerLine("ex_lib_desktop"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_downloads"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_recent"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_nav_lib"), .indent = 0, .heading = true },
-        .{ .s = shell_strings.explorerLine("ex_lib_documents"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_music"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_pictures"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_videos"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_nav_comp"), .indent = 0, .heading = true },
-        .{ .s = shell_strings.explorerLine("ex_lib_disk_c"), .indent = 8, .heading = false },
-        .{ .s = "D:", .indent = 8, .heading = false },
-        .{ .s = "E:", .indent = 8, .heading = false },
-        .{ .s = "F:", .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_dvd"), .indent = 8, .heading = false },
-        .{ .s = shell_strings.explorerLine("ex_lib_nav_net"), .indent = 0, .heading = true },
-    };
-    for (nav_rows) |nr| {
-        if (ny + 17 > body_y + body_h) break;
-        const tc: u32 = if (nr.heading) rgb(0x50, 0x58, 0x60) else rgb(0x18, 0x18, 0x18);
-        fb.drawTextTransparent(x + 6 + nr.indent, ny, nr.s, tc);
-        ny += if (nr.heading) @as(i32, 18) else @as(i32, 16);
+    var lri: usize = 0;
+    const body_bottom = body_y + body_h;
+    var lib_vol_buf: [48]u8 = undefined;
+
+    display.explorerEnsureVolumeSnapshot();
+    const lib_vols = display.explorerVolumes();
+
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_fav, &lib_mui), 0, true, .favorites);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_desktop, &lib_mui), 8, false, .shell_desktop);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_downloads, &lib_mui), 8, false, .downloads);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_recent, &lib_mui), 8, false, .recent_places);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_lib, &lib_mui), 0, true, .library_root);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_documents, &lib_mui), 8, false, .documents);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_music, &lib_mui), 8, false, .music);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_pictures, &lib_mui), 8, false, .pictures);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_videos, &lib_mui), 8, false, .videos);
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_comp, &lib_mui), 0, true, .computer);
+    for (lib_vols) |v| {
+        const vlab = explorer_format.formatDriveNavLabel(&lib_vol_buf, v.letter);
+        drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, vlab, 8, false, v.iconId());
     }
+    drawExplorerLibNavLine(x, &ny, &lri, body_bottom, nav_w, shell_mui.loadString(.ex_lib_nav_net, &lib_mui), 0, true, .network);
 
     const list_x = x + nav_w + 1;
     const list_w = w - nav_w - 1;
     fb.fillRect(list_x, body_y, list_w, body_h, rgb(0xFF, 0xFF, 0xFF));
 
-    fb.drawTextTransparent(list_x + 24, body_y + 16, shell_strings.explorerLine("ex_lib_title"), rgb(0x12, 0x18, 0x22));
-    fb.drawTextTransparent(list_x + 24, body_y + 36, shell_strings.explorerLine("ex_lib_subtitle"), rgb(0x50, 0x58, 0x60));
+    fb.drawTextTransparent(list_x + 24, body_y + 16, shell_mui.loadString(.ex_lib_title, &lib_mui), rgb(0x12, 0x18, 0x22));
+    fb.drawTextTransparent(list_x + 24, body_y + 36, shell_mui.loadString(.ex_lib_subtitle, &lib_mui), rgb(0x50, 0x58, 0x60));
 
     const tile: i32 = 88;
     const gap: i32 = 32;
@@ -786,10 +1003,10 @@ fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme
     const gx0 = list_x + @max(24, @divTrunc(list_w - grid_w, 2));
     const gy0 = body_y + 80;
     const libs = [_]struct { label: []const u8, icon: icons.IconId }{
-        .{ .label = shell_strings.explorerLine("ex_lib_videos"), .icon = .folder },
-        .{ .label = shell_strings.explorerLine("ex_lib_pictures"), .icon = .pictures },
-        .{ .label = shell_strings.explorerLine("ex_lib_documents"), .icon = .documents },
-        .{ .label = shell_strings.explorerLine("ex_lib_music"), .icon = .music },
+        .{ .label = shell_mui.loadString(.ex_lib_videos, &lib_mui), .icon = .videos },
+        .{ .label = shell_mui.loadString(.ex_lib_pictures, &lib_mui), .icon = .pictures },
+        .{ .label = shell_mui.loadString(.ex_lib_documents, &lib_mui), .icon = .documents },
+        .{ .label = shell_mui.loadString(.ex_lib_music, &lib_mui), .icon = .music },
     };
     for (libs, 0..) |lib, i| {
         const col: i32 = @intCast(i % 2);
@@ -805,7 +1022,7 @@ fn renderExplorerLibrariesClient(x: i32, y: i32, w: i32, h: i32, t: *const theme
     const status_y = display.clampI32FromI64(@as(i64, y) + @as(i64, h) - @as(i64, status_h));
     fb.fillRect(x, status_y, w, status_h, rgb(0xE8, 0xEE, 0xF6));
     fb.drawHLine(x, status_y, w, rgb(0xC0, 0xC8, 0xD4));
-    fb.drawTextTransparent(x + 8, status_y + 4, shell_strings.explorerLine("ex_lib_status"), rgb(0x30, 0x38, 0x42));
+    fb.drawTextTransparent(x + 8, status_y + 4, shell_mui.loadString(.ex_lib_status, &lib_mui), rgb(0x30, 0x38, 0x42));
 }
 
 fn patchDragBackground(scr_w: i32, scr_h: i32) void {

@@ -8,6 +8,7 @@ const dwm_surface_spec = @import("../../../config/dwm_surface_spec.zig");
 const dwm_nt61_abi = @import("../../../config/dwm_nt61_api_contract.zig");
 const fb = @import("framebuffer.zig");
 const material = @import("../desktop/material.zig");
+const compositor_sync_nt61 = @import("../../../config/compositor_sync_nt61.zig");
 
 pub const CompositorBackend = enum(u8) {
     none = 0,
@@ -108,6 +109,26 @@ var aero_cfg: AeroConfig = .{};
 /// 逻辑表面 ID（元数据）；实际像素指针由 `cursor_plane.zig` 在 `display.renderDesktopFrameEx` 末尾叠加。
 var cursor_surface_id: u16 = 0;
 var compositor_initialized: bool = false;
+
+/// 最近一次自用户态 LPC `COMPOSITOR_TREE_SYNC_V1` 应用的世代号（0 表示尚未同步）。
+var authority_tree_sync_generation_applied: u32 = 0;
+
+pub fn getAuthorityTreeSyncGenerationApplied() u32 {
+    return authority_tree_sync_generation_applied;
+}
+
+/// 阶段 C：用户态（user32 窗口 Z 序）经 csrss `compositor_tree_sync` 下推的 **权威** Z 补丁；内核不再单独 `setSurfaceZOrder` 维护并行真相。
+/// `cursor_surface_id` 与壁纸占位由内核 bring-up 固定，忽略补丁中的对应 id（若有）。
+pub fn applyAuthorityTreeSyncV1(generation: u32, entries: []const compositor_sync_nt61.TreeSurfaceEntryV1) void {
+    if (generation == 0) return;
+    authority_tree_sync_generation_applied = generation;
+    for (entries) |e| {
+        if (e.surface_id >= surface_count) continue;
+        if (e.surface_id == cursor_surface_id) continue;
+        surfaces[e.surface_id].z_order = e.z_order;
+        surfaces[e.surface_id].dirty = true;
+    }
+}
 
 pub fn initAero(cfg: AeroConfig) void {
     if (compositor_initialized) return;

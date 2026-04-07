@@ -1205,6 +1205,28 @@ pub fn addSpecularBand(x: i32, y: i32, w: i32, band_h: i32, intensity: u32) void
 
 // ── Buffer Management ──
 
+/// Forward copy using volatile destination writes so the compiler cannot fold
+/// this into `@memcpy` (which panics in ReleaseSafe when src/dst overlap).
+/// Used for scanout flips where identity-mapped GPA may alias if the PFN
+/// allocator ever hands out a range overlapping the GOP region.
+fn safeScanoutCopy(dst: [*]u8, src: [*]const u8, len: usize) void {
+    const vdst: [*]volatile u8 = @volatileCast(dst);
+    const word_size = @sizeOf(usize);
+    const full = len / word_size;
+    const tail = len % word_size;
+    var wi: usize = 0;
+    while (wi < full) : (wi += 1) {
+        const off = wi * word_size;
+        const w: usize = @as(*align(1) const usize, @ptrCast(src + off)).*;
+        @as(*align(1) volatile usize, @ptrCast(vdst + off)).* = w;
+    }
+    const base = full * word_size;
+    var ti: usize = 0;
+    while (ti < tail) : (ti += 1) {
+        vdst[base + ti] = src[base + ti];
+    }
+}
+
 /// 大块 memcpy 到屏前/ramfb 后做内存栅栏，避免弱序模型下设备侧先看到旧像素（LoongArch 上尤为明显）。
 fn fenceScanoutAfterMemcpy() void {
     fenceScanoutVisibleWrites();
@@ -1214,6 +1236,7 @@ fn fenceScanoutAfterMemcpy() void {
 pub fn fenceScanoutVisibleWrites() void {
     switch (builtin.target.cpu.arch) {
         .loongarch64 => asm volatile ("dbar 0" ::: .{ .memory = true }),
+        .aarch64 => asm volatile ("dsb sy" ::: .{ .memory = true }),
         else => {},
     }
 }
@@ -1223,7 +1246,7 @@ pub fn flip() void {
         const size = bytes_per_slot;
         const dst: [*]u8 = @ptrFromInt(fb_config.address);
         const src = backBufSrcPtr();
-        @memcpy(dst[0..size], src[0..size]);
+        safeScanoutCopy(dst, src, size);
         fenceScanoutAfterMemcpy();
         if (triple_buffer_active) {
             draw_slot ^= 1;
@@ -1239,7 +1262,7 @@ pub fn flipDirty() void {
         if (dirty_count == 0 or dirty_count >= MAX_DIRTY_RECTS) {
             const size = @as(usize, fb_config.pitch) * @as(usize, fb_config.height);
             const dst: [*]u8 = @ptrFromInt(fb_config.address);
-            @memcpy(dst[0..size], src[0..size]);
+            safeScanoutCopy(dst, src, size);
             fenceScanoutAfterMemcpy();
         } else {
             const bytes_pp: usize = @as(usize, fb_config.bpp) / 8;
@@ -1256,7 +1279,7 @@ pub fn flipDirty() void {
                 var py: u32 = ry0;
                 while (py < ry1) : (py += 1) {
                     const off = pixelByteOffset(rx0, py, @intCast(bytes_pp));
-                    @memcpy(dst_base[off .. off + row_bytes], src[off .. off + row_bytes]);
+                    safeScanoutCopy(dst_base + off, src + off, row_bytes);
                 }
             }
             fenceScanoutAfterMemcpy();
@@ -1308,7 +1331,7 @@ pub fn copyDrawBufferRectBytes(dx: i32, dy: i32, w: i32, h: i32, dst: []u8) usiz
         const py: u32 = @intCast(y0 + row);
         const off: usize = @as(usize, py) * @as(usize, fb_config.pitch) + @as(usize, @intCast(x0)) * bytes_pp;
         const src_row = @as([*]u8, @volatileCast(ptr))[off .. off + row_bytes];
-        @memcpy(dst[dst_off..][0..row_bytes], src_row);
+        safeScanoutCopy(dst[dst_off..].ptr, src_row.ptr, row_bytes);
         dst_off += row_bytes;
     }
     return dst_off;
@@ -1355,7 +1378,7 @@ pub fn pasteDrawBufferRectBytes(dx: i32, dy: i32, w: i32, h: i32, src: []const u
         const py: u32 = @intCast(y0 + row);
         const off: usize = @as(usize, py) * @as(usize, fb_config.pitch) + @as(usize, @intCast(x0)) * bytes_pp;
         const dst_row = @as([*]u8, @volatileCast(ptr))[off .. off + row_bytes];
-        @memcpy(dst_row, src[src_off..][0..row_bytes]);
+        safeScanoutCopy(dst_row.ptr, src[src_off..].ptr, row_bytes);
         src_off += row_bytes;
     }
 }
@@ -1394,7 +1417,7 @@ pub fn seedDrawBufferFromVisibleIfConfigured() void {
             @ptrFromInt(back_buffer_addr + off)
         else
             @as([*]u8, @ptrCast(&back_buf)) + off;
-        @memcpy(dst[0..size], src[0..size]);
+        safeScanoutCopy(dst, src, size);
     }
 }
 
@@ -1761,6 +1784,20 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
         }
     }
 
+    if (double_buffer_active and addr != 0 and bytes_per_slot > 0) {
+        const back_start = if (back_buffer_addr != 0) back_buffer_addr else @intFromPtr(&back_buf);
+        const back_end = back_start + bytes_per_slot;
+        const fb_end = addr + required;
+        if (back_start < fb_end and addr < back_end) {
+            klog.err("Framebuffer: OVERLAP DETECTED — GOP [0x%x..0x%x) vs back [0x%x..0x%x); disabling double buffer to avoid alias panic", .{
+                @as(u32, @truncate(addr)),     @as(u32, @truncate(fb_end)),
+                @as(u32, @truncate(back_start)), @as(u32, @truncate(back_end)),
+            });
+            double_buffer_active = false;
+            triple_buffer_active = false;
+        }
+    }
+
     fb_config = .{
         .address = addr,
         .width = width,
@@ -1777,30 +1814,36 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
 
     seedDrawBufferFromVisibleIfConfigured();
 
-    driver_idx = io.registerDriver("\\Driver\\Framebuf", fbDispatch) orelse {
-        klog.err("Framebuffer: Failed to register IO driver (rendering still works)", .{});
-        klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
-            width,                                     height,                                    bpp, pitch, addr,
-            if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF",
+    if (!driver_initialized) {
+        driver_idx = io.registerDriver("\\Driver\\Framebuf", fbDispatch) orelse {
+            klog.err("Framebuffer: Failed to register IO driver (rendering still works)", .{});
+            klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
+                width,                                     height,                                    bpp, pitch, addr,
+                if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF",
+            });
+            return;
+        };
+
+        device_idx = io.createDevice("\\Device\\Framebuf0", .framebuffer, driver_idx) orelse {
+            klog.err("Framebuffer: Failed to create IO device (rendering still works)", .{});
+            klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
+                width,                                     height,                                    bpp, pitch, addr,
+                if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF",
+            });
+            return;
+        };
+
+        driver_initialized = true;
+
+        klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s offscreen_B=%u", .{
+            width,                                     height,                                    bpp,                                              pitch, addr,
+            if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF", @as(u32, @truncate(getOffscreenReservedBytes())),
         });
-        return;
-    };
-
-    device_idx = io.createDevice("\\Device\\Framebuf0", .framebuffer, driver_idx) orelse {
-        klog.err("Framebuffer: Failed to create IO device (rendering still works)", .{});
-        klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s", .{
-            width,                                     height,                                    bpp, pitch, addr,
-            if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF",
+    } else {
+        klog.info("Framebuffer: reconfigured %ux%u@%ubpp pitch=%u addr=0x%x double_buf=%s", .{
+            width, height, bpp, pitch, addr, if (double_buffer_active) "ON" else "OFF",
         });
-        return;
-    };
-
-    driver_initialized = true;
-
-    klog.info("Framebuffer Driver: %ux%u@%ubpp, pitch=%u, addr=0x%x, double_buf=%s triple=%s offscreen_B=%u", .{
-        width,                                     height,                                    bpp,                                              pitch, addr,
-        if (double_buffer_active) "ON" else "OFF", if (triple_buffer_active) "ON" else "OFF", @as(u32, @truncate(getOffscreenReservedBytes())),
-    });
+    }
     logFramebufferMemorySummary();
 }
 

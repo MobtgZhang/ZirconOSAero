@@ -58,7 +58,15 @@ pub const Clipboard = struct {
         c.dib_h = 0;
         c.dib_byte_len = 0;
         const n = @min(s.len, c.text_buf.len);
-        @memcpy(c.text_buf[0..n], s[0..n]);
+        if (@intFromPtr(s.ptr) >= @intFromPtr(&c.text_buf) and
+            @intFromPtr(s.ptr) < @intFromPtr(&c.text_buf) + c.text_buf.len)
+        {
+            var tmp: [2048]u8 = undefined;
+            @memcpy(tmp[0..n], s[0..n]);
+            @memcpy(c.text_buf[0..n], tmp[0..n]);
+        } else {
+            @memcpy(c.text_buf[0..n], s[0..n]);
+        }
         c.text_len = n;
     }
 

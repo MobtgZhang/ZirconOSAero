@@ -1,7 +1,7 @@
 //! ZirconOSAero — driver module root (NT 6.1 target)
 //! Centralized kernel-mode driver load order (NT 6.x–style: bus → class → PnP stack).
-//! Reference: WDM driver model (Microsoft Learn / WDK), KMDF concepts mapped onto this kernel’s
-//! `io.Irp` + `registerDriver` / `createDevice`.
+//! Behavior-level notes: Microsoft Learn / public driver model descriptions; this kernel maps
+//! concepts onto `io.Irp` + `registerDriver` / `createDevice`.
 //!
 //! Categories:
 //!   bus/      - PCI/PCIe configuration (Type 1 host access)
@@ -15,6 +15,7 @@
 //! Each driver registers a `DriverObject` dispatch routine and one or more `DeviceObject`s.
 
 const builtin = @import("builtin");
+const io = @import("../io/io.zig");
 const klog = @import("../rtl/klog.zig");
 
 const is_x86 = (builtin.target.cpu.arch == .x86_64);
@@ -23,15 +24,15 @@ comptime {
     _ = @import("storage/block_dev_common.zig").BlockDevVTable;
 }
 
-pub const bus = if (is_x86) struct {
+const serial_bus_stub = struct {
+    pub fn init() void {}
+};
+
+pub const bus = struct {
     pub const pcie = @import("bus/pcie.zig");
     pub const i2c = @import("bus/i2c.zig");
     pub const spi = @import("bus/spi.zig");
-    pub const serial_bus = @import("bus/serial_bus.zig");
-} else struct {
-    pub const pcie = @import("bus/pcie.zig");
-    pub const i2c = @import("bus/i2c.zig");
-    pub const spi = @import("bus/spi.zig");
+    pub const serial_bus = if (is_x86) @import("bus/serial_bus.zig") else serial_bus_stub;
 };
 
 pub const timer = if (is_x86) struct {
@@ -44,6 +45,7 @@ pub const storage = if (is_x86) struct {
     pub const virtio_blk_pci = @import("storage/virtio_blk_pci.zig");
     pub const ahci = @import("storage/ahci.zig");
     pub const nvme_pci = @import("storage/nvme_pci.zig");
+    pub const boot_probe = @import("storage/boot_probe.zig");
 } else struct {};
 
 pub const video = struct {
@@ -93,14 +95,18 @@ pub const net = struct {
 
 var drivers_initialized: bool = false;
 
-pub fn init() void {
-    klog.info("Drivers: Initializing driver stack...", .{});
-
+fn initPcieEnumerateAndVirtioGpu() void {
     if (bus.pcie.supports_pci_config) {
         bus.pcie.init();
         bus.pcie.logPciEnumerationBindAndCapabilitiesBus0();
         video.virtio_gpu_pci.probe();
     }
+}
+
+pub fn init() void {
+    klog.info("Drivers: Initializing driver stack...", .{});
+
+    initPcieEnumerateAndVirtioGpu();
 
     const bopts_init = @import("build_options");
     if (builtin.target.cpu.arch == .loongarch64 and bopts_init.loongson_igpu) {
@@ -121,10 +127,12 @@ pub fn init() void {
         storage.ata.init();
         if (bus.pcie.supports_pci_config) {
             storage.ahci.probeAndLog(1);
-            storage.ahci.noteVfsVolumeIntentAfterProbe(1);
-            storage.ahci.tryInitMmioDmaPath(1);
             storage.nvme_pci.probeAndLog(1);
-            storage.nvme_pci.tryMapBar0AndLogCap(1);
+            storage.nvme_pci.tryInitMvpBlockPath(1);
+            if (!storage.nvme_pci.storageReady()) {
+                storage.ahci.noteVfsVolumeIntentAfterProbe(1);
+                storage.ahci.tryInitMmioDmaPath(1);
+            }
             net.virtio_net_pci.probeAndLog(1);
         }
         timer.pit_timer.init();
@@ -225,7 +233,12 @@ pub fn initAudioDrivers() void {
     });
 }
 
-/// GOP/桌面表面逻辑尺寸变化时统一更新指针边界、VirtIO ABS 基线与 DWM 光标状态（未来 `IOCTL_DISPLAY_SET_MODE` 亦应调用）。
+/// 运行期显示模式（与 `IOCTL_DISPLAY_SET_MODE` / `docs/specs/DisplayModeChange_NT61.md` 同源）。
+pub fn applyDesktopResolution(req: *const video.display.DisplaySetModeRequestV1) io.NTSTATUS {
+    return video.display.applyDesktopResolutionChange(req);
+}
+
+/// GOP/桌面表面逻辑尺寸变化时统一更新指针边界、VirtIO ABS 基线与 DWM 光标状态；`applyDesktopResolution` 内部亦会调用。
 pub fn notifyDisplayGeometryChanged(width: u32, height: u32) void {
     input.mouse.setScreenBounds(@intCast(width), @intCast(height));
     input.virtio_input_pci.resetPointerBaseline();

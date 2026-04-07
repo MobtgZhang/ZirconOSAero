@@ -113,7 +113,7 @@ pub fn readU16Le(buf: []const u8, off: usize) u16 {
 
 /// 在配置描述符 blob 中查找首个 HID 引导接口及其中断 IN 端点。
 /// 返回：interface 偏移、endpoint 偏移；未找到返回 null。
-pub fn findBootHidInterruptIn(cfg: []const u8) ?struct { iface_off: usize, ep_off: usize } {
+pub fn findBootHidInterruptIn(cfg: []const u8) ?struct { iface_off: usize, ep_off: usize, protocol: u8 } {
     var i: usize = 0;
     while (i + 2 <= cfg.len) {
         const len = cfg[i];
@@ -133,7 +133,7 @@ pub fn findBootHidInterruptIn(cfg: []const u8) ?struct { iface_off: usize, ep_of
                         const in = (addr & 0x80) != 0;
                         const xfer = ep.bmAttributes & 0x03;
                         if (in and xfer == 0x03) {
-                            return .{ .iface_off = i, .ep_off = j };
+                            return .{ .iface_off = i, .ep_off = j, .protocol = ifc.bInterfaceProtocol };
                         }
                     }
                     j += el;

@@ -113,8 +113,20 @@ pub fn seRegistryKeyOpenAllowed(tok: *const Token, desired_access: ob.ACCESS_MAS
 }
 
 /// `ObOpenObjectByName` 前置 **分派**：`\Registry\…` → 键；`\??\`、`\DosDevices\`、`\Device\`、**剥前缀后的 `X:\`** → 文件。
+///
+/// **B2 已接线「打开路径」清单**（在成功打开/创建内核对象前调用本函数或等价 `checkAccess`）：
+/// `NtOpenKey` / `NtCreateKey`（`\Registry\…`）、`NtCreateFile` / `NtOpenFile`（解析后的对象名）；
+/// 文件侧原有 `canOpenFileForAccess` 仍保留；`NtOpenProcess` / `NtOpenThread` 等走独立 `seProcessOpenAllowed` / `seThreadOpenAllowed`；
+/// `NtDuplicateObject` 为句柄表复制无路径。未列出的未来 `NtOpen*` 须在合入时补测。
 pub fn openNamedObjectAccessCheck(path: []const u8, desired: ob.ACCESS_MASK, tok: *const Token) bool {
     const n = ob.normalizeNtObjectPath(path);
+    // 受保护内核对象视图：`\KernelObjects\…` 或 `\Registry\…\KernelObjects\…` — 仅 SYSTEM 或 **提升** 令牌。
+    if (std.mem.indexOf(u8, n, "\\KernelObjects\\") != null) {
+        return tok.owner.eql(SYSTEM_SID) or tok.is_elevated;
+    }
+    if (n.len == 14 and std.mem.eql(u8, n, "\\KernelObjects")) {
+        return tok.owner.eql(SYSTEM_SID) or tok.is_elevated;
+    }
     if (n.len >= 9 and std.mem.startsWith(u8, n, "\\Registry")) {
         return seRegistryKeyOpenAllowed(tok, desired);
     }

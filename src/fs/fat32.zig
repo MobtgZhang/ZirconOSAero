@@ -277,6 +277,22 @@ pub const Fat32Volume = struct {
         }
         return free;
     }
+
+    /// 数据区簇数（自 BPB 推导，供 Explorer 总容量）。
+    pub fn getTotalDataClusters(self: *const Fat32Volume) u32 {
+        if (!self.is_mounted) return 0;
+        const total_sec: u32 = self.bpb.total_sectors_32;
+        if (total_sec == 0) return 0;
+        const reserved: u32 = self.bpb.reserved_sectors;
+        const fat_size: u32 = self.bpb.fat_size_32;
+        const num_fat: u32 = self.bpb.num_fats;
+        const spc: u32 = self.bpb.sectors_per_cluster;
+        if (spc == 0) return 0;
+        const fat_sectors = fat_size * num_fat;
+        if (total_sec <= reserved + fat_sectors) return 1;
+        const data_sectors = total_sec - reserved - fat_sectors;
+        return @max(data_sectors / spc, 1);
+    }
 };
 
 fn matchName(entry: *const DirEntry83, name: []const u8) bool {
@@ -332,6 +348,11 @@ fn fat32Open(f: *vfs.FileObject, path: []const u8, _: vfs.FileAccessMode) vfs.Fi
         if (c == '/' or c == '\\') name_start = i + 1;
     }
     const filename = path[name_start..];
+    if (filename.len == 0) {
+        f.file_type = .directory;
+        f.fs_data = 0;
+        return .success;
+    }
 
     const entry = volume.findEntry(filename);
     if (entry) |e| {
@@ -370,6 +391,15 @@ fn fat32Write(f: *vfs.FileObject, data: []const u8) vfs.WriteResult {
     f.position += bytes;
     if (f.position > f.file_size) f.file_size = f.position;
     return .{ .status = .success, .bytes_written = bytes };
+}
+
+fn fat32QuerySpace(_: u32, total: *u64, free: *u64) vfs.FileStatus {
+    if (!volume.is_mounted) return .not_mounted;
+    const tc = volume.getTotalDataClusters();
+    const fc = volume.getFreeClusters();
+    total.* = @as(u64, tc) * CLUSTER_SIZE;
+    free.* = @as(u64, fc) * CLUSTER_SIZE;
+    return .success;
 }
 
 fn fat32Readdir(_: *vfs.FileObject, entries: []vfs.DirEntry) usize {
@@ -476,6 +506,7 @@ pub fn getOps() vfs.FsOps {
         .mkdir = &fat32Mkdir,
         .remove = &fat32Remove,
         .stat = &fat32Stat,
+        .query_space = &fat32QuerySpace,
     };
 }
 

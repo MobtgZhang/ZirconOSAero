@@ -7,7 +7,7 @@
 //!
 //! **句柄关闭 vs `IRP_MJ_CLEANUP`（阶段 A 审计）**：`HandleTable.closeHandle` 递减 `handle_count` 并在 `ref_count` 至零时按类型调用 `cleanup_hooks`（当前 **Section** 已接线）。**文件对象**（`vfs.FileObject`）经 `vfs.close` 在 `FsOps.close` 之前调用可选的 **`FsOps.cleanup`**（等价 **IRP_MJ_CLEANUP** 子集）；各 FS 驱动在 `mount` 时填入。
 //!
-//! **命名打开与 SE（B3）**：`obOpenObjectByNameAccessProbe` 提供 **Key + File** 路径的 `se/token.zig` 分派；完整句柄创建仍由各 `Nt*` 路径完成。
+//! **命名打开与 SE（B2）**：`obOpenObjectByNameAccessProbe` 提供 **Key + File** 路径的 `se/token.zig` 分派；完整句柄创建仍由各 `Nt*` 路径完成。
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -258,6 +258,8 @@ pub const HandleTable = struct {
         return (entry.granted_access & required) == required;
     }
 
+    /// 与 `allocHandle` 共用 **referenceObject + handle_count++**；表满时 `allocHandle` 内 **对称回滚**
+    ///（`decHandleCount` + `dereferenceObject`），与 `closeHandle` 路径一致。
     pub fn duplicateHandle(self: *HandleTable, source: Handle, new_access: ACCESS_MASK) ?Handle {
         const entry = self.lookupHandle(source) orelse return null;
         const access = if (new_access != 0) new_access else entry.granted_access;

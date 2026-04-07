@@ -380,6 +380,9 @@ pub fn isInitialized() bool {
 fn populateDefaults() void {
     const hklm_root = createKey(.hklm, NO_PARENT, "HKEY_LOCAL_MACHINE") orelse return;
     const sys_key = createKey(.hklm, hklm_root, "SYSTEM") orelse return;
+    // B2：`\Registry\Machine\SYSTEM\KernelObjects\…` 受 `se/openNamedObjectAccessCheck` 保护（非提升令牌拒绝）。
+    const ko_key = createKey(.hklm, sys_key, "KernelObjects") orelse return;
+    _ = createKey(.hklm, ko_key, "Example") orelse return;
     const ccs_key = createKey(.hklm, sys_key, "CurrentControlSet") orelse return;
     const ctrl_key = createKey(.hklm, ccs_key, "Control") orelse return;
 
@@ -427,6 +430,12 @@ fn populateDefaults() void {
     // WOW64：`HKLM\SOFTWARE` 下 32 位视图逻辑映射的锚点（见 `wow64/redirect.zig`）。
     _ = createKey(.hklm, sw_key, "Wow6432Node") orelse return;
     const ms_win = createKey(.hklm, sw_key, "Microsoft") orelse return;
+    // B5：与 Win7 文档树对齐的 `...\Microsoft\Windows NT\CurrentVersion`（`CurrentBuild` 名 + 保留 `CurrentBuildNumber`）。
+    const ms_nt = createKey(.hklm, ms_win, "Windows NT") orelse return;
+    const win_nt_cv = createKey(.hklm, ms_nt, "CurrentVersion") orelse return;
+    _ = setValueSz(win_nt_cv, "CurrentVersion", "6.1");
+    _ = setValueSz(win_nt_cv, "CurrentBuild", "7601");
+    _ = setValueDword(win_nt_cv, "CurrentBuildNumber", os_version.buildNumber());
     const win_brand = createKey(.hklm, ms_win, "Windows") orelse return;
     const dwm_key = createKey(.hklm, win_brand, "DWM") orelse return;
     hklm_dwm_key = dwm_key;

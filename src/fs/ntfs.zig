@@ -268,6 +268,18 @@ pub const NtfsVolume = struct {
     pub fn getFreeRecords(self: *const NtfsVolume) usize {
         return MAX_MFT_RECORDS - self.mft_count;
     }
+
+    /// 简化 NTFS 卷：数据区上限即「总空间」近似。
+    pub fn getVolumeTotalBytes(self: *const NtfsVolume) u64 {
+        _ = self;
+        return MAX_DATA_SIZE;
+    }
+
+    /// 已用 ≈ 下一空闲簇指针之前的数据簇（Explorer 用量条近似）。
+    pub fn getVolumeFreeBytes(self: *const NtfsVolume) u64 {
+        const used = @as(u64, self.next_data_cluster) * CLUSTER_SIZE;
+        return self.getVolumeTotalBytes() -| used;
+    }
 };
 
 fn toUpperN(c: u8) u8 {
@@ -290,6 +302,11 @@ fn ntfsOpen(f: *vfs.FileObject, path: []const u8, _: vfs.FileAccessMode) vfs.Fil
         if (c == '/' or c == '\\') name_start = i + 1;
     }
     const filename = path[name_start..];
+    if (filename.len == 0) {
+        f.file_type = .directory;
+        f.fs_data = MFT_RECORD_ROOT;
+        return .success;
+    }
     const rec = ntfs_volume.findFile(filename, MFT_RECORD_ROOT) orelse return .not_found;
     f.file_size = rec.file_size;
     f.fs_data = rec.data_start_cluster;
@@ -316,6 +333,13 @@ fn ntfsWrite(f: *vfs.FileObject, data: []const u8) vfs.WriteResult {
     f.position += bytes;
     if (f.position > f.file_size) f.file_size = f.position;
     return .{ .status = .success, .bytes_written = bytes };
+}
+
+fn ntfsQuerySpace(_: u32, total: *u64, free: *u64) vfs.FileStatus {
+    if (!ntfs_volume.is_mounted) return .not_mounted;
+    total.* = ntfs_volume.getVolumeTotalBytes();
+    free.* = ntfs_volume.getVolumeFreeBytes();
+    return .success;
 }
 
 fn ntfsReaddir(f: *vfs.FileObject, entries: []vfs.DirEntry) usize {
@@ -367,6 +391,7 @@ pub fn getOps() vfs.FsOps {
         .mkdir = &ntfsMkdir,
         .remove = &ntfsRemove,
         .stat = &ntfsStat,
+        .query_space = &ntfsQuerySpace,
     };
 }
 

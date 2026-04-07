@@ -113,6 +113,9 @@ var desktop_ui_tid: u32 = 0;
 /// 由 `ke/scheduler.zig` 在 `init()` 中注册，避免 `process` ↔ `scheduler` 循环依赖。
 pub var before_release_process_address_space: ?*const fn (u32) void = null;
 
+/// `attachWow64IfPresent` 之后由调度器同步 `Thread.is_wow64`（避免 `process` 直接依赖 `scheduler` 形成环依赖）。
+pub var after_attach_wow64: ?*const fn (u32) void = null;
+
 pub fn registerDesktopSession(shell_pid: u32, ui_tid: u32) void {
     desktop_shell_pid = shell_pid;
     desktop_ui_tid = ui_tid;
@@ -184,7 +187,7 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
         return null;
     }
     panic_ctx.setPhase(0x0005_0011);
-    if (builtin.cpu.arch == .x86_64) {
+    if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .loongarch64 or builtin.cpu.arch == .mips64el) {
         if (!vm.linkKernelHalfMappings(space_ptr)) {
             vm.releaseProcessAddressSpace(space_ptr);
             freeProcessAddressSpaceSlot(space_ptr);
@@ -192,11 +195,13 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
             return null;
         }
         panic_ctx.setPhase(0x0005_0012);
-        if (!kuser_shared.installInProcessAddressSpace(space_ptr)) {
-            vm.releaseProcessAddressSpace(space_ptr);
-            freeProcessAddressSpaceSlot(space_ptr);
-            panic_ctx.setPhase(0);
-            return null;
+        if (builtin.cpu.arch == .x86_64) {
+            if (!kuser_shared.installInProcessAddressSpace(space_ptr)) {
+                vm.releaseProcessAddressSpace(space_ptr);
+                freeProcessAddressSpaceSlot(space_ptr);
+                panic_ctx.setPhase(0);
+                return null;
+            }
         }
     }
     panic_ctx.setPhase(0x0005_0013);
@@ -255,6 +260,7 @@ pub fn attachWow64IfPresent(pid: u32, peb32_va: u64, teb32_va: u64) void {
     p.is_wow64 = true;
     p.peb32_user_va = peb32_va;
     p.teb32_user_va = teb32_va;
+    if (after_attach_wow64) |hook| hook(pid);
 }
 
 pub fn findProcess(pid: u32) ?*Process {

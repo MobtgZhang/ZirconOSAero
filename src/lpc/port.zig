@@ -228,6 +228,7 @@ pub fn requestWaitReplyPort(
     if (client_port.owner_pid != client_pid) return null;
     if (client_port.connected_port == 0) return null;
     const server_port = findPortById(client_port.connected_port) orelse return null;
+    // B4：入队目标为 **服务端端口 owner_pid**（监听/服务进程），而非调用方 current_pid。
     _ = ipc.send(client_pid, server_port.owner_pid, opcode, data);
 
     if (opcode >= 0x10000 and opcode <= 0x1FFFF) {

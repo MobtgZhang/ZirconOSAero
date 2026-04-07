@@ -96,6 +96,8 @@ pub const FsOps = struct {
     remove: ?*const fn ([]const u8) FileStatus = null,
     stat: ?*const fn ([]const u8, *DirEntry) FileStatus = null,
     seek: ?*const fn (*FileObject, i64, SeekOrigin) FileStatus = null,
+    /// 卷总/可用字节（Explorer / DiskPart）；未实现则返回 `.not_implemented`。
+    query_space: ?*const fn (mount_idx: u32, *u64, *u64) FileStatus = null,
 };
 
 pub const ReadResult = struct {
@@ -176,7 +178,8 @@ fn volumeDeviceName(mount_idx: usize, out: *[32]u8) []const u8 {
     return out[0..len];
 }
 
-fn driveLetterFromPrefix(prefix: []const u8) ?u8 {
+/// `C:\` / `D:/` 等 DOS 盘符路径 → 大写字母；否则 `null`。
+pub fn driveLetterFromDosPath(prefix: []const u8) ?u8 {
     if (prefix.len < 2) return null;
     var c0 = prefix[0];
     if (!((c0 >= 'A' and c0 <= 'Z') or (c0 >= 'a' and c0 <= 'z'))) return null;
@@ -342,7 +345,7 @@ pub fn mount(prefix: []const u8, fs_type: FsType, ops: FsOps, device_idx: u32, l
             if (io.getDeviceObject(didx)) |dobj| {
                 const ext: *align(1) VolumeDeviceExtension = @ptrCast(io.IoGetDeviceExtension(dobj));
                 ext.* = .{ .mount_idx = @intCast(idx_this) };
-                if (driveLetterFromPrefix(prefix)) |letter| {
+                if (driveLetterFromDosPath(prefix)) |letter| {
                     registerDosDriveSymlink(letter, dobj);
                 }
             }
@@ -511,6 +514,47 @@ fn getMountIndex(mp: *MountPoint) usize {
 
 pub fn getMountCount() usize {
     return mount_count;
+}
+
+/// 活跃挂载点中 **带盘符** 的项（`X:\`），供 Explorer / DiskPart 枚举。
+pub const MountInfo = struct {
+    mount_idx: u32,
+    drive_letter: u8,
+    fs_type: FsType,
+    /// 生命周期：直至该挂载被 `unmount` 改写；勿跨帧长期保存指针（可每帧快照）。
+    label: []const u8,
+    prefix: []const u8,
+};
+
+/// 将 DOS 卷写入 `out`，返回写入条数（至多 `out.len`）。
+pub fn copyDosDriveMountInfos(out: []MountInfo) usize {
+    var n: usize = 0;
+    for (mounts[0..mount_count], 0..) |*mp, i| {
+        if (!mp.is_active) continue;
+        const prefix = mp.prefix[0..mp.prefix_len];
+        const letter = driveLetterFromDosPath(prefix) orelse continue;
+        if (n >= out.len) break;
+        out[n] = .{
+            .mount_idx = @intCast(i),
+            .drive_letter = letter,
+            .fs_type = mp.fs_type,
+            .label = mp.label[0..mp.label_len],
+            .prefix = prefix,
+        };
+        n += 1;
+    }
+    return n;
+}
+
+/// `total_bytes` / `free_bytes`：卷容量与可用空间；无回调时 `.not_implemented`。
+pub fn queryMountSpace(mount_idx: usize, total_bytes: *u64, free_bytes: *u64) FileStatus {
+    if (mount_idx >= mount_count) return .invalid_parameter;
+    const mp = &mounts[mount_idx];
+    if (!mp.is_active) return .not_mounted;
+    if (mp.ops.query_space) |q| {
+        return q(@intCast(mount_idx), total_bytes, free_bytes);
+    }
+    return .not_implemented;
 }
 
 pub fn getFileCount() usize {

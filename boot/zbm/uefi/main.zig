@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const unicode = std.unicode;
 
 const menu = @import("menu_common.zig");
+const gop_pitch_fixup = @import("gop_pitch_fixup.zig");
 
 const arch_name = switch (builtin.target.cpu.arch) {
     .x86_64 => "x86_64",
@@ -330,7 +331,7 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
         .addr = @intCast(mode.frame_buffer_base),
         .width = info.horizontal_resolution,
         .height = info.vertical_resolution,
-        .pitch = info.pixels_per_scan_line * (@as(u32, bpp) / 8),
+        .pitch = gop_pitch_fixup.effectivePitchBytes(info.horizontal_resolution, info.pixels_per_scan_line, bpp),
         .bpp = bpp,
         .pixel_bgr = pixel_bgr,
     };
@@ -341,6 +342,8 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
     printDecimal(out, fb_info.height);
     puts(out, "x");
     printDecimal(out, @as(u32, bpp));
+    puts(out, " pitch_B=");
+    printDecimal(out, fb_info.pitch);
     puts(out, "\r\n");
 
     return fb_info;

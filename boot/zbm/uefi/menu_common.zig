@@ -3,8 +3,13 @@
 //! Windows 7 文本启动管理器风格：灰顶栏/灰底栏、全行高亮与右侧 `>`、F8 高级选项、
 //! Tools 区与 TAB 切换、ESC 退出应用返回固件。
 const std = @import("std");
+const builtin = @import("builtin");
 const uefi = std.os.uefi;
 const unicode = std.unicode;
+
+const la = @import("loongarch_tcg_mem.zig");
+const zto = @import("zbm_text_out.zig");
+const zcall = @import("zbm_uefi_calls.zig");
 
 const KeyInput = uefi.protocol.SimpleTextInput.Key.Input;
 
@@ -84,6 +89,33 @@ fn rowToolsFirst() usize {
 
 const row_footer: usize = 24;
 
+fn bootEntryDescription(idx: usize) []const u8 {
+    if (builtin.cpu.arch != .loongarch64) return entries[idx].description;
+    const base = @intFromPtr(&entries) +% idx *% @sizeOf(BootEntry) +% @offsetOf(BootEntry, "description");
+    return la.sliceFromRawParts(base);
+}
+
+fn bootEntryCmdline(idx: usize) []const u8 {
+    if (builtin.cpu.arch != .loongarch64) return entries[idx].cmdline;
+    const base = @intFromPtr(&entries) +% idx *% @sizeOf(BootEntry) +% @offsetOf(BootEntry, "cmdline");
+    return la.sliceFromRawParts(base);
+}
+
+/// 供 `main_loongarch64` 等在 LoongArch 上避免 `entries[idx]` 变址访存。
+pub fn bootEntryDescriptionFor(idx: usize) []const u8 {
+    return bootEntryDescription(idx);
+}
+
+pub fn bootEntryCmdlineFor(idx: usize) []const u8 {
+    return bootEntryCmdline(idx);
+}
+
+fn toolDescription(idx: usize) []const u8 {
+    if (builtin.cpu.arch != .loongarch64) return tool_descriptions[idx];
+    const base = @intFromPtr(&tool_descriptions) +% idx *% @sizeOf([]const u8);
+    return la.sliceFromRawParts(base);
+}
+
 pub fn initBootEntries(comptime desktop_theme_name: []const u8, kernel_path: []const u8) void {
     entry_count = 0;
     menu_focus = .os_list;
@@ -127,7 +159,7 @@ pub fn runMenuLoop(
     debug_mode: bool,
 ) MenuResult {
     bs = b;
-    g_text_in_ex = b.locateProtocol(uefi.protocol.SimpleTextInputEx, null) catch null;
+    g_text_in_ex = zcall.locateSimpleTextInputEx(b);
     var poll_count: u32 = 0;
     var need_full_redraw = true;
 
@@ -228,7 +260,7 @@ pub fn runMenuLoop(
         }
 
         if (timer_active) {
-            _ = bs.stall(5_000) catch {};
+            zcall.stallMicroseconds(bs, 5_000);
             poll_count += 1;
             if (poll_count >= 200) {
                 poll_count = 0;
@@ -242,7 +274,7 @@ pub fn runMenuLoop(
             const con_in: *uefi.protocol.SimpleTextInput = @ptrCast(@alignCast(@constCast(con_in_ptr)));
             waitForKey(bs, con_in);
         } else {
-            _ = bs.stall(100_000) catch {};
+            zcall.stallMicroseconds(bs, 100_000);
         }
     }
 
@@ -250,20 +282,20 @@ pub fn runMenuLoop(
 }
 
 fn readKeyStrokeSimple(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
-    return cin.readKeyStroke() catch null;
+    return zcall.readKeyStrokeSimple(cin);
 }
 
 fn tryReadKeyUnified(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
     if (g_text_in_ex) |ex| {
-        if (ex.readKeyStroke()) |full| {
+        if (zcall.readKeyStrokeEx(ex)) |full| {
             return full.input;
-        } else |_| {}
-        if (bs.checkEvent(ex.wait_for_key_ex) catch false) {
-            if (ex.readKeyStroke()) |full| return full.input else |_| {}
+        }
+        if (zcall.checkEventSignaled(bs, ex.wait_for_key_ex)) {
+            if (zcall.readKeyStrokeEx(ex)) |full| return full.input;
         }
     }
     if (readKeyStrokeSimple(cin)) |k| return k;
-    if (bs.checkEvent(cin.wait_for_key) catch false) {
+    if (zcall.checkEventSignaled(bs, cin.wait_for_key)) {
         return readKeyStrokeSimple(cin);
     }
     return null;
@@ -275,13 +307,9 @@ fn waitForKey(b: *uefi.tables.BootServices, cin: *uefi.protocol.SimpleTextInput)
 
         if (g_text_in_ex) |ex| {
             const evs = [_]uefi.Event{ ex.wait_for_key_ex, cin.wait_for_key };
-            _ = b.waitForEvent(evs[0..]) catch {
-                _ = b.stall(10_000) catch {};
-            };
+            zcall.waitForEventWithStallFallback(b, evs[0..]);
         } else {
-            _ = b.waitForEvent(&.{cin.wait_for_key}) catch {
-                _ = b.stall(10_000) catch {};
-            };
+            zcall.waitForEventWithStallFallback(b, &.{cin.wait_for_key});
         }
     }
 }
@@ -294,33 +322,74 @@ const SPACES_79_U16 = init: {
 };
 
 fn clearTextRow(out: anytype, row: usize) void {
-    _ = out.setCursorPosition(0, row) catch return;
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-    _ = out.outputString(@as([*:0]const u16, @ptrCast(&SPACES_79_U16))) catch {};
-    _ = out.setCursorPosition(0, row) catch {};
+    zto.setCursorPosition(out, 0, row);
+    zto.setAttribute(out, Attr.normal);
+    zto.outputString(out, @as([*:0]const u16, @ptrCast(&SPACES_79_U16)));
+    zto.setCursorPosition(out, 0, row);
 }
 
 const LINE_MAX = 78;
 
-fn printLinePadded(out: anytype, prefix: []const u8, desc: []const u8) void {
+/// LoongArch：避免把 `[]const u8` 作参数/返回值在栈上展开，LLVM 可能为 slice 相关路径生成 **`ldx.d` 跳转表**（QEMU TCG #INE）。
+fn printLinePaddedLa(out: anytype, prefix: []const u8, desc_ptr: [*]const u8, desc_len: usize) void {
     var buf: [80]u16 = undefined;
     var i: usize = 0;
-    for (prefix) |c| {
-        buf[i] = @intCast(c);
+    var pi: usize = 0;
+    while (pi < prefix.len) : (pi += 1) {
+        buf[i] = @intCast(la.loadU8(prefix.ptr, pi));
         i += 1;
     }
-    for (desc) |c| {
+    var di: usize = 0;
+    while (di < desc_len) : (di += 1) {
         if (i >= LINE_MAX) break;
-        buf[i] = @intCast(c);
+        buf[i] = @intCast(la.loadU8(desc_ptr, di));
         i += 1;
     }
     while (i < LINE_MAX) : (i += 1) buf[i] = ' ';
     buf[i] = 0;
-    _ = out.outputString(@as([*:0]const u16, @ptrCast(&buf))) catch {};
+    zto.outputString(out, @as([*:0]const u16, @ptrCast(&buf)));
+}
+
+fn printOsEntryHighlightedLa(out: anytype, desc_ptr: [*]const u8, desc_len: usize) void {
+    zto.setAttribute(out, Attr.highlight);
+    var buf: [80]u16 = undefined;
+    var i: usize = 0;
+    const left_margin = 4;
+    while (i < left_margin) : (i += 1) buf[i] = ' ';
+    var di: usize = 0;
+    const max_desc = LINE_MAX - left_margin - 2;
+    while (di < desc_len and i < left_margin + max_desc) {
+        buf[i] = @intCast(la.loadU8(desc_ptr, di));
+        i += 1;
+        di += 1;
+    }
+    while (i < LINE_MAX - 1) : (i += 1) buf[i] = ' ';
+    buf[LINE_MAX - 1] = '>';
+    buf[LINE_MAX] = 0;
+    zto.outputString(out, @as([*:0]const u16, @ptrCast(&buf)));
+}
+
+fn printLinePadded(out: anytype, prefix: []const u8, desc: []const u8) void {
+    var buf: [80]u16 = undefined;
+    var i: usize = 0;
+    var pi: usize = 0;
+    while (pi < prefix.len) : (pi += 1) {
+        buf[i] = @intCast(la.loadU8(prefix.ptr, pi));
+        i += 1;
+    }
+    var di: usize = 0;
+    while (di < desc.len) : (di += 1) {
+        if (i >= LINE_MAX) break;
+        buf[i] = @intCast(la.loadU8(desc.ptr, di));
+        i += 1;
+    }
+    while (i < LINE_MAX) : (i += 1) buf[i] = ' ';
+    buf[i] = 0;
+    zto.outputString(out, @as([*:0]const u16, @ptrCast(&buf)));
 }
 
 fn printOsEntryHighlighted(out: anytype, desc: []const u8) void {
-    _ = out.setAttribute(@bitCast(Attr.highlight)) catch {};
+    zto.setAttribute(out, Attr.highlight);
     var buf: [80]u16 = undefined;
     var i: usize = 0;
     const left_margin = 4;
@@ -328,14 +397,14 @@ fn printOsEntryHighlighted(out: anytype, desc: []const u8) void {
     var di: usize = 0;
     const max_desc = LINE_MAX - left_margin - 2;
     while (di < desc.len and i < left_margin + max_desc) {
-        buf[i] = @intCast(desc[di]);
+        buf[i] = @intCast(la.loadU8(desc.ptr, di));
         i += 1;
         di += 1;
     }
     while (i < LINE_MAX - 1) : (i += 1) buf[i] = ' ';
     buf[LINE_MAX - 1] = '>';
     buf[LINE_MAX] = 0;
-    _ = out.outputString(@as([*:0]const u16, @ptrCast(&buf))) catch {};
+    zto.outputString(out, @as([*:0]const u16, @ptrCast(&buf)));
 }
 
 fn printToolEntryHighlighted(out: anytype, desc: []const u8) void {
@@ -343,28 +412,28 @@ fn printToolEntryHighlighted(out: anytype, desc: []const u8) void {
 }
 
 fn drawHeaderBar(out: anytype) void {
-    _ = out.setCursorPosition(0, 0) catch return;
-    _ = out.setAttribute(@bitCast(Attr.highlight)) catch {};
-    _ = out.outputString(@as([*:0]const u16, @ptrCast(&SPACES_79_U16))) catch {};
+    zto.setCursorPosition(out, 0, 0);
+    zto.setAttribute(out, Attr.highlight);
+    zto.outputString(out, @as([*:0]const u16, @ptrCast(&SPACES_79_U16)));
     const title = "ZirconOSAero Boot Manager";
     const col = (80 - title.len) / 2;
-    _ = out.setCursorPosition(col, 0) catch return;
+    zto.setCursorPosition(out, col, 0);
     putsRuntime(out, title);
 }
 
 fn drawFooterBar(out: anytype) void {
-    _ = out.setCursorPosition(0, row_footer) catch return;
-    _ = out.setAttribute(@bitCast(Attr.highlight)) catch {};
-    _ = out.outputString(@as([*:0]const u16, @ptrCast(&SPACES_79_U16))) catch {};
+    zto.setCursorPosition(out, 0, row_footer);
+    zto.setAttribute(out, Attr.highlight);
+    zto.outputString(out, @as([*:0]const u16, @ptrCast(&SPACES_79_U16)));
     const left = "ENTER=Choose";
     const mid = "TAB=Menu";
     const right = "ESC=Cancel";
-    _ = out.setCursorPosition(2, row_footer) catch return;
+    zto.setCursorPosition(out, 2, row_footer);
     putsRuntime(out, left);
     const mid_col = (80 - mid.len) / 2;
-    _ = out.setCursorPosition(mid_col, row_footer) catch return;
+    zto.setCursorPosition(out, mid_col, row_footer);
     putsRuntime(out, mid);
-    _ = out.setCursorPosition(80 - right.len - 1, row_footer) catch return;
+    zto.setCursorPosition(out, 80 - right.len - 1, row_footer);
     putsRuntime(out, right);
 }
 
@@ -373,13 +442,25 @@ fn redrawOsEntryRows(out: anytype) void {
     while (i < entry_count) : (i += 1) {
         const row = rowEntryFirst() + i;
         clearTextRow(out, row);
-        _ = out.setCursorPosition(0, row) catch return;
+        zto.setCursorPosition(out, 0, row);
         const hi = (menu_focus == .os_list) and (i == selected);
-        if (hi) {
-            printOsEntryHighlighted(out, entries[i].description);
+        if (builtin.cpu.arch == .loongarch64) {
+            const desc_base = @intFromPtr(&entries) +% i *% @sizeOf(BootEntry) +% @offsetOf(BootEntry, "description");
+            const dptr: [*]const u8 = @ptrFromInt(la.loadU64Abs(desc_base));
+            const dlen = la.loadU64Abs(desc_base +% 8);
+            if (hi) {
+                printOsEntryHighlightedLa(out, dptr, dlen);
+            } else {
+                zto.setAttribute(out, Attr.normal);
+                printLinePaddedLa(out, "    ", dptr, dlen);
+            }
         } else {
-            _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-            printLinePadded(out, "    ", entries[i].description);
+            if (hi) {
+                printOsEntryHighlighted(out, bootEntryDescription(i));
+            } else {
+                zto.setAttribute(out, Attr.normal);
+                printLinePadded(out, "    ", bootEntryDescription(i));
+            }
         }
     }
 }
@@ -390,13 +471,25 @@ fn redrawToolRows(out: anytype) void {
     while (t < tool_descriptions.len) : (t += 1) {
         const row = base + t;
         clearTextRow(out, row);
-        _ = out.setCursorPosition(0, row) catch return;
+        zto.setCursorPosition(out, 0, row);
         const hi = (menu_focus == .tools_list) and (t == tool_selected);
-        if (hi) {
-            printToolEntryHighlighted(out, tool_descriptions[t]);
+        if (builtin.cpu.arch == .loongarch64) {
+            const desc_base = @intFromPtr(&tool_descriptions) +% t *% @sizeOf([]const u8);
+            const dptr: [*]const u8 = @ptrFromInt(la.loadU64Abs(desc_base));
+            const dlen = la.loadU64Abs(desc_base +% 8);
+            if (hi) {
+                printOsEntryHighlightedLa(out, dptr, dlen);
+            } else {
+                zto.setAttribute(out, Attr.normal);
+                printLinePaddedLa(out, "    ", dptr, dlen);
+            }
         } else {
-            _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
-            printLinePadded(out, "    ", tool_descriptions[t]);
+            if (hi) {
+                printToolEntryHighlighted(out, toolDescription(t));
+            } else {
+                zto.setAttribute(out, Attr.normal);
+                printLinePadded(out, "    ", toolDescription(t));
+            }
         }
     }
 }
@@ -404,11 +497,11 @@ fn redrawToolRows(out: anytype) void {
 fn refreshTimerLine(out: anytype) void {
     if (!timer_active or countdown == 0) return;
     const row = rowTimer();
-    _ = out.setCursorPosition(0, row) catch return;
-    _ = out.enableCursor(false) catch {};
+    zto.setCursorPosition(out, 0, row);
+    zto.enableCursor(out, false);
     clearTextRow(out, row);
-    _ = out.setCursorPosition(0, row) catch return;
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+    zto.setCursorPosition(out, 0, row);
+    zto.setAttribute(out, Attr.normal);
     puts(out, "    Seconds until the highlighted choice will be started automatically: ");
     printDecimal(out, countdown);
     puts(out, "  ");
@@ -417,19 +510,19 @@ fn refreshTimerLine(out: anytype) void {
 pub fn displayBootManagerMenu(out: anytype, arch_name: []const u8, debug_mode: bool) void {
     _ = arch_name;
     _ = debug_mode;
-    out.reset(false) catch {};
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+    zto.reset(out, false);
+    zto.setAttribute(out, Attr.normal);
 
     drawHeaderBar(out);
 
     clearTextRow(out, 1);
 
-    _ = out.setCursorPosition(0, 2) catch return;
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+    zto.setCursorPosition(out, 0, 2);
+    zto.setAttribute(out, Attr.normal);
     puts(out, "    Choose an operating system to start, or press TAB to select a tool:\r\n");
 
-    _ = out.setCursorPosition(0, 3) catch return;
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
+    zto.setCursorPosition(out, 0, 3);
+    zto.setAttribute(out, Attr.dim);
     puts(out, "    (Use the arrow keys to highlight your choice, then press ENTER.)\r\n");
 
     clearTextRow(out, 4);
@@ -439,15 +532,15 @@ pub fn displayBootManagerMenu(out: anytype, arch_name: []const u8, debug_mode: b
     const gap_row = 5 + entry_count;
     clearTextRow(out, gap_row);
 
-    _ = out.setCursorPosition(0, rowF8()) catch return;
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+    zto.setCursorPosition(out, 0, rowF8());
+    zto.setAttribute(out, Attr.normal);
     puts(out, "    To specify an advanced option for this choice, press F8.\r\n");
 
     clearTextRow(out, rowF8() + 1);
 
     if (timer_active and countdown > 0) {
-        _ = out.setCursorPosition(0, rowTimer()) catch return;
-        _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+        zto.setCursorPosition(out, 0, rowTimer());
+        zto.setAttribute(out, Attr.normal);
         puts(out, "    Seconds until the highlighted choice will be started automatically: ");
         printDecimal(out, countdown);
         puts(out, "\r\n");
@@ -457,8 +550,8 @@ pub fn displayBootManagerMenu(out: anytype, arch_name: []const u8, debug_mode: b
 
     clearTextRow(out, rowTimer() + 1);
 
-    _ = out.setCursorPosition(0, rowToolsLabel()) catch return;
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+    zto.setCursorPosition(out, 0, rowToolsLabel());
+    zto.setAttribute(out, Attr.normal);
     puts(out, "    Tools:\r\n");
 
     redrawToolRows(out);
@@ -469,12 +562,12 @@ pub fn displayBootManagerMenu(out: anytype, arch_name: []const u8, debug_mode: b
     }
 
     drawFooterBar(out);
-    _ = out.enableCursor(false) catch {};
+    zto.enableCursor(out, false);
 }
 
 fn showToolPlaceholderScreen(out: anytype, cin: ?*const anyopaque) void {
-    out.reset(false) catch {};
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+    zto.reset(out, false);
+    zto.setAttribute(out, Attr.normal);
     puts(out, "\r\n");
     puts(out, "    ZirconOS Boot Manager\r\n\r\n");
     puts(out, "    The selected tool is not available in this build of ZBM.\r\n");
@@ -487,20 +580,55 @@ fn showToolPlaceholderScreen(out: anytype, cin: ?*const anyopaque) void {
 }
 
 fn puts(out: anytype, comptime s: []const u8) void {
-    _ = out.outputString(unicode.utf8ToUtf16LeStringLiteral(s)) catch false;
+    zto.outputString(out, unicode.utf8ToUtf16LeStringLiteral(s));
 }
 
 fn putsRuntime(out: anytype, s: []const u8) void {
-    for (s) |c| {
+    var si: usize = 0;
+    while (si < s.len) : (si += 1) {
+        const c = la.loadU8(s.ptr, si);
         var buf: [1:0]u16 = .{@intCast(c)};
-        _ = out.outputString(&buf) catch false;
+        zto.outputString(out, &buf);
+    }
+}
+
+/// `displayBootProgress` / 高级选项等：LoongArch 上避免经 `[]const u8` 传参。
+pub fn putsRuntimeBootEntryDesc(out: anytype, idx: usize) void {
+    if (builtin.cpu.arch == .loongarch64) {
+        const base = @intFromPtr(&entries) +% idx *% @sizeOf(BootEntry) +% @offsetOf(BootEntry, "description");
+        const dptr: [*]const u8 = @ptrFromInt(la.loadU64Abs(base));
+        const dlen = la.loadU64Abs(base +% 8);
+        var si: usize = 0;
+        while (si < dlen) : (si += 1) {
+            const c = la.loadU8(dptr, si);
+            var buf: [1:0]u16 = .{@intCast(c)};
+            zto.outputString(out, &buf);
+        }
+    } else {
+        putsRuntime(out, bootEntryDescription(idx));
+    }
+}
+
+pub fn putsRuntimeBootEntryCmdline(out: anytype, idx: usize) void {
+    if (builtin.cpu.arch == .loongarch64) {
+        const base = @intFromPtr(&entries) +% idx *% @sizeOf(BootEntry) +% @offsetOf(BootEntry, "cmdline");
+        const dptr: [*]const u8 = @ptrFromInt(la.loadU64Abs(base));
+        const dlen = la.loadU64Abs(base +% 8);
+        var si: usize = 0;
+        while (si < dlen) : (si += 1) {
+            const c = la.loadU8(dptr, si);
+            var buf: [1:0]u16 = .{@intCast(c)};
+            zto.outputString(out, &buf);
+        }
+    } else {
+        putsRuntime(out, bootEntryCmdline(idx));
     }
 }
 
 pub fn printDecimal(out: anytype, value: u32) void {
     if (value >= 10) printDecimal(out, value / 10);
     var buf: [1:0]u16 = .{@intCast('0' + (value % 10))};
-    _ = out.outputString(&buf) catch false;
+    zto.outputString(out, &buf);
 }
 
 pub fn displayAdvancedOptions(
@@ -514,12 +642,12 @@ pub fn displayAdvancedOptions(
     debug_mode: bool,
 ) void {
     bs = boot_services;
-    g_text_in_ex = boot_services.locateProtocol(uefi.protocol.SimpleTextInputEx, null) catch null;
-    out.reset(false) catch {};
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+    g_text_in_ex = zcall.locateSimpleTextInputEx(boot_services);
+    zto.reset(out, false);
+    zto.setAttribute(out, Attr.normal);
     puts(out, "\r\n");
     puts(out, "                ZirconOS Advanced Boot Options                                 \r\n");
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
+    zto.setAttribute(out, Attr.dim);
     puts(out, "\r\n");
     puts(out, "    Boot Information:\r\n");
     puts(out, "      Architecture : ");
@@ -527,7 +655,7 @@ pub fn displayAdvancedOptions(
     puts(out, "\r\n");
     puts(out, "      Boot Method  : UEFI Application\r\n");
     puts(out, "      Firmware     : ");
-    _ = out.outputString(firmware_vendor) catch {};
+    zto.outputString(out, firmware_vendor);
     puts(out, "\r\n");
 
     const major = revision >> 16;
@@ -551,7 +679,7 @@ pub fn displayAdvancedOptions(
     printDecimal(out, @intCast(entry_count));
     puts(out, "\r\n");
     puts(out, "      Default      : ");
-    putsRuntime(out, entries[0].description);
+    putsRuntimeBootEntryDesc(out, 0);
     puts(out, "\r\n");
     puts(out, "      Timeout      : ");
     printDecimal(out, DEFAULT_TIMEOUT);
@@ -571,7 +699,7 @@ pub fn displayAdvancedOptions(
 
     puts(out, "\r\n");
     puts(out, "  Press any key to return to boot menu...                                     \r\n");
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
+    zto.setAttribute(out, Attr.dim);
 
     if (cin) |c| {
         const con_in: *uefi.protocol.SimpleTextInput = @ptrCast(@alignCast(@constCast(c)));
@@ -590,8 +718,10 @@ pub fn printHex64(out: anytype, value: u64) void {
         buf[i] = hex[@intCast(v & 0xF)];
         v >>= 4;
     }
-    for (buf) |c| {
+    var j: usize = 0;
+    while (j < buf.len) : (j += 1) {
+        const c = la.loadU8(@ptrCast(&buf), j);
         var u16buf: [1:0]u16 = .{@intCast(c)};
-        _ = out.outputString(&u16buf) catch false;
+        zto.outputString(out, &u16buf);
     }
 }

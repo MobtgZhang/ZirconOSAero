@@ -1,12 +1,17 @@
 //! ZirconOSAero Boot Manager (ZBM) — LoongArch64 UEFI（与 `boot/zbm/uefi/main.zig` 共用 menu_common）
 //!
 //! Zig build-obj + GNU-EFI/ld + objcopy 或 C stub 流程（linker_stub.lds）生成 BOOTLOONGARCH64.EFI。
+//! 默认 Zig 路径：`build.zig` 中 `cpu_model=baseline` + `code_model=medium`，减轻 la464 不支持的指令与 PCREL 溢出（历史 INE/错址）。
 const std = @import("std");
+const builtin = @import("builtin");
 const uefi = std.os.uefi;
 const unicode = std.unicode;
 const elf = std.elf;
 
 const menu = @import("menu_common.zig");
+const la = @import("loongarch_tcg_mem.zig");
+const zto = @import("zbm_text_out.zig");
+const zcall = @import("zbm_uefi_calls.zig");
 
 const arch_name = "loongarch64";
 const debug_mode = @import("build_options").debug;
@@ -16,10 +21,25 @@ const preferred_fb_height = @import("build_options").zbm_preferred_fb_height;
 const KERNEL_PATH = menu.KERNEL_PATH;
 const Attr = menu.Attr;
 
+/// CSR **EUEN**（0x2）：bit0 = PLV0 FPU 使能。EDK2/QEMU 常以 `EUEN=0` 进入 EFI；Zig `baseline` 含 **+d**，未开 FPE 时硬件浮点可 #INE。
+/// 另：LLVM 常为大型 `switch`/跳转表生成 **`ldx.d`**；部分 **`-cpu la464` QEMU TCG** 对该类指令支持不完整时会在菜单循环后 #INE（与 EUEN 无关）——见 `Makefile` 的 `QEMU_LOONGARCH64_CPU`（默认 `max`）。
+fn enableLoongArchExtendedUnitsEarly() void {
+    const CSR_EUEN: comptime_int = 0x2;
+    const EUEN_FPE: u64 = 1 << 0;
+    asm volatile ("csrwr %[v], %[c]"
+        :
+        : [v] "r" (EUEN_FPE),
+          [c] "i" (CSR_EUEN),
+    );
+}
+
 // ── LoongArch EFI handoff（与 src/arch/loongarch64/boot.zig 一致）──
 
 const ZIRCON_LOONGARCH_EFI_MAGIC: u32 = 0x6372697A;
-const HANDOFF_PHYS: usize = 0x100000;
+/// 须落在 **已加载内核映像之前** 的 RAM 空洞内。`0x100000`（1MiB）在部分 EDK2/QEMU 路径上与固件保留区重叠，`AllocatePages(AtAddress)` 可长时间挂起；`0x1FF000` 为内核首段 PhysAddr `0x200000` 前一页。
+const HANDOFF_PHYS: usize = 0x1FF000;
+/// `EfiHandoff` 与 `mmap` 表（`MMAP_STORE_OFF`）之间的空洞；`ExitBootServices` 会回收 ZBM `.bss`，故跳转目标须存在此已分配页内而非 Loader 映像。
+const HANDOFF_KERNEL_ENTRY_SLOT: usize = HANDOFF_PHYS + 0x100;
 
 /// 与 `src/arch/loongarch64/boot.zig` 中 `EfiHandoff` 布局一致（v2 GOP / v3 mmap）
 const EfiHandoff = extern struct {
@@ -49,32 +69,43 @@ const KernelMmapEntry = extern struct {
 
 const MMAP_STORE_OFF: usize = 0x200;
 
-fn efiToKernelMmapType(mt: uefi.tables.MemoryType) u32 {
-    return switch (mt) {
-        .conventional_memory => 1,
-        .acpi_reclaim_memory => 3,
-        .unusable_memory, .reserved_memory_type => 5,
-        else => 2,
-    };
+/// 仅接受 **U32 内存类型值**。LLVM 会把稠密枚举映射优化成小跳转表（`ldx.w`）；用 **asm 屏障**打断值域分析，保留逐次比较。
+noinline fn efiToKernelMmapTypeU32(mt: u32) u32 {
+    const MT = uefi.tables.MemoryType;
+    var m = mt;
+    asm volatile (""
+        : [m] "+r" (m),
+    );
+    if (m == @intFromEnum(MT.conventional_memory)) return 1;
+    if (m == @intFromEnum(MT.acpi_reclaim_memory)) return 3;
+    if (m == @intFromEnum(MT.unusable_memory)) return 5;
+    if (m == @intFromEnum(MT.reserved_memory_type)) return 5;
+    return 2;
 }
 
-fn fillHandoffMmap(page: [*]u8, mmap_slice: uefi.tables.MemoryMapSlice) struct { count: u32, esz: u32 } {
+fn fillHandoffMmapInto(page: [*]u8, mmap_slice: uefi.tables.MemoryMapSlice, out_count: *u32, out_esz: *u32) void {
     const max_n = (4096 - MMAP_STORE_OFF) / @sizeOf(KernelMmapEntry);
-    @memset((page + MMAP_STORE_OFF)[0 .. 4096 - MMAP_STORE_OFF], 0);
-    var it = mmap_slice.iterator();
+    la.setBytes(page + MMAP_STORE_OFF, 4096 - MMAP_STORE_OFF, 0);
+    var i: usize = 0;
     var n: u32 = 0;
-    while (it.next()) |d| {
+    const ds = mmap_slice.info.descriptor_size;
+    const base = @intFromPtr(mmap_slice.ptr);
+    while (i < mmap_slice.info.len) : (i += 1) {
         if (n >= max_n) break;
-        const dst: *KernelMmapEntry = @ptrCast(@alignCast(page + MMAP_STORE_OFF + @as(usize, n) * @sizeOf(KernelMmapEntry)));
-        dst.* = .{
-            .base_addr = d.physical_start,
-            .length = d.number_of_pages * 4096,
-            .type = efiToKernelMmapType(d.type),
-            .reserved = 0,
-        };
+        const md_base = base +% i *% ds;
+        const mt = la.loadU32Abs(md_base + @offsetOf(uefi.tables.MemoryDescriptor, "type"));
+        const phys = la.loadU64Abs(md_base + @offsetOf(uefi.tables.MemoryDescriptor, "physical_start"));
+        const pages = la.loadU64Abs(md_base + @offsetOf(uefi.tables.MemoryDescriptor, "number_of_pages"));
+        const dst_base = @intFromPtr(page + MMAP_STORE_OFF + @as(usize, n) * @sizeOf(KernelMmapEntry));
+        const len = pages * 4096;
+        la.storeU64Abs(dst_base + @offsetOf(KernelMmapEntry, "base_addr"), phys);
+        la.storeU64Abs(dst_base + @offsetOf(KernelMmapEntry, "length"), len);
+        la.storeU32Abs(dst_base + @offsetOf(KernelMmapEntry, "type"), efiToKernelMmapTypeU32(mt));
+        la.storeU32Abs(dst_base + @offsetOf(KernelMmapEntry, "reserved"), 0);
         n += 1;
     }
-    return .{ .count = n, .esz = @sizeOf(KernelMmapEntry) };
+    out_count.* = n;
+    out_esz.* = @sizeOf(KernelMmapEntry);
 }
 
 const Elf64_Ehdr = extern struct {
@@ -113,62 +144,77 @@ fn comptimeDesktopId() u32 {
     return 1;
 }
 
-/// 将菜单项映射为 EFI handoff（与 x86 条目语义尽量对应）
-fn handoffForSelectedEntry(idx: usize) EfiHandoff {
+/// 将菜单项映射为 EFI handoff（与 x86 条目语义尽量对应）。
+/// **仅 `st.*` 绝对寻址写入**，避免对 `*EfiHandoff` 字段普通赋值与后继路径合成 **`ldx.*`/错跳转**（QEMU LoongArch TCG #INE）。
+noinline fn initHandoffBaseAbs(out: *EfiHandoff, idx: usize) void {
     const def_id = comptimeDesktopId();
     var boot_mode: u32 = 0;
+    if (idx == 5) boot_mode = 1;
+
     var desktop: u32 = def_id;
-    switch (idx) {
-        0 => {
-            boot_mode = 0;
-            desktop = def_id;
-        },
-        1 => {
-            boot_mode = 0;
-            desktop = def_id;
-        },
-        2, 3, 4 => {
-            boot_mode = 0;
-            desktop = 0;
-        },
-        5 => {
-            boot_mode = 1;
-            desktop = 0;
-        },
-        else => {
-            boot_mode = 0;
-            desktop = def_id;
-        },
-    }
-    return .{
-        .magic = ZIRCON_LOONGARCH_EFI_MAGIC,
-        .version = 1,
-        .boot_mode = boot_mode,
-        .desktop = desktop,
-        .fb_addr = 0,
-        .fb_pitch = 0,
-        .fb_width = 0,
-        .fb_height = 0,
-        .fb_bpp = 0,
-        ._pad = [_]u8{0} ** 3,
-        .mmap_count = 0,
-        .mmap_entry_size = 0,
-        .mmap_off_from_handoff = 0,
-        ._mmap_pad = 0,
-    };
+    if (idx == 2) desktop = 0;
+    if (idx == 3) desktop = 0;
+    if (idx == 4) desktop = 0;
+    if (idx == 5) desktop = 0;
+
+    const b = @intFromPtr(out);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "magic"), ZIRCON_LOONGARCH_EFI_MAGIC);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "version"), 1);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "boot_mode"), boot_mode);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "desktop"), desktop);
+    la.storeU64Abs(b + @offsetOf(EfiHandoff, "fb_addr"), 0);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "fb_pitch"), 0);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "fb_width"), 0);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "fb_height"), 0);
+    la.storeU8Abs(b + @offsetOf(EfiHandoff, "fb_bpp"), 0);
+    const pad0 = b + @offsetOf(EfiHandoff, "_pad");
+    la.storeU8Abs(pad0 + 0, 0);
+    la.storeU8Abs(pad0 + 1, 0);
+    la.storeU8Abs(pad0 + 2, 0);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "mmap_count"), 0);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "mmap_entry_size"), 0);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "mmap_off_from_handoff"), 0);
+    la.storeU32Abs(b + @offsetOf(EfiHandoff, "_mmap_pad"), 0);
 }
 
-fn jumpToKernel(entry: u64, handoff_phys: usize) noreturn {
+noinline fn applyGopToHandoffAbs(ho: *EfiHandoff, fb_addr: u64, pitch: u32, w: u32, fb_h: u32, bpp: u8) void {
+    const hb = @intFromPtr(ho);
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "version"), 2);
+    la.storeU64Abs(hb + @offsetOf(EfiHandoff, "fb_addr"), fb_addr);
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "fb_pitch"), pitch);
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "fb_width"), w);
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "fb_height"), fb_h);
+    la.storeU8Abs(hb + @offsetOf(EfiHandoff, "fb_bpp"), bpp);
+}
+
+noinline fn applyMmapMetaToHandoffAbs(h: *EfiHandoff, mmap_count: u32, mmap_esz: u32) void {
+    const hb = @intFromPtr(h);
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "mmap_count"), mmap_count);
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "mmap_entry_size"), mmap_esz);
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "mmap_off_from_handoff"), MMAP_STORE_OFF);
+}
+
+/// 等价 `hand.version = @max(hand.version, 3)`，**勿用** `@max`（LLVM 可能对 u32 生成跳转表）。
+noinline fn bumpHandoffVersionAtLeast3Abs(h: *EfiHandoff) void {
+    const hb = @intFromPtr(h);
+    var v = la.loadU32Abs(hb + @offsetOf(EfiHandoff, "version"));
+    if (v < 3) v = 3;
+    la.storeU32Abs(hb + @offsetOf(EfiHandoff, "version"), v);
+}
+
+fn jumpToKernel(handoff_phys: usize) noreturn {
     const mag: u64 = @as(u64, ZIRCON_LOONGARCH_EFI_MAGIC);
+    const ent = la.loadU64Abs(HANDOFF_KERNEL_ENTRY_SLOT);
     asm volatile (
         \\ move $a0, %[mag]
         \\ move $a1, %[hand]
-        \\ jr %[entry]
+        \\ move $t0, %[entry]
+        \\ jr $t0
         :
         : [mag] "r" (mag),
           [hand] "r" (handoff_phys),
-          [entry] "r" (entry),
-    );
+          [entry] "r" (ent),
+        : .{ .memory = true });
     unreachable;
 }
 
@@ -184,14 +230,14 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
     const out = st.con_out orelse return .unsupported;
     const bs = st.boot_services orelse return .unsupported;
 
-    out.reset(false) catch {};
-    _ = out.setMode(0) catch {};
+    zto.reset(out, false);
+    zto.setMode(out, 0);
 
     menu.initBootEntries(desktop_theme_name, KERNEL_PATH);
 
     const cin = st.con_in orelse {
-        displayBootProgress(out);
-        loadAndBootLoongArchKernel(out, bs);
+        displayBootProgress(out, menu.selected);
+        loadAndBootLoongArchKernel(out, bs, menu.selected);
         puts(out, "\r\n");
         puts(out, "  [!!] Failed to load kernel image (no console input path).\r\n");
         haltLa();
@@ -222,9 +268,10 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
         }
     }
 
-    out.reset(false) catch {};
-    displayBootProgress(out);
-    loadAndBootLoongArchKernel(out, bs);
+    const boot_idx = menu.selected;
+    zto.reset(out, false);
+    displayBootProgress(out, boot_idx);
+    loadAndBootLoongArchKernel(out, bs, boot_idx);
 
     puts(out, "\r\n");
     puts(out, "  [!!] Failed to load kernel image.\r\n");
@@ -233,17 +280,17 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
     haltLa();
 }
 
-fn displayBootProgress(out: anytype) void {
-    _ = out.setAttribute(@bitCast(Attr.normal)) catch {};
+fn displayBootProgress(out: anytype, selected_idx: usize) void {
+    zto.setAttribute(out, Attr.normal);
     puts(out, "\r\n");
     puts(out, "                 ZirconOSAero Boot Manager (NT 6.1)                            \r\n");
-    _ = out.setAttribute(@bitCast(Attr.dim)) catch {};
+    zto.setAttribute(out, Attr.dim);
     puts(out, "\r\n");
     puts(out, "    Booting: ");
-    putsRuntime(out, menu.entries[menu.selected].description);
+    menu.putsRuntimeBootEntryDesc(out, selected_idx);
     puts(out, "\r\n\r\n");
     puts(out, "    Command line: ");
-    putsRuntime(out, menu.entries[menu.selected].cmdline);
+    menu.putsRuntimeBootEntryCmdline(out, selected_idx);
     puts(out, "\r\n\r\n");
 
     puts(out, "    [*] UEFI Console initialized\r\n");
@@ -255,7 +302,7 @@ fn displayBootProgress(out: anytype) void {
     puts(out, "\r\n");
 }
 
-const GopFbInfo = struct {
+const GopFbInfo = extern struct {
     addr: u64,
     width: u32,
     height: u32,
@@ -264,25 +311,60 @@ const GopFbInfo = struct {
     pixel_bgr: u8,
 };
 
+noinline fn storeBoolAbs(p: *bool, v: bool) void {
+    la.storeU8Abs(@intFromPtr(p), if (v) 1 else 0);
+}
+
+/// 仅 `st.*` 清零，避免对 `*GopFbInfo` 字段成组写与后继路径合成 **错跳转进 `.data` 串区**（QEMU 下 ERA 曾落在 UTF-16 字面量地址，#INE）。
+noinline fn resetGopFbInfoAbs(p: *GopFbInfo) void {
+    const b = @intFromPtr(p);
+    la.storeU64Abs(b + @offsetOf(GopFbInfo, "addr"), 0);
+    la.storeU32Abs(b + @offsetOf(GopFbInfo, "width"), 0);
+    la.storeU32Abs(b + @offsetOf(GopFbInfo, "height"), 0);
+    la.storeU32Abs(b + @offsetOf(GopFbInfo, "pitch"), 0);
+    la.storeU8Abs(b + @offsetOf(GopFbInfo, "bpp"), 0);
+    la.storeU8Abs(b + @offsetOf(GopFbInfo, "pixel_bgr"), 0);
+}
+
+noinline fn commitGopFbInfoAbs(p: *GopFbInfo, addr: u64, w: u32, h: u32, pitch: u32, bpp: u8, pixel_bgr: u8) void {
+    const b = @intFromPtr(p);
+    la.storeU64Abs(b + @offsetOf(GopFbInfo, "addr"), addr);
+    la.storeU32Abs(b + @offsetOf(GopFbInfo, "width"), w);
+    la.storeU32Abs(b + @offsetOf(GopFbInfo, "height"), h);
+    la.storeU32Abs(b + @offsetOf(GopFbInfo, "pitch"), pitch);
+    la.storeU8Abs(b + @offsetOf(GopFbInfo, "bpp"), bpp);
+    la.storeU8Abs(b + @offsetOf(GopFbInfo, "pixel_bgr"), pixel_bgr);
+}
+
+/// 将 GOP 尺寸读到独立栈槽；**noinline** 切断 LLVM 跨 `puts`/handoff 的错误跨函数优化（误入 `.data`）。
+noinline fn readGopFbHandoffScalars(info: *const GopFbInfo, out_addr: *u64, out_w: *u32, out_h: *u32, out_pitch: *u32, out_bpp: *u8) void {
+    const b = @intFromPtr(info);
+    la.storeU64Abs(@intFromPtr(out_addr), la.loadU64Abs(b + @offsetOf(GopFbInfo, "addr")));
+    la.storeU32Abs(@intFromPtr(out_w), la.loadU32Abs(b + @offsetOf(GopFbInfo, "width")));
+    la.storeU32Abs(@intFromPtr(out_h), la.loadU32Abs(b + @offsetOf(GopFbInfo, "height")));
+    la.storeU32Abs(@intFromPtr(out_pitch), la.loadU32Abs(b + @offsetOf(GopFbInfo, "pitch")));
+    la.storeU8Abs(@intFromPtr(out_bpp), la.loadU8Abs(b + @offsetOf(GopFbInfo, "bpp")));
+}
+
 fn gopPixelFormatIsLinear(f: uefi.protocol.GraphicsOutput.PixelFormat) bool {
     return f == .red_green_blue_reserved_8_bit_per_color or
         f == .blue_green_red_reserved_8_bit_per_color or
         f == .bit_mask;
 }
 
-/// 内核 handoff 与 `queryGopFramebuffer` 仅支持 32bpp 线性（RGB/BGR 打包或 bit_mask）；不含 BltOnly。
+/// 内核 handoff 与 `queryGopFramebufferInto` 仅支持 32bpp 线性（RGB/BGR 打包或 bit_mask）；不含 BltOnly。
 fn gopModeIs32bppLinear(mi: *const uefi.protocol.GraphicsOutput.Mode.Info) bool {
     return gopPixelFormatIsLinear(mi.pixel_format);
 }
 
 /// 同分辨率下优先 RGB、其次 BGR、再 bit_mask（部分固件 bit_mask 与扫描线对齐异常）。
 fn gopPixelFormatRank(f: uefi.protocol.GraphicsOutput.PixelFormat) u8 {
-    return switch (f) {
-        .red_green_blue_reserved_8_bit_per_color => 0,
-        .blue_green_red_reserved_8_bit_per_color => 1,
-        .bit_mask => 2,
-        else => 255,
-    };
+    const PF = uefi.protocol.GraphicsOutput.PixelFormat;
+    const v = @intFromEnum(f);
+    if (v == @intFromEnum(PF.red_green_blue_reserved_8_bit_per_color)) return 0;
+    if (v == @intFromEnum(PF.blue_green_red_reserved_8_bit_per_color)) return 1;
+    if (v == @intFromEnum(PF.bit_mask)) return 2;
+    return 255;
 }
 
 fn printGopModeDiag(out: anytype, mid: u32, mi: *const uefi.protocol.GraphicsOutput.Mode.Info) void {
@@ -305,16 +387,18 @@ fn trySetLinearGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput) void {
     const cur = gop.mode.info.pixel_format;
     if (gopPixelFormatIsLinear(cur)) return;
 
-    const prefer: []const uefi.protocol.GraphicsOutput.PixelFormat = &.{
+    // 勿用 `for (&[_]PixelFormat{...})`：运行时常从 rodata 用 **`ldx.w`** 取枚举表项；改用 comptime 展开的 `inline for`。
+    const prefer_order = [_]uefi.protocol.GraphicsOutput.PixelFormat{
         .red_green_blue_reserved_8_bit_per_color,
         .blue_green_red_reserved_8_bit_per_color,
         .bit_mask,
     };
-    for (prefer) |want_pf| {
+    inline for (prefer_order) |want_pf| {
+        const want_v = @intFromEnum(want_pf);
         var mid: u32 = 0;
         while (mid < gop.mode.max_mode) : (mid += 1) {
             const mi = gop.queryMode(mid) catch continue;
-            if (mi.pixel_format != want_pf) continue;
+            if (@intFromEnum(mi.pixel_format) != want_v) continue;
             gop.setMode(mid) catch continue;
             const after = gop.queryMode(mid) catch return;
             puts(out, "    [*] GOP: selected linear 32bpp mode idx=");
@@ -440,53 +524,52 @@ fn trySetPreferredGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput, want
     }
 }
 
-fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
-    const gop_opt = bs.locateProtocol(uefi.protocol.GraphicsOutput, null) catch return null;
-    const gop = gop_opt orelse return null;
+/// 通过 `out_ok` / `out_info` 输出；避免按值返回大聚合体（易生成 `@memcpy`/`ldx.*`，QEMU LoongArch TCG 会 #INE）。
+fn queryGopFramebufferInto(out: anytype, bs: *uefi.tables.BootServices, out_ok: *bool, out_info: *GopFbInfo) void {
+    storeBoolAbs(out_ok, false);
+    resetGopFbInfoAbs(out_info);
+
+    const gop = zcall.locateGraphicsOutput(bs) orelse return;
 
     trySetPreferredGopMode(out, gop, preferred_fb_width, preferred_fb_height);
 
-    const mode = gop.mode;
-    const info = mode.info;
+    const GMode = uefi.protocol.GraphicsOutput.Mode;
+    const GInfo = GMode.Info;
+    const mode_ptr = gop.mode;
+    const info_va = la.loadU64Abs(@intFromPtr(mode_ptr) + @offsetOf(GMode, "info"));
+    const pf = la.loadU32Abs(info_va + @offsetOf(GInfo, "pixel_format"));
+    const w = la.loadU32Abs(info_va + @offsetOf(GInfo, "horizontal_resolution"));
+    const h = la.loadU32Abs(info_va + @offsetOf(GInfo, "vertical_resolution"));
+    const ppsl = la.loadU32Abs(info_va + @offsetOf(GInfo, "pixels_per_scan_line"));
+    const fb_base = la.loadU64Abs(@intFromPtr(mode_ptr) + @offsetOf(GMode, "frame_buffer_base"));
 
-    const bpp: u8 = switch (info.pixel_format) {
-        .red_green_blue_reserved_8_bit_per_color,
-        .blue_green_red_reserved_8_bit_per_color,
-        => 32,
-        .bit_mask => 32,
-        else => 0,
-    };
+    const PF = uefi.protocol.GraphicsOutput.PixelFormat;
+    var bpp: u8 = 0;
+    if (pf == @intFromEnum(PF.red_green_blue_reserved_8_bit_per_color)) bpp = 32;
+    if (pf == @intFromEnum(PF.blue_green_red_reserved_8_bit_per_color)) bpp = 32;
+    if (pf == @intFromEnum(PF.bit_mask)) bpp = 32;
 
     if (bpp == 0) {
         puts(out, "    [!] GOP pixel format unsupported for framebuffer\r\n");
-        return null;
+        return;
     }
 
-    const pixel_bgr: u8 = switch (info.pixel_format) {
-        .blue_green_red_reserved_8_bit_per_color => 1,
-        .red_green_blue_reserved_8_bit_per_color => 0,
-        .bit_mask => 1,
-        else => 1,
-    };
+    var pixel_bgr: u8 = 1;
+    if (pf == @intFromEnum(PF.blue_green_red_reserved_8_bit_per_color)) pixel_bgr = 1;
+    if (pf == @intFromEnum(PF.bit_mask)) pixel_bgr = 1;
+    if (pf == @intFromEnum(PF.red_green_blue_reserved_8_bit_per_color)) pixel_bgr = 0;
 
-    const fb_info = GopFbInfo{
-        .addr = @intCast(mode.frame_buffer_base),
-        .width = info.horizontal_resolution,
-        .height = info.vertical_resolution,
-        .pitch = info.pixels_per_scan_line * (@as(u32, bpp) / 8),
-        .bpp = bpp,
-        .pixel_bgr = pixel_bgr,
-    };
+    const pitch = ppsl * (@as(u32, bpp) / 8);
 
     puts(out, "    [*] GOP Framebuffer: ");
-    printDecimal(out, fb_info.width);
+    printDecimal(out, w);
     puts(out, "x");
-    printDecimal(out, fb_info.height);
+    printDecimal(out, h);
     puts(out, "x");
     printDecimal(out, @as(u32, bpp));
     puts(out, "\r\n");
 
-    if (fb_info.width != preferred_fb_width or fb_info.height != preferred_fb_height) {
+    if (w != preferred_fb_width or h != preferred_fb_height) {
         puts(out, "    [!] GOP: active mode != build preferred ");
         printDecimal(out, preferred_fb_width);
         puts(out, "x");
@@ -494,17 +577,39 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
         puts(out, " (set build.conf RESOLUTION; make sync-resolution; firmware/QEMU may not expose exact mode)\r\n");
     }
 
-    return fb_info;
+    commitGopFbInfoAbs(out_info, fb_base, w, h, pitch, bpp, pixel_bgr);
+    storeBoolAbs(out_ok, true);
 }
 
-fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void {
+/// `BootServices.openProtocol` 使用 `std.meta.activeTag(attributes)`，在 LoongArch 上会生成 `ldx.d`；QEMU TCG 对该指令 #INE。
+fn openProtocolByHandleNoLdx(
+    bs: *uefi.tables.BootServices,
+    comptime Protocol: type,
+    handle: uefi.Handle,
+) uefi.tables.BootServices.OpenProtocolError!?*Protocol {
+    if (!@hasDecl(Protocol, "guid"))
+        @compileError("protocol missing guid: " ++ @typeName(Protocol));
+    var ptr: ?*Protocol = undefined;
+    const st = bs._openProtocol(
+        handle,
+        &Protocol.guid,
+        @as(*?*anyopaque, @ptrCast(&ptr)),
+        null,
+        null,
+        uefi.tables.OpenProtocolAttributes.by_handle_protocol,
+    );
+    const sv = @intFromEnum(st);
+    if (sv == @intFromEnum(uefi.Status.success)) return ptr;
+    if (sv == @intFromEnum(uefi.Status.unsupported)) return null;
+    if (sv == @intFromEnum(uefi.Status.access_denied)) return error.AccessDenied;
+    if (sv == @intFromEnum(uefi.Status.already_started)) return error.AlreadyStarted;
+    return uefi.unexpectedStatus(st);
+}
+
+fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices, selected_idx: usize) void {
     puts(out, "    [*] Opening kernel from ESP...\r\n");
 
-    const loaded_image = bs.openProtocol(
-        uefi.protocol.LoadedImage,
-        uefi.handle,
-        .{ .by_handle_protocol = .{} },
-    ) catch {
+    const loaded_image = openProtocolByHandleNoLdx(bs, uefi.protocol.LoadedImage, uefi.handle) catch {
         puts(out, "    [!!] Failed to get LoadedImage protocol\r\n");
         return;
     } orelse {
@@ -517,11 +622,7 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
         return;
     };
 
-    const sfs = bs.openProtocol(
-        uefi.protocol.SimpleFileSystem,
-        device_handle,
-        .{ .by_handle_protocol = .{} },
-    ) catch {
+    const sfs = openProtocolByHandleNoLdx(bs, uefi.protocol.SimpleFileSystem, device_handle) catch {
         puts(out, "    [!!] Failed to get SimpleFileSystem\r\n");
         return;
     } orelse {
@@ -580,6 +681,7 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
     }
 
     const ehdr: *const Elf64_Ehdr = @ptrCast(@alignCast(file_data.ptr));
+    const ehdr_base: usize = @intFromPtr(file_data.ptr);
 
     if (ehdr.e_ident[0] != 0x7F or ehdr.e_ident[1] != 'E' or
         ehdr.e_ident[2] != 'L' or ehdr.e_ident[3] != 'F')
@@ -596,16 +698,29 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
         return;
     }
 
+    const kernel_entry = la.loadU64Abs(ehdr_base + @offsetOf(Elf64_Ehdr, "e_entry"));
+
     puts(out, "    [*] ELF64 valid, ");
     printDecimal(out, ehdr.e_phnum);
     puts(out, " program headers\r\n");
 
     var segments_loaded: u32 = 0;
-    for (0..ehdr.e_phnum) |i| {
-        const ph_off: usize = @intCast(ehdr.e_phoff + @as(u64, @intCast(i)) * ehdr.e_phentsize);
+    var ph_i: usize = 0;
+    while (ph_i < ehdr.e_phnum) : (ph_i += 1) {
+        const ph_off: usize = @intCast(ehdr.e_phoff + @as(u64, @intCast(ph_i)) * ehdr.e_phentsize);
         if (ph_off + @sizeOf(Elf64_Phdr) > file_size) break;
 
-        const phdr: *const Elf64_Phdr = @ptrCast(@alignCast(file_data.ptr + ph_off));
+        const ph_base = @intFromPtr(file_data.ptr) +% ph_off;
+        const phdr: Elf64_Phdr = .{
+            .p_type = la.loadU32Abs(ph_base),
+            .p_flags = la.loadU32Abs(ph_base +% 4),
+            .p_offset = la.loadU64Abs(ph_base +% 8),
+            .p_vaddr = la.loadU64Abs(ph_base +% 16),
+            .p_paddr = la.loadU64Abs(ph_base +% 24),
+            .p_filesz = la.loadU64Abs(ph_base +% 32),
+            .p_memsz = la.loadU64Abs(ph_base +% 40),
+            .p_align = la.loadU64Abs(ph_base +% 48),
+        };
         if (phdr.p_type != PT_LOAD) continue;
         if (phdr.p_memsz == 0) continue;
 
@@ -616,7 +731,7 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
         const page_base: usize = @intCast(paddr & ~@as(u64, 0xFFF));
         const dest_ptr: [*]align(4096) uefi.Page = @ptrFromInt(page_base);
 
-        _ = bs.allocatePages(.{ .address = dest_ptr }, .loader_data, num_pages) catch {};
+        _ = zcall.allocatePagesAtLoaderThin(bs, dest_ptr, num_pages);
 
         const dst: [*]u8 = @ptrFromInt(@as(usize, @intCast(paddr)));
         const filesz: usize = @intCast(phdr.p_filesz);
@@ -625,10 +740,10 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
 
         if (filesz > 0 and offset + filesz <= file_size) {
             const src = file_data.ptr + offset;
-            @memcpy(dst[0..filesz], src[0..filesz]);
+            la.copyBytes(dst, src, filesz);
         }
         if (memsz > filesz) {
-            @memset(dst[filesz..memsz], 0);
+            la.setBytes(dst + filesz, memsz - filesz, 0);
         }
 
         segments_loaded += 1;
@@ -639,27 +754,40 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
     puts(out, " ELF segments\r\n");
 
     // SetMode 到 ≥1024×768 后把线性 GOP 写入 handoff，使内核与 QEMU 主窗口（固件 GOP 扫描）一致。
-    const gop_fb_opt = queryGopFramebuffer(out, bs);
+    var gop_ok: bool = false;
+    var gop_fb: GopFbInfo = undefined;
+    queryGopFramebufferInto(out, bs, &gop_ok, &gop_fb);
+    if (debug_mode) {
+        puts(out, "    [dbg] ZBM: after GOP query\r\n");
+    }
+    var gop_addr: u64 = 0;
+    var gop_w: u32 = 0;
+    var gop_h: u32 = 0;
+    var gop_pitch: u32 = 0;
+    var gop_bpp: u8 = 0;
+    readGopFbHandoffScalars(&gop_fb, &gop_addr, &gop_w, &gop_h, &gop_pitch, &gop_bpp);
+    if (debug_mode) {
+        puts(out, "    [dbg] ZBM: after readGopFbHandoffScalars\r\n");
+    }
+
+    var hand: EfiHandoff = undefined;
+    initHandoffBaseAbs(&hand, selected_idx);
+    if (debug_mode) {
+        puts(out, "    [dbg] ZBM: after initHandoffBaseAbs\r\n");
+    }
 
     puts(out, "    [*] kernel entry at 0x");
-    printHex64(out, ehdr.e_entry);
+    printHex64(out, kernel_entry);
     puts(out, "\r\n");
-
-    var hand = handoffForSelectedEntry(menu.selected);
     // 仅当 GOP 同时达到构建首选宽高时写入 handoff：内核若收到更小 GOP 会弃用并走 ramfb（fw_cfg），以得到与 build.conf RESOLUTION 一致的桌面。
-    if (gop_fb_opt) |gf| {
-        if (gf.width >= preferred_fb_width and gf.height >= preferred_fb_height) {
-            hand.version = 2;
-            hand.fb_addr = gf.addr;
-            hand.fb_pitch = gf.pitch;
-            hand.fb_width = gf.width;
-            hand.fb_height = gf.height;
-            hand.fb_bpp = gf.bpp;
+    if (gop_ok) {
+        if (gop_w >= preferred_fb_width and gop_h >= preferred_fb_height) {
+            applyGopToHandoffAbs(&hand, gop_addr, gop_pitch, gop_w, gop_h, gop_bpp);
         } else {
             puts(out, "    [*] Firmware FB ");
-            printDecimal(out, gf.width);
+            printDecimal(out, gop_w);
             puts(out, " x ");
-            printDecimal(out, gf.height);
+            printDecimal(out, gop_h);
             puts(out, " < pref ");
             printDecimal(out, preferred_fb_width);
             puts(out, " x ");
@@ -670,40 +798,45 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices) void 
         }
     }
     const ho_ptr: [*]align(4096) uefi.Page = @ptrFromInt(HANDOFF_PHYS);
-    _ = bs.allocatePages(.{ .address = ho_ptr }, .loader_data, 1) catch {
+    if (!zcall.allocatePagesAtLoaderThin(bs, ho_ptr, 1)) {
         puts(out, "    [!!] Failed to allocate handoff page\r\n");
         return;
-    };
+    }
     const hp: *EfiHandoff = @ptrCast(ho_ptr);
     const page_u8: [*]u8 = @ptrCast(ho_ptr);
 
     var mmap_buf: [32768]u8 align(@alignOf(uefi.tables.MemoryDescriptor)) = undefined;
-    const mmap = bs.getMemoryMap(@as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) catch {
+    const mmap = zcall.getMemoryMapThin(bs, @as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) orelse {
         puts(out, "    [!!] Failed to get memory map\r\n");
         return;
     };
 
-    const mf = fillHandoffMmap(page_u8, mmap);
-    hand.mmap_count = mf.count;
-    hand.mmap_entry_size = mf.esz;
-    hand.mmap_off_from_handoff = MMAP_STORE_OFF;
-    if (mf.count > 0) {
-        hand.version = @max(hand.version, 3);
+    var mmap_count: u32 = 0;
+    var mmap_esz: u32 = 0;
+    fillHandoffMmapInto(page_u8, mmap, &mmap_count, &mmap_esz);
+    applyMmapMetaToHandoffAbs(&hand, mmap_count, mmap_esz);
+    if (mmap_count > 0) {
+        bumpHandoffVersionAtLeast3Abs(&hand);
     }
-    hp.* = hand;
+    if (builtin.cpu.arch == .loongarch64) {
+        la.copyBytes(@ptrCast(ho_ptr), @ptrCast(@alignCast(&hand)), @sizeOf(EfiHandoff));
+    } else {
+        hp.* = hand;
+    }
+    la.storeU64Abs(HANDOFF_KERNEL_ENTRY_SLOT, kernel_entry);
 
     puts(out, "    [*] Exiting boot services...\r\n");
 
-    bs.exitBootServices(uefi.handle, mmap.info.key) catch {
-        const mmap2 = bs.getMemoryMap(@as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) catch return;
-        bs.exitBootServices(uefi.handle, mmap2.info.key) catch return;
-    };
+    if (!zcall.exitBootServicesThin(bs, uefi.handle, mmap.info.key)) {
+        const mmap2 = zcall.getMemoryMapThin(bs, @as([]align(@alignOf(uefi.tables.MemoryDescriptor)) u8, &mmap_buf)) orelse return;
+        if (!zcall.exitBootServicesThin(bs, uefi.handle, mmap2.info.key)) return;
+    }
 
-    jumpToKernel(ehdr.e_entry, HANDOFF_PHYS);
+    jumpToKernel(HANDOFF_PHYS);
 }
 
 fn displayMemoryMap(out: anytype, bs: *uefi.tables.BootServices) void {
-    const info = bs.getMemoryMapInfo() catch {
+    const info = zcall.getMemoryMapInfoThin(bs) orelse {
         puts(out, "    [!] Memory map unavailable\r\n");
         return;
     };
@@ -727,7 +860,7 @@ fn printUefiVersion(out: anytype, revision: u32) void {
 fn printDecimal(out: anytype, value: u32) void {
     if (value >= 10) printDecimal(out, value / 10);
     var buf: [1:0]u16 = .{@as(u16, @intCast('0' + (value % 10)))};
-    _ = out.outputString(&buf) catch false;
+    zto.outputString(out, &buf);
 }
 
 fn printHex64(out: anytype, value: u64) void {
@@ -737,27 +870,32 @@ fn printHex64(out: anytype, value: u64) void {
     var i: usize = 16;
     while (i > 0) {
         i -= 1;
-        buf[i] = hex[@as(usize, @intCast(v & 0xF))];
+        buf[i] = la.loadU8(hex.ptr, @intCast(v & 0xF));
         v >>= 4;
     }
-    for (buf) |c| {
+    var j: usize = 0;
+    while (j < buf.len) : (j += 1) {
+        const c = la.loadU8(@ptrCast(&buf), j);
         var u16buf: [1:0]u16 = .{@as(u16, c)};
-        _ = out.outputString(&u16buf) catch false;
+        zto.outputString(out, &u16buf);
     }
 }
 
 fn puts(out: anytype, comptime s: []const u8) void {
-    _ = out.outputString(unicode.utf8ToUtf16LeStringLiteral(s)) catch false;
+    zto.outputString(out, unicode.utf8ToUtf16LeStringLiteral(s));
 }
 
 fn putsRuntime(out: anytype, s: []const u8) void {
-    for (s) |c| {
+    var si: usize = 0;
+    while (si < s.len) : (si += 1) {
+        const c = la.loadU8(s.ptr, si);
         var buf: [1:0]u16 = .{@as(u16, c)};
-        _ = out.outputString(&buf) catch false;
+        zto.outputString(out, &buf);
     }
 }
 
 export fn efi_main(image_handle: uefi.Handle, st: *uefi.tables.SystemTable) callconv(uefi.cc) uefi.Status {
+    enableLoongArchExtendedUnitsEarly();
     uefi.handle = image_handle;
     uefi.system_table = st;
     return runBootManager(st);

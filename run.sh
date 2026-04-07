@@ -81,6 +81,17 @@ case "$TARGET" in
     run-qemu-sdl)           TARGET="run-qemu-sdl" ;;
     run-aarch64)            TARGET="run" ; MAKE_ARGS+=("ARCH=aarch64") ;;
     run-uefi-aarch64)       TARGET="run" ; MAKE_ARGS+=("ARCH=aarch64" "BOOT_METHOD=uefi") ;;
+    run-riscv64)            TARGET="run-riscv64" ; MAKE_ARGS+=("ARCH=riscv64") ;;
+    run-uefi-riscv64)       TARGET="run-riscv64" ; MAKE_ARGS+=("ARCH=riscv64") ;;
+    run-riscv64-debug)      TARGET="run-riscv64-debug" ; MAKE_ARGS+=("ARCH=riscv64") ;;
+    run-loongarch64)        TARGET="run-loongarch64" ; MAKE_ARGS+=("ARCH=loongarch64") ;;
+    run-loongarch64-uefi|run-uefi-loongarch64)
+                            TARGET="run-loongarch64-autozbm" ; MAKE_ARGS+=("ARCH=loongarch64") ;;
+    run-loongarch64-debug)  TARGET="run-loongarch64-debug" ; MAKE_ARGS+=("ARCH=loongarch64") ;;
+    run-loongarch64-serial-debug)
+                            TARGET="run-loongarch64-serial-debug" ; MAKE_ARGS+=("ARCH=loongarch64") ;;
+    run-mips64el)           TARGET="run-mips64el" ; MAKE_ARGS+=("ARCH=mips64el") ;;
+    run-mips64el-debug)     TARGET="run-mips64el-debug" ; MAKE_ARGS+=("ARCH=mips64el") ;;
     configure)              TARGET="configure" ;;
     show-config)            TARGET="show-config" ;;
     test)                   TARGET="test" ;;

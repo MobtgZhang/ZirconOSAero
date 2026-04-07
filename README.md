@@ -23,7 +23,7 @@
 ## Design
 
 - **NT-style hybrid microkernel**: scheduling, virtual memory, IPC, interrupts, and syscalls in the kernel
-- **User-mode system services**: Object Manager, Process Manager, I/O Manager, Security, etc.
+- **Hybrid executive (as-built)**: Object Manager, Memory Manager, process/thread core, I/O Manager, Security, and loaders live **in kernel** today (`src/ob/`, `src/mm/`, `src/ps/`, `src/io/`, `src/se/`, `src/loader/`). **User-mode** bring-up today is mainly **Process Server** (PID 1, `server.zig`) and **SMSS** (PID 2, `smss.zig`). Splitting Ob/IO/Security into standalone user processes is **planned**, not done — [docs/en/Servers.md](docs/en/Servers.md), [docs/cn/LPC_USER_SERVERS_CONTRACT.md](docs/cn/LPC_USER_SERVERS_CONTRACT.md).
 - **Win32 compatibility layer** (**subset**, milestone-driven; not binary-compatible with Microsoft DLLs): in-repo ntdll/kernel32/kernelbase-style APIs and the console — see [NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md), [API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)
 - **Win32 subsystem server** (**partial**): csrss-style process registration and messaging hooks; full window-station/desktop lifecycle is phased — [LPC_NT61_HANDSHAKE.md](docs/cn/LPC_NT61_HANDSHAKE.md)
 - **Win32 execution engine** (**subset**): PE loading, DLL binding, process creation, API dispatch for supported paths only
@@ -57,7 +57,7 @@ ZirconOSAero/
 ├── link/                  # Per-architecture linker scripts
 │   └── x86_64.ld / aarch64.ld / loongarch64.ld / riscv64.ld / mips64el.ld
 ├── src/                   # Kernel sources
-│   ├── main.zig           # Kernel entry (Phase 0–11 boot path)
+│   ├── main.zig           # Kernel entry (Phase 0–12 init; roadmap milestones remain 0–11 — docs/en/Boot.md)
 │   ├── config/            # Config parser + embedded defaults (*.conf, defaults.zig)
 │   ├── arch/              # Architecture code
 │   │   ├── x86_64/        #   Multiboot2, paging, IDT, ISR, syscall
@@ -65,7 +65,8 @@ ZirconOSAero/
 │   │   └── (loongarch64, riscv64, mips64el)
 │   ├── hal/               # Hardware abstraction
 │   │   ├── x86_64/        #   VGA, PIC, PIT, port I/O, serial, GDT, framebuffer
-│   │   └── aarch64/       #   GIC, timer, PL011 UART
+│   │   ├── aarch64/       #   GIC, timer, PL011 UART
+│   │   └── loongarch64/   #   ramfb, TLB flush, SMP IPI, CPU topology
 │   ├── drivers/           # Device drivers
 │   │   └── video/         #   VGA, HDMI, framebuffer, display manager
 │   ├── ke/                # Kernel Executive — scheduling, timer, interrupts, sync
@@ -93,7 +94,7 @@ ZirconOSAero/
 │           ├── console.zig    # Console runtime
 │           ├── cmd.zig        # CMD
 │           └── wow64.zig      # WOW64 layer
-├── src/desktop/           # Desktop theme Zig projects; each has resources/
+├── src/desktop/           # Desktop resources (shipped theme: aero/ only; see desktop.conf)
 ├── src/fonts/             # Shared open fonts (make fonts / scripts/fonts/fetch-fonts.sh)
 └── docs/                  # Design docs (en/ and cn/)
 ```
@@ -139,6 +140,9 @@ Install Zig from [ziglang.org](https://ziglang.org/download/) and add it to `PAT
 ./run.sh run-uefi           # 显式 UEFI+ZBM（x86_64）
 ./run.sh run-uefi-aarch64   # UEFI (aarch64)
 ./run.sh run-aarch64        # AArch64 bare metal
+./run.sh run-loongarch64    # LoongArch64 QEMU（-kernel + ramfb）
+./run.sh run-loongarch64-uefi # LoongArch64 UEFI+ZBM
+./run.sh run-riscv64        # RISC-V64 UEFI
 ./run.sh clean              # Clean
 ./run.sh help               # Help
 
@@ -170,15 +174,15 @@ Clean-room，行为以 [Microsoft Learn](https://learn.microsoft.com/)、WDK 与
 | Kernel heap               | Partial | Bump 快路径 + 空闲链表 + `mm/pool` 档位；路径/IRQL 见 [docs/cn/MM_ALLOC_PATHS.md](docs/cn/MM_ALLOC_PATHS.md)；Paged 软上限与契约矩阵 §0                                                                                                                                          |
 | Section objects           | Partial | 匿名节 + `ntdll` / `section.zig`；x64 `syscall` 分发 `NtCreateSection`/`NtMapViewOfSection`/`NtUnmapViewOfSection`（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)）                     |
 | IPC (LPC)                 | Partial | Queues, ports；连接/通信端口分离雏形、`section_view_handle` 占位（[Win32kArchitectureNotes.md](docs/cn/Win32kArchitectureNotes.md)）                                                                     |
-| Syscall                   | Partial | **仅 `syscall`/`sysret`**（[SyscallABI.md](docs/cn/SyscallABI.md)；无 SYSCALL/SYSRET 的 CPU 会 bugcheck）；SSDT 含 `NtCreateProcess`/`NtWaitForMultipleObjects`（**0x57**）等；`NtQuerySystemInformation` 子集 + `probe`；**ssdt_stub_parity**（[ntdll_syscall_win64.zig](src/sdk/ntdll_syscall_win64.zig)） |
+| Syscall                   | Partial | **`syscall`/`sysret` only** ([SyscallABI.md](docs/cn/SyscallABI.md); CPUs without it → bugcheck). SSDT includes `NtCreateProcess`, `NtCreateUserProcess` (**0xAA**), `NtWaitForMultipleObjects` (**0x57**), `NtDeviceIoControlFile` (**0x52**), Lock/Unlock VM (**0x53/0x54**), etc.; `NtQuerySystemInformation` subset + probe; **ssdt_stub_parity** ([ntdll_syscall_win64.zig](src/sdk/ntdll_syscall_win64.zig)). Phase E: [PHASE_E_NATIVE_API.md](docs/cn/PHASE_E_NATIVE_API.md). |
 | IDT/ISR                   | Done    | 256 vectors                                                                                                                                                                              |
 | Scheduler                 | Partial | **已实现**：每逻辑 CPU **32** 档 FIFO 分桶、`non_empty` 位图、按 **priority class** 时间片、饥饿提升、I/O boost、互斥优先级继承（多锁深度配对 `mutex_inherit_depth`）、亲和与 `home_cpu`、tick 路径 CR3 切换；**对象等待队列** + `keWait` 阻塞与 `tick` 让出（[SCHEDULER_API.md](docs/cn/SCHEDULER_API.md) 阶段 C）。**未等同 NT**：NUMA/公平份额、完整 IRQL 抢占模型、AP **INIT-SIPI** 实路径与多核 tick 仍为路线图（K2.4/K2.6）。 |
 | Timer                     | Partial | **主 tick**：PIC + **PIT ~100Hz**（`ke/timer.zig`）。**单调时钟抽象**：`ke/timekeeping.zig`（调度 tick + 可选 HPET 主计数器只读）。**HPET**：MMIO 探测/频率解析见 `hal/x86_64/hpet.zig`（接 IRQ0 迁移与 LAPIC one-shot 见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md)）。 |
-| Sync                      | Done    | Event, mutex, semaphore, spinlock                                                                                                                                                        |
+| Sync                      | Partial | Kernel `ke/sync.zig`: event, mutex, semaphore, spinlock; **IRQL/DPC/APC/wait** and many **ntdll** sync syscalls still **Partial** ([NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md) §2). Examples: `NtCreateEvent` / `NtWait*` / `NtSetEvent` vs **`NtCreateMutant` / parts of semaphore paths still stub** — [SCHEDULER_API.md](docs/cn/SCHEDULER_API.md).                                                                                                                                                        |
 | Object Manager            | Partial | 类型、句柄表、命名空间子集；主机测试 [zircon_host_ob_test.zig](src/zircon_host_ob_test.zig)                                                                                                                |
 | Process Manager           | Partial | 进程/线程、Process Server；隔离与 CR3 切换见契约矩阵 §0                                                                                                                                                  |
 | Session Manager           | Done    | SMSS, sessions, subsystem registration                                                                                                                                                   |
-| Security                  | Done    | Token, SID, access checks                                                                                                                                                                |
+| Security                  | Partial | Tokens, SIDs, `checkAccess`-style checks; **full DACL / AuthZ** remains roadmap — contract matrix **B3** ([NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)).                                                                                                                                                                |
 | I/O Manager               | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP 桥接；PnP/PCI 见 `acpi_pci_early.zig`                                                                                                                    |
 | VFS                       | Partial | Mount points；完整 IRP/锁语义见契约矩阵                                                                                                                                                             |
 | FAT32                     | Partial | `C:\` 主路径可用；与 NT 格式化工具完全互操作非目标                                                                                                                                                           |
@@ -198,7 +202,7 @@ Clean-room，行为以 [Microsoft Learn](https://learn.microsoft.com/)、WDK 与
 | WOW64                     | Partial | PE32, thunk；32→64 服务号须对齐 `ssdt_nt61.zig`（与旧 `SYS_`* 已分离）— 见 `wow64.zig`                                                                                                                  |
 | Registry runtime          | Partial | 内存树 + `Mouse`/`Desktop`/`HKLM\...\Windows\DWM`/`Memory Management` 等键；RegF/hive 持久化 Planned                                                                                              |
 | Aero / DWM (kernel shell) | Partial | 脏区/Present 契约、`thumb_refresh` 节流、任务栏缩略 `enqueueIconicThumbnailRequest` 与 Flip3D 表面枚举；**Aero 模糊/合成仍以 CPU 为主**（`blur_budget`）。**VirtIO-GPU**：`SET_SCANOUT` + 屏前 RAM `RESOURCE_FLUSH`（`isScanoutActive`）；≤32×32 scratch `TRANSFER` PoC 仍保留。**NVIDIA**：PCI/BAR0 + 可选 4MiB 可预取 BAR 诊断映射、`IOCTL_NVIDIA_BAR0_FIRST_U32`（非 WDDM）。见 [AeroDesktopRuntime.md](docs/cn/AeroDesktopRuntime.md)、契约矩阵 §4.1、[SOFTWARE_COMPOSITOR_WDDM.md](docs/cn/SOFTWARE_COMPOSITOR_WDDM.md) |
-| 多架构 Win32 栈               | Partial | **x86_64** 为主验证路径；riscv64/LoongArch/MIPS 引导与桌面见各 `arch` 文档与 CI 说明                                                                                                                        |
+| 多架构 Win32 栈               | Partial | **x86_64** 为主验证路径。**LoongArch64**：UEFI/ZBM 引导 + ramfb 桌面可达；paging/TLB/SMP 逐步完善中。**AArch64/RISC-V64**：引导骨架已搭建，异常/MMU/调度未完整。**MIPS64el**：空壳。见各 `arch/` 与 `hal/` 子目录                                                                                                                        |
 
 
 ## Milestones

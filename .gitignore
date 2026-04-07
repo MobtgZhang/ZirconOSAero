@@ -1,5 +1,8 @@
 .zig-cache/
 zig-out/
+# Local / agent scratch (not part of the kernel tree)
+.log/
+.contents/
 # Root output dir only; plain `build/` wrongly ignores `scripts/build/*.sh`.
 /build/
 mdcs/

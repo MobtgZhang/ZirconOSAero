@@ -36,7 +36,7 @@
 ## 设计理念
 
 - **NT 风格混合微内核**：调度、虚拟内存、IPC、中断与系统调用在内核中实现
-- **用户态系统服务**：Object Manager、Process Manager、I/O Manager、Security 等
+- **混合 Executive（当前落地）**：Object Manager、内存管理器、进程/线程核心、I/O Manager、Security 与加载器**目前在内核**（`src/ob/`、`src/mm/`、`src/ps/`、`src/io/`、`src/se/`、`src/loader/`）。**独立用户态服务**当前主要是 **Process Server**（PID 1，`server.zig`）与 **SMSS**（PID 2，`smss.zig`）。将 Ob/IO/Security 拆成独立用户态进程为**路线图，未实现** — [Servers.md](docs/cn/Servers.md)、[LPC_USER_SERVERS_CONTRACT.md](docs/cn/LPC_USER_SERVERS_CONTRACT.md)。
 - **Win32 兼容层**（**子集**，按里程碑推进）：**二进制兼容**指 **自研合成 DLL** + 公开文档 ABI **子集** + PE 加载策略（导出清单见 `src/config/nt61_core_dll_abi_inventory.zig` 等），**非**可在商业 Windows 上替换 `System32` 闭源微软 DLL 或与之逐位等价 — 见 [NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)、[BINARY_COMPAT_GAP_AUDIT.md](docs/cn/BINARY_COMPAT_GAP_AUDIT.md)
 - **Win32 子系统服务器**（**部分**）：csrss 风格进程注册与消息桥接；完整窗口站/桌面生命周期分阶段 — [LPC_NT61_HANDSHAKE.md](docs/cn/LPC_NT61_HANDSHAKE.md)
 - **Win32 执行引擎**（**子集**）：PE 加载、DLL 绑定、进程创建、API 分发（仅已支持路径）
@@ -47,6 +47,8 @@
 - **多架构**：x86_64（主路径）、aarch64、loongarch64、riscv64、mips64el
 
 **流程与契约（必读）**：[docs/cn/PROCESS_NT61.md](docs/cn/PROCESS_NT61.md) · [docs/cn/NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)（与下方矩阵 **Status** 同源；**Partial / Stub** 即非 Done）· [docs/cn/NT61_DEFERRED_SURFACES.md](docs/cn/NT61_DEFERRED_SURFACES.md) · [docs/cn/DWM_NOTIFY_MODEL_NT61.md](docs/cn/DWM_NOTIFY_MODEL_NT61.md) · [docs/cn/MVT_NT61.md](docs/cn/MVT_NT61.md) · [docs/en/COPYRIGHT_AND_SOURCES.md](docs/en/COPYRIGHT_AND_SOURCES.md) / [docs/cn/COPYRIGHT_AND_SOURCES.md](docs/cn/COPYRIGHT_AND_SOURCES.md)
+
+**调度与定时（行为细节）**：[docs/cn/SCHEDULER_API.md](docs/cn/SCHEDULER_API.md) · [docs/cn/TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md)
 
 状态标签：`Stub` · `Partial` · `Done` · `Verified`。**工程三态**：`Verified`（CI/`zig build test` 或 QEMU 冒烟可重复）、`InProgress`（接口已建、语义对齐中）、`Planned`（仅文档/桩）。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
@@ -68,7 +70,7 @@ ZirconOSAero/
 ├── link/                  # 各架构链接脚本
 │   └── x86_64.ld / aarch64.ld / loongarch64.ld / riscv64.ld / mips64el.ld
 ├── src/                   # 内核源码
-│   ├── main.zig           # 内核入口（Phase 0–11 引导路径）
+│   ├── main.zig           # 内核入口（Phase 0–12 初始化；路线图里程碑仍为 0–11 — 见 Boot.md）
 │   ├── config/            # 配置解析 + 嵌入式默认（*.conf、defaults.zig）
 │   ├── arch/              # 架构相关
 │   │   ├── x86_64/        #   Multiboot2、分页、IDT、ISR、syscall
@@ -104,7 +106,7 @@ ZirconOSAero/
 │           ├── console.zig    # 控制台运行时
 │           ├── cmd.zig        # CMD
 │           └── wow64.zig      # WOW64（见 wow64/ 子模块）
-├── src/desktop/           # 桌面主题 Zig 工程；各主题含 resources/
+├── src/desktop/           # 桌面资源（当前交付主题：aero/；见 desktop.conf）
 ├── src/fonts/             # 共享开源字体（make fonts / scripts/fonts/fetch-fonts.sh）
 └── docs/                  # 设计文档（en/ 与 cn/）
 ```
@@ -150,6 +152,9 @@ Zig：从 [ziglang.org](https://ziglang.org/download/) 安装并加入 PATH；`b
 ./run.sh run-uefi           # 显式 UEFI+ZBM（x86_64）
 ./run.sh run-uefi-aarch64   # UEFI (aarch64)
 ./run.sh run-aarch64        # AArch64 裸机
+./run.sh run-loongarch64    # LoongArch64 QEMU（-kernel + ramfb）
+./run.sh run-loongarch64-uefi # LoongArch64 UEFI+ZBM
+./run.sh run-riscv64        # RISC-V64 UEFI
 ./run.sh clean              # 清理
 ./run.sh help               # 帮助
 
@@ -184,13 +189,13 @@ Clean-room；矩阵 **Done** = 烟测主路径可演示且与 [契约矩阵](doc
 | IPC (LPC) | Partial | 队列、端口；连接/通信端口分离雏形、`section_view_handle` 占位 |
 | 系统调用 | Partial | **仅 `syscall`/`sysret`**（[SyscallABI.md](docs/cn/SyscallABI.md)；无 SYSCALL/SYSRET 的 CPU 会 bugcheck）；SSDT 含 `NtCreateProcess`、`NtCreateUserProcess`（**0xAA**）、`NtWaitForMultipleObjects`（**0x57**）、`NtDeviceIoControlFile`（**0x52**）、Lock/Unlock VM（**0x53/0x54**）等；`NtQuerySystemInformation` 多类子集 + `probe`；**ssdt_stub_parity**；阶段 E 见 [PHASE_E_NATIVE_API.md](docs/cn/PHASE_E_NATIVE_API.md) |
 | IDT/ISR | Done | 256 向量 |
-| 调度器 | Partial | 多优先级就绪队列；完整 NT 32 级与饥饿策略见契约矩阵 |
+| 调度器 | Partial | **已实现**：每逻辑 CPU **32** 档 FIFO 分桶、`non_empty` 位图、按 **priority class** 时间片、饥饿提升、I/O boost、互斥优先级继承（`mutex_inherit_depth`）、亲和与 `home_cpu`、tick 路径 CR3 切换；**对象等待队列** + `keWait` 与 `tick` 协同（[SCHEDULER_API.md](docs/cn/SCHEDULER_API.md) 阶段 C）。**未等同 NT**：NUMA/公平份额、完整 IRQL 抢占、AP **INIT-SIPI** 实路径与多核 tick 等见契约矩阵与 K2.x |
 | 定时器 | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
 | 同步 | Partial | 内核 `ke/sync.zig` 有 Event/Mutex/Semaphore/SpinLock；**ntdll 句柄路径**：`NtCreateEvent`/`NtWait`/`NtSetEvent`（含手动/自动复位）与 `ObjectHeader` 等待队列一致；`NtCreateMutant`/`NtReleaseSemaphore` 等仍为桩 — 见 [SCHEDULER_API.md](docs/cn/SCHEDULER_API.md)、契约矩阵 §2 |
 | Object Manager | Partial | 类型、句柄表、命名空间子集；主机测试 [zircon_host_ob_test.zig](src/zircon_host_ob_test.zig) |
 | Process Manager | Partial | 进程/线程、Process Server；CR3/隔离见契约矩阵 §0 |
 | Session Manager | Done | SMSS、会话、子系统注册 |
-| Security | Done | Token、SID、访问检查 |
+| Security | Partial | 令牌、SID、`checkAccess` 类检查；**完整 DACL / AuthZ** 仍为路线图 — 契约矩阵 **B3**（[NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)） |
 | I/O Manager | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP；PCI 早期见 `acpi_pci_early.zig` |
 | VFS | Partial | 挂载点；完整语义见契约矩阵 |
 | FAT32 | Partial | `C:\` 主路径；与 NT 格式化完全互操作非目标 |
@@ -209,8 +214,8 @@ Clean-room；矩阵 **Done** = 烟测主路径可演示且与 [契约矩阵](doc
 | 执行引擎 | Partial | PE 加载、DLL 绑定、生命周期 |
 | WOW64 | Partial | PE32、thunk；见 `subsystems/win32/wow64/` 子模块 |
 | 注册表运行时 | Partial | 内存树与若干键；RegF/hive 持久化 Planned |
-| Aero / DWM（内核壳） | Partial | 脏矩形/分层与 `compositor_config_epoch`；CPU 合成与 Win7 WDDM 差异见 DesktopManagerSpec |
-| 多架构 Win32 栈 | Partial | **x86_64** 为主验证路径；其余架构见各 arch 文档与 CI |
+| Aero / DWM（内核壳） | Partial | 脏区/Present 契约、`thumb_refresh` 节流、任务栏缩略 `enqueueIconicThumbnailRequest` 与 Flip3D 表面枚举；**Aero 模糊/合成仍以 CPU 为主**（`blur_budget`）。**VirtIO-GPU**：`SET_SCANOUT` + 屏前 RAM `RESOURCE_FLUSH`；≤32×32 scratch `TRANSFER` PoC。**NVIDIA**：PCI/BAR0 + 可选诊断映射、`IOCTL_NVIDIA_BAR0_FIRST_U32`（非 WDDM）。见 [AeroDesktopRuntime.md](docs/cn/AeroDesktopRuntime.md)、契约矩阵 §4.1、[SOFTWARE_COMPOSITOR_WDDM.md](docs/cn/SOFTWARE_COMPOSITOR_WDDM.md) |
+| 多架构 Win32 栈 | Partial | **x86_64** 为主验证路径。**LoongArch64**：UEFI/ZBM 引导 + ramfb 桌面可达；paging/TLB/SMP 逐步完善中。**AArch64/RISC-V64**：引导骨架已搭建，异常/MMU/调度未完整。**MIPS64el**：空壳 |
 
 ## 里程碑（路线图阶段，非「全部已完成」）
 

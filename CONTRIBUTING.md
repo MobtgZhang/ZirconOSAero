@@ -14,6 +14,13 @@
 - 新 `.zig` 文件使用仓库统一 SPDX + 模块头注释。  
 - 裸指针与 `@ptrFromInt` 须注释安全理由（内核规则）。
 
+## 目录约定（结构）
+
+- **宿主测试**（`zig build test` 的独立目标）：逻辑放在 [`tests/`](tests/)（含 [`tests/host/`](tests/host/) 与 [`tests/nt61/`](tests/nt61/)）。若测试需 `@import("mm/...")` 等与内核同包路径，Zig 0.15 要求 **模块根目录为 `src/`**；此类用例的 **真源在 `tests/host/*.zig`**，由 [`src/`](src/) 下同名 **符号链接** 指向（`build.zig` 的 `root_source_file` 仍写 `src/...`）。  
+- **内核可执行入口**：仅 [`src/main.zig`](src/main.zig)（panic、`kernel_main`、架构分发）；启动与桌面会话逻辑逐步收拢到 `src/kernel/` 等模块。  
+- **显示/合成栈**：跨目录引用时优先经 [`src/drivers/video/root.zig`](src/drivers/video/root.zig) 的稳定 re-export，避免深层 `../../../` 穿透。  
+- **新增大文件**：先按子域拆模块再合入，单文件不宜长期超过约两千行（显示/Win32 等域允许分多步拆分）。
+
 ## Issue
 
 请使用 GitHub Issue 模板（Bug / 功能请求）；安全敏感问题请避免在公开 Issue 中粘贴可利用载荷细节。

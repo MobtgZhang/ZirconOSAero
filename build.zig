@@ -1,83 +1,13 @@
 const std = @import("std");
 const mem = std.mem;
+const wr = @import("tooling/wallpaper_resolution.zig");
 
-const PreferredFbDims = struct { w: u32, h: u32 };
-
-/// PNG sources for `tools/wallpaper_embed.zig` (preset order 0..11).
-const wallpaper_png_inputs = [_][]const u8{
-    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_harmony.png",
-    "src/desktop/aero/resources/wallpapers/Nature/zircon_default.png",
-    "src/desktop/aero/resources/wallpapers/Architecture/zircon_crystal.png",
-    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_aurora.png",
-    "src/desktop/aero/resources/wallpapers/Characters/zircon_characters.png",
-    "src/desktop/aero/resources/wallpapers/Nature/zircon_nature.png",
-    "src/desktop/aero/resources/wallpapers/Scenes/zircon_scenes.png",
-    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_landscapes.png",
-    "src/desktop/aero/resources/wallpapers/Architecture/zircon_architecture.png",
-    "src/desktop/aero/resources/wallpapers/Nature/zircon_ocean.png",
-    "src/desktop/aero/resources/wallpapers/Scenes/zircon_nebula.png",
-    "src/desktop/aero/resources/wallpapers/Landscapes/zircon_landscape.png",
-};
-
-/// Parse `RESOLUTION = WxHxdepth` from build.conf text (first match).
-fn parseResolutionFromBuildConfText(content: []const u8) ?PreferredFbDims {
-    var iter = std.mem.splitScalar(u8, content, '\n');
-    while (iter.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0 or trimmed[0] == '#') continue;
-        if (!std.mem.startsWith(u8, trimmed, "RESOLUTION")) continue;
-        const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
-        var val = std.mem.trim(u8, trimmed[eq + 1 ..], " \t");
-        if (std.mem.indexOfScalar(u8, val, '#')) |hi| {
-            val = std.mem.trim(u8, val[0..hi], " \t");
-        }
-        var parts = std.mem.splitScalar(u8, val, 'x');
-        const ws = parts.next() orelse continue;
-        const hs = parts.next() orelse continue;
-        const w = std.fmt.parseUnsigned(u32, ws, 10) catch continue;
-        const h = std.fmt.parseUnsigned(u32, hs, 10) catch continue;
-        if (w == 0 or h == 0) continue;
-        return .{ .w = w, .h = h };
-    }
-    return null;
-}
-
-/// `make build` / `sync_resolution` 写入 `build/tmp/kernel_pref_fb_wh.txt`（与 ZIRCON_RESOLUTION / build.conf 一致）。
-fn readPreferredFbFromSyncArtifact(b: *std.Build) ?PreferredFbDims {
-    const path = "build/tmp/kernel_pref_fb_wh.txt";
-    const file = b.build_root.handle.openFile(path, .{}) catch return null;
-    defer file.close();
-    const max_bytes: usize = 128;
-    const raw = file.readToEndAlloc(b.allocator, max_bytes) catch return null;
-    defer b.allocator.free(raw);
-    var iter = std.mem.splitScalar(u8, raw, '\n');
-    const wline = std.mem.trim(u8, iter.next() orelse return null, " \t\r");
-    const hline = std.mem.trim(u8, iter.next() orelse return null, " \t\r");
-    if (wline.len == 0 or hline.len == 0) return null;
-    const w = std.fmt.parseUnsigned(u32, wline, 10) catch return null;
-    const h = std.fmt.parseUnsigned(u32, hline, 10) catch return null;
-    if (w == 0 or h == 0) return null;
-    return .{ .w = w, .h = h };
-}
-
-/// 仅当 `build.conf` 中存在未注释的 `RESOLUTION = WxHxdepth` 时返回 Some；否则 null（与 sync 脚本语义一致）。
-fn tryReadPreferredFbFromBuildConf(b: *std.Build) ?PreferredFbDims {
-    const file = b.build_root.handle.openFile("build.conf", .{}) catch return null;
-    defer file.close();
-    const max_bytes: usize = 65536;
-    const raw = file.readToEndAlloc(b.allocator, max_bytes) catch return null;
-    defer b.allocator.free(raw);
-    return parseResolutionFromBuildConfText(raw);
-}
-
-fn ensureWallpaperPngAssetsPresent(b: *std.Build) void {
-    for (wallpaper_png_inputs) |rel| {
-        b.build_root.handle.access(rel, .{}) catch {
-            std.log.err("Missing wallpaper PNG: {s}\n  Add the file or generate placeholders: bash scripts/fetch-assets.sh\n", .{rel});
-            std.process.exit(1);
-        };
-    }
-}
+const PreferredFbDims = wr.PreferredFbDims;
+const parseResolutionFromBuildConfText = wr.parseResolutionFromBuildConfText;
+const readPreferredFbFromSyncArtifact = wr.readPreferredFbFromSyncArtifact;
+const tryReadPreferredFbFromBuildConf = wr.tryReadPreferredFbFromBuildConf;
+const ensureWallpaperPngAssetsPresent = wr.ensureWallpaperPngAssetsPresent;
+const wallpaper_png_inputs = wr.wallpaper_png_inputs;
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
@@ -422,6 +352,10 @@ pub fn build(b: *std.Build) void {
         .x86_64 => .kernel,
         .aarch64 => .small,
         .riscv64 => .medium,
+        // LoongArch 内核 VA/恒等与 Large 代码模型易触发 ±2GiB PCREL 溢出；与 RISC-V 一致用 medium。
+        .loongarch64 => .medium,
+        // MIPS64EL：kseg0 内核地址 + N64 ABI 全局数据需 medium code model，避免 $gp-relative 溢出。
+        .mips64el => .medium,
         else => .default,
     };
 
@@ -504,11 +438,20 @@ pub fn build(b: *std.Build) void {
         kernel.addAssemblyFile(b.path("src/arch/x86_64/kernel_end.s"));
     } else if (mem.eql(u8, arch_opt, "aarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/aarch64/start.S"));
+        kernel.addAssemblyFile(b.path("src/arch/aarch64/exception_vector.S"));
+        kernel.addAssemblyFile(b.path("src/arch/aarch64/context_switch.S"));
     } else if (mem.eql(u8, arch_opt, "riscv64")) {
         kernel.addAssemblyFile(b.path("src/arch/riscv64/start.S"));
+        kernel.addAssemblyFile(b.path("src/arch/riscv64/trap.S"));
+        kernel.addAssemblyFile(b.path("src/arch/riscv64/context_switch.S"));
     } else if (mem.eql(u8, arch_opt, "loongarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/loongarch64/crt0.S"));
         kernel.addAssemblyFile(b.path("src/arch/loongarch64/exc_vec.S"));
+        kernel.addAssemblyFile(b.path("src/arch/loongarch64/context_switch.S"));
+    } else if (mem.eql(u8, arch_opt, "mips64el")) {
+        kernel.addAssemblyFile(b.path("src/arch/mips64el/start.S"));
+        kernel.addAssemblyFile(b.path("src/arch/mips64el/exceptions.S"));
+        kernel.addAssemblyFile(b.path("src/arch/mips64el/context_switch.S"));
     }
 
     b.installArtifact(kernel);
@@ -668,11 +611,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_wow64_types_tests = b.addRunArtifact(wow64_types_tests);
 
+    const nt61_aero_defaults_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+
     const ob_object_test_mod = b.createModule(.{
         .root_source_file = b.path("src/zircon_host_ob_test.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    ob_object_test_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
     ob_object_test_mod.addOptions("build_options", build_opts);
     const ob_object_tests = b.addTest(.{
         .root_module = ob_object_test_mod,
@@ -845,6 +795,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_fs_vfs_constants_tests = b.addRunArtifact(fs_vfs_constants_tests);
 
+    const partition_table_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/drivers/storage/partition_table.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const partition_table_host_tests = b.addTest(.{
+        .root_module = partition_table_host_mod,
+        .name = "partition_table_host",
+    });
+    const run_partition_table_host_tests = b.addRunArtifact(partition_table_host_tests);
+
     const fs_status_nt_map_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/fs_status_nt_map_host.zig"),
         .target = b.graph.host,
@@ -941,6 +902,11 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    const peb_nt61_x64_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/sdk/peb_nt61_x64.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
     const kuser_shared_nt61_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/kuser_shared_nt61.zig"),
         .target = b.graph.host,
@@ -952,6 +918,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
         .imports = &.{
             .{ .name = "teb", .module = teb_nt61_x64_mod },
+            .{ .name = "peb", .module = peb_nt61_x64_host_mod },
             .{ .name = "kuser", .module = kuser_shared_nt61_mod },
         },
     });
@@ -960,6 +927,17 @@ pub fn build(b: *std.Build) void {
         .name = "nt61_abi_layout_host",
     });
     const run_nt61_abi_layout_tests = b.addRunArtifact(nt61_abi_layout_tests);
+
+    const system_info_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/sdk/system_info_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const system_info_nt61_layout_tests = b.addTest(.{
+        .root_module = system_info_nt61_host_mod,
+        .name = "system_info_nt61_host",
+    });
+    const run_system_info_nt61_layout_tests = b.addRunArtifact(system_info_nt61_layout_tests);
 
     const object_layout_nt61_mod = b.createModule(.{
         .root_source_file = b.path("sdk/object_layout_nt61.zig"),
@@ -1036,6 +1014,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    wait_user_apc_nt61_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
     wait_user_apc_nt61_host_mod.addOptions("build_options", build_opts);
     const wait_user_apc_nt61_tests = b.addTest(.{
         .root_module = wait_user_apc_nt61_host_mod,
@@ -1131,11 +1110,6 @@ pub fn build(b: *std.Build) void {
     });
     const run_aero_flag_mapping_tests = b.addRunArtifact(aero_flag_mapping_tests);
 
-    const nt61_aero_defaults_host_mod = b.createModule(.{
-        .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
-    });
     const nt61_aero_defaults_tests = b.addTest(.{
         .root_module = nt61_aero_defaults_host_mod,
         .name = "nt61_aero_defaults_host",
@@ -1201,6 +1175,17 @@ pub fn build(b: *std.Build) void {
         .name = "dwm_blur_budget_host",
     });
     const run_dwm_blur_budget_tests = b.addRunArtifact(dwm_blur_budget_tests);
+
+    const compositor_sync_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/compositor_sync_nt61.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const compositor_sync_nt61_tests = b.addTest(.{
+        .root_module = compositor_sync_nt61_host_mod,
+        .name = "compositor_sync_nt61_host",
+    });
+    const run_compositor_sync_nt61_tests = b.addRunArtifact(compositor_sync_nt61_tests);
 
     const dwm_nt61_api_contract_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_nt61_api_contract.zig"),
@@ -1303,6 +1288,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_multimon_dpi_nt61_tests = b.addRunArtifact(multimon_dpi_nt61_tests);
 
+    const display_set_mode_ioctl_layout_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/nt61/display_set_mode_ioctl_layout_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const display_set_mode_ioctl_layout_tests = b.addTest(.{
+        .root_module = display_set_mode_ioctl_layout_host_mod,
+        .name = "display_set_mode_ioctl_layout_host",
+    });
+    const run_display_set_mode_ioctl_layout_tests = b.addRunArtifact(display_set_mode_ioctl_layout_tests);
+
     const taskbar_peek_hit_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/taskbar_peek_hit_nt61_host.zig"),
         .target = b.graph.host,
@@ -1360,6 +1356,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "dwm_config_registry_sync", .module = dwm_config_registry_sync_host_mod },
             .{ .name = "dwm_blur_budget", .module = dwm_blur_budget_host_mod },
             .{ .name = "dwm_nt61_api_contract", .module = dwm_nt61_api_contract_host_mod },
+            .{ .name = "compositor_sync_nt61", .module = compositor_sync_nt61_host_mod },
             .{ .name = "wddm_abstraction", .module = wddm_abstraction_host_mod },
             .{ .name = "nt61_aero_defaults", .module = nt61_aero_defaults_host_mod },
         },
@@ -1380,6 +1377,19 @@ pub fn build(b: *std.Build) void {
         .name = "registry_zosh1_host",
     });
     const run_registry_zosh1_tests = b.addRunArtifact(registry_zosh1_tests);
+
+    const phase_b_exec_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/zircon_host_phase_b_exec_test.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    phase_b_exec_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    phase_b_exec_host_mod.addOptions("build_options", build_opts);
+    const phase_b_exec_host_tests = b.addTest(.{
+        .root_module = phase_b_exec_host_mod,
+        .name = "phase_b_exec_host",
+    });
+    const run_phase_b_exec_host_tests = b.addRunArtifact(phase_b_exec_host_tests);
 
     const regf_parse_host_mod = b.createModule(.{
         .root_source_file = b.path("src/registry/regf_parse.zig"),
@@ -1514,6 +1524,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    fork_cow_share_nt61_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
     fork_cow_share_nt61_host_mod.addOptions("build_options", build_opts);
     const fork_cow_share_nt61_tests = b.addTest(.{
         .root_module = fork_cow_share_nt61_host_mod,
@@ -1521,7 +1532,46 @@ pub fn build(b: *std.Build) void {
     });
     const run_fork_cow_share_nt61_tests = b.addRunArtifact(fork_cow_share_nt61_tests);
 
-    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, lpc_handshake_version_host, nt61_os_version_layout_host, nt61_core_dll_abi_inventory_host, pe_loader_policy_host, fork_cow_share_nt61_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, mutex_inherit_depth_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, dwm_nt61_api_contract_host, dwm_nt61_abi_inventory_host, dwmapi_wow64_host, ntfs_hive_minimum_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, startmenu_paint_hint_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86, wow64_x64_semantic_alias_host, wow64_redirect_host)");
+    const vm_user_va_policy_nt61_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/vm_user_va_policy_nt61_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    vm_user_va_policy_nt61_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    vm_user_va_policy_nt61_host_mod.addOptions("build_options", build_opts);
+    const vm_user_va_policy_nt61_tests = b.addTest(.{
+        .root_module = vm_user_va_policy_nt61_host_mod,
+        .name = "vm_user_va_policy_nt61_host",
+    });
+    const run_vm_user_va_policy_nt61_tests = b.addRunArtifact(vm_user_va_policy_nt61_tests);
+
+    const loongarch_nt61_mm_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/loongarch_nt61_mm_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    loongarch_nt61_mm_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    loongarch_nt61_mm_host_mod.addOptions("build_options", build_opts);
+    const loongarch_nt61_mm_host_tests = b.addTest(.{
+        .root_module = loongarch_nt61_mm_host_mod,
+        .name = "loongarch_nt61_mm_host",
+    });
+    const run_loongarch_nt61_mm_host_tests = b.addRunArtifact(loongarch_nt61_mm_host_tests);
+
+    const mips64el_nt61_mm_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/mips64el_nt61_mm_host.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    mips64el_nt61_mm_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    mips64el_nt61_mm_host_mod.addOptions("build_options", build_opts);
+    const mips64el_nt61_mm_host_tests = b.addTest(.{
+        .root_module = mips64el_nt61_mm_host_mod,
+        .name = "mips64el_nt61_mm_host",
+    });
+    const run_mips64el_nt61_mm_host_tests = b.addRunArtifact(mips64el_nt61_mm_host_tests);
+
+    const test_step = b.step("test", "Run host unit tests (heap, pool, buddy, slab, vm_nt_protect_pte_host, SSDT, ssdt_stub_parity, ssdt_x64_x86_namespace, se/token, smp_atomic_host, wow64_types, object, io_irp_host, ecam_layout, hpet_id, lpc_portkind_host, lpc_handshake_version_host, nt61_os_version_layout_host, nt61_core_dll_abi_inventory_host, pe_loader_policy_host, fork_cow_share_nt61_host, vm_user_va_policy_nt61_host, loongarch_nt61_mm_host, minimal_net, mdl_host, pci_driver_bind_host, fs_vfs_constants_host, fs_status_nt_map_host, nt61_full_api_backlog_anchors_host, scheduler_policy_host, mutex_inherit_depth_host, nt61_phase_f_scheduler_gap, gpu_device_host, virtio_gpu_spec_host, display_flip_journal_host, nt61_abi_layout_host, win32k_host, msg_pm_semantics_host, gdi_rop_contract_host, hid_boot_report_host, dwm_surface_spec_host, aero_flag_mapping_host, nt61_aero_defaults_host, nt61_dual_track_host, color_nt61_host, dwm_config_registry_sync_host, dwm_blur_budget_host, compositor_sync_nt61_host, dwm_nt61_api_contract_host, dwm_nt61_abi_inventory_host, dwmapi_wow64_host, ntfs_hive_minimum_host, win32k_api_semantics_host, csr_lpc_policy_host, dwm_messages_nt61_host, dwm_zorder_nt61_host, multimon_dpi_nt61_host, taskbar_peek_hit_nt61_host, startmenu_paint_hint_nt61_host, kernel_stub_audit_anchor_host, dwm_nt61_integration_host, registry_zosh1_host, wow64_ssdt_x86, wow64_x64_semantic_alias_host, wow64_redirect_host)");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_pool_tests.step);
     test_step.dependOn(&run_buddy_tests.step);
@@ -1551,6 +1601,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_paging_x86_host_tests.step);
     test_step.dependOn(&run_pci_bind_tests.step);
     test_step.dependOn(&run_fs_vfs_constants_tests.step);
+    test_step.dependOn(&run_partition_table_host_tests.step);
     test_step.dependOn(&run_fs_status_nt_map_tests.step);
     test_step.dependOn(&run_nt61_backlog_anchors_tests.step);
     test_step.dependOn(&run_sched_policy_tests.step);
@@ -1560,6 +1611,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_virtio_gpu_spec_tests.step);
     test_step.dependOn(&run_display_flip_journal_tests.step);
     test_step.dependOn(&run_nt61_abi_layout_tests.step);
+    test_step.dependOn(&run_system_info_nt61_layout_tests.step);
     test_step.dependOn(&run_object_layout_nt61_tests.step);
     test_step.dependOn(&run_stage4_min_anchor_tests.step);
     test_step.dependOn(&run_syscall_numbers_lock_nt61_tests.step);
@@ -1577,6 +1629,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_color_nt61_tests.step);
     test_step.dependOn(&run_dwm_config_registry_sync_tests.step);
     test_step.dependOn(&run_dwm_blur_budget_tests.step);
+    test_step.dependOn(&run_compositor_sync_nt61_tests.step);
     test_step.dependOn(&run_dwm_nt61_api_contract_tests.step);
     test_step.dependOn(&run_dwm_nt61_abi_inventory_tests.step);
     test_step.dependOn(&run_dwmapi_wow64_tests.step);
@@ -1587,12 +1640,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_dwm_messages_nt61_tests.step);
     test_step.dependOn(&run_dwm_zorder_nt61_tests.step);
     test_step.dependOn(&run_multimon_dpi_nt61_tests.step);
+    test_step.dependOn(&run_display_set_mode_ioctl_layout_tests.step);
     test_step.dependOn(&run_taskbar_peek_hit_nt61_tests.step);
     test_step.dependOn(&run_startmenu_paint_hint_nt61_tests.step);
     test_step.dependOn(&run_shell_partial_repaint_nt61_tests.step);
     test_step.dependOn(&run_kernel_stub_audit_tests.step);
     test_step.dependOn(&run_dwm_nt61_integration_tests.step);
     test_step.dependOn(&run_registry_zosh1_tests.step);
+    test_step.dependOn(&run_phase_b_exec_host_tests.step);
     test_step.dependOn(&run_regf_parse_tests.step);
     test_step.dependOn(&run_wow64_ssdt_x86_tests.step);
     test_step.dependOn(&run_wow64_x64_semantic_alias_tests.step);
@@ -1604,6 +1659,28 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_nt61_core_dll_abi_inventory_tests.step);
     test_step.dependOn(&run_pe_loader_policy_tests.step);
     test_step.dependOn(&run_fork_cow_share_nt61_tests.step);
+    test_step.dependOn(&run_vm_user_va_policy_nt61_tests.step);
+    test_step.dependOn(&run_loongarch_nt61_mm_host_tests.step);
+    test_step.dependOn(&run_mips64el_nt61_mm_host_tests.step);
+
+    const pwsh_lite_mod = b.createModule(.{
+        .root_source_file = b.path("tools/pwsh-lite/main.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const pwsh_lite_exe = b.addExecutable(.{
+        .name = "pwsh-lite",
+        .root_module = pwsh_lite_mod,
+    });
+    const install_pwsh_lite = b.addInstallArtifact(pwsh_lite_exe, .{});
+    const pwsh_lite_step = b.step("pwsh-lite", "Install tools/pwsh-lite → zig-out/bin (not Microsoft PowerShell)");
+    pwsh_lite_step.dependOn(&install_pwsh_lite.step);
+    const pwsh_lite_tests = b.addTest(.{
+        .root_module = pwsh_lite_mod,
+        .name = "pwsh_lite_host",
+    });
+    const run_pwsh_lite_tests = b.addRunArtifact(pwsh_lite_tests);
+    test_step.dependOn(&run_pwsh_lite_tests.step);
 
     addMinimalPeNt61Step(b);
 
@@ -1614,6 +1691,9 @@ pub fn build(b: *std.Build) void {
     }
     if (cpu_arch == .riscv64) {
         buildRiscv64ZbmEfiObject(b, optimize, desktop_default, debug_mode, zbm_fb_w, zbm_fb_h);
+    }
+    if (cpu_arch == .mips64el) {
+        buildMips64elZbmEfiObject(b, optimize, desktop_default, debug_mode, zbm_fb_w, zbm_fb_h);
     }
     buildDesktop(b, optimize);
 }
@@ -1949,18 +2029,24 @@ fn buildLoongArchZbmEfiObject(
         .cpu_arch = .loongarch64,
         .os_tag = .freestanding,
         .abi = .none,
-        .cpu_model = .baseline, // 避免 la464 不支持的指令（INE 异常）
+        // baseline：LA64 整数 + 双精度；LLVM 仍可能为跳转表生成 `ldx.d`，与 QEMU `-cpu la464` TCG 组合时曾 #INE（见 Makefile QEMU_LOONGARCH64_CPU）。
+        .cpu_model = .baseline,
     });
     const zbm_opts = b.addOptions();
     zbm_opts.addOption(bool, "debug", debug_mode);
     zbm_opts.addOption([]const u8, "desktop", desktop_default);
     zbm_opts.addOption(u32, "zbm_preferred_fb_width", zbm_fb_w);
     zbm_opts.addOption(u32, "zbm_preferred_fb_height", zbm_fb_h);
+    _ = optimize;
+    // ZBM 在 Debug 下仍可能为边界检查/`switch` 生成 `ldx.d` 跳转表；QEMU LoongArch TCG 对部分 `ldx` #INE。
+    // LoongArch ZBM 单独用 ReleaseSmall，与内核 `-Doptimize` 脱钩（菜单/加载路径行为不变，仅少调试断言）。
     const zbm_mod = b.createModule(.{
         .root_source_file = b.path("boot/zbm/uefi/main_loongarch64.zig"),
         .target = la_target,
-        .optimize = optimize,
+        .optimize = .ReleaseSmall,
         .link_libc = false,
+        // 与内核一致：避免大位移/PCREL 与 la464 默认特性组合下出现非法指令或错址（历史「Zig ZBM INE」根因之一）。
+        .code_model = .medium,
     });
     zbm_mod.addOptions("build_options", zbm_opts);
     const zbm_obj = b.addObject(.{
@@ -2007,6 +2093,44 @@ fn buildRiscv64ZbmEfiObject(
     b.getInstallStep().dependOn(&install_o.step);
     const zbm_rv_step = b.step("zbm-riscv64-uefi", "RISC-V64 ZBM: Zig object (link with scripts/build/zbm-riscv64-efi.sh → BOOTRISCV64.EFI)");
     zbm_rv_step.dependOn(&install_o.step);
+}
+
+/// MIPS64EL ZBM: Zig → `zbm_mips64el.o` (freestanding), then GNU-EFI crt0 + objcopy → `.efi`.
+fn buildMips64elZbmEfiObject(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    desktop_default: []const u8,
+    debug_mode: bool,
+    zbm_fb_w: u32,
+    zbm_fb_h: u32,
+) void {
+    const mips_target = b.resolveTargetQuery(.{
+        .cpu_arch = .mips64el,
+        .os_tag = .freestanding,
+        .abi = .none,
+    });
+    const zbm_opts = b.addOptions();
+    zbm_opts.addOption(bool, "debug", debug_mode);
+    zbm_opts.addOption([]const u8, "desktop", desktop_default);
+    zbm_opts.addOption(u32, "zbm_preferred_fb_width", zbm_fb_w);
+    zbm_opts.addOption(u32, "zbm_preferred_fb_height", zbm_fb_h);
+    _ = optimize;
+    const zbm_mod = b.createModule(.{
+        .root_source_file = b.path("boot/zbm/uefi/main_mips64el.zig"),
+        .target = mips_target,
+        .optimize = .ReleaseSmall,
+        .link_libc = false,
+        .code_model = .medium,
+    });
+    zbm_mod.addOptions("build_options", zbm_opts);
+    const zbm_obj = b.addObject(.{
+        .name = "zbm_mips64el",
+        .root_module = zbm_mod,
+    });
+    const install_o = b.addInstallFile(zbm_obj.getEmittedBin(), "zbm_mips64el.o");
+    b.getInstallStep().dependOn(&install_o.step);
+    const zbm_mips_step = b.step("zbm-mips64el-uefi", "MIPS64EL ZBM: Zig object (link with scripts/build/zbm-mips64el-efi.sh → BOOTMIPS64EL.EFI)");
+    zbm_mips_step.dependOn(&install_o.step);
 }
 
 /// Host-only: optional ICO regeneration, MinGW `windres`, then `zig cc -target x86_64-windows-gnu -shared` → PE icon DLL.

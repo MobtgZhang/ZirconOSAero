@@ -111,7 +111,7 @@
 | 资源监视器 / 性能监视器 | stub | 与 KE/PS 采样二期 |
 | 任务计划程序 | stub | 作业存储占位 |
 | 命令提示符 | stub | `cmd.zig`（内核内置最小 CMD 行） |
-| **PowerShell**：兼容 cmdlet 宿主 | **不适用（本仓库）** | **内核不提供** PowerShell；与 PowerShell 行为对齐的脚本引擎计划在 **独立仓库的用户态 .NET** 中实现；本仓库仅保留 syscall / LPC / Section 等内核支撑（见 Phase F / 契约矩阵）。 |
+| **PowerShell**：兼容 cmdlet 宿主 | **不适用（内核）** / **工具链 partial** | **内核不提供** PowerShell；完整 .NET 宿主仍为 **仓库外**。阶段 D 起：主机工具 **[`tools/pwsh-lite`](../../tools/pwsh-lite/)**（`zig build pwsh-lite`）为 **自研** cmdlet 管道演示，`zig build test` → **pwsh_lite_host**；**不**声称与 Windows PowerShell 等价。 |
 
 ## 游戏（Games）
 

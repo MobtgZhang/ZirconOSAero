@@ -13,6 +13,10 @@ Status values match [NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md) and
 | WOW64 | `src/subsystems/win32/wow64.zig` | Partial | PE32 + 32→64 thunk **subset**; PEB/TEB/SSDT gaps — see matrix |
 | POSIX | — | Planned | libc/POSIX mapping |
 
+### 1.1 API tables below are **not** a completion checklist
+
+Category / **Examples** columns are **Learn-style pointers** for readers. They **do not** mean every listed API exists, is `Partial` vs `Stub`, or matches Windows error/synchronization semantics. **Authoritative coverage**：[API_COMPAT_MATRIX.md](../cn/API_COMPAT_MATRIX.md)（skeleton + `Stub`/`Partial`）· [NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md) · [MVT_NT61.md](../cn/MVT_NT61.md). If a symbol is absent there, assume **not implemented** until code + tests say otherwise.
+
 ### Call stack
 
 ```
@@ -112,7 +116,7 @@ Loads and runs Win32 apps.
 | PE load | PE32/PE32+ executables |
 | DLL binding | Import tables → ntdll/kernel32/… |
 | Process creation | Address space, initial thread |
-| Lifecycle | Create through exit |
+| Lifecycle | Create through exit (**subset** — many edge cases deferred) |
 
 ### 3.6 console — console runtime (`console.zig`)
 
@@ -135,9 +139,11 @@ CMD-style shell.
 | `type` | Cat file |
 | `copy` / `del` / `mkdir` / `rmdir` | File ops |
 
-### 3.8 Managed shell (.NET user mode, planned)
+### 3.8 Managed shell (.NET user mode, planned) and **pwsh-lite** (repo tool)
 
-The in-kernel ZirconShell has been removed. A script host compatible with **Microsoft PowerShell** is expected as a **user-mode .NET** program, outside this kernel tree.
+The in-kernel ZirconShell has been removed. Full **Microsoft PowerShell** binary / cmdlet compatibility is expected from a **user-mode .NET** host outside this tree.
+
+For milestone testing, this repo ships a **clean-room** minimal cmdlet-style pipeline host at [`tools/pwsh-lite/`](../../tools/pwsh-lite/): `zig build pwsh-lite` → `zig-out/bin/pwsh-lite` (not a Microsoft product). Host tests: **pwsh_lite_host** (`zig build test`).
 
 ## 4. WOW64 (`wow64.zig`)
 

@@ -24,6 +24,7 @@
 
 ## K0.5 Win32 / 子系统表述与矩阵（任意 PR 若触及下列内容）
 
+- [ ] 若根目录 **[README.md](../../README.md)** 或 **[README_cn.md](../../README_cn.md)** 的「设计理念」段或 **Phase 0–11 功能矩阵**任一行（Status / Notes）有改动，须**同一 PR** 使 **中英文 README 对应行语义一致**，并更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 中相关能力（若已有矩阵行）。
 - [ ] 若 README、[docs/en/Subsystems.md](../en/Subsystems.md)、[docs/cn/Subsystems.md](Subsystems.md) 或营销性「功能列表」中**扩大** Win32、WOW64、ntdll、csrss、user32、gdi32 的完成度表述，须**同一 PR** 更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与（如适用）[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)，并在 [MVT_NT61.md](MVT_NT61.md) 或 `tests/` 增加可复现验证，或明确保持 `Stub`/`Partial`。
 - [ ] 实现与文档引用仅限 **Microsoft Learn、WDK、硬件规范、公开发表的 ABI 对照**；行为细节不足时以实验 + 文档迭代，不依赖非白名单逆向代码库。
 

@@ -11,7 +11,7 @@
 
 2. **Phase 3 — VM / PML4（initAddressSpaceInPlace 等）**  
    - 从帧分配器取低地址可恒等映射的页建 PML4，再建立内核地址空间与 identity map。  
-   - 依赖 Phase 1 已完成且 PFN 元数据一致。
+   - 依赖本路径上 **Phase 1（帧种子）已跑通**且 PFN 元数据一致（非声称整个 Roadmap Phase 1 里程碑「全部完成」）。
 
 3. **用户映像加载（NT 6.1 兼容，后续里程碑）**  
    - 与上两阶段独立：需要 `NtCreateSection` / `NtMapViewOfSection` 子集、PE32+ 头解析（见 `sdk/pe64_nt61.zig`）、重定位与用户栈。  

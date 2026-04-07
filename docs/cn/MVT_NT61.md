@@ -4,6 +4,11 @@
 
 **PR 门禁**：[NT61_PR_GATES.md](NT61_PR_GATES.md)。**何时扩展本表**： [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) Phase K0。
 
+## 阶段 A/B/C 收口 + E 门禁（摘要）
+
+- **A/B/C**：以本表 **主机 `zig build test` 全绿** 为准；阶段 C DWM/LPC 细项见 [阶段 C 计划](.cursor/plans/阶段c_dwm合成待办_44633382.plan.md) 与 **dwm_*** / **lpc_*** 主机测；QEMU 烟测见下文 **CI / 烟测**。
+- **阶段 E**：WOW64 `int 0x2E`、AHCI 分区偏移、`NtShutdownSystem`、USB HID Boot 键盘路径等须在 PR 中对照 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与 [PHASE_G_WOW64.md](PHASE_G_WOW64.md)。
+
 ## 主机单元测试（无需 QEMU）
 
 | 能力域 | 命令 | 覆盖模块 |
@@ -45,6 +50,7 @@
 | MDL 子集（PFN 槽、恒等映射填 PFN） | 同上 → mdl_host | [src/mm/mdl.zig](../../src/mm/mdl.zig) |
 | PCI 类码 / VirtIO → 驱动绑定占位 | 同上 → pci_driver_bind_host | [src/drivers/bus/pci_driver_bind.zig](../../src/drivers/bus/pci_driver_bind.zig) |
 | VFS `FileAccessMode` 数值 | 同上 → fs_vfs_constants_host | [tests/fs_vfs_constants_host.zig](../../tests/fs_vfs_constants_host.zig)（与 [src/fs/vfs.zig](../../src/fs/vfs.zig) 同步） |
+| **MBR / GPT 分区表解析（fixture）** | 同上 → **partition_table_host** | [partition_table.zig](../../src/drivers/storage/partition_table.zig)（模块根内 `test`） |
 | 常见 `NTSTATUS` 与文件打开映射（P6-1 锚点） | 同上 → fs_status_nt_map_host | [tests/fs_status_nt_map_host.zig](../../tests/fs_status_nt_map_host.zig) |
 | FULL_API_BACKLOG §1–§10 分节 CI 锚点（导入 `ssdt` 真断言） | 同上 → nt61_full_api_backlog_anchors_host | [tests/nt61_full_api_backlog_anchors_host.zig](../../tests/nt61_full_api_backlog_anchors_host.zig)；阶段 E 清单 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md) |
 | 调度器策略公式（主机） | 同上 → scheduler_policy_host | [tests/scheduler_policy_host.zig](../../tests/scheduler_policy_host.zig) |
@@ -55,6 +61,7 @@
 | Aero 标志映射（内核 ↔ 用户态 `SurfaceFlags`） | 同上 → **aero_flag_mapping_host** | [src/config/aero_flag_mapping.zig](../../src/config/aero_flag_mapping.zig) |
 | COLORREF ↔ 内核 BGR（与 Aero `theme.rgb` 字节序对照） | 同上 → **color_nt61_host** | [color_nt61.zig](../../src/config/color_nt61.zig) |
 | DWM 消息常量 + `WM_DWMSENDICONICTHUMBNAIL` / **`WM_DWMSENDICONICLIVEPREVIEWBITMAP`** lParam 烟测 + 打包器 + `classifyVirtioRuntimePhase`（含 `submit3d_noop_ok`）+ `DWM_E_COMPOSITIONDISABLED` / `DWM_THUMBNAIL_PROPERTIES` 布局锚点 + 注册表 `Composition` 广播提示 | 同上 → **dwm_messages_nt61_host**、**dwm_nt61_integration_host** | [tests/nt61/dwm_messages_nt61.zig](../../tests/nt61/dwm_messages_nt61.zig)、[tests/nt61/dwm_nt61_integration_host.zig](../../tests/nt61/dwm_nt61_integration_host.zig) |
+| 阶段 C：`COMPOSITOR_TREE_SYNC_V1` / `KERNEL_DWM_NOTIFY_V1` LPC 载荷（含 13 表面分片上限） | 同上 → **compositor_sync_nt61_host**、**dwm_nt61_integration_host**（`GetMessage` 0,0 与 DWM 常量） | [compositor_sync_nt61.zig](../../src/config/compositor_sync_nt61.zig)、[SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) 阶段 C |
 | DWM 公开契约常量 / 结构布局（`dwm_nt61_api_contract`） | 同上 → **dwm_nt61_api_contract_host** | [src/config/dwm_nt61_api_contract.zig](../../src/config/dwm_nt61_api_contract.zig)（含 `iconicSizeRequestLParam` 等主机 `test`） |
 | `dwmapi` 导出名表（与 `pe.zig` 合成 DLL 顺序一致） | 同上 → **dwm_nt61_abi_inventory_host** | [dwm_nt61_abi_inventory.zig](../../src/config/dwm_nt61_abi_inventory.zig)；策略 [DWMAPI_PE_EXPORT_STRATEGY.md](DWMAPI_PE_EXPORT_STRATEGY.md) |
 | WOW64 `dwmapi` PE32 布局（`DWM_BLURBEHIND32` / HWND 扩展） | 同上 → **dwmapi_wow64_host** | [dwmapi_wow64.zig](../../src/subsystems/win32/dwmapi_wow64.zig) |
@@ -85,7 +92,12 @@
 | 构建与 ELF | `.github/workflows/ci.yml`；本地 `zig build install` | ReleaseSafe 与横幅校验见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) |
 | 最小 x64 PE（仓库内，`ExitProcess`） | `zig build minimal-pe-nt61` | 输出 `zig-out/bin/zircon_nt61_minimal_pe.exe`；[`tools/minimal_pe_nt61/minimal_pe.zig`](../../tools/minimal_pe_nt61/minimal_pe.zig)；可选 QEMU 加载实验（不依赖微软闭源 DLL） |
 | ZBM / 无头启动 | `bash scripts/ci-qemu-smoke.sh` | MBR 盘、串口可选断言；`CI_SMOKE_DESKTOP=aero` 可走完整壳层（见脚本注释） |
+| **ACPI S5 / `NtShutdownSystem`** | QEMU `-no-reboot` 或串口检索 `ACPI PM:` | [`acpi_pm.zig`](../../src/hal/x86_64/acpi_pm.zig)；须令牌 **`PRIV_SHUTDOWN`**；SSDT **0x40/0x41**（[`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)）。无 PM1a 时回退 `arch.shutdown()`。 |
+| **PIC 向量 0x30+（WOW64 释放 0x2E）** | 串口 tick/键盘中断仍正常 | [`pic.zig`](../../src/hal/x86_64/pic.zig)、[`lapic_timer_tick.zig`](../../src/hal/x86_64/lapic_timer_tick.zig) |
+| **USB xHCI Boot 键盘** | `-device qemu-xhci` + `-device usb-kbd` | 串口 `USB: HID boot … proto=1`；[`hid.zig`](../../src/drivers/usb/hid.zig)；与 PS/2 优先级见 [`input_hub.zig`](../../src/drivers/input/input_hub.zig) |
+| **EHCI（可选）** | `-device usb-ehci` | [`ehci.zig`](../../src/drivers/usb/ehci.zig) 当前桩；QH/qTD 后续项 |
 | CPU 合成性能基线（人工） | `bash scripts/qemu_desktop_perf_baseline.sh` | 记录 `getDesktopComposeTelemetry` / 串口 blur 统计步骤；非硬性 60fps |
+| 阶段 C 模糊预算 × 分辨率（1080p / 800×600，人工） | `bash scripts/dwm_blur_resolution_matrix.sh` 后按脚本改 `RESOLUTION` 重建 + QEMU | `-Ddwm_blur_stats=true`、`-Dmouse_debug=true`；默认阈值见 `nt61_aero_defaults` / `dwm_blur_budget`；详 [SOFTWARE_COMPOSITOR_WDDM.md](SOFTWARE_COMPOSITOR_WDDM.md) |
 | 阶段 4 呈现 A/B | `zig build` 对比 `-Dforce_gop_present=true` 与默认；QEMU `-device virtio-gpu-pci` | 串口应出现 `present_backend=` / `compositor_backend=` 与 [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) |
 | aarch64 桌面相关编译闸门 | `.github/workflows/ci.yml`：`zig build kernel -Darch=aarch64 -Ddesktop-full=true` | 与 x86_64 **desktop-full** 选项一致 |
 | 分辨率与串口日志 | 改 `build.conf` 的 `RESOLUTION` → `make sync-resolution` → `make build` → QEMU/串口 | 核对 `Config: display=`、`FB tag`、`Framebuffer Driver` 宽高与 `RESOLUTION` 一致（见 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) §4.2.2） |

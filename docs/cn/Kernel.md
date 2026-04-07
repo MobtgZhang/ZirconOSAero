@@ -1,6 +1,6 @@
 # ZirconOSAero 内核实现
 
-本文档描述 ZirconOSAero 内核各子系统的具体实现细节（NT 6.1 目标）。
+本文档描述 ZirconOSAero 内核各子系统的实现线索（NT 6.1 目标）。**深浅不一**：大量模块为 **Partial**、桩或仅主机测。**完成度**以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)、[MVT_NT61.md](MVT_NT61.md) 为准，勿因本节出现某文件名即推断已等同 Windows 内核行为。
 
 ## 1. 源码布局
 
@@ -182,7 +182,7 @@ create, close, read, write, ioctl, query_info 等。
 
 console, serial, keyboard, disk, framebuffer, mouse, audio 等。
 
-### I/O 路径
+### I/O 路径（概念模型；实际设备/驱动覆盖为子集）
 
 ```
 用户态 API 调用
@@ -208,12 +208,12 @@ console, serial, keyboard, disk, framebuffer, mouse, audio 等。
 ### FAT32 (fat32.zig)
 
 - 挂载为 `C:\`
-- 支持：文件创建、读写、目录遍历、删除
+- **主路径子集**：创建、读写、目录遍历、删除等；与 NT 格式化工具或边缘特性**非**完全互操作 — 见根 README 矩阵与契约矩阵
 
 ### NTFS (ntfs.zig)
 
 - 挂载为 `D:\`
-- 支持：MFT 解析、文件/目录操作
+- **MFT/路径子集**；**非**完整 NTFS（日志、压缩、稀疏流、完整安全描述符等见路线图）
 
 ## 9. 加载器 (loader/)
 
@@ -229,9 +229,9 @@ console, serial, keyboard, disk, framebuffer, mouse, audio 等。
 
 ### ELF 加载器 (elf.zig)
 
-- 多架构 ELF 支持
-- ELF64 头解析、段加载
-- 共享对象处理
+- 多架构 ELF **试验/子集**
+- ELF64 头解析、段加载（与 glibc 动态链接全兼容**非**目标）
+- 共享对象：**Partial** / 路线图
 
 ## 10. 设备驱动 (drivers/)
 
@@ -246,7 +246,7 @@ console, serial, keyboard, disk, framebuffer, mouse, audio 等。
 | dwm.zig | Desktop Window Manager 合成器 |
 | amd_igpu.zig、`amd/*` | AMD/ATI 显示（含 RX550 / Polaris12）：PCI BAR 区分寄存器与 VRAM、多块卡时按芯片族选 primary、GOP handoff；构建选项 `amd_igpu`、`amd_igpu_defer_probe`、`amd_kms_experimental`。KMS/DC 占位见 `amd/display_dc_stub.zig`，GMC 规划见 `amd/gmc.zig`。 |
 
-支持的桌面主题：Classic、Luna、Aero、Modern、Fluent、SunValley
+**本仓库内置并随发行构建的桌面主题：仅 Aero**（`src/desktop/aero/`；`src/config/desktop.conf` 中 `theme = aero | none`）。其它文档若出现 Classic、Luna、Modern 等名称，多指**风格参考或历史代码路径**，勿当作已交付、可切换的产品主题集。
 
 **桌面鼠标与合成帧（`main.zig` + `display.zig`）**
 
@@ -278,4 +278,4 @@ console, serial, keyboard, disk, framebuffer, mouse, audio 等。
 
 ## 12. 注册表 (registry/)
 
-简化版的 Windows 注册表实现，提供键值对存储。
+内存树 + 部分键（**非**完整 RegF/hive 与 Windows 注册表语义）；持久化见路线图 — [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、根 README 矩阵「Registry runtime」行。

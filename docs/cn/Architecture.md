@@ -6,34 +6,43 @@
 
 核心设计思想：
 
-- **微内核 + 用户态系统服务**：内核最小化，系统语义在用户态 server/subsystem 中实现
+- **混合微内核 + 内核内 Executive（当前落地）**：调度、虚拟内存、IPC、系统调用等机制与 **Object/MM/PS/IO/Security、加载器** 等管理器**目前均在内核**（`src/ob/`、`src/mm/`、`src/ps/`、`src/io/`、`src/se/`、`src/loader/` 等）；**独立用户态服务**当前主要是 **Process Server** 与 **SMSS**。进一步用户态拆分见 [Servers.md](Servers.md)、[LPC_USER_SERVERS_CONTRACT.md](LPC_USER_SERVERS_CONTRACT.md)。
 - **NT 风格思路**：面向对象 / 句柄 (Handle) / 命名空间 (Namespace) / 系统服务化
 - **Zig 实现**：利用 Zig 的编译期能力与无 libc 依赖，保持可控边界
 - **兼容性分阶段**：先 Native + ELF → 再 PE → 再 Win32 子系统 → 最后 WOW64
 
 ## 2. 系统分层模型
 
+**易错点**：旧图常把 **Object Manager / I/O Manager / Security / Loader** 画在「用户态服务」层；在本仓库 **当前代码** 中它们属于 **内核 Executive**（见 §2.1）。下图按 **`src/` 现状** 绘制；§2.2 表中标出 **计划拆分**。
+
+### 2.0 当前落地（与 `src/` 一致）
+
 ```
 ┌──────────────────────────────────────────────┐
 │                Applications                   │
-│       Win32 Apps  ·  POSIX Apps  ·  Native    │
+│       Win32  ·  POSIX（规划） · Native       │
 ├──────────────────────────────────────────────┤
-│              Subsystems (用户态)               │
-│     Win32  ·  POSIX  ·  WOW64  ·  Native     │
+│        Subsystems（用户态，部分实现）          │
+│     Win32  ·  WOW64  ·  Native（ntdll 等）    │
 ├──────────────────────────────────────────────┤
-│           System Services (用户态)             │
-│  Process Server · Object Manager · I/O Mgr    │
-│  Security  ·  Session Manager  ·  Loader      │
+│     用户态服务（当前仅下列独立进程）            │
+│     Process Server (PID 1) · SMSS (PID 2)    │
 ├──────────────────────────────────────────────┤
-│            Microkernel (内核态)                │
-│  Scheduler · IPC · VM · Syscall · Interrupt   │
+│                  内核                         │
+│  微内核：调度 · VM · LPC · 系统调用 ·          │
+│         中断 / 同步 / 定时器                   │
+│  Executive：OB · MM · PS · IO · Security     │
+│            文件系统/VFS · Loader（PE/ELF）     │
 ├──────────────────────────────────────────────┤
-│          HAL - Hardware Abstraction           │
-│  CPU · APIC · IO Ports · Timer · GDT · IDT   │
+│          HAL（CPU、APIC/PIC、定时器等）        │
 ├──────────────────────────────────────────────┤
 │               Hardware                        │
 └──────────────────────────────────────────────┘
 ```
+
+### 2.0.1 计划中的用户态策略拆分（尚未实现）
+
+独立的 **Object / I/O / Security** 服务进程与更清晰的 Loader 边界仅为**设计目标**，见 [Servers.md](Servers.md) §3 与 [LPC_USER_SERVERS_CONTRACT.md](LPC_USER_SERVERS_CONTRACT.md)。
 
 ### 2.1 内核态 (Kernel Mode)
 
@@ -76,18 +85,16 @@
 
 ### 2.2 用户态 (User Mode)
 
-#### System Services
+#### 系统服务
 
-通过 LPC/IPC 与内核通信的用户态系统组件：
+| 服务 | 职责 | 当前落地 |
+|------|------|----------|
+| Process Server (PID 1) | 进程/线程生命周期 RPC | **用户态** — `src/servers/server.zig` |
+| Session Manager (SMSS, PID 2) | 会话、子系统注册与启动 | **用户态** — `src/servers/smss.zig` |
+| Object / I/O / Security「服务器」 | 类似 NT 的用户态策略进程 | **非独立进程** — 逻辑在内核 `src/ob/`、`src/io/`、`src/se/` |
+| Loader | PE/ELF 映射、重定位、导入 | **内核** `src/loader/`；用户态拆分 **规划中** |
 
-| 服务 | 职责 |
-|------|------|
-| Process Server (PID 1) | 进程/线程创建、终止、查询 |
-| Session Manager (SMSS, PID 2) | 会话管理、子系统注册与启动 |
-| Object Server | 对象命名空间高层策略 |
-| I/O Server | 设备与文件系统策略 |
-| Security Server | 权限与访问控制策略 |
-| Loader | ELF / PE 映射、重定位、导入解析 |
+未来 LPC 端口名见 [Servers.md](Servers.md)；在独立进程落地前，部分端口仅为 **契约/占位**。
 
 #### Subsystems
 
@@ -120,7 +127,7 @@ ObjectHeader {
 
 ### 3.2 对象类型
 
-当前已实现的对象类型：
+下列为 Object Manager **已登记的对象种类** — **不表示**每类均已达到 Windows 级语义、syscall 全覆盖或测试完备；多数为 **Partial**，以 [`object.zig`](../../src/ob/object.zig) 与 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 为准。
 
 | 类型 | 说明 |
 |------|------|
@@ -150,7 +157,7 @@ ObjectHeader {
 
 ### 3.4 命名空间
 
-NT 风格的对象命名空间树：
+NT 风格命名空间**示意图** — **并非**每个分支均可完整遍历或与 Windows 等深；**`LPC\ObServer`、`IoServer` 等名称不表示**当前已有独立用户态服务进程（见 [Servers.md](Servers.md)）。
 
 ```
 \
@@ -170,7 +177,7 @@ NT 风格的对象命名空间树：
 
 ## 4. IPC 设计
 
-微内核系统中 IPC 是最关键的基础设施。
+IPC 是基础能力；**本仓库为混合内核**，大量策略仍在内核 Executive 中，与「一切策略在用户态」的纯微内核叙事不同。
 
 ### 4.1 内核原语层
 

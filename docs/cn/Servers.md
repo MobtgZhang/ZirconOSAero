@@ -1,6 +1,8 @@
 # ZirconOS 系统服务
 
-系统服务运行在用户态，通过 LPC/IPC 与微内核通信，提供系统策略和高层管理功能。
+**当前落地**：**仅** **Process Server**（PID 1）与 **SMSS**（PID 2）是**独立用户态进程**，经 LPC 与内核对话。**Object / I/O / Security** 的策略与实现**仍在内核**（`src/ob/`、`src/io/`、`src/se/`）；独立的 ObServer / IoServer 等进程**尚未**作为产品路径交付。本文同时描述**现状**与 **§3 规划拆分**。
+
+**LPC 用户态拆分契约（草案）**：[LPC_USER_SERVERS_CONTRACT.md](LPC_USER_SERVERS_CONTRACT.md)。
 
 ## 1. 服务架构
 
@@ -8,20 +10,22 @@
 ┌──────────────────────────────────────────────────┐
 │                  Applications                     │
 ├──────────────────────────────────────────────────┤
-│ Subsystems (Win32 / POSIX / WOW64 / Native)      │
+│ Subsystems（Win32 / POSIX 规划 / WOW64 / …）      │
 ├──────────────────────────────────────────────────┤
-│          System Services (本文档)                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
-│  │ PsServer │  │  SMSS    │  │ ObServer │  ...   │
-│  │  PID 1   │  │  PID 2   │  │          │        │
-│  └─────┬────┘  └─────┬────┘  └─────┬────┘        │
-│        │              │              │             │
-│        └──────────────┼──────────────┘             │
-│                       │ LPC/IPC                    │
-├───────────────────────┼──────────────────────────┤
-│                  Microkernel                       │
+│ 用户态服务进程（当前已实现）                        │
+│   ┌────────────┐      ┌────────────┐             │
+│   │ PsServer   │      │   SMSS     │             │
+│   │   PID 1    │      │   PID 2    │             │
+│   └─────┬──────┘      └─────┬──────┘             │
+│         └─────────┬─────────┘                    │
+│                   │ LPC/IPC                       │
+├───────────────────┼──────────────────────────────┤
+│ 内核 — 微内核 + Executive（OB / IO / SE /       │
+│ MM / PS / loader / VFS …）                        │
 └──────────────────────────────────────────────────┘
 ```
+
+**规划中（上图不单独画框）**：用户态 **Object / I/O / Security** 服务进程与 Loader 边界 — 见 §3。
 
 ## 2. 已实现的服务
 
@@ -29,7 +33,7 @@
 
 - **源码**：`src/servers/server.zig`
 - **LPC 端口**：`\LPC\PsServer`
-- **职责**：进程和线程的全生命周期管理
+- **职责**：经 LPC 的进程/线程管理（**子集**，非完整 NT PS；覆盖与语义以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、`server.zig` 为准）
 
 | 操作 | 说明 |
 |------|------|
@@ -37,7 +41,7 @@
 | 创建线程 | 分配 TID、内核栈、用户栈 |
 | 终止进程 | 清理资源、关闭句柄、释放内存 |
 | 查询信息 | 进程列表、线程状态 |
-| 挂起/恢复 | 暂停和恢复线程执行 |
+| 挂起/恢复 | **部分** — 假设 NT 语义前请对照 `server.zig` / 测试 |
 
 ### 2.2 Session Manager — SMSS (PID 2)
 
@@ -65,16 +69,16 @@
 
 ## 4. LPC 通信端口
 
-系统启动后注册的 LPC 端口：
+下列名称含**未来**拆分目标。**当前**仅标注 **用户进程** 的端口对应独立服务二进制；其余可能是**内核侧登记**、桩或路线图 — 工具链或 AI 推理前请在 `src/` 核实。
 
-| 端口名称 | 所属服务 | 用途 |
-|----------|----------|------|
-| `\LPC\PsServer` | Process Server | 进程/线程管理请求 |
-| `\LPC\ObServer` | Object Manager | 对象/命名空间操作 |
-| `\LPC\IoServer` | I/O Manager | 设备与 I/O 请求 |
-| `\LPC\SmssServer` | Session Manager | 会话与子系统管理 |
-| `\LPC\NativeSubsys` | Native 子系统 | 原生 API 调用 |
-| `\LPC\Win32Subsys` | Win32 子系统 | Win32 API 调用 |
+| 端口名称 | 逻辑所属 | 用途 | 当前落地 |
+|----------|----------|------|----------|
+| `\LPC\PsServer` | Process Server | 进程/线程 RPC | **用户进程**（PID 1） |
+| `\LPC\SmssServer` | Session Manager | 会话与子系统 | **用户进程**（PID 2） |
+| `\LPC\ObServer` | Object Manager | 对象/命名空间 | **内核/占位**（§3 拆分前） |
+| `\LPC\IoServer` | I/O Manager | 设备与 I/O | **内核/占位**（§3 拆分前） |
+| `\LPC\NativeSubsys` | Native 子系统 | 原生 API | **以代码为准**（子系统/内核路径） |
+| `\LPC\Win32Subsys` | Win32 子系统 | Win32 API | **以代码为准**（`subsystem.zig` 等） |
 
 ## 5. IPC 消息格式
 
@@ -101,13 +105,13 @@ Message {
 
 ## 6. 启动顺序
 
-系统服务按以下顺序启动（Phase 5）：
+路线图 **Phase 5** 的意图摘要；**实际**端口创建顺序、哪些端口在内核侧登记，可能因构建而异 — 以 `main.zig` 与服务拉起代码为准。
 
 ```
-Phase 5 开始
-  1. 创建 LPC 端口 (\LPC\PsServer, \LPC\ObServer, \LPC\IoServer)
-  2. 启动 Process Server (PID 1) → 注册进程管理能力
-  3. 启动 Session Manager / SMSS (PID 2) → 创建会话、注册子系统
-  4. SMSS 发起子系统启动链
+Phase 5（概念）
+  1. 登记/创建引导所需 LPC 端口（至少 Ps + SMSS；Ob/Io 名称可能仅内核侧）
+  2. 启动 Process Server (PID 1)
+  3. 启动 Session Manager / SMSS (PID 2)
+  4. SMSS 驱动子系统启动链
 Phase 5 结束
 ```

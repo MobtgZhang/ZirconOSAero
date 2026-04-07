@@ -11,6 +11,12 @@
 2. **脏矩形**：在 `compositor_config_epoch` 与显示路径上减少全屏 blit（已有部分 trace / 握手位）。  
 3. **与 user32 边界**：user32 负责单窗消息与 NC；合成器负责跨窗 Z-order 与 damage 聚合。
 
+## 阶段 C：逻辑树权威与内核像素快照（NT61）
+
+- **唯一权威（窗口 Z 序与绑定表）**：以 **user32 窗口表 + `syncCompositorZOrderForUserWindows`** 为源；通过 **`COMPOSITOR_TREE_SYNC_V1`** LPC 载荷（`src/config/compositor_sync_nt61.zig`）经 csrss **`compositor_tree_sync`（`CsrApiNumber`）** 下推到内核 **`dwm_compositor.applyAuthorityTreeSyncV1`**。内核 **`RedirectedSurface.z_order`** 仅作为该快照的消费端，**禁止**与用户态并行「各写一套」作为第二真相。  
+- **像素与 DWM 策略**：重定向表面位图与 `SurfaceDwmState`（模糊、扩展边距等）仍走既有内核路径；**逻辑树**不依赖双端裸写同一块共享内存作状态源。  
+- **DWM 广播**：内核策略变更（`dwm.zig`：`syncPolicyFromRegistry`、`setCompositionEnabled`、`setGlass`、`setColorizationTint`）经 **`KERNEL_DWM_NOTIFY_V1`** → 专用 inbox **PID 62**（`subsystem.kernel_dwm_lpc_inbox_pid`）→ `handleApiCall` → **`user32.broadcastDwm*`**，与 [DWM_NOTIFY_MODEL_NT61.md](DWM_NOTIFY_MODEL_NT61.md) 一致。
+
 ## GPU 路线（QEMU / 真机）
 
 - **Virtio-GPU**：作为可移植的 **非 WDDM** 加速台阶（VirtIO 规范 + 本内核 PCI 枚举）。  

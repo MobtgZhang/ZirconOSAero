@@ -6,34 +6,43 @@
 
 Core ideas:
 
-- **Microkernel + user-mode services**: keep the kernel small; policy lives in user-mode servers/subsystems
+- **Hybrid microkernel + in-kernel Executive (as-built)**: mechanisms (scheduling, VM, IPC, syscalls) **and** NT-style managers (**Object, MM, PS, IO, Security**, loaders) run **in kernel** today; only **Process Server** and **SMSS** are separate user-mode services. Further user-mode splits are **roadmap** — [Servers.md](Servers.md), [LPC_USER_SERVERS_CONTRACT.md](../cn/LPC_USER_SERVERS_CONTRACT.md).
 - **NT-style model**: objects / handles / namespaces / service-oriented design
 - **Zig**: compile-time power and no libc dependency for a controlled boundary
 - **Phased compatibility**: Native + ELF → PE → Win32 subsystem → WOW64
 
 ## 2. Layered model
 
+**As-built vs diagram traps:** Older docs drew **Object Manager / I/O Manager / Security / Loader** in a “user-mode services” band. In **this** tree they are **kernel Executive** code (`src/ob/`, `src/io/`, `src/se/`, `src/loader/`, …). The figure below matches **current layout**; §2.2 lists **planned** user-mode splits.
+
+### 2.0 As-built (matches `src/` today)
+
 ```
 ┌──────────────────────────────────────────────┐
 │                Applications                   │
-│       Win32 Apps  ·  POSIX Apps  ·  Native    │
+│       Win32 Apps  ·  POSIX (planned) · Native │
 ├──────────────────────────────────────────────┤
-│              Subsystems (user mode)           │
-│     Win32  ·  POSIX  ·  WOW64  ·  Native     │
+│        Subsystems (user mode, partial)        │
+│     Win32  ·  WOW64  ·  Native (ntdll, …)    │
 ├──────────────────────────────────────────────┤
-│           System Services (user mode)          │
-│  Process Server · Object Manager · I/O Mgr    │
-│  Security  ·  Session Manager  ·  Loader      │
+│     User-mode services (only these today)     │
+│     Process Server (PID 1) · SMSS (PID 2)    │
 ├──────────────────────────────────────────────┤
-│            Microkernel (kernel mode)           │
-│  Scheduler · IPC · VM · Syscall · Interrupt   │
+│                  Kernel                       │
+│  Microkernel: Sched · VM · LPC · Syscall ·   │
+│               Interrupts / sync / timers      │
+│  Executive:   OB · MM · PS · IO · Security    │
+│               FS/VFS · Loader (PE/ELF)        │
 ├──────────────────────────────────────────────┤
-│          HAL - Hardware Abstraction           │
-│  CPU · APIC · IO Ports · Timer · GDT · IDT   │
+│          HAL (CPU, APIC/PIC, timers, …)       │
 ├──────────────────────────────────────────────┤
 │               Hardware                        │
 └──────────────────────────────────────────────┘
 ```
+
+### 2.0.1 Planned user-mode policy split (not current)
+
+Independent **Object / I/O / Security** server processes (and tighter loader service boundaries) are **design targets** only; see [Servers.md](Servers.md) §3 and [LPC_USER_SERVERS_CONTRACT.md](../cn/LPC_USER_SERVERS_CONTRACT.md).
 
 ### 2.1 Kernel mode
 
@@ -78,16 +87,14 @@ Inspired by the NT Executive, key managers remain in kernel mode:
 
 #### System services
 
-User-mode components that talk to the kernel over LPC/IPC:
+| Service | Role | As-built |
+|---------|------|----------|
+| Process Server (PID 1) | Process/thread lifecycle RPCs | **User mode** — `src/servers/server.zig` |
+| Session Manager (SMSS, PID 2) | Sessions, subsystem registration/startup | **User mode** — `src/servers/smss.zig` |
+| Object / I/O / Security “servers” | Policy split like NT usermode services | **Not separate processes** — logic in kernel `src/ob/`, `src/io/`, `src/se/` |
+| Loader service | PE/ELF mapping, relocations, imports | **Kernel** `src/loader/` today; user-mode split **planned** |
 
-| Service | Role |
-|---------|------|
-| Process Server (PID 1) | Process/thread lifecycle |
-| Session Manager (SMSS, PID 2) | Sessions, subsystem registration/startup |
-| Object Server | Namespace policy (planned split) |
-| I/O Server | Devices and filesystem policy (planned split) |
-| Security Server | ACL/policy (planned split) |
-| Loader | ELF/PE mapping, relocations, imports |
+LPC port names for future splits are documented in [Servers.md](Servers.md); many are **contract placeholders** until processes exist.
 
 #### Subsystems
 
@@ -120,10 +127,10 @@ ObjectHeader {
 
 ### 3.2 Object types
 
-Implemented types include:
+These are **in-tree object kinds** registered with the Object Manager — **not** a claim that each type has Windows-complete semantics, syscall coverage, or tests. Many are **Partial**; see [`object.zig`](../../src/ob/object.zig) and [NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md).
 
 | Type | Description |
-|------|---------------|
+|------|-------------|
 | Process | Process object |
 | Thread | Thread object |
 | Token | Security token |
@@ -150,7 +157,7 @@ Each process has its own handle table; handles do not expose raw kernel pointers
 
 ### 3.4 Namespace
 
-NT-style object namespace tree:
+Logical NT-style namespace sketch — **not** every branch is fully walkable or backed by the same depth as Windows. **`LPC\ObServer` / `IoServer` names do not imply** standalone user-mode processes today ([Servers.md](Servers.md)).
 
 ```
 \
@@ -170,7 +177,7 @@ NT-style object namespace tree:
 
 ## 4. IPC design
 
-IPC is foundational in a microkernel.
+IPC is foundational; **this codebase is a hybrid** — large policy pieces still run in-kernel alongside LPC.
 
 ### 4.1 Kernel primitives
 

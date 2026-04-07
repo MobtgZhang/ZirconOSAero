@@ -25,6 +25,12 @@
 
 原生 **x86** 内核使用的服务号与 x64 SSDT **不同**；公开对照见 [`wow64/ssdt_x86_win7_sp1.zig`](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)（j00ru `x86/json/nt-per-system.json`，Windows 7 SP1）。同名 API 的 x86→x64 索引子集见 [`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig)；里程碑 [PHASE_G_WOW64.md](PHASE_G_WOW64.md)。真实 SysWOW64 在 64 位内核上仍走 **64 位 SSDT**；`translateSyscall32to64` 演进须同时维护两表。
 
+### 内核侧：`int 0x2E`（与 `syscall` 并存）
+
+- **8259** 主片/从片 **ICW2** 重映射为 **0x30 / 0x38**，硬件 IRQ 占用向量 **0x30–0x3F**，**释放 0x2E** 专供软件 `int 0x2E`（见 [`pic.zig`](../../src/hal/x86_64/pic.zig)、[`interrupt_x86.zig`](../../src/ke/interrupt_x86.zig)）。
+- **进入后**：`EAX`→`RAX`（服务号）、`EDX`→`RDX`（用户区实参指针）；经 [`wow64_syscall.zig`](../../src/arch/x86_64/wow64_syscall.zig) 调 `thunk.translateSyscall32to64WithArgs`，**不**复用 `syscall` 的 R10/RDX/R8/R9 形参槽。
+- **电源 / 关机**：x64 原生为 **`NtShutdownSystem` SSDT 0x40**、**`NtInitiatePowerAction` 0x41**（ZOA 锚点槽，见 [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)），须 **`SeShutdownPrivilege`**（`PRIV_SHUTDOWN`）后写 **ACPI PM1** 或回退 `arch.shutdown()`（[`ntdll.zig`](../../src/libs/ntdll.zig)、[`acpi_pm.zig`](../../src/hal/x86_64/acpi_pm.zig)）。
+
 ## 其他架构
 
 `aarch64`、`riscv64`、`loongarch64`、`mips64el`：**不** 声称与 Windows syscall 兼容；陷阱 ABI 在对应 `arch/*/interrupt*` 中单独说明。

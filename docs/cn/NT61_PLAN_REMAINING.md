@@ -21,9 +21,9 @@
 
 ---
 
-## P / Q 类（PowerShell / QEMU）— 内核侧已完成
+## P / Q 类（PowerShell / QEMU）— 相关路线已收口（≠ 内核整体完成）
 
-- PowerShell / ZirconShell：已从内核与菜单路径移除；契约矩阵 §5.2、BuiltinApps 路线图标明 **用户态 .NET**（仓库外）。
+- PowerShell / ZirconShell：已从内核与菜单路径**移除**；契约矩阵 §5.2、BuiltinApps 路线图标明 **用户态 .NET**（仓库外）。此处「完成」仅指**移除/转向**，非其它内核子系统已交付。
 - QEMU 窗口与分辨率：**默认** `QEMU_GTK_ZOOM=zoom-to-fit=off`（1:1，与 `build.conf` `RESOLUTION` 一致）；缩放模式见 `make run-qemu-zoom-fit`；文档 §4.2.2；**SDL 后端**见 `make run-qemu-sdl`。
 
 ---

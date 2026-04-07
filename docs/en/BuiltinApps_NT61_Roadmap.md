@@ -111,7 +111,7 @@ Track these against [`shell_strings.zig`](../../src/drivers/video/desktop/shell_
 | Resource / Performance Monitor | stub | Sampling phase 2 |
 | Task Scheduler | stub | Job store TBD |
 | Command Prompt | stub | Minimal in-kernel CMD line in `cmd.zig` |
-| **PowerShell**-style cmdlet host | **Out of scope (this repo)** | **No in-kernel PowerShell**; a .NET **user-mode** host is planned **outside** this tree; this kernel keeps syscall / LPC / Section support only (see Phase F / contract matrix). |
+| **PowerShell**-style cmdlet host | **Out of scope (kernel)** / **tooling partial** | **No in-kernel PowerShell**; full .NET host remains **outside** this tree. Phase D: host tool [`tools/pwsh-lite`](../../tools/pwsh-lite/) (`zig build pwsh-lite`) is a **clean-room** cmdlet pipeline demo; `zig build test` → **pwsh_lite_host**; **not** a claim of parity with Windows PowerShell. |
 
 ## Games
 

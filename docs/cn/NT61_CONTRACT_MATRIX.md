@@ -136,7 +136,7 @@ PR 合并时须将「状态 / 测试」列与 `src/`、`tests/`、`MVT_NT61.md` 
 | `NtAllocateVirtualMemory` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntallocatevirtualmemory> | `MEM_*`、`PAGE_*` |
 | `NtProtectVirtualMemory` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntprotectvirtualmemory> | SSDT `0x4D`（Win7 SP1 x64）；`syscall.zig` → `ntdll.zig` → `vm.protectVirtualRange` / `paging.protectLeafPage` |
 | `NtDelayExecution` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntdelayexecution> | SSDT `0x31`；**负**间隔以 `scheduler.yield` 粗近似；**正**间隔（NT 绝对 `LARGE_INTEGER`）当前无单调域换算 → 立即 `SUCCESS` 且不睡眠（见 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md)、[TimerPrecisionRoadmap.md](TimerPrecisionRoadmap.md)） |
-| `NtQuerySystemInformation` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation> | **Partial** — `SystemBasicInformation` / `SystemProcessorInformation` / `SystemVersionInformation` / `SystemTimeOfDayInformation`（48B 零）/ `SystemProcessInformation`（96B 单进程桩）/ `SystemPerformanceInformation`（128B 零前缀）/ **阶段 E** `SystemInterruptInformation`（32B 零）、`SystemExceptionInformation`（16B 零）；`SystemModuleInformation`/`SystemPoolTagInformation`/`SystemHandleInformation` → `NOT_IMPLEMENTED`；未列 class → `INVALID_INFO_CLASS`；`NtSetSystemInformation` → `NOT_IMPLEMENTED` 或非法 class |
+| `NtQuerySystemInformation` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation> | **Partial** — 结构真源 [`sdk/system_info_nt61.zig`](../../src/sdk/system_info_nt61.zig)；`SystemBasicInformation`（Learn 布局 64B，`NumberOfProcessors@56`）；`SystemProcessorInformation`（12B 前缀）；`SystemProcessInformation`（多进程链 + `SYSTEM_THREAD_INFORMATION` + 内联 `ImageName` UTF-16，`ReturnLength` 与 `STATUS_INFO_LENGTH_MISMATCH`）；`SystemModuleInformation`（**最小**单模块列表：`RTL_PROCESS_MODULES` + 一条 `zircon_nt61` 路径桩）；`SystemVersionInformation` / `SystemTimeOfDayInformation`（48B 零）/ `SystemPerformanceInformation`（128B 零前缀）/ `SystemInterruptInformation`（32B 零）、`SystemExceptionInformation`（16B 零）；`SystemPoolTagInformation`/`SystemHandleInformation` → `NOT_IMPLEMENTED`；未列 class → `INVALID_INFO_CLASS`；`NtSetSystemInformation` → `NOT_IMPLEMENTED` 或非法 class；主机布局测 **system_info_nt61_host** |
 | `NtOpenKey` / `NtOpenKeyEx` / `NtQueryValueKey` / `NtCreateKey` / `NtSetValueKey` / `NtEnumerateKey` / `NtEnumerateValueKey` | WDK/Win32 注册表相关 | `NtOpenKey` `0x0F`；`NtOpenKeyEx`：`options==0` 等价 `NtOpenKey`，非零事务类 → `STATUS_NOT_IMPLEMENTED`；其余键 API 同上 |
 | `RtlNtStatusToWin32Error` | <https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-rtlntstatustowin32error> | 与 `RtlNtStatusToDosError` 等价名 |
 | `RtlGetVersion` | <https://learn.microsoft.com/windows/win32/sysinfo/nf-sysinfo-rtlgetversion> | 与 [`os_version.zig`](../../src/config/os_version.zig) 单源一致 |
@@ -215,7 +215,7 @@ PR 合并时须将「状态 / 测试」列与 `src/`、`tests/`、`MVT_NT61.md` 
 
 | API | Microsoft Learn（条目） | 文档关注点 | 实现 | 模块 |
 |-----|-------------------------|------------|------|------|
-| `CreateWindowEx` | [CreateWindowExA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-createwindowexa) | 成功 `HWND`，失败 `NULL` 与 `SetLastError` | **Implemented**（子集样式/类） | `user32.zig` |
+| `CreateWindowEx` | [CreateWindowExA function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-createwindowexa) | 成功 `HWND`，失败 `NULL` 与 `SetLastError` | **Implemented**（子集样式/类）— **Verified 子集**：`win32k_api_semantics_host`（失败 `HWND==0` 哨兵；成功/失败 `SetLastError` 见 `user32.CreateWindowExA`） | `user32.zig` |
 | `DestroyWindow` | [DestroyWindow function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-destroywindow) | 销毁顺序、`INVALID_HANDLE` | **Implemented**（+ `detachCompositorSurface`） | `user32.zig` |
 | `GetDC` / `ReleaseDC` | [GetDC](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getdc) / [ReleaseDC](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-releasedc) | 配对；`GetDC(NULL)` 屏幕 DC | **Partial**（`HDC==HWND`；`GetDC(0)` 成功返回 `0`） | `user32.zig` |
 | `GetMessage` | [GetMessage function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getmessage) | 空队列阻塞；过滤范围 | **Partial**（`STATUS_PENDING` / 协作式；`min>max`（非 0,0）→ `ERROR_INVALID_PARAMETER`；见 syscall 注释） | `user32.zig`、`syscall.zig` |
@@ -225,7 +225,7 @@ PR 合并时须将「状态 / 测试」列与 `src/`、`tests/`、`MVT_NT61.md` 
 | `SetWindowPos` | [SetWindowPos function](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowpos) | `HWND_*` 与 `SWP_*` | **Partial**（Learn `HWND_NOTOPMOST` 非 topmost 无 Z 序效果；扩展 `SWP_*` 常量；帧/重绘位忽略） | `user32.zig` |
 | `CreateDesktop` / `OpenDesktop` / `SwitchDesktop` | [Desktops](https://learn.microsoft.com/windows/win32/winstation/desktops) | 桌面句柄与切换 | **Partial**（`subsystem.createUserDesktop` / `openDesktopByName` / `switchToDesktop`；`HDESK` 1-based） | `user32.zig`、`subsystem.zig` |
 | `BeginPaint` / `EndPaint` | [BeginPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-beginpaint) / [EndPaint](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-endpaint) | `PAINTSTRUCT` | **Partial**（`BeginPaint` / **`InvalidateRect`** 在有 compositor 表面时 `dwm_comp.markSurfaceDirty`） | `user32.zig` |
-| `BitBlt` | [BitBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-bitblt) | 成功非零；无效 DC | **Partial**（**仅 `SRCCOPY`**；其它 ROP → `FALSE` + `ERROR_INVALID_PARAMETER`；见 `gdi_rop_contract.zig`） | `gdi32.zig` |
+| `BitBlt` | [BitBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-bitblt) | 成功非零；无效 DC | **Partial**（**仅 `SRCCOPY`**；其它 ROP → `FALSE` + `ERROR_INVALID_PARAMETER`；见 `gdi_rop_contract.zig`）— **Verified**：`gdi_rop_contract_host`、`win32k_api_semantics_host`（`bitblt_unsupported_rop_last_error==87`） | `gdi32.zig` |
 | `PatBlt` | [PatBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-patblt) | 同上 | **Partial**（`PATCOPY`/`BLACKNESS`/`WHITENESS`/`PATINVERT` 子集） | `gdi32.zig` |
 | `StretchBlt` | [StretchBlt function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-stretchblt) | 同上 | **Partial**（**仅 `SRCCOPY`**；其余 ROP 同上） | `gdi32.zig` |
 | `AlphaBlend` | [AlphaBlend function](https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-alphablend) | `BLENDFUNCTION`；成功非零 | **Partial**（**仅 `AC_SRC_OVER`** 存根；几何/像素混合计数；`gdi_rop_contract`） | `gdi32.zig` |
@@ -254,6 +254,7 @@ PR 合并时须将「状态 / 测试」列与 `src/`、`tests/`、`MVT_NT61.md` 
 | 能力（文档概念） | 状态 | 说明 |
 |------------------|------|------|
 | **PowerShell** / cmdlet 脚本宿主 | **不适用（内核）** | 内核侧 **不实现** PowerShell 引擎；历史上 in-kernel ZirconShell 已移除。 |
+| 仓库内 **pwsh-lite**（自研 cmdlet 管道） | **Partial（工具）** | [`tools/pwsh-lite`](../../tools/pwsh-lite/)：`zig build pwsh-lite`；**非** Microsoft PowerShell；主机测 **pwsh_lite_host**。 |
 | 用户态 **.NET** 脚本宿主（未来） | **Planned（仓库外）** | 与 PowerShell 公开 **行为与 cmdlet 模型** 对齐的宿主应在 **独立用户态程序 / 仓库** 实现；本仓库仅提供 Native / LPC / 对象等内核能力。 |
 | 命令提示符（`cmd.exe` 语义子集） | Partial | `src/subsystems/win32/cmd.zig` 等；与上项正交。 |
 
@@ -261,8 +262,9 @@ PR 合并时须将「状态 / 测试」列与 `src/`、`tests/`、`MVT_NT61.md` 
 
 | 主题 | `zig build test` 步 | 说明 |
 |------|---------------------|------|
-| PM_* / LPC 偏移 / GDI ROP 子集 / Flip3D 数值 cap | **win32k_api_semantics_host** | [tests/nt61/win32k_api_semantics_host.zig](../../tests/nt61/win32k_api_semantics_host.zig) |
+| PM_* / LPC 偏移 / GDI ROP 子集 / Flip3D 数值 cap | **win32k_api_semantics_host** | [tests/nt61/win32k_api_semantics_host.zig](../../tests/nt61/win32k_api_semantics_host.zig)；含矩阵 **§5** `HWND` 失败哨兵与 `BitBlt` 未支持 ROP 的 `LastError` 锚点 |
 | GDI ROP 清单 | **gdi_rop_contract_host** | [gdi_rop_contract.zig](../../src/subsystems/win32/gdi_rop_contract.zig) |
+| `SYSTEM_*` / `RTL_PROCESS_MODULES` 布局 | **system_info_nt61_host** | [`src/sdk/system_info_nt61.zig`](../../src/sdk/system_info_nt61.zig) 内建 `test` |
 
 ## 6. 配置语义：`nt_product_arch` 与宿主 CPU
 
@@ -301,7 +303,7 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 | IRP 完成例程与栈下传 | `src/io/io.zig` `IoCompleteRequest`、`dispatchIrpThroughStack` | 主机：`tests/io_irp_host.zig`（完成例程 + 栈链镜像断言） |
 | 对象路径规范化 / 符号链接（单层） | `src/ob/object.zig` `normalizeNtObjectPath`、`insertSymbolicLink`、`normalizeNtObjectPathResolveSymlinks` | `zig build test` → `object` |
 | 合规短语扫描 | `scripts/verify-compliance.sh` | CI：`Compliance phrase scan (src/boot)` |
-| `NtQuerySystemInformation` 子集 | `src/libs/ntdll.zig` | syscall + ntdll 一致性审查 |
+| `NtQuerySystemInformation` 子集 | `src/libs/ntdll.zig`、`src/sdk/system_info_nt61.zig` | syscall + ntdll；主机 **system_info_nt61_host**（结构 `comptime`）；进程链见 `SystemProcessInformation` 实现 |
 | `NtReadFile` / `NtWriteFile` syscall → VFS | `syscall_nt_extras.zig`、`ntdll.zig`、`vfs.zig` | 指针探测 + `zig build test`；QEMU 烟测扩展 |
 | VFS `FsOps.cleanup`（IRP_MJ_CLEANUP 子集） | `src/fs/vfs.zig` `close` | 各 `mount` 实现可选填入；矩阵 A-deep |
 | `NtDuplicateObject`（同进程） | `ntdll.zig`、`syscall_nt_extras.zig`；SSDT `0x44` | **ssdt_stub_parity**（`NtDuplicateObject` 号）；句柄表 **object** 测试 |
@@ -316,7 +318,7 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 | 表面 | 公开依据 | 状态 |
 |------|----------|------|
 | `KUSER_SHARED_DATA` 用户映射页（时标、系统调用间隔等） | WDK `KUSER_SHARED_DATA` DDI | **Partial** — x64 进程创建时映射 `0x7FFE0000` 只读页并写版本桩；见 [`mm/kuser_shared.zig`](../../src/mm/kuser_shared.zig)、[`sdk/kuser_shared_nt61.zig`](../../src/sdk/kuser_shared_nt61.zig)；**ntdll 合成基址** 迁至 `0x7FF6_0000_0000` 避免冲突 |
-| PEB / TEB 中线程与进程信息；`LastErrorValue` x64 偏移 | Learn — 进程线程；调试器实践 | **Partial** — [`sdk/teb_nt61_x64.zig`](../../src/sdk/teb_nt61_x64.zig) 断言 `@offsetOf(LastErrorValue)==0x68`；主机测试 **nt61_abi_layout_host** |
+| PEB / TEB 中线程与进程信息；`LastErrorValue` x64 偏移 | Learn — 进程线程；调试器实践 | **Partial** — [`sdk/teb_nt61_x64.zig`](../../src/sdk/teb_nt61_x64.zig)（`ProcessEnvironmentBlock@0x60`、`LastErrorValue@0x68`）；[`sdk/peb_nt61_x64.zig`](../../src/sdk/peb_nt61_x64.zig)（`ImageBaseAddress@0x10` 等）；用户 PEB/TEB 页由 `NtCreateUserProcessFromPath` 映射写入；主机 **nt61_abi_layout_host** |
 | Win32k 与 ntos SSDT 分流；全局 ATOM 占位 | x64 上多表/MSR；Learn 原子表概念 | **Partial** — 本内核将部分用户消息 syscall 折叠进主 SSDT，见 [SyscallABI.md](SyscallABI.md)；[`win32k/atoms.zig`](../../src/subsystems/win32k/atoms.zig) |
 | 用户态 `Nt*` → `syscall` 薄层 | AMD64 调用约定 | **Partial** — [`src/sdk/ntdll_syscall_win64.zig`](../../src/sdk/ntdll_syscall_win64.zig)；内核内联桩仍为 `src/libs/ntdll.zig` |
 
@@ -328,7 +330,8 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 |------|----------|-------------|
 | x86（32 位）原生服务号 **公开子集**（与 x64 表不同号） | **Partial** — 对照 j00ru `x86/json/nt-per-system.json` Win7 SP1 | [`ssdt_x86_win7_sp1.zig`](../../src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig)；主机测试 **wow64_ssdt_x86**、**ssdt_x64_x86_namespace**；[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
 | 64 位内核 SSDT 子集 | **Partial** | [`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)；与 x86 同名 API 对照见 [`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig) |
-| `translateSyscall32to64` / `WithArgs` | **Partial** — stub 列表 + `last_x64_ssdt_alias`；`marshal.zig` 另覆盖 `NtAllocateVirtualMemory` / `NtFreeVirtualMemory` / `NtDuplicateObject`（x86 **0x39**）/ `NtReadFile` / `NtWriteFile`（用户 `IO_STATUS_BLOCK` 回写）；`userVaFromWow64Ptr32` 与 `thunk` 导出对齐；x86 **win32k**（`≥0x1000`）仍 `STATUS_NOT_IMPLEMENTED`；`NtTerminateThread` x64 索引 ZOA **0x55** 注释见 `ssdt_nt61` | [`wow64/thunk.zig`](../../src/subsystems/win32/wow64/thunk.zig)、[`marshal.zig`](../../src/subsystems/win32/wow64/marshal.zig)、[`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig)、`syscall.zig`、[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
+| `translateSyscall32to64` / `WithArgs` | **Partial** — stub 列表 + `last_x64_ssdt_alias`；`marshal.zig` 另覆盖 `NtAllocateVirtualMemory` / `NtFreeVirtualMemory` / `NtProtectVirtualMemory` / `NtDuplicateObject`（x86 **0x39**）/ `NtReadFile` / `NtWriteFile`（用户 `IO_STATUS_BLOCK` 回写）；`userVaFromWow64Ptr32` 与 `thunk` 导出对齐；x86 **win32k**（`≥0x1000`）仍 `STATUS_NOT_IMPLEMENTED`；`NtTerminateThread` x64 索引 ZOA **0x55** 注释见 `ssdt_nt61` | [`wow64/thunk.zig`](../../src/subsystems/win32/wow64/thunk.zig)、[`marshal.zig`](../../src/subsystems/win32/wow64/marshal.zig)、[`x64_semantic_alias.zig`](../../src/subsystems/win32/wow64/x64_semantic_alias.zig)、`syscall.zig`、[PHASE_G_WOW64.md](PHASE_G_WOW64.md) |
+| **内核 `int 0x2E`（向量 0x2E）** 与 8259 重映射 | **Partial** — PIC 主/从片 ICW2 设为 **0x30/0x38**，释放 0x2E 专供软件中断；`interrupt_x86` → `wow64_syscall.dispatchInt2e`；EAX=服务号、EDX=用户实参区；`Process.is_wow64` + 调度器 `Thread.is_wow64` 同步；**IA32_SYSENTER_*** 快速调用仍建议走 `syscall`/文档化后续 | [`pic.zig`](../../src/hal/x86_64/pic.zig)、[`interrupt_x86.zig`](../../src/ke/interrupt_x86.zig)、[`wow64_syscall.zig`](../../src/arch/x86_64/wow64_syscall.zig)、[`scheduler.zig`](../../src/ke/scheduler.zig)、[SyscallABI.md](SyscallABI.md) |
 | 32 位 PEB / TEB 布局 | **Partial** — `PEB32`/`TEB32` 为 `extern` 子集 + comptime 偏移测试；演示 VA 与 `ProcessWow64Information`；用户页真实映射仍依阶段 F | [`wow64/types.zig`](../../src/subsystems/win32/wow64/types.zig)、[`ps/process.zig`](../../src/ps/process.zig)、[`ntdll.zig`](../../src/libs/ntdll.zig) |
 | 文件 / 注册表重定向 | **Partial** — UTF-16LE `System32`→`SysWOW64`（`ntdll` `NtCreateFile`/`NtOpenFile`）；`\Registry\Machine\SOFTWARE\`→`Wow6432Node`（`syscall` `NtOpenKey`/`NtCreateKey`）；**反重定向**（system32 下 native 工具）等为后续项 | [`wow64/redirect.zig`](../../src/subsystems/win32/wow64/redirect.zig)、[`registry/registry.zig`](../../src/registry/registry.zig) |
 | 地址空间隔离 | **Partial** — WOW64 进程模型与栈/堆基址为简化演示 | `wow64.zig` |

@@ -1,6 +1,6 @@
 # ZirconOSAero documentation
 
-ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** implemented in Zig. The kernel provides minimal mechanisms (scheduling, virtual memory, IPC, interrupts, system calls); higher-level semantics live in user-mode services and subsystems, with a subset of Win32-compatible APIs.
+ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** implemented in Zig. The kernel provides mechanisms (scheduling, virtual memory, IPC, interrupts, syscalls) **and** much **in-kernel Executive** code (objects, I/O, security, loaders — see [en/Architecture.md](en/Architecture.md)); **user-mode** today is mainly Process Server, SMSS, and Win32-facing libraries. Win32-compatible APIs are a **documented subset**, not retail Windows parity.
 
 **简体中文**：[cn/README.md](cn/README.md)
 
@@ -9,6 +9,14 @@ ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** imple
 **Reproducible builds / CI toolchain**: [REPRODUCE_BUILD.md](REPRODUCE_BUILD.md).
 
 NT 6.1–specific contracts, verification steps, and kernel work items are documented primarily in **Chinese** (`cn/`). English readers: [en/NT61_REFERENCE.md](en/NT61_REFERENCE.md) or the table below.
+
+## Phase numbering (do not conflate)
+
+| Name | Where | Meaning |
+|------|-------|---------|
+| **Kernel init Phase 0–12** | [en/Boot.md](en/Boot.md), [en/Kernel.md](en/Kernel.md), `src/main.zig` | Ordered bring-up steps inside the kernel |
+| **Roadmap Phase 0–11** | [en/Roadmap.md](en/Roadmap.md), root `README.md` | Milestone **scope** headings — **not** “everything done” |
+| **Phases D–G**, **desktop Phase 4** | [cn/README.md](cn/README.md) links | Separate trackers; **not** the same indices as 0–11 |
 
 ## NT 6.1 technical reference (authoritative in `cn/`)
 

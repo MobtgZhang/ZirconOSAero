@@ -1,12 +1,14 @@
 # ZirconOSAero 文档（中文）
 
-ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。内核提供最小机制（调度、虚拟内存、IPC、中断、系统调用），复杂系统语义通过用户态服务和子系统实现，兼容 Win32 API 子集。
+ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。内核除机制（调度、虚拟内存、IPC、中断、系统调用）外，仍含大量 **Executive**（对象、I/O、安全、加载器等 — 见 [Architecture.md](Architecture.md)）；**独立用户态**当前主要为 Process Server、SMSS 与 Win32 侧库。Win32 兼容为**文档化子集**，非零售 Windows 等价。
 
 **英文总索引**：[../README.md](../README.md) · **全部分类列表**：[../DOCS_INDEX.md](../DOCS_INDEX.md) · **文档职责划分**：[../DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md) · **可复现构建**：[../REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) · **English pages**：[`../en/`](../en/)
 
 ## Phase / 路线图命名区分（权威说明）
 
 下文 **阶段 D–G**、**阶段 4** 等文档中的「Phase」与 [Roadmap.md](Roadmap.md) 中 **Phase 0–11** 里程碑 **不是同一套编号**。对应关系与范围以各阶段文档文首一句为准；避免在其它文中重复长段解释。
+
+**另一套编号：内核初始化 Phase 0–12** — [Boot.md](Boot.md)、[Kernel.md](Kernel.md) 与 `src/main.zig` 中的 **顺序拉起步骤** 使用 **0–12**；与路线图 **0–11** **不是同一计数**。勿把「Phase 11 里程碑」与「init Phase 11」混为一谈。
 
 | 文档中的名称 | 与 Roadmap 的关系（摘要） |
 |--------------|---------------------------|

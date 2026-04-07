@@ -22,6 +22,32 @@
 | 重定向可测子集 | [`redirect.zig`](../../src/subsystems/win32/wow64/redirect.zig) | UTF-16LE `\System32\`→`\SysWOW64\`；窄路径 `\Registry\Machine\SOFTWARE\` 下插入 `Wow6432Node\`；`syscall.zig` / `ntdll`（`NtOpenKey`/`NtCreateKey`）接线 |
 | 进程演示 | [`wow64.zig`](../../src/subsystems/win32/wow64.zig) | `Wow64Process`、`last_x64_ssdt_alias`；PEB32 版本字段来自 [`os_version.zig`](../../src/config/os_version.zig) |
 | PE32 加载策略（与 E10 共用结论） | [`pe.zig`](../../src/loader/pe.zig) | delay-load / bound 等诚实边界见 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md) E10 |
+| **内核 `int 0x2E` 分发** | [`wow64_syscall.zig`](../../src/arch/x86_64/wow64_syscall.zig)、[`interrupt_x86.zig`](../../src/ke/interrupt_x86.zig) | 见下文 **顺序图**；8259 重映射见 [`pic.zig`](../../src/hal/x86_64/pic.zig) |
+
+## 32 位用户态 `int 0x2E` → 内核（x86_64）
+
+与纯 x64 **`syscall`** 路径不同：兼容模式下 **`int 0x2E`** 使用 **IDT 向量 0x2E**，CPU 压入 **IRET 风格** 返回帧；`isr_common` 扩展保存全体 GPR 后进入 `isr_common_handler` → `interrupt_x86.handle`。
+
+- **寄存器约定（进入 `dispatchInt2e` 时）**：**RAX** 低 32 位 = x86 **服务号**（与 `ssdt_x86_win7_sp1` 同命名空间）；**RDX** 低 32 位 = 指向 **最多 16×`u32`** 实参区的用户 VA（stdcall 从左到右对应 `args[0]…`，与下文 **§ stdcall（Win32 x86）实参序** 表一致）。**RCX/R8/R9/R10** 等在此路径**不**承载 NT x64 syscall 形参。
+- **权威 WOW64 判定**：`Process.is_wow64` **或** 存在同 PID 的 `Wow64Process` 槽（`wow64.zig`）；调度器线程 `Thread.is_wow64` 在 `attachWow64IfPresent` / `createThread` 时与进程同步。
+- **派发**：仅 `thunk.translateSyscall32to64WithArgs` → `marshal.dispatchWow64Stub`（及 stub 列表策略），**不**在此重复硬编码 SSDT 映射表。
+
+```mermaid
+sequenceDiagram
+  participant U32 as 用户态 32 位
+  participant IDT as IDT 向量 0x2E
+  participant K as wow64_syscall.dispatchInt2e
+  participant T as thunk + marshal
+  participant N as ntdll x64 桩
+  U32->>IDT: int 0x2E (EAX=svc, EDX→args)
+  IDT->>K: InterruptFrame
+  K->>T: translateSyscall32to64WithArgs
+  T->>N: Nt* 内核实现
+  N-->>K: NTSTATUS
+  K-->>U32: RAX = 状态码
+```
+
+**IA32_SYSENTER_*（fast syscall）**：本阶段以 **文档化 + 与 `int 0x2E` 可共用语义** 为锚；完整 **SYSEXIT** 返回帧与 per-CPU MSR 引导为后续项（避免与 `syscall/sysret` 双路径混淆）。
 
 ## 双 PEB / TEB 布局与里程碑（G-B2 / F 协同）
 
@@ -43,6 +69,7 @@
 | `NtFreeVirtualMemory` | `Proc`, `**Base`, `**RegionSize`, `FreeType` | 同上 |
 | `NtDuplicateObject`（x86 **0x39**） | 七参 stdcall | `TargetHandle` 为用户侧 `*HANDLE32` 回写 |
 | `NtReadFile` / `NtWriteFile` | 前七参含 `IoStatusBlock`、`Buffer`、`Length` | 内核临时 `IO_STATUS_BLOCK` 后 **拷回** 用户 IOSB（演示路径；完整 probe 与阶段 F 协同） |
+| `NtProtectVirtualMemory` | `ProcessHandle`, `*Base`, `*RegionSize`, `NewProtect`, `*OldProtect` | 32 位指针扩址；回写 `Base`/`RegionSize`/`OldProtect` 低 32 位 |
 
 **指针校验**：`userVaFromWow64Ptr32` / `convertPtr32to64` 对 `> WOW64_MAX_ADDR`（`0x7FFF_FFFF`）拒绝或归零，避免把内核高位误当用户指针。
 
@@ -57,7 +84,7 @@
 
 | 门禁 | 说明 |
 |------|------|
-| `zig build test` | **wow64_ssdt_x86**、**ssdt_x64_x86_namespace**、**wow64_x64_semantic_alias_host**、**wow64_redirect_host**、**phase4_host_anchors**（LPC 族与 x86 号一致）等 |
+| `zig build test` | **wow64_ssdt_x86**、**ssdt_x64_x86_namespace**、**wow64_x64_semantic_alias_host**、**wow64_redirect_host**、**phase4_host_anchors**（LPC 族与 x86 号一致）、**partition_table_host**（存储分区锚点）等 |
 | `translateSyscall32to64` / `WithArgs` | stub 命中后写 `last_x64_ssdt_alias`；**带参**路径经 `marshal` 调用 `ntdll`（`NtClose`、`NtWaitForSingleObject`、`NtTerminateProcess`、`NtDelayExecution` 等）；无参调用保持演示成功语义 |
 | `Process` / PEB32 | [`process.zig`](../../src/ps/process.zig)：`is_wow64`、`peb32_user_va`、`teb32_user_va`；[`types.zig`](../../src/subsystems/win32/wow64/types.zig)：`PEB32`/`TEB32` 为 `extern` 子集布局；演示 VA `PEB32_DEFAULT_USER_VA` / `TEB32_DEFAULT_USER_VA`；`NtQueryInformationProcess`(`ProcessWow64Information`) |
 | NTSTATUS | 与 [`ntdll.zig`](../../src/libs/ntdll.zig) 常量一致；win32k x86 号与未实现路径 `STATUS_NOT_IMPLEMENTED` |

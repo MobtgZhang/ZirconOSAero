@@ -13,6 +13,10 @@
 | WOW64 | `src/subsystems/win32/wow64.zig` | 部分 | PE32 + 32→64 thunk **子集**；PEB/TEB/SSDT 仍有缺口 — 见矩阵 |
 | POSIX | — | 规划中 | libc / POSIX API 映射 |
 
+### 1.1 下文 API 表示例**不是**完成度清单
+
+按类别的 **示例函数** 仅作 **MSDN/Learn 式导航**，**不表示**所列 API 均已实现、已达 `Partial`、或错误码/同步语义与 Windows 一致。**权威覆盖**见 [API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)、[NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)、[MVT_NT61.md](MVT_NT61.md)。矩阵中未出现的符号，默认按**未实现或桩**处理，除非源码与测试另有证明。
+
 ### 调用层次
 
 ```
@@ -112,7 +116,7 @@ Win32 应用程序的加载和执行管理。
 | PE 加载 | 加载 PE32/PE32+ 可执行文件 |
 | DLL 绑定 | 解析导入表，绑定到 ntdll / kernel32 等 |
 | 进程创建 | 创建进程对象、地址空间、初始线程 |
-| 生命周期 | 管理进程从创建到终止的全过程 |
+| 生命周期 | 创建到退出（**子集**；大量边界与 NT 对齐仍在路线图） |
 
 ### 3.6 console — 控制台运行时 (console.zig)
 
@@ -137,9 +141,11 @@ Windows 风格的命令行 Shell。
 | `type` | 显示文件内容 |
 | `copy` / `del` / `mkdir` / `rmdir` | 文件操作 |
 
-### 3.8 托管 Shell（.NET，用户态，规划中）
+### 3.8 托管 Shell（.NET，用户态，规划中）与 **pwsh-lite**（仓库工具）
 
-内核内曾有的 ZirconShell（ cmdlet 风格）已移除。与 **Microsoft PowerShell** 兼容的脚本宿主计划在 **用户态 .NET** 中实现，不在本仓库内核维护。
+内核内曾有的 ZirconShell（ cmdlet 风格）已移除。与 **Microsoft PowerShell** 二进制/ cmdlet **完全**兼容的脚本宿主计划在 **用户态 .NET** 中实现，不在本仓库内核维护。
+
+为阶段 D 验收，本仓库提供 **自研** 最小 cmdlet 管道宿主 **[`tools/pwsh-lite/`](../../tools/pwsh-lite/)**：`zig build pwsh-lite` 安装至 `zig-out/bin/pwsh-lite`；**非**微软产品，不声称 cmdlet 语义等价。主机测 **pwsh_lite_host**（`zig build test`）。
 
 ## 4. WOW64 子系统 (wow64.zig)
 

@@ -53,6 +53,8 @@ Win32 文档中，非客户区鼠标移动与按钮 **hot tracking** 通常对�
 
 与 [AeroDesktopRuntime.md](AeroDesktopRuntime.md) 一致：`zig build -Dmouse_debug=true` 输出指针坐标与输入轮询锚点，用于确认 **IRQ12 跳过**（VirtIO 活跃且未 `ps2_mouse_with_virtio`）时 PS/2 不再增量。
 
+**阶段 C 验收（与 AeroDesktopRuntime § 计数尾段一致）**：在标题栏上来回横扫时 **`render_cap` 应显著高于 `render_full`**；拖窗时 **`render_drag` 递增**且 **`render_full` 不应每帧暴涨**。若 `render_full` 主导，优先对照 `handleMouseMove` → `needs_caption_chrome_only` 与 `renderer_aero.redrawCaptionBandsOnly`。
+
 ## 5. 参考阅读（合法来源）
 
 - Microsoft Learn：鼠标、指针、辅助功能相关 **用户文档**（行为级）。

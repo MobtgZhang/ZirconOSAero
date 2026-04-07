@@ -61,8 +61,8 @@
 
 | 波次 | 服务（示例） | 公开索引（SP1 x64） | 状态 |
 |------|----------------|---------------------|------|
-| W5-A（已接线） | `NtUserGetMessage` | `0x58` | 已实现 |
-| W5-A | `NtUserPeekMessage` | `0x59` | 已实现 |
+| W5-A（已接线） | `NtUserGetMessage` | `0x58` | **SSDT 已接线 + 子集语义**（非完整 `user32`/`win32k` 等价 — 见契约矩阵 §5、[NT61_WINMSG_API_TRACKER.md](NT61_WINMSG_API_TRACKER.md)） |
+| W5-A | `NtUserPeekMessage` | `0x59` | 同上 |
 | W5-B（下一批） | `NtUserPostMessage` / `NtUserSendMessage` / `NtUserSetWindowPos` 等 | 查表后逐条填入 `ssdt_nt61.zig` | Planned |
 | WOW64 | 同上名称的 x86 表项 + x64 语义别名 | `wow64/ssdt_x86_win7_sp1.zig`、`wow64/x64_semantic_alias.zig`；[PHASE_G_WOW64.md](PHASE_G_WOW64.md) | Partial |
 

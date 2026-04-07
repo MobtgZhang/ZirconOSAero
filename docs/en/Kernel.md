@@ -1,6 +1,6 @@
 # ZirconOSAero kernel implementation (NT 6.1 target)
 
-This document describes the main kernel subsystems.
+This document describes the main kernel subsystems. **Depth is uneven**: many areas are **Partial** or scaffold-only. Use [NT61_CONTRACT_MATRIX.md](../cn/NT61_CONTRACT_MATRIX.md), [API_COMPAT_MATRIX.md](../cn/API_COMPAT_MATRIX.md), and [MVT_NT61.md](../cn/MVT_NT61.md) as the completion truth — not every file listed below is end-to-end production quality.
 
 ## 1. Source layout
 
@@ -198,7 +198,7 @@ create, close, read, write, ioctl, query_info, pnp, power, …
 
 console, serial, keyboard, disk, framebuffer, mouse, audio, …
 
-### Path
+### Path (model — driver/device coverage is a **subset**)
 
 ```
 User API
@@ -280,7 +280,7 @@ zig build test   # includes io_irp_host, fs_status_nt_map_host
 | display.zig | Desktop/display manager, Windows-style themes |
 | dwm.zig | Desktop Window Manager compositor |
 
-Themes: Classic, Luna, Aero, Modern, Fluent, Sun Valley.
+**Built-in shipped desktop theme: Aero only** (`src/desktop/aero/`; `src/config/desktop.conf`: `theme = aero | none`). Older text listed Classic/Luna/Modern/… as stylistic targets; **do not** assume those are selectable products unless a theme actually ships under `src/desktop/` and docs say so.
 
 **Desktop mouse and compositing (`main.zig` + `display.zig`)**
 

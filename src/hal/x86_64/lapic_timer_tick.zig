@@ -19,8 +19,8 @@ const REG_LVT_TIMER: u32 = 0x320;
 const REG_TIMER_DIV: u32 = 0x3E0;
 const REG_TICR: u32 = 0x380;
 
-/// 与 `interrupt_x86` 中 IRQ0 → 向量 32 一致。
-const timer_vector: u32 = 32;
+/// 与 `interrupt_x86` 中 IRQ0 → 向量 **0x30（48）** 一致（PIC 主片 ICW2）。
+const timer_vector: u32 = 0x30;
 
 var g_lapic_periodic_tick: bool = false;
 

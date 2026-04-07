@@ -1,5 +1,5 @@
 //! 8259 PIC (Programmable Interrupt Controller)
-//! Maps IRQ 0-15 to IDT vectors 32-47
+//! IRQ 0–7 → 向量 **0x30–0x37**，IRQ 8–15 → **0x38–0x3F**（见 `init` 中 ICW2），与 `interrupt_x86` / `lapic_timer_tick` 一致。
 
 const portio = @import("portio.zig");
 
@@ -18,8 +18,9 @@ pub fn init() void {
     portio.outb(PIC1_CMD, ICW1_INIT | ICW1_ICW4);
     portio.outb(PIC2_CMD, ICW1_INIT | ICW1_ICW4);
 
-    portio.outb(PIC1_DATA, 0x20);
-    portio.outb(PIC2_DATA, 0x28);
+    // 主片向量基 0x30、从片 0x38（与 Windows 常见布局一致），释放 0x20–0x2F 供 **int 0x2E**（向量 0x2E）等软件中断专用，避免与 IRQ14 冲突。
+    portio.outb(PIC1_DATA, 0x30);
+    portio.outb(PIC2_DATA, 0x38);
 
     portio.outb(PIC1_DATA, 0x04);
     portio.outb(PIC2_DATA, 0x02);

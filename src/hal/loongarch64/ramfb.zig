@@ -28,10 +28,29 @@ const FB_BPP: u32 = 32;
 /// 且 `main.zig` 在启用 ramfb 前已 `markPhysRangeUsed`（避免页表帧落入帧缓冲）。
 pub const RAMFB_PHYS: usize = 0x0F000000;
 
+/// 引导期 `main.zig` 在 `RAMFB_PHYS` 上 `markPhysRangeUsed` 的字节上界；运行期改分辨率不可超过此值。
+var guest_reserved_scanout_bytes: usize = 0;
+
+pub fn noteGuestReservedScanout(bytes: usize) void {
+    guest_reserved_scanout_bytes = @max(guest_reserved_scanout_bytes, bytes);
+}
+
+pub fn guestReservedScanoutBytes() usize {
+    return guest_reserved_scanout_bytes;
+}
+
 /// 供帧分配器保留的字节数（与传入宽高一致，32bpp 线性）
 pub fn framebufferReservedBytesDims(width: u32, height: u32) usize {
     if (width == 0 or height == 0) return 0;
     return @as(usize, width) * 4 * @as(usize, height);
+}
+
+/// 与 `virtio_gpu_spec.max_scanout_*` 一致：引导预留上界，供运行期 IOCTL 改分辨率。
+pub const ramfb_reserve_max_width: u32 = 3840;
+pub const ramfb_reserve_max_height: u32 = 2160;
+
+pub fn maxStandardScanoutReservedBytes() usize {
+    return framebufferReservedBytesDims(ramfb_reserve_max_width, ramfb_reserve_max_height);
 }
 
 /// 与构建期 `kernel_preferred_fb_*` 一致（未走 `setupWithDims` 时）
@@ -187,4 +206,30 @@ pub fn pointRamfbToGuestPhys(phys: u64, width: u32, height: u32, stride: u32) bo
     writeRamfbCfgToBuf(cfg_ptr, phys, width, height, stride);
     const ok = writeRamfbConfig(key, cfg_ptr);
     return ok;
+}
+
+/// 运行期 IOCTL / 显示栈改分辨率：写 fw_cfg，须 `need <= guest_reserved_scanout_bytes`（引导期已 note）。
+pub fn runtimeReconfigure(width: u32, height: u32) ?RamfbInfo {
+    return runtimeReconfigureAtGuestPhys(RAMFB_PHYS, width, height);
+}
+
+/// 将 QEMU ramfb 指向 **调用方已保证可用** 的客物理地址（须已映射且与 `guest_reserved_scanout_bytes` 一致）。
+pub fn runtimeReconfigureAtGuestPhys(phys: u64, width: u32, height: u32) ?RamfbInfo {
+    const need = framebufferReservedBytesDims(width, height);
+    if (need == 0) return null;
+    if (guest_reserved_scanout_bytes == 0 or need > guest_reserved_scanout_bytes) return null;
+    if (width == 0 or height == 0) return null;
+    const stride = width * 4;
+    const key = findRamfbKey() orelse return null;
+    const cfg_ptr = &ramfb_cfg_buf;
+    writeRamfbCfgToBuf(cfg_ptr, phys, width, height, stride);
+    if (!writeRamfbConfig(key, cfg_ptr)) return null;
+    return RamfbInfo{
+        .addr = phys,
+        .pitch = stride,
+        .width = width,
+        .height = height,
+        .bpp = 32,
+        .fb_type = 1,
+    };
 }

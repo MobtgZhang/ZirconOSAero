@@ -9,6 +9,7 @@ fn reg(offset: usize) *volatile u32 {
 const DR_OFFSET = 0x00;
 const FR_OFFSET = 0x18;
 const FR_TXFF: u32 = 1 << 5;
+const FR_RXFE: u32 = 1 << 4;
 
 pub fn init() void {}
 
@@ -22,4 +23,9 @@ pub fn write(s: []const u8) void {
         if (c == '\n') writeByte('\r');
         writeByte(c);
     }
+}
+
+pub fn readByte() ?u8 {
+    if (reg(FR_OFFSET).* & FR_RXFE != 0) return null;
+    return @truncate(reg(DR_OFFSET).*);
 }

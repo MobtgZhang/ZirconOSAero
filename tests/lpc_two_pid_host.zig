@@ -70,3 +70,40 @@ test "two-pid LPC queue roundtrip mirrors ipc.zig" {
     try std.testing.expectEqual(@as(u8, 0xAB), got.data[0]);
     try std.testing.expectEqual(@as(u8, 0xCD), got.data[1]);
 }
+
+// B4：镜像 `port.requestWaitReplyPort` — `ipc.send(client, server_port.owner_pid, …)`，应答进客户端队列。
+test "LPC request-reply routing uses server owner pid not client pid" {
+    var queues: [MAX_QUEUES]MessageQueue = undefined;
+    for (&queues) |*q| q.* = .{};
+
+    const server_owner_pid: u32 = 10;
+    const client_pid: u32 = 20;
+    const opcode: u32 = 0x4242;
+    var payload: [MSG_DATA_SIZE]u8 = [_]u8{0} ** MSG_DATA_SIZE;
+    payload[0] = 0x11;
+
+    // Client → server queue (owner_pid)
+    var req: Message = undefined;
+    req.sender = client_pid;
+    req.receiver = server_owner_pid;
+    req.opcode = opcode;
+    @memcpy(&req.data, &payload);
+
+    const srv_idx = pidToIndex(server_owner_pid).?;
+    const cli_idx = pidToIndex(client_pid).?;
+    try std.testing.expect(queues[srv_idx].push(req));
+
+    const inbound = queues[srv_idx].pop().?;
+    try std.testing.expectEqual(server_owner_pid, inbound.receiver);
+
+    var rep: Message = undefined;
+    rep.sender = server_owner_pid;
+    rep.receiver = client_pid;
+    rep.opcode = opcode;
+    rep.data[0] = 0x99;
+    try std.testing.expect(queues[cli_idx].push(rep));
+
+    const back = queues[cli_idx].pop().?;
+    try std.testing.expectEqual(client_pid, back.receiver);
+    try std.testing.expectEqual(@as(u8, 0x99), back.data[0]);
+}

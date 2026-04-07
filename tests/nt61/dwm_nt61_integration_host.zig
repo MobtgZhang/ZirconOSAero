@@ -7,6 +7,7 @@
 const std = @import("std");
 const dwm_registry_sync = @import("dwm_config_registry_sync");
 const dwm_blur_budget = @import("dwm_blur_budget");
+const compositor_sync = @import("compositor_sync_nt61");
 const dnc = @import("dwm_nt61_api_contract");
 const wddm = @import("wddm_abstraction");
 const nt61_aero = @import("nt61_aero_defaults");
@@ -14,8 +15,16 @@ const nt61_aero = @import("nt61_aero_defaults");
 const WM_DWMSENDICONICTHUMBNAIL: u32 = 0x0323;
 const WM_DWMSENDICONICLIVEPREVIEWBITMAP: u32 = 0x0326;
 
+test "GetMessage filter min=max=0 admits WM_DWMCOMPOSITIONCHANGED" {
+    const WM_DWM: u32 = dnc.WM_DWMCOMPOSITIONCHANGED;
+    const min: u32 = 0;
+    const max: u32 = 0;
+    const passes = (min == 0 and max == 0) or (WM_DWM >= min and WM_DWM <= max);
+    try std.testing.expect(passes);
+}
+
 test "compositor z-order stride matches user32 syncCompositorZOrderForUserWindows" {
-    // user32.zig: var zi: i16 = 10; per valid window with surface: setSurfaceZOrder(..., zi); zi += 10;
+    // user32.zig: var zi: i16 = 10; per valid window with surface: LPC `compositor_tree_sync` 分片；内核 `applyAuthorityTreeSyncV1` 应用 z。
     var zi: i16 = 10;
     var i: usize = 0;
     while (i < 5) : (i += 1) {

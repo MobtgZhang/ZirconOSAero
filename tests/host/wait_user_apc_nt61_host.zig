@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/wait_user_apc_nt61_host.zig
-// Purpose: 主机测试根（`src/`）：`ke/wait` + `ke/apc` 可告警等待与用户 APC 可见性。
+// Module: tests/host/wait_user_apc_nt61_host.zig
+// Purpose: 主机测试：`ke/wait` + `ke/apc` 可告警等待与用户 APC 可见性。
 //
 // This is an independent clean-room implementation.
 

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/syscall_numbers_lock_nt61_host.zig
-// Purpose: 主机测试根在 `src/`：syscall 索引锚点与 SDK 真源路径声明。
+// Module: tests/host/syscall_numbers_lock_nt61_host.zig
+// Purpose: 主机测试：syscall 索引锚点与 SDK 真源路径声明。
 //
 // This is an independent clean-room implementation.
 

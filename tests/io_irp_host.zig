@@ -174,6 +174,82 @@ test "IoForwardIrpToNextDevice mirror fails without lower device" {
     try std.testing.expectEqual(STATUS_NOT_IMPLEMENTED_HOST, st);
 }
 
+/// 镜像 `io.IoCompleteRequest`：`io_status_block_ptr` 与 IRP 字段同步写入（B3 单一路径）。
+const IO_STATUS_BLOCK_HOST = extern struct {
+    status: i32 = 0,
+    information: usize = 0,
+};
+
+const IrpIosb = struct {
+    status: i32 = 0,
+    bytes_transferred: usize = 0,
+    io_status_block_ptr: u64 = 0,
+};
+
+fn ioCompleteRequestIosbMirror(irp: *IrpIosb, st: i32, transferred: usize) void {
+    irp.status = st;
+    irp.bytes_transferred = transferred;
+    if (irp.io_status_block_ptr != 0) {
+        const iosb: *IO_STATUS_BLOCK_HOST = @ptrFromInt(irp.io_status_block_ptr);
+        iosb.status = st;
+        iosb.information = transferred;
+    }
+}
+
+/// 经栈下降时底层 `IoCompleteRequest` 写 IOSB（卷设备栈与 `dispatchIrpThroughStack` 行为级一致）。
+fn dispatchStackWithIosb(
+    top: u32,
+    irp: *IrpIosb,
+    attached: *const [MAX_DEV]u32,
+    dev_count: usize,
+    impl: *const fn (u32, *IrpIosb) i32,
+) i32 {
+    var idx = top;
+    var guard: usize = 0;
+    while (guard < MAX_DEV) : (guard += 1) {
+        if (idx >= dev_count) return STATUS_NOT_IMPLEMENTED_HOST;
+        const st = impl(idx, irp);
+        if (st != STATUS_NOT_IMPLEMENTED_HOST) return st;
+        const next = attached[idx];
+        if (next == 0) return st;
+        idx = next;
+    }
+    return STATUS_NOT_IMPLEMENTED_HOST;
+}
+
+test "IoCompleteRequest mirror writes IO_STATUS_BLOCK when pointer set (B3)" {
+    var iosb: IO_STATUS_BLOCK_HOST = .{};
+    var irp: IrpIosb = .{ .io_status_block_ptr = @intFromPtr(&iosb) };
+    ioCompleteRequestIosbMirror(&irp, STATUS_SUCCESS_HOST, 42);
+    try std.testing.expectEqual(STATUS_SUCCESS_HOST, irp.status);
+    try std.testing.expectEqual(@as(usize, 42), irp.bytes_transferred);
+    try std.testing.expectEqual(STATUS_SUCCESS_HOST, iosb.status);
+    try std.testing.expectEqual(@as(usize, 42), iosb.information);
+}
+
+test "dispatch through stack completes IOSB at bottom device (B3 volume stack)" {
+    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    att[0] = 1;
+    att[1] = 2;
+    att[2] = 0;
+    var iosb: IO_STATUS_BLOCK_HOST = .{};
+    var irp: IrpIosb = .{ .io_status_block_ptr = @intFromPtr(&iosb) };
+    const S = struct {
+        fn disp(idx: u32, i: *IrpIosb) i32 {
+            if (idx == 0 or idx == 1) return STATUS_NOT_IMPLEMENTED_HOST;
+            if (idx == 2) {
+                ioCompleteRequestIosbMirror(i, STATUS_SUCCESS_HOST, 7);
+                return STATUS_SUCCESS_HOST;
+            }
+            return STATUS_NOT_IMPLEMENTED_HOST;
+        }
+    };
+    const st = dispatchStackWithIosb(0, &irp, &att, 3, &S.disp);
+    try std.testing.expectEqual(STATUS_SUCCESS_HOST, st);
+    try std.testing.expectEqual(@as(usize, 7), iosb.information);
+    try std.testing.expectEqual(STATUS_SUCCESS_HOST, iosb.status);
+}
+
 test "dispatchIrpThroughStack falls through NOT_IMPLEMENTED to lower device" {
     var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
     att[0] = 1;

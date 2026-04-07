@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/rtl_verify_version_info_host.zig
+// Module: tests/host/rtl_verify_version_info_host.zig
 // Purpose: 主机验证 `config/os_version.zig` 中 `verSetConditionMask` / `rtlVerifyVersionInfo`。
 //
 // Ref: https://learn.microsoft.com/windows/win32/devnotes/rtlverifyversioninfo

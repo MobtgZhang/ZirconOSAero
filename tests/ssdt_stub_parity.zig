@@ -49,4 +49,6 @@ test "user syscall stub Ssdt matches ssdt_nt61" {
     try std.testing.expectEqual(ssdt.NtTerminateProcess, stub.Ssdt.NtTerminateProcess);
     try std.testing.expectEqual(ssdt.NtReadVirtualMemory, stub.Ssdt.NtReadVirtualMemory);
     try std.testing.expectEqual(ssdt.NtWriteVirtualMemory, stub.Ssdt.NtWriteVirtualMemory);
+    try std.testing.expectEqual(ssdt.NtShutdownSystem, stub.Ssdt.NtShutdownSystem);
+    try std.testing.expectEqual(ssdt.NtInitiatePowerAction, stub.Ssdt.NtInitiatePowerAction);
 }

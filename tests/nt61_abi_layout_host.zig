@@ -9,10 +9,18 @@
 
 const std = @import("std");
 const teb = @import("teb");
+const peb = @import("peb");
 const kuser = @import("kuser");
 
 test "TEB x64 LastErrorValue offset 0x68" {
+    try std.testing.expectEqual(@as(usize, 0x60), @offsetOf(teb.TebNt61X64, "ProcessEnvironmentBlock"));
     try std.testing.expectEqual(@as(usize, 0x68), @offsetOf(teb.TebNt61X64, "LastErrorValue"));
+}
+
+test "PEB x64 ImageBaseAddress offset 0x10" {
+    try std.testing.expectEqual(@as(usize, 0x10), @offsetOf(peb.PebNt61X64, "ImageBaseAddress"));
+    try std.testing.expectEqual(@as(usize, 0x18), @offsetOf(peb.PebNt61X64, "Ldr"));
+    try std.testing.expectEqual(@as(usize, 0x20), @offsetOf(peb.PebNt61X64, "ProcessParameters"));
 }
 
 test "KUSER_SHARED_DATA VA and version field offsets" {

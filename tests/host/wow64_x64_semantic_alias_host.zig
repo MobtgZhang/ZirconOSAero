@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/wow64_x64_semantic_alias_host.zig
-// Purpose: 主机测试根在 `src/`，运行 WOW64 x86→x64 语义别名映射回归（见 `wow64/x64_semantic_alias.zig`）。
+// Module: tests/host/wow64_x64_semantic_alias_host.zig
+// Purpose: 主机测试：WOW64 x86→x64 语义别名映射回归（见 `wow64/x64_semantic_alias.zig`）。
 //
 // This is an independent clean-room implementation.
 // Ref: [docs/cn/PHASE_G_WOW64.md](../docs/cn/PHASE_G_WOW64.md)

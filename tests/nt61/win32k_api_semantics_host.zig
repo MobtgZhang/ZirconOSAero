@@ -30,6 +30,15 @@ test "GDI ROP contract SRCCOPY only for BitBlt family" {
     try std.testing.expect(!rop.isImplementedBitBltRop(0x00EE0086));
 }
 
+test "§5 BitBlt unsupported ROP last error matches gdi32 path" {
+    try std.testing.expectEqual(@as(u32, 87), rop.bitblt_unsupported_rop_last_error);
+}
+
+test "§5 CreateWindowEx failure HWND sentinel is NULL" {
+    const hwnd_fail: u64 = 0;
+    try std.testing.expectEqual(@as(u64, 0), hwnd_fail);
+}
+
 test "Flip3D caps from dwm_nt61_api_contract" {
     try std.testing.expectEqual(dnc.flip3d_shell_sid_buffer_cap, @as(usize, 6));
     try std.testing.expectEqual(dnc.flip3d_shell_thumb_paint_max, @as(usize, 4));

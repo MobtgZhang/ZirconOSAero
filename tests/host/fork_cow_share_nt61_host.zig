@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
-// Module: src/fork_cow_share_nt61_host.zig
-// Purpose: 模块根在 `src/`，使 `mm/vm.zig` 等对 `arch`/`hal` 的 `@import` 落在同一模块内；`zig build test` 目标名仍为 **fork_cow_share_nt61_host**。
+// Module: tests/host/fork_cow_share_nt61_host.zig
+// Purpose: 主机测试：`mm/vm.zig` fork/CoW 共享路径；`zig build test` 目标名 **fork_cow_share_nt61_host**。
 //
 // This is an independent clean-room implementation.
 
@@ -29,7 +29,7 @@ test "duplicateUserMappingsForFork then tryCowWriteFault splits child pfn" {
     try std.testing.expect(vm.initAddressSpaceInPlace(&parent, &fa));
     defer vm.releaseProcessAddressSpace(&parent);
 
-    const user_va: u64 = 0x40_000;
+    const user_va: u64 = vm.USER_VA_MIN_X64_NT;
     const phys = parent.mapPageAlloc(user_va, .{ .writable = true, .user = true, .executable = false }) orelse
         return error.ParentMapFail;
     vm.recordCommittedVadRange(&parent, user_va, 1, vm.PAGE_READWRITE);

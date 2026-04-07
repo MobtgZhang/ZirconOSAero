@@ -314,6 +314,13 @@ pub fn isExplorerShellLangZh() bool {
     return true;
 }
 
+/// 资源管理器盘符：`verbose`（长描述）与 `pe_compact`（仅 `C:`）。Windows 宿主目标默认紧凑；其余由 `desktop.conf` 的 `explorer_drive_label_style` 决定。
+pub fn isExplorerDriveLabelPeCompact() bool {
+    if (builtin.os.tag == .windows) return true;
+    const v = desktop_config.getOr("desktop", "explorer_drive_label_style", "verbose");
+    return sliceEqIgnoreAsciiCase(v, "pe_compact") or sliceEqIgnoreAsciiCase(v, "compact") or sliceEqIgnoreAsciiCase(v, "pe");
+}
+
 pub fn isAutoLogon() bool {
     return desktop_config.getBoolOr("desktop", "auto_logon", false);
 }
@@ -375,6 +382,14 @@ pub fn isTripleBufferEnabled() bool {
 /// LoongArch64：QEMU ramfb/脏矩形路径曾出现屏上黑屏或残影，默认整幅 flip 优先保证可见；若需减负可在 desktop.conf 设 `present_full_flip=false`。
 pub fn isPresentFullFlipEnabled() bool {
     return desktop_config.getBoolOr("display", "present_full_flip", true);
+}
+
+/// x86_64：`present()` 与 vsync 策略联用时，按调度 tick 限制最小 present 间隔（毫秒，0=关闭）。非硬件 vblank，仅减轻无同步 flip 的撕裂感。
+pub fn getPresentCoarseFramePacingMs() u32 {
+    const v = desktop_config.getIntOr("display", "present_coarse_frame_pacing_ms", 0);
+    if (v <= 0) return 0;
+    if (v > 10_000) return 10_000;
+    return @truncate(v);
 }
 
 /// 初始化时把当前可见 GOP 拷入离屏绘制缓冲（两槽均拷）；默认关。首帧前常与 `clearFramebuffer` 二选一。

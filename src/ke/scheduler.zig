@@ -11,6 +11,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const peb_stub_va = @import("../sdk/peb_nt61_x64.zig");
 const klog = @import("../rtl/klog.zig");
 const vm_mod = @import("../mm/vm.zig");
 const process_mod = @import("../ps/process.zig");
@@ -27,7 +28,7 @@ var sched_irq_lock: spinlock_mod.IrqSpinLock = .{};
 const foreground_quantum_bonus_ticks: u32 = 4;
 
 fn activateCr3ForProcessId(pid: u32) void {
-    if (builtin.cpu.arch != .x86_64) return;
+    if (builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .loongarch64 and builtin.cpu.arch != .riscv64 and builtin.cpu.arch != .aarch64 and builtin.cpu.arch != .mips64el) return;
     if (pid == 0) {
         if (vm_mod.kernelAddressSpace()) |ks| {
             ks.activate();
@@ -83,6 +84,16 @@ fn schedNumCpus() usize {
     if (builtin.cpu.arch == .x86_64) {
         const madt = @import("../hal/x86_64/madt.zig");
         const n: u32 = madt.logical_cpu_count;
+        return @max(@as(usize, 1), @min(@as(usize, @intCast(n)), MAX_SCHED_CPUS));
+    }
+    if (builtin.cpu.arch == .loongarch64) {
+        const topo = @import("../hal/loongarch64/cpu_topology.zig");
+        const n: u32 = topo.logicalCpuCount();
+        return @max(@as(usize, 1), @min(@as(usize, @intCast(n)), MAX_SCHED_CPUS));
+    }
+    if (builtin.cpu.arch == .mips64el) {
+        const topo = @import("../hal/mips64el/cpu_topology.zig");
+        const n: u32 = topo.logicalCpuCount();
         return @max(@as(usize, 1), @min(@as(usize, @intCast(n)), MAX_SCHED_CPUS));
     }
     return 1;
@@ -451,6 +462,18 @@ pub const Thread = struct {
     alert_pending: bool = false,
     /// 非 0：阻塞在 **该 receiver_pid** 的 LPC 入站队列上（`ipc`）；与 `wakeLpcWaitersForReceiverPid` 配对。
     lpc_wait_receiver_pid: u32 = 0,
+    /// NT 6.1：`ThreadBasicInformation.TebBaseAddress` / 用户调试子集；与 `peb_nt61_x64.stubUserTebPageVa` 对齐，映射由进程创建路径提交。
+    teb_user_va: u64 = 0,
+    /// WOW64：与所属 `Process.is_wow64` 同步（`attachWow64IfPresent` / `createThread`）。
+    is_wow64: bool = false,
+    /// LoongArch64：`thread_switch.LaThreadContext` 的 11×u64 镜像；其它架构下保留为 0 占位。
+    la_context_raw: [11]u64 align(8) = @splat(0),
+    /// RISC-V64：`thread_switch.RvThreadContext` 的 14×u64 镜像；其它架构下保留为 0 占位。
+    rv_context_raw: [14]u64 align(8) = @splat(0),
+    /// AArch64：`thread_switch.A64ThreadContext` 的 13×u64 镜像；其它架构下保留为 0 占位。
+    a64_context_raw: [13]u64 align(8) = @splat(0),
+    /// MIPS64EL：`thread_switch.MipsThreadContext` 的 13×u64 镜像；其它架构下保留为 0 占位。
+    mips_context_raw: [13]u64 align(8) = @splat(0),
 };
 
 fn effectivePriority(t: *const Thread) u8 {
@@ -556,8 +579,24 @@ pub fn init() void {
     scheduling_enabled = false;
 
     process_mod.before_release_process_address_space = terminateThreadsForProcess;
+    process_mod.after_attach_wow64 = syncWow64FlagForProcessThreads;
 
     _ = createIdleThread();
+}
+
+fn syncWow64FlagForProcessThreads(pid: u32) void {
+    var i: usize = 1;
+    while (i < thread_count) : (i += 1) {
+        if (threads[i].process_id == pid) {
+            threads[i].is_wow64 = true;
+        }
+    }
+}
+
+/// 权威 WOW64 线程标志：与 `Process.is_wow64` 一致；`int 0x2E` 路径可双重校验。
+pub fn currentThreadIsWow64() bool {
+    if (current_thread >= thread_count) return false;
+    return threads[current_thread].is_wow64;
 }
 
 fn createIdleThread() ?usize {
@@ -574,6 +613,7 @@ fn createIdleThread() ?usize {
     threads[idx].io_boost = 0;
     threads[idx].boost_deadline_tick = 0;
     threads[idx].slice_remaining = quantumTicksForThread(&threads[idx]);
+    threads[idx].teb_user_va = peb_stub_va.stubUserTebPageVa(idx);
 
     const idle_name = "idle";
     @memcpy(threads[idx].name[0..idle_name.len], idle_name);
@@ -604,23 +644,48 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
 
     const stack_base = @intFromPtr(&threads[idx].stack);
     const stack_end = stack_base + STACK_SIZE;
-    var sp = stack_end;
 
-    sp -= 8;
-    @as(*u64, @ptrFromInt(sp)).* = entry;
-    sp -= 8;
-    @as(*u64, @ptrFromInt(sp)).* = 0;
-    sp -= 8;
-    @as(*u64, @ptrFromInt(sp)).* = 0;
-    sp -= 8;
-    @as(*u64, @ptrFromInt(sp)).* = 0;
-    sp -= 8;
-    @as(*u64, @ptrFromInt(sp)).* = 0;
-    sp -= 8;
-    @as(*u64, @ptrFromInt(sp)).* = 0;
+    if (builtin.target.cpu.arch == .loongarch64) {
+        const la_ts = @import("../arch/loongarch64/thread_switch.zig");
+        const la_ptr: *la_ts.LaThreadContext = @ptrCast(&threads[idx].la_context_raw);
+        la_ts.initNewThread(la_ptr, entry, stack_end);
+        threads[idx].stack_top = la_ptr.sp;
+    } else if (builtin.target.cpu.arch == .riscv64) {
+        const rv_ts = @import("../arch/riscv64/thread_switch.zig");
+        const rv_ptr: *rv_ts.RvThreadContext = @ptrCast(&threads[idx].rv_context_raw);
+        rv_ts.initNewThread(rv_ptr, entry, stack_end);
+        threads[idx].stack_top = rv_ptr.sp;
+    } else if (builtin.target.cpu.arch == .aarch64) {
+        const a64_ts = @import("../arch/aarch64/thread_switch.zig");
+        const a64_ptr: *a64_ts.A64ThreadContext = @ptrCast(&threads[idx].a64_context_raw);
+        a64_ts.initNewThread(a64_ptr, entry, stack_end);
+        threads[idx].stack_top = a64_ptr.sp;
+    } else if (builtin.target.cpu.arch == .mips64el) {
+        const mips_ts = @import("../arch/mips64el/thread_switch.zig");
+        const mips_ptr: *mips_ts.MipsThreadContext = @ptrCast(&threads[idx].mips_context_raw);
+        mips_ts.initNewThread(mips_ptr, entry, stack_end);
+        threads[idx].stack_top = mips_ptr.sp;
+    } else {
+        var sp = stack_end;
 
-    threads[idx].stack_top = sp;
+        sp -= 8;
+        @as(*u64, @ptrFromInt(sp)).* = entry;
+        sp -= 8;
+        @as(*u64, @ptrFromInt(sp)).* = 0;
+        sp -= 8;
+        @as(*u64, @ptrFromInt(sp)).* = 0;
+        sp -= 8;
+        @as(*u64, @ptrFromInt(sp)).* = 0;
+        sp -= 8;
+        @as(*u64, @ptrFromInt(sp)).* = 0;
+        sp -= 8;
+        @as(*u64, @ptrFromInt(sp)).* = 0;
+
+        threads[idx].stack_top = sp;
+    }
     threads[idx].context.rip = entry;
+    threads[idx].teb_user_va = peb_stub_va.stubUserTebPageVa(idx);
+    threads[idx].is_wow64 = if (process_mod.findProcess(process_id)) |pr| pr.is_wow64 else false;
 
     thread_count += 1;
     enqueueReady(idx);
@@ -678,6 +743,18 @@ pub fn tick() void {
         current_thread = next_blk;
         kpcr.setCurrentThreadIndex(@intCast(next_blk));
         activateCr3ForProcessId(threads[next_blk].process_id);
+        if (builtin.target.cpu.arch == .loongarch64) {
+            performLoongArchContextSwitch(cur, next_blk);
+        }
+        if (builtin.target.cpu.arch == .riscv64) {
+            performRiscvContextSwitch(cur, next_blk);
+        }
+        if (builtin.target.cpu.arch == .aarch64) {
+            performAarch64ContextSwitch(cur, next_blk);
+        }
+        if (builtin.target.cpu.arch == .mips64el) {
+            performMipsContextSwitch(cur, next_blk);
+        }
         return;
     }
 
@@ -711,6 +788,50 @@ pub fn tick() void {
     current_thread = next;
     kpcr.setCurrentThreadIndex(@intCast(next));
     activateCr3ForProcessId(threads[next].process_id);
+    if (builtin.target.cpu.arch == .loongarch64) {
+        performLoongArchContextSwitch(cur, next);
+    }
+    if (builtin.target.cpu.arch == .riscv64) {
+        performRiscvContextSwitch(cur, next);
+    }
+    if (builtin.target.cpu.arch == .aarch64) {
+        performAarch64ContextSwitch(cur, next);
+    }
+    if (builtin.target.cpu.arch == .mips64el) {
+        performMipsContextSwitch(cur, next);
+    }
+}
+
+fn performLoongArchContextSwitch(from_idx: usize, to_idx: usize) void {
+    if (builtin.target.cpu.arch != .loongarch64) return;
+    const la_ts = @import("../arch/loongarch64/thread_switch.zig");
+    const from_ctx: *la_ts.LaThreadContext = @ptrCast(&threads[from_idx].la_context_raw);
+    const to_ctx: *la_ts.LaThreadContext = @ptrCast(&threads[to_idx].la_context_raw);
+    la_ts.loongarch_switch_context(from_ctx, to_ctx);
+}
+
+fn performRiscvContextSwitch(from_idx: usize, to_idx: usize) void {
+    if (builtin.target.cpu.arch != .riscv64) return;
+    const rv_ts = @import("../arch/riscv64/thread_switch.zig");
+    const from_ctx: *rv_ts.RvThreadContext = @ptrCast(&threads[from_idx].rv_context_raw);
+    const to_ctx: *rv_ts.RvThreadContext = @ptrCast(&threads[to_idx].rv_context_raw);
+    rv_ts.riscv_switch_context(from_ctx, to_ctx);
+}
+
+fn performAarch64ContextSwitch(from_idx: usize, to_idx: usize) void {
+    if (builtin.target.cpu.arch != .aarch64) return;
+    const a64_ts = @import("../arch/aarch64/thread_switch.zig");
+    const from_ctx: *a64_ts.A64ThreadContext = @ptrCast(&threads[from_idx].a64_context_raw);
+    const to_ctx: *a64_ts.A64ThreadContext = @ptrCast(&threads[to_idx].a64_context_raw);
+    a64_ts.aarch64_switch_context(from_ctx, to_ctx);
+}
+
+fn performMipsContextSwitch(from_idx: usize, to_idx: usize) void {
+    if (builtin.target.cpu.arch != .mips64el) return;
+    const mips_ts = @import("../arch/mips64el/thread_switch.zig");
+    const from_ctx: *mips_ts.MipsThreadContext = @ptrCast(&threads[from_idx].mips_context_raw);
+    const to_ctx: *mips_ts.MipsThreadContext = @ptrCast(&threads[to_idx].mips_context_raw);
+    mips_ts.mips64_switch_context(from_ctx, to_ctx);
 }
 
 pub fn yield() void {
@@ -811,6 +932,18 @@ pub fn getThreadCount() usize {
     return thread_count;
 }
 
+/// `NtQueryInformationThread`：`sched_tid` 为 `createThread` / `createIdleThread` 返回的槽索引。
+pub fn getTebUserVaForSchedIndex(sched_tid: usize) u64 {
+    if (sched_tid >= thread_count) return 0;
+    return threads[sched_tid].teb_user_va;
+}
+
+/// 进程创建路径在用户区映射 TEB 页后同步（与 `stubUserTebPageVa` 一致）。
+pub fn setTebUserVaForSchedIndex(sched_tid: usize, teb_va: u64) void {
+    if (sched_tid >= thread_count) return;
+    threads[sched_tid].teb_user_va = teb_va;
+}
+
 pub fn setThreadPriority(tid: usize, priority: u8) void {
     if (tid >= thread_count) return;
     threads[tid].priority = priority;
@@ -876,6 +1009,20 @@ pub fn apProcessorIdleLoop() noreturn {
         arch_x.enableInterrupts();
         while (true) {
             asm volatile ("sti; hlt" ::: .{ .memory = true });
+        }
+    }
+    if (builtin.cpu.arch == .loongarch64) {
+        const arch_la = @import("../arch/loongarch64/mod.zig");
+        arch_la.enableInterrupts();
+        while (true) {
+            asm volatile ("idle 0" ::: .{ .memory = true });
+        }
+    }
+    if (builtin.cpu.arch == .mips64el) {
+        const arch_mips = @import("../arch/mips64el/mod.zig");
+        arch_mips.enableInterrupts();
+        while (true) {
+            asm volatile ("wait" ::: .{ .memory = true });
         }
     }
     while (true) {

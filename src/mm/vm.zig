@@ -59,7 +59,7 @@ pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u
                 klog.info("VM: identity map progress va=0x%x / end=0x%x", .{ va, range_end });
             }
         }
-        if (builtin.cpu.arch == .x86_64 and @hasDecl(paging, "map2MiBPage") and @hasDecl(paging, "HUGE_PAGE_SIZE")) {
+        if ((builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) and @hasDecl(paging, "map2MiBPage") and @hasDecl(paging, "HUGE_PAGE_SIZE")) {
             const huge: u64 = paging.HUGE_PAGE_SIZE;
             if ((va % huge) == 0 and va <= std.math.maxInt(u64) - huge and va + huge <= range_end) {
                 if (paging.map2MiBPage(space.pml4_phys, va, va, pflags, allocFrameCb, space.allocator)) {
@@ -69,7 +69,7 @@ pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u
                 }
             }
         }
-        if (builtin.cpu.arch == .loongarch64 and
+        if ((builtin.cpu.arch == .loongarch64 or builtin.cpu.arch == .mips64el) and
             @hasDecl(paging, "mapIdentity32MiBlock") and
             @hasDecl(paging, "identity_bulk_bytes"))
         {
@@ -106,8 +106,20 @@ pub const MapFlags = struct {
     }
 };
 
-/// x86_64 用户态 canonical 低半区上界（文档常量；页表须与 `arch` 一致）。Ref: Intel SDM — canonical addresses.
-pub const USER_VA_MAX_HINT_X86_64: u64 = 0x0000_7FFF_FFFF_FFFF;
+const user_va_policy = @import("vm_user_va_policy.zig");
+pub const USER_VA_MAX_HINT_X86_64 = user_va_policy.USER_VA_MAX_HINT_X86_64;
+pub const USER_VA_MIN_X64_NT = user_va_policy.USER_VA_MIN_X64_NT;
+pub const USER_VA_MAX_X64_NT = user_va_policy.USER_VA_MAX_X64_NT;
+pub const USER_VA_MIN_LA_NT = user_va_policy.USER_VA_MIN_LA_NT;
+pub const USER_VA_MAX_LA_NT = user_va_policy.USER_VA_MAX_LA_NT;
+pub const USER_VA_MIN_NT61 = user_va_policy.USER_VA_MIN_NT61;
+pub const USER_VA_MAX_NT61 = user_va_policy.USER_VA_MAX_NT61;
+pub const userVaRangeAllowedX64 = user_va_policy.userVaRangeAllowedX64;
+pub const userVaRangeAllowedLa64 = user_va_policy.userVaRangeAllowedLa64;
+pub const userVaRangeAllowedMips64 = user_va_policy.userVaRangeAllowedMips64;
+pub const userVaRangeAllowedNt61 = user_va_policy.userVaRangeAllowedNt61;
+pub const USER_VA_MIN_MIPS64_NT = user_va_policy.USER_VA_MIN_MIPS64_NT;
+pub const USER_VA_MAX_MIPS64_NT = user_va_policy.USER_VA_MAX_MIPS64_NT;
 
 /// NT 6.1 虚拟分配阶段（公开文档：`ZwAllocateVirtualMemory` / `VirtualAlloc` 的 MEM_RESERVE vs MEM_COMMIT）。
 /// - **Reserved**：VA 区间计入地址空间，无页表 Present / 无物理页。
@@ -143,15 +155,45 @@ pub fn kernelAddressSpace() ?*AddressSpace {
 /// 将内核 `AddressSpace` 的 PML4 槽 **256..512**（canonical 高半区入口）复制到进程页表，使 `CR3` 切换后仍可达内核映射。
 /// 与 `paging.releaseUserHalfAddressSpace` 仅回收 **0..256** 一致；子进程 PML4 与内核 **共享** 高半区所指 PDPT/PD/PT 物理帧（不复制整棵子树）。
 /// Ref: Intel SDM — 4-level paging；行为描述见 `docs/cn/VM_ISOLATION.md`。
+/// LoongArch64：复制 PGD **[kernel_linked_l0_begin, 2048)**（见 `docs/specs/MemoryManagement_NT61_LoongArch64_NewWorld.md`）。
 pub fn linkKernelHalfMappings(dst: *AddressSpace) bool {
-    if (builtin.cpu.arch != .x86_64) return true;
     const ks = kernelAddressSpace() orelse return false;
-    // 恒等映射下 PML4 物理页可解引用（与 `unmapPage` / `translateVirtualToPhysical` 路径一致）。
-    const dst_pml4: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
-    const src_pml4: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
-    var i: usize = 256;
-    while (i < 512) : (i += 1) {
-        dst_pml4.entries[i] = src_pml4.entries[i];
+    if (builtin.cpu.arch == .x86_64) {
+        // 恒等映射下 PML4 物理页可解引用（与 `unmapPage` / `translateVirtualToPhysical` 路径一致）。
+        const dst_pml4: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
+        const src_pml4: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
+        var i: usize = 256;
+        while (i < 512) : (i += 1) {
+            dst_pml4.entries[i] = src_pml4.entries[i];
+        }
+        return true;
+    }
+    if (builtin.cpu.arch == .loongarch64) {
+        const dst_pgd: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
+        const src_pgd: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
+        var i: usize = paging.kernel_linked_l0_begin;
+        while (i < 2048) : (i += 1) {
+            dst_pgd.entries[i] = src_pgd.entries[i];
+        }
+        return true;
+    }
+    if (builtin.cpu.arch == .aarch64) {
+        const dst_pgd: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
+        const src_pgd: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
+        var i: usize = paging.kernel_linked_l0_begin;
+        while (i < 512) : (i += 1) {
+            dst_pgd.entries[i] = src_pgd.entries[i];
+        }
+        return true;
+    }
+    if (builtin.cpu.arch == .mips64el) {
+        const dst_pgd: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
+        const src_pgd: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
+        var i: usize = paging.kernel_linked_l0_begin;
+        while (i < 512) : (i += 1) {
+            dst_pgd.entries[i] = src_pgd.entries[i];
+        }
+        return true;
     }
     return true;
 }
@@ -171,6 +213,21 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
         tlb.notePendingGlobalShootdown();
         tlb.noteUserMappingInvalidatedSmp();
     }
+    if (builtin.cpu.arch == .loongarch64 and builtin.os.tag == .freestanding) {
+        const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
+        tlb_la.notePendingGlobalShootdown();
+        tlb_la.noteUserMappingInvalidatedSmp();
+    }
+    if (builtin.cpu.arch == .aarch64 and builtin.os.tag == .freestanding) {
+        const tlb_a64 = @import("../hal/aarch64/tlb_flush.zig");
+        tlb_a64.notePendingGlobalShootdown();
+        tlb_a64.noteUserMappingInvalidatedSmp();
+    }
+    if (builtin.cpu.arch == .mips64el and builtin.os.tag == .freestanding) {
+        const tlb_mips = @import("../hal/mips64el/tlb_flush.zig");
+        tlb_mips.notePendingGlobalShootdown();
+        tlb_mips.noteUserMappingInvalidatedSmp(0);
+    }
     if (@hasDecl(paging, "releaseUserHalfAddressSpace")) {
         paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, @ptrCast(space.allocator));
     }
@@ -184,6 +241,8 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     @memset(&space.section_view_obj, 0);
     @memset(&space.section_view_file_off, 0);
     @memset(&space.section_view_token, 0);
+    @memset(&space.section_view_is_image, false);
+    @memset(&space.section_view_protect, 0);
     space.vma_len = 0;
     @memset(&space.vma_base, 0);
     @memset(&space.vma_pages, 0);
@@ -193,6 +252,14 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding) {
         const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
         tlb.requestGlobalFlushStub();
+    }
+    if (builtin.cpu.arch == .loongarch64 and builtin.os.tag == .freestanding) {
+        const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
+        tlb_la.requestGlobalFlushStub();
+    }
+    if (builtin.cpu.arch == .mips64el and builtin.os.tag == .freestanding) {
+        const tlb_mips = @import("../hal/mips64el/tlb_flush.zig");
+        tlb_mips.requestGlobalFlushStub();
     }
 }
 
@@ -204,22 +271,28 @@ fn vmaOverlaps(a0: u64, a1: u64, b0: u64, b1: u64) bool {
     return !(a1 <= b0 or b1 <= a0);
 }
 
-/// Win32 `PAGE_*` → x86_64 叶 PTE 标志（用户页）。未覆盖的组合返回 `null`。
+/// Win32 `PAGE_*` → 当前 `arch.impl.paging` 叶 PTE 标志（用户页；x86 与 LoongArch 符号名对齐）。未覆盖的组合返回 `null`。
 fn ntProtectToPteFlags(prot: u32) ?u64 {
     const base = paging.Present | paging.User | paging.Accessed;
     return switch (prot) {
         0x02 => base | paging.NoExecute,
-        0x04, 0x08, 0x80 => base | paging.Write | paging.NoExecute,
+        0x04, 0x08 => base | paging.Write | paging.NoExecute,
         0x10, 0x20 => base,
-        0x40 => base | paging.Write,
+        // PAGE_EXECUTE_READWRITE：W^X 下降为可执行可读、不可写。
+        0x40 => base,
+        // PAGE_EXECUTE_WRITECOPY（0x80）：与 0x40 相同处理。
+        0x80 => base,
         else => null,
     };
 }
 
 /// Win32 `PAGE_*` → `MapFlags`（用户区）。
 pub fn mapFlagsFromNtProtect(prot: u32) MapFlags {
-    const writable = (prot & 0xCC) != 0;
-    const executable = (prot & 0x70) != 0;
+    var writable = (prot & 0xCC) != 0;
+    // 可执行：`PAGE_EXECUTE*` 占位 0x10–0x80（含 `PAGE_EXECUTE_WRITECOPY`=0x80，不在 0x70 掩码内）。
+    const executable = ((prot & 0xF0) >= 0x10);
+    // W^X：用户叶不允许同时可写且可执行（缓解 shellcode）；需自修改代码时用先 RW 再 RX 切换。
+    if (writable and executable) writable = false;
     return .{ .writable = writable, .user = true, .executable = executable };
 }
 
@@ -234,6 +307,12 @@ pub const VmAreaDesc = struct {
 
 pub fn vmaInsert(space: *AddressSpace, base: u64, num_pages: u32, user: bool, writable: bool) bool {
     if (num_pages == 0 or space.vma_len >= max_vma) return false;
+    if (user) {
+        const ps: u64 = @intCast(paging.page_size);
+        if (ps != 0 and @as(u64, num_pages) > std.math.maxInt(u64) / ps) return false;
+        const span = @as(u64, num_pages) * ps;
+        if (!userVaRangeAllowedNt61(base, span)) return false;
+    }
     const end = vmaRangeEnd(base, num_pages);
     var i: u8 = 0;
     while (i < space.vma_len) : (i += 1) {
@@ -399,6 +478,9 @@ pub const PAGE_READWRITE: u32 = 0x04;
 /// Ref: https://learn.microsoft.com/windows/win32/memory/memory-protection-constants
 pub const PAGE_GUARD: u32 = 0x100;
 pub const MEM_PRIVATE: u32 = 0x20000;
+/// Ref: Learn — memory types for `MEMORY_BASIC_INFORMATION`.
+pub const MEM_MAPPED: u32 = 0x40000;
+pub const MEM_IMAGE: u32 = 0x1000000;
 
 pub const AddressSpace = struct {
     pml4_phys: u64,
@@ -417,6 +499,10 @@ pub const AddressSpace = struct {
     section_view_token: [max_section_views]u32 = @splat(0),
     /// `NtMapViewOfSection` 时文件视图的起始字节偏移（惰性填页用）。
     section_view_file_off: [max_section_views]u64 = @splat(0),
+    /// 与 `section_view_*` 行对齐：`SEC_IMAGE` 视图在 `MEMORY_BASIC_INFORMATION.Type` 中报告 `MEM_IMAGE`。
+    section_view_is_image: [max_section_views]bool = @splat(false),
+    /// 映射时的 Win32 `PAGE_*`（供 `NtQueryVirtualMemory`）。
+    section_view_protect: [max_section_views]u32 = @splat(0),
     /// 显式 VMA 记录（与 `reserved_*` 不重复登记：reserve 仅走 `reserved_*`；`vmaInsert` 用于已映射或其它视图）。
     vma_len: u8 = 0,
     vma_base: [max_vma]u64 = @splat(0),
@@ -428,7 +514,9 @@ pub const AddressSpace = struct {
         if (self.reserved_count >= max_reserved_regions) return false;
         if (num_pages == 0) return false;
         const ps: u64 = @intCast(paging.page_size);
-        const end_excl = virt_base + @as(u64, num_pages) * ps;
+        const span = @as(u64, num_pages) * ps;
+        if (!userVaRangeAllowedNt61(virt_base, span)) return false;
+        const end_excl = virt_base + span;
         const is_guard = (nt_protect & PAGE_GUARD) != 0;
         if (!self.vad.insert(virt_base, end_excl, .reserved, nt_protect, is_guard)) return false;
         const i = self.reserved_count;
@@ -512,6 +600,10 @@ pub const AddressSpace = struct {
     }
 
     pub fn mapPage(self: *AddressSpace, virt: u64, phys: u64, flags: MapFlags) bool {
+        if (flags.user) {
+            const ps: u64 = @intCast(paging.page_size);
+            if (!userVaRangeAllowedNt61(virt, ps)) return false;
+        }
         return paging.mapPage(
             self.pml4_phys,
             virt,
@@ -523,6 +615,10 @@ pub const AddressSpace = struct {
     }
 
     pub fn mapPageAlloc(self: *AddressSpace, virt: u64, flags: MapFlags) ?u64 {
+        if (flags.user) {
+            const ps: u64 = @intCast(paging.page_size);
+            if (!userVaRangeAllowedNt61(virt, ps)) return null;
+        }
         const panic_ctx = @import("../rtl/panic_context.zig");
         panic_ctx.setPhase(0x0005_0130);
         const phys = self.allocator.allocZeroed() orelse {
@@ -545,6 +641,7 @@ pub const AddressSpace = struct {
     /// Ref: https://learn.microsoft.com/windows/win32/memory/memory-protection-constants
     pub fn protectVirtualRange(self: *AddressSpace, base: u64, size_bytes: u64, new_protect: u32) bool {
         if (size_bytes == 0) return false;
+        if (!userVaRangeAllowedNt61(base, size_bytes)) return false;
         if (!@hasDecl(paging, "protectLeafPage")) return false;
         const pte_flags = ntProtectToPteFlags(new_protect) orelse return false;
         const ps: u64 = @intCast(paging.page_size);
@@ -601,13 +698,15 @@ pub const AddressSpace = struct {
         paging.loadCr3(self.pml4_phys);
     }
 
-    pub fn recordSectionView(self: *AddressSpace, base: u64, pages: u32, sec_ptr: u64, file_start_off: u64) bool {
+    pub fn recordSectionView(self: *AddressSpace, base: u64, pages: u32, sec_ptr: u64, file_start_off: u64, is_image_section: bool, nt_page_protect: u32) bool {
         if (self.section_view_count >= max_section_views) return false;
         const i = self.section_view_count;
         self.section_view_base[i] = base;
         self.section_view_pages[i] = pages;
         self.section_view_obj[i] = sec_ptr;
         self.section_view_file_off[i] = file_start_off;
+        self.section_view_is_image[i] = is_image_section;
+        self.section_view_protect[i] = nt_page_protect;
         self.section_view_token[i] = g_section_view_token_seq.fetchAdd(1, .monotonic);
         self.section_view_count += 1;
         return true;
@@ -632,6 +731,8 @@ pub const AddressSpace = struct {
                 self.section_view_pages[i] = self.section_view_pages[last];
                 self.section_view_obj[i] = self.section_view_obj[last];
                 self.section_view_file_off[i] = self.section_view_file_off[last];
+                self.section_view_is_image[i] = self.section_view_is_image[last];
+                self.section_view_protect[i] = self.section_view_protect[last];
                 self.section_view_token[i] = self.section_view_token[last];
                 self.section_view_count -= 1;
                 return pages;
@@ -684,6 +785,31 @@ pub fn fillMemoryBasicInformation(space: *AddressSpace, query_va: u64, out: *Mem
     const ps: u64 = @intCast(paging.page_size);
     const page = query_va & ~(ps - 1);
     out.* = .{};
+
+    var svi: u8 = 0;
+    while (svi < space.section_view_count) : (svi += 1) {
+        const vb = space.section_view_base[svi];
+        const np = space.section_view_pages[svi];
+        if (np == 0) continue;
+        if (@as(u64, np) > std.math.maxInt(u64) / ps) continue;
+        const span = @as(u64, np) * ps;
+        if (query_va < vb or query_va >= vb + span) continue;
+        const prot = space.section_view_protect[svi];
+        out.BaseAddress = vb;
+        out.AllocationBase = vb;
+        out.AllocationProtect = prot;
+        out.RegionSize = span;
+        out.Type = if (space.section_view_is_image[svi]) MEM_IMAGE else MEM_MAPPED;
+        const qpg = query_va & ~(ps - 1);
+        if (space.getPhysical(qpg)) |_| {
+            out.State = vad_mod.MEM_COMMIT;
+            out.Protect = prot;
+        } else {
+            out.State = vad_mod.MEM_RESERVE;
+            out.Protect = PAGE_NOACCESS;
+        }
+        return;
+    }
 
     if (space.vad.findContaining(query_va)) |e| {
         out.BaseAddress = e.start;
@@ -849,6 +975,8 @@ pub fn initAddressSpaceInPlace(space: *AddressSpace, allocator: *FrameAllocator)
         .section_view_obj = @splat(0),
         .section_view_token = @splat(0),
         .section_view_file_off = @splat(0),
+        .section_view_is_image = @splat(false),
+        .section_view_protect = @splat(0),
         .vma_len = 0,
         .vma_base = @splat(0),
         .vma_pages = @splat(0),
@@ -882,6 +1010,17 @@ fn forkDupChildPteFlags(pte_raw: u64) u64 {
             if (pe.global) f |= paging.Global;
             if (pe.dirty) f |= paging.Dirty;
             if (pe.no_execute) f |= paging.NoExecute;
+            break :blk f;
+        },
+        .loongarch64 => pte_raw & ~@as(u64, paging.D),
+        .mips64el => pte_raw & ~@as(u64, paging.D_BIT),
+        .aarch64 => blk: {
+            // Preserve all flags except make read-only for CoW:
+            // Clear AP[1] (bit 7) to remove EL0 write → AP=0b00 (EL1 RW only)
+            // Keep Valid, AF, SH, AttrIdx, User, NoExecute etc.
+            var f: u64 = pte_raw & ~@as(u64, paging.Write);
+            // Ensure present and accessed
+            f |= paging.Present | paging.Accessed;
             break :blk f;
         },
         else => pte_raw,
@@ -929,6 +1068,8 @@ fn copyUserSideMetadataForFork(dst: *AddressSpace, src: *const AddressSpace) boo
     @memcpy(&dst.section_view_pages, &src.section_view_pages);
     @memcpy(&dst.section_view_obj, &src.section_view_obj);
     @memcpy(&dst.section_view_file_off, &src.section_view_file_off);
+    @memcpy(&dst.section_view_is_image, &src.section_view_is_image);
+    @memcpy(&dst.section_view_protect, &src.section_view_protect);
     @memcpy(&dst.section_view_token, &src.section_view_token);
     dst.vma_len = src.vma_len;
     @memcpy(&dst.vma_base, &src.vma_base);
@@ -938,12 +1079,11 @@ fn copyUserSideMetadataForFork(dst: *AddressSpace, src: *const AddressSpace) boo
     return true;
 }
 
-/// fork 子集：将 `src` 用户半区 **4KiB 用户叶** 复制到 `dst`（`notePageShared`、子侧 PTE **不可写**），并复制 VAD / `reserved_*` / `section_view_*` / VMA。
-/// - **大页**（1GiB/2MiB）当前不枚举（见 `paging.forEachUser4KiPresentLeaf`）。
+/// fork 子集：将 `src` 用户半区 **用户叶**（x86 为 4KiB，LoongArch 为 16KiB；API 名 `forEachUser4KiPresentLeaf` 沿用）复制到 `dst`（`notePageShared`、子侧 PTE **不可写**），并复制 VAD / `reserved_*` / `section_view_*` / VMA。
+/// - **大页**（x86 1GiB/2MiB 等）当前不枚举（见 `paging.forEachUser4KiPresentLeaf`）。
 /// - 若 `dst` 某 VA 已有映射（如 `kuser_shared`），跳过该 VA，保留子侧原页。
 /// - 要求：`dst` 在复制前 **无** VAD / 保留区 / 段视图 / VMA 元数据（与 `createProcess` + `kuser` 后状态一致）。
 pub fn duplicateUserMappingsForFork(dst: *AddressSpace, src: *const AddressSpace) i32 {
-    if (builtin.cpu.arch != .x86_64) return fork_dup_status_not_supported;
     if (!@hasDecl(paging, "forEachUser4KiPresentLeaf")) return fork_dup_status_not_supported;
     if (@intFromPtr(dst) == @intFromPtr(src)) return fork_dup_status_invalid_parameter;
     if (dst.vad.len() != 0 or dst.reserved_count != 0 or dst.section_view_count != 0 or dst.vma_len != 0)
@@ -1023,6 +1163,12 @@ pub fn isVirtInReservedRange(space: *const AddressSpace, virt_base: u64, num_pag
 
 pub fn mapRange(space: *AddressSpace, virt_base: u64, num_pages: usize, flags: MapFlags) bool {
     const ps: u64 = @intCast(paging.page_size);
+    if (flags.user) {
+        if (num_pages == 0) return false;
+        if (ps != 0 and num_pages > std.math.maxInt(u64) / ps) return false;
+        const span = @as(u64, @intCast(num_pages)) * ps;
+        if (!userVaRangeAllowedNt61(virt_base, span)) return false;
+    }
     var i: usize = 0;
     while (i < num_pages) : (i += 1) {
         if (ps != 0 and i > std.math.maxInt(u64) / ps) return false;
@@ -1067,6 +1213,14 @@ pub fn unmapRange(space: *AddressSpace, virt_base: u64, num_pages: usize) void {
         const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
         tlb.noteUserMappingInvalidatedSmp();
     }
+    if (builtin.cpu.arch == .loongarch64 and builtin.os.tag == .freestanding and num_pages > 0) {
+        const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
+        tlb_la.noteUserMappingInvalidatedSmp();
+    }
+    if (builtin.cpu.arch == .mips64el and builtin.os.tag == .freestanding and num_pages > 0) {
+        const tlb_mips = @import("../hal/mips64el/tlb_flush.zig");
+        tlb_mips.noteUserMappingInvalidatedSmp(0);
+    }
 }
 
 /// `MEM_DECOMMIT`：解除 PTE 并将对应 VAD 标回 reserved（子集；须整段落在已提交 VAD 内）。
@@ -1089,6 +1243,14 @@ pub fn decommitVirtualRange(space: *AddressSpace, virt_base: u64, num_pages: usi
     if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding and num_pages > 0) {
         const tlb = @import("../hal/x86_64/tlb_broadcast.zig");
         tlb.noteUserMappingInvalidatedSmp();
+    }
+    if (builtin.cpu.arch == .loongarch64 and builtin.os.tag == .freestanding and num_pages > 0) {
+        const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
+        tlb_la.noteUserMappingInvalidatedSmp();
+    }
+    if (builtin.cpu.arch == .mips64el and builtin.os.tag == .freestanding and num_pages > 0) {
+        const tlb_mips = @import("../hal/mips64el/tlb_flush.zig");
+        tlb_mips.noteUserMappingInvalidatedSmp(0);
     }
     return true;
 }

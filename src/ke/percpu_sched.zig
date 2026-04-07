@@ -23,6 +23,38 @@ pub fn assignCpuForNewThread() u32 {
         assign_cpu_rot +%= 1;
         return c % n;
     }
+    if (builtin.cpu.arch == .loongarch64) {
+        const topo = @import("../hal/loongarch64/cpu_topology.zig");
+        const n = topo.logicalCpuCount();
+        if (n <= 1) return 0;
+        const c = assign_cpu_rot;
+        assign_cpu_rot +%= 1;
+        return c % n;
+    }
+    if (builtin.cpu.arch == .riscv64) {
+        const topo = @import("../hal/riscv64/cpu_topology.zig");
+        const n = topo.logicalCpuCount();
+        if (n <= 1) return 0;
+        const c = assign_cpu_rot;
+        assign_cpu_rot +%= 1;
+        return c % n;
+    }
+    if (builtin.cpu.arch == .aarch64) {
+        const topo = @import("../hal/aarch64/cpu_topology.zig");
+        const n = topo.logicalCpuCount();
+        if (n <= 1) return 0;
+        const c = assign_cpu_rot;
+        assign_cpu_rot +%= 1;
+        return c % n;
+    }
+    if (builtin.cpu.arch == .mips64el) {
+        const topo = @import("../hal/mips64el/cpu_topology.zig");
+        const n = topo.logicalCpuCount();
+        if (n <= 1) return 0;
+        const c = assign_cpu_rot;
+        assign_cpu_rot +%= 1;
+        return c % n;
+    }
     return 0;
 }
 

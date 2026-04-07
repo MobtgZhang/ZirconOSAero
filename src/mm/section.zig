@@ -131,17 +131,23 @@ pub fn releaseSectionObject(sec: *SectionObject) void {
 
 fn mapFlagsFromPageProtect(prot: u32) vm.MapFlags {
     const writable = (prot & 0xCC) != 0; // READWRITE / WRITECOPY / EXECUTE_READWRITE / EXECUTE_WRITECOPY
-    const executable = (prot & 0x70) != 0; // EXECUTE*
+    const executable = ((prot & 0xF0) >= 0x10); // PAGE_EXECUTE (0x10) through PAGE_EXECUTE_WRITECOPY (0x80)
     return .{ .writable = writable, .user = true, .executable = executable };
 }
 
 fn pickUserBase(space: *vm.AddressSpace, num_pages: u32) ?u64 {
     const ps: u64 = @intCast(paging.page_size);
+    if (ps != 0 and @as(u64, num_pages) > std.math.maxInt(u64) / ps) return null;
+    const vs = @as(u64, num_pages) * ps;
+    if (!vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_X64_NT, vs)) return null;
     section_va_salt = section_va_salt *% 1664525 +% 1013904223;
     const slide: u64 = @as(u64, section_va_salt % 512);
-    var base: u64 = 0x0000_0000_4000_0000 + slide * ps;
-    const vs = @as(u64, num_pages) * ps;
-    while (base < vm.USER_VA_MAX_HINT_X86_64 -| vs) : (base += ps) {
+    var base: u64 = std.mem.alignForward(u64, vm.USER_VA_MIN_X64_NT + slide * ps, ps);
+    if (!vm.userVaRangeAllowedNt61(base, vs)) {
+        base = std.mem.alignForward(u64, vm.USER_VA_MIN_X64_NT, ps);
+        if (!vm.userVaRangeAllowedNt61(base, vs)) return null;
+    }
+    while (vm.userVaRangeAllowedNt61(base, vs)) : (base += ps) {
         if (space.getPhysical(base) != null) continue;
         if (vm.isVirtInReservedRange(space, base, num_pages)) continue;
         var ok = true;
@@ -168,7 +174,6 @@ fn copyFileIntoMappedPages(
 ) i32 {
     const ps: u64 = @intCast(paging.page_size);
     var buf: [4096]u8 = undefined;
-    if (ps > buf.len) return STATUS_INVALID_PARAMETER;
     var file_pos = start_file_off;
     var p: u32 = 0;
     while (p < num_pages) : (p += 1) {
@@ -222,13 +227,14 @@ pub fn mapViewIntoProcess(
     } else {
         if (base & (ps - 1) != 0) return STATUS_INVALID_PARAMETER;
     }
+    if (!vm.userVaRangeAllowedNt61(base, vs)) return STATUS_INVALID_PARAMETER;
 
     if (sec.file_backed) {
         const end_excl = base + vs;
         if (!space.vad.insert(base, end_excl, .reserved, sec.page_protection, false)) {
             return STATUS_NO_MEMORY;
         }
-        if (!space.recordSectionView(base, num_pages, @intFromPtr(sec), section_offset)) {
+        if (!space.recordSectionView(base, num_pages, @intFromPtr(sec), section_offset, sec.is_image_section, sec.page_protection)) {
             _ = space.vad.removeExact(base, num_pages);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
@@ -250,7 +256,7 @@ pub fn mapViewIntoProcess(
         }
     }
 
-    if (!space.recordSectionView(base, num_pages, @intFromPtr(sec), 0)) {
+    if (!space.recordSectionView(base, num_pages, @intFromPtr(sec), 0, sec.is_image_section, sec.page_protection)) {
         var j: u32 = 0;
         while (j < num_pages) : (j += 1) {
             _ = space.unmapAndFree(base + @as(u64, j) * ps);

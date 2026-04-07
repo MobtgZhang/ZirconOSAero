@@ -80,8 +80,11 @@ pub fn handle(frame: *InterruptFrame) void {
 
     if (vector < 32) {
         handleException(frame, vector);
-    } else if (vector >= 32 and vector < 48) {
-        handleIrq(frame, vector - 32);
+    } else if (vector == 0x2e) {
+        handleWow64LegacySyscall(frame);
+    } else if (vector >= 0x30 and vector < 0x40) {
+        // 8259 重映射：IRQn → 向量 0x30+n（主片 0–7，从片 8–15）。
+        handleIrq(frame, vector - 0x30);
     } else if (vector == 128) {
         handleSyscall(frame);
     } else {
@@ -190,7 +193,24 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
 
 fn handleSyscall(frame: *InterruptFrame) void {
     if (@import("build_options").enable_idt) {
+        const smap = @import("../hal/x86_64/smap_user_access.zig");
+        smap.syscallEnterAllowUserMemory();
+        defer smap.syscallExitRestoreSmap();
         const syscall = @import("../arch/x86_64/syscall.zig");
         syscall.dispatch(frame);
+    }
+}
+
+/// **int 0x2E**（WOW64 / 兼容 32 位 NT 调用约定）：EAX=服务号，EDX=指向 stdcall 实参区（u32 槽）的指针。
+fn handleWow64LegacySyscall(frame: *InterruptFrame) void {
+    if (!@import("build_options").enable_idt) return;
+    const smap = @import("../hal/x86_64/smap_user_access.zig");
+    smap.syscallEnterAllowUserMemory();
+    defer smap.syscallExitRestoreSmap();
+    const wow = @import("../arch/x86_64/wow64_syscall.zig");
+    wow.dispatchInt2e(frame);
+    @import("apc.zig").deliverKernelApcsForCurrentThread();
+    if (process.getCurrentProcess()) |proc| {
+        if (proc.address_space) |asp| asp.activate();
     }
 }

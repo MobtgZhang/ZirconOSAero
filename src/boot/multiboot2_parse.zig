@@ -80,6 +80,21 @@ pub const FramebufferInfo = struct {
     pixel_bgr: u8 = 1,
 };
 
+/// Bochs/VBE 与多类 OVMF GOP：扫描行宽常按 **16 像素**对齐，但 Multiboot2 tag 可能携带 `pitch == width×cpp`。
+/// 1366×768×32 等模式下会表现为对角撕裂；此处抬升 pitch 使 PFN 预留与绘制一致（无需仅重编 ZBM）。
+fn normalizeLinear32FramebufferPitch(fb: FramebufferInfo) FramebufferInfo {
+    var o = fb;
+    if (o.fb_type != 1) return o;
+    if (o.bpp != 32) return o;
+    if (o.width == 0 or o.height == 0) return o;
+    const min_bpl = o.width *| @as(u32, 4);
+    if (o.pitch == 0 or o.pitch < min_bpl) o.pitch = min_bpl;
+    const aligned_w = (o.width + 15) & ~@as(u32, 15);
+    const padded_bpl = aligned_w *| 4;
+    if (o.pitch < padded_bpl) o.pitch = padded_bpl;
+    return o;
+}
+
 /// GOP 线性帧缓冲占用的 **物理** 页对齐区间；须从可用 RAM 中剔除，避免当作普通页清零。
 /// `fb_type == 2`（文本等）返回 `(0,0)`。`page_size` 典型为 4096。
 pub fn gopPhysicalReserveRange(fb: FramebufferInfo, page_size: u64) struct { start: u64, end_exclusive: u64 } {
@@ -197,7 +212,7 @@ pub fn parseMultiboot2(phys_addr: usize) ?BootInfo {
                 const fb_type_val = p8[29];
                 const ext_valid = p8[31] == 0x5A;
                 const pixel_bgr: u8 = if (ext_valid) (if (p8[30] != 0) 1 else 0) else 1;
-                info.fb_info = .{
+                info.fb_info = normalizeLinear32FramebufferPitch(.{
                     .addr = @as(u64, fb_addr_hi) << 32 | @as(u64, fb_addr_lo),
                     .pitch = fb_pitch,
                     .width = fb_width,
@@ -205,7 +220,7 @@ pub fn parseMultiboot2(phys_addr: usize) ?BootInfo {
                     .bpp = fb_bpp,
                     .fb_type = fb_type_val,
                     .pixel_bgr = pixel_bgr,
-                };
+                });
             },
             14, 15 => {
                 const body = addr + offset + 8;
@@ -282,6 +297,33 @@ fn parseCmdlineDesktop(cmdline: []const u8) DesktopTheme {
         return .aero;
     }
     return .none;
+}
+
+test "normalizeLinear32FramebufferPitch widens 1366 tight stride" {
+    const fb: FramebufferInfo = .{
+        .addr = 0xE000_0000,
+        .pitch = 1366 * 4,
+        .width = 1366,
+        .height = 768,
+        .bpp = 32,
+        .fb_type = 1,
+        .pixel_bgr = 1,
+    };
+    const n = normalizeLinear32FramebufferPitch(fb);
+    try std.testing.expectEqual(@as(u32, 1376 * 4), n.pitch);
+}
+
+test "normalizeLinear32FramebufferPitch leaves 1920x1080 unchanged" {
+    const fb: FramebufferInfo = .{
+        .addr = 0,
+        .pitch = 1920 * 4,
+        .width = 1920,
+        .height = 1080,
+        .bpp = 32,
+        .fb_type = 1,
+    };
+    const n = normalizeLinear32FramebufferPitch(fb);
+    try std.testing.expectEqual(@as(u32, 1920 * 4), n.pitch);
 }
 
 test "gopPhysicalReserveRange 1600x900x32 at 2GiB page aligned" {

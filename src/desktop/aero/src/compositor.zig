@@ -13,6 +13,7 @@
 const std = @import("std");
 const theme = @import("theme.zig");
 const renderer = @import("renderer.zig");
+const dnc = @import("dwm_nt61_api_contract");
 
 pub const Rect = renderer.Rect;
 pub const COLORREF = theme.COLORREF;
@@ -50,6 +51,13 @@ pub const Surface = struct {
     y: i32 = 0,
     alpha: u8 = 255,
     blur_radius: i32 = 0,
+    /// 与 Learn `DwmExtendFrameIntoClientArea` / `MARGINS` 对齐的壳层提示（用户态合成阅读；内核 CSRSS 路径见 `dwmapi.zig`）。
+    extend_margins: dnc.MARGINS = .{
+        .cxLeftWidth = 0,
+        .cxRightWidth = 0,
+        .cyTopHeight = 0,
+        .cyBottomHeight = 0,
+    },
     /// 离屏表面 / 重定向位图共享计数；`destroySurface` 在减至 0 时移除槽位。
     ref_count: u32 = 1,
 
@@ -298,6 +306,34 @@ pub fn setSurfaceGlass(id: u32, glass: bool) void {
             sfc.alpha = 255;
             sfc.blur_radius = 0;
             sfc.flags.needs_blur = false;
+        }
+        sfc.markFullDirty();
+        compositor_dirty = true;
+    }
+}
+
+/// 阶段 C：Zig 内部 `DwmExtendFrameIntoClientArea` 对等（用户态 compositor）。
+pub fn setSurfaceExtendMargins(id: u32, m: dnc.MARGINS) void {
+    if (getSurface(id)) |sfc| {
+        sfc.extend_margins = m;
+        sfc.markFullDirty();
+        compositor_dirty = true;
+    }
+}
+
+/// 阶段 C：`DwmEnableBlurBehindWindow` 对等（`DWM_BB_ENABLE` + `fEnable` 子集）。
+pub fn setSurfaceBlurBehindDwm(id: u32, bb: dnc.DWM_BLURBEHIND) void {
+    if (getSurface(id)) |sfc| {
+        if ((bb.dwFlags & dnc.DWM_BB_ENABLE) != 0) {
+            sfc.flags.needs_blur = bb.fEnable != 0;
+            if (sfc.flags.needs_blur) {
+                sfc.blur_radius = theme.getBlurRadius();
+            } else {
+                sfc.blur_radius = 0;
+            }
+        } else {
+            sfc.flags.needs_blur = false;
+            sfc.blur_radius = 0;
         }
         sfc.markFullDirty();
         compositor_dirty = true;

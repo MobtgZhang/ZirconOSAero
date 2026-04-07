@@ -1,7 +1,7 @@
 //! Resource Loader — ZirconOS Aero Desktop
 //! Scans and catalogues graphical assets from the resources/ directory tree:
 //!   resources/wallpapers/    — PNG wallpaper backgrounds per theme (classified subdirs)
-//!   resources/icons/         — Application and system icons (SVG; logical IDs 1–25)
+//!   resources/icons/         — Application and system icons (SVG; logical IDs 1–32)
 //!   resources/cursors/       — Animated cursor sprites (SVG)
 //!   resources/themes/        — .theme configuration files
 //!   resources/sounds/        — Event sound schemes（元数据 + 五主题 WAV；内核暂无播放栈）
@@ -174,6 +174,13 @@ fn registerBuiltinIcons() void {
     addIcon("resources/icons/info.svg", 23);
     addIcon("resources/icons/warning.svg", 24);
     addIcon("resources/icons/error.svg", 25);
+    addIcon("resources/icons/favorites.svg", 26);
+    addIcon("resources/icons/shell_desktop.svg", 27);
+    addIcon("resources/icons/downloads.svg", 28);
+    addIcon("resources/icons/recent_places.svg", 29);
+    addIcon("resources/icons/library_root.svg", 30);
+    addIcon("resources/icons/videos.svg", 31);
+    addIcon("resources/icons/homegroup.svg", 32);
 }
 
 fn registerBuiltinCursors() void {

@@ -16,6 +16,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const dwm_nt61_api_contract_mod = b.createModule(.{
+        .root_source_file = b.path("../../config/dwm_nt61_api_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -23,6 +29,7 @@ pub fn build(b: *std.Build) void {
     });
     lib_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
     lib_mod.addImport("aero_flag_mapping", aero_flag_mapping_mod);
+    lib_mod.addImport("dwm_nt61_api_contract", dwm_nt61_api_contract_mod);
 
     // Static library (.lib) — Windows-compatible archive
     const lib = b.addLibrary(.{
@@ -58,6 +65,7 @@ pub fn build(b: *std.Build) void {
     // main.zig 与 root.zig 同属本模块，theme.zig 的 @import("nt61_aero_defaults") 解析自此处
     exe_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
     exe_mod.addImport("aero_flag_mapping", aero_flag_mapping_mod);
+    exe_mod.addImport("dwm_nt61_api_contract", dwm_nt61_api_contract_mod);
 
     // EXE — Windows PE-compatible executable
     const exe = b.addExecutable(.{
@@ -73,6 +81,7 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
     test_mod.addImport("aero_flag_mapping", aero_flag_mapping_mod);
+    test_mod.addImport("dwm_nt61_api_contract", dwm_nt61_api_contract_mod);
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_mod,

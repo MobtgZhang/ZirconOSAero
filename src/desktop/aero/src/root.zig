@@ -9,6 +9,7 @@
 
 pub const theme = @import("theme.zig");
 pub const dwm = @import("dwm.zig");
+pub const dwm_internal = @import("dwm_internal.zig");
 pub const desktop = @import("desktop.zig");
 pub const taskbar = @import("taskbar.zig");
 pub const startmenu = @import("startmenu.zig");

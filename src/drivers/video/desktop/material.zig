@@ -24,6 +24,33 @@ fn clampCoordI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
+// ── Blur Performance Configuration ──
+
+/// 小于此面积（像素数）的区域直接跳过模糊（避免过度计算）
+const BLUR_MIN_AREA_PIXELS: u32 = 64 * 64;
+
+/// 下采样阈值：宽或高超过此值时启用下采样模糊
+const BLUR_DOWNSCALE_THRESHOLD: u32 = 512;
+
+/// 下采样比例（2=缩小一半，4=缩小1/4）
+const BLUR_DOWNSCALE_FACTOR: u32 = 2;
+
+/// 最小可模糊面积（避免死循环或极小区域开销不成比例）
+const BLUR_MIN_DIMENSION: u32 = 8;
+
+// ── Blur Efficiency Helper ──
+
+/// 判断给定矩形是否应该跳过模糊处理（面积太小不值得模糊）
+fn shouldSkipBlur(w: u32, h: u32) bool {
+    return w < BLUR_MIN_DIMENSION or h < BLUR_MIN_DIMENSION or
+        w * h < BLUR_MIN_AREA_PIXELS;
+}
+
+/// 检查是否应该使用下采样模糊
+fn shouldUseDownscaledBlur(w: u32, h: u32) bool {
+    return w > BLUR_DOWNSCALE_THRESHOLD or h > BLUR_DOWNSCALE_THRESHOLD;
+}
+
 pub const MaterialType = enum(u8) {
     opaque_solid = 0,
     glass = 1,
@@ -278,8 +305,101 @@ pub fn renderShadow(x: i32, y: i32, w: i32, h: i32, size: u8, layers: u8) void {
 // the distance from each pixel to the rounded rectangle boundary
 // determines alpha, producing smooth anti-aliased corners.
 //
-// Here we approximate with a simple corner-mask clear.
+// 这里使用 SDF（符号距离场）算法实现真正的抗锯齿圆角：
+// - 计算每个像素到圆弧边界的距离
+// - 根据距离计算透明度，实现边缘平滑过渡
+// - 与 GPU shader 中的 smoothstep 效果等价
 
+/// SDF 抗锯齿圆角裁剪（仅裁剪圆角区域）
+/// 使用符号距离场算法实现边缘平滑过渡
+pub fn applyRoundedClipAA(x: i32, y: i32, w: i32, h: i32, radius: u8) void {
+    if (!fb.isInitialized() or radius == 0) return;
+    const r: i32 = @intCast(radius);
+    const w_i32: i32 = @intCast(fb.getWidth());
+    const h_i32: i32 = @intCast(fb.getHeight());
+    if (w_i32 <= 0 or h_i32 <= 0) return;
+
+    // 每个像素的抗锯齿过渡宽度（像素数）
+    // 值越大，边缘越柔和；值越小，边缘越锐利
+    const aa_scale: f32 = 1.5;
+
+    // 四个角的位置和圆心偏移
+    const corners = [_]struct { cx: i32, cy: i32, corner_x: i32, corner_y: i32 }{
+        // 左上角
+        .{ .cx = x + r, .cy = y + r, .corner_x = x, .corner_y = y },
+        // 右上角
+        .{ .cx = x + w - r, .cy = y + r, .corner_x = x + w - r, .corner_y = y },
+        // 左下角
+        .{ .cx = x + r, .cy = y + h - r, .corner_x = x, .corner_y = y + h - r },
+        // 右下角
+        .{ .cx = x + w - r, .cy = y + h - r, .corner_x = x + w - r, .corner_y = y + h - r },
+    };
+
+    for (corners) |corner| {
+        // 遍历圆角区域内的所有像素
+        var dy: i32 = 0;
+        while (dy < r) : (dy += 1) {
+            var dx: i32 = 0;
+            while (dx < r) : (dx += 1) {
+                const px = corner.corner_x + dx;
+                const py = corner.corner_y + dy;
+
+                // 计算像素中心到圆心的距离（用于 SDF）
+                const cdx = @as(f32, @intCast(dx)) + 0.5;
+                const cdy = @as(f32, @intCast(dy)) + 0.5;
+                const dist_sq = cdx * cdx + cdy * cdy;
+                const r_f = @as(f32, @intCast(r));
+
+                // SDF 距离：正值表示在圆外，负值表示在圆内
+                const dist = @sqrt(dist_sq) - r_f;
+
+                // 计算抗锯齿透明度
+                // 当 dist < 0（在圆内）：alpha = 1.0
+                // 当 dist > aa_scale（在 aa_scale 像素外）：alpha = 0.0
+                // 中间地带平滑过渡
+                var alpha: u8 = 255;
+                if (dist > 0) {
+                    // 在圆外：透明度根据距离衰减
+                    const t = @min(dist / aa_scale, 1.0);
+                    alpha = @intFromFloat(@round((1.0 - t) * 255.0));
+                }
+
+                if (alpha < 255) {
+                    // 需要混合：获取现有像素颜色和填充颜色
+                    const safe_x: i32 = std.math.clamp(px, @as(i32, 0), w_i32 - 1);
+                    const safe_y: i32 = std.math.clamp(py, @as(i32, 0), h_i32 - 1);
+                    const existing = fb.getPixel32(@as(u32, safe_x), @as(u32, safe_y));
+
+                    // 获取圆弧边界内的样本点颜色（近似圆弧内的实际颜色）
+                    const sample_x: i32 = std.math.clamp(corner.cx, @as(i32, 0), w_i32 - 1);
+                    const sample_y: i32 = std.math.clamp(corner.cy, @as(i32, 0), h_i32 - 1);
+                    const corner_fill = fb.getPixel32(@as(u32, @intCast(sample_x)), @as(u32, @intCast(sample_y))) & 0x00FFFFFF;
+
+                    // Alpha 混合：corner_fill * alpha + existing * (1 - alpha)
+                    const er = (existing >> 0) & 0xFF;
+                    const eg = (existing >> 8) & 0xFF;
+                    const eb = (existing >> 16) & 0xFF;
+                    const fr = (corner_fill >> 0) & 0xFF;
+                    const fg = (corner_fill >> 8) & 0xFF;
+                    const fb_c = (corner_fill >> 16) & 0xFF;
+
+                    const inv_alpha: u32 = 255 - @as(u32, alpha);
+                    const out_r = (@as(u32, fr) * @as(u32, alpha) + @as(u32, er) * inv_alpha) / 255;
+                    const out_g = (@as(u32, fg) * @as(u32, alpha) + @as(u32, eg) * inv_alpha) / 255;
+                    const out_b = (@as(u32, fb_c) * @as(u32, alpha) + @as(u32, eb) * inv_alpha) / 255;
+
+                    const out_color = out_r | (out_g << 8) | (out_b << 16) | 0xFF000000;
+
+                    if (px >= 0 and px < w_i32 and py >= 0 and py < h_i32) {
+                        fb.putPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)), out_color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 传统圆角裁剪（保持兼容性）
 pub fn applyRoundedClip(x: i32, y: i32, w: i32, h: i32, radius: u8) void {
     if (!fb.isInitialized() or radius == 0) return;
     const r: i32 = @intCast(radius);

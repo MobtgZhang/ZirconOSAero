@@ -200,12 +200,13 @@ pub fn addDirtyRect(r: Rect) void {
     if (r.w <= 0 or r.h <= 0) return;
     var nr = r;
     var i: usize = 0;
+    // 优化：合并后继续从当前位置检查（不必重置为0），避免 O(n²) 中不必要的重复遍历
     while (i < dirty_count) {
         if (dirty_rects[i].intersects(nr)) {
             nr = dirtyRectUnion2(dirty_rects[i], nr);
             dirty_rects[i] = dirty_rects[dirty_count - 1];
             dirty_count -= 1;
-            i = 0;
+            // 不重置 i = 0，继续从当前 i 检查新合并的矩形
             continue;
         }
         i += 1;
@@ -280,8 +281,15 @@ var total_flips: u64 = 0;
 // 双缓冲：单离屏槽 + GOP。三缓冲（乒乓）：两离屏槽 + GOP；present 后切换 draw_slot（概念见 docs/cn/AeroDesktopRuntime.md §9，自研非 DXGI）。
 // 单缓冲（double_buffer_active=false）：getDrawBuffer() 即 GOP；flipDirty() 仅清 dirty 计数、不做 memcpy（屏前直绘 + 软件光标 save-under 同面）。
 // 路线图：与用户态 DWM 共享合成缓冲时，优先改为 `NtCreateSection` + 跨进程 `NtMapViewOfSection`（见 docs/cn/MM_Section_Roadmap.md、docs/cn/DesktopManagerSpec.md）。
-const BACK_BUF_MAX: usize = 10 * 1024 * 1024; // 10 MB – covers up to 1920×1080@32bpp
-var back_buf: [BACK_BUF_MAX]u8 align(1) = undefined;
+
+/// 小型静态缓冲区阈值（覆盖 800×600@32bpp ≈ 1.8MB 以内的单缓冲）
+const STATIC_BACK_BUF_MAX: usize = 2 * 1024 * 1024;
+
+/// 静态缓冲区：仅用于小分辨率（<=800×600@32bpp）情况，避免堆分配开销
+var back_buf: [STATIC_BACK_BUF_MAX]u8 align(1) = undefined;
+
+/// 标记静态缓冲区是否已初始化（避免不必要的 memset）
+var back_buf_initialized: bool = false;
 var double_buffer_active: bool = false;
 /// 第二离屏槽；flip 提交后 draw_slot 翻转。
 var triple_buffer_active: bool = false;
@@ -304,6 +312,62 @@ pub const IOCTL_FB_FILL_RECT: u32 = 0x00090010;
 pub const IOCTL_FB_COPY_RECT: u32 = 0x00090014;
 pub const IOCTL_FB_DRAW_LINE: u32 = 0x00090018;
 pub const IOCTL_FB_GET_STATS: u32 = 0x0009001C;
+
+/// IOCTL_FB_FILL_RECT 请求结构（NT6.1 framebuffer miniport 约定）
+pub const FillRectRequest = extern struct {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: u32,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(FillRectRequest) == 20);
+}
+
+/// IOCTL_FB_COPY_RECT 请求结构：矩形区域拷贝
+pub const CopyRectRequest = extern struct {
+    src_x: i32,
+    src_y: i32,
+    dst_x: i32,
+    dst_y: i32,
+    w: i32,
+    h: i32,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(CopyRectRequest) == 24);
+}
+
+/// IOCTL_FB_DRAW_LINE 请求结构
+pub const DrawLineRequest = extern struct {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+    color: u32,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(DrawLineRequest) == 20);
+}
+
+/// IOCTL_FB_GET_STATS 响应结构
+pub const FbStatsResponse = extern struct {
+    total_draw_calls: u64,
+    total_flips: u64,
+    width: u32,
+    height: u32,
+    bpp: u8,
+    double_buffer_active: bool,
+    triple_buffer_active: bool,
+    reserved: [2]u8 = [_]u8{0} ** 2,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(FbStatsResponse) == 32);
+}
 
 // ── Internal Helpers ──
 
@@ -489,6 +553,106 @@ pub fn fillRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
     addDirtyRect(.{ .x = x, .y = y, .w = w, .h = h });
 }
 
+/// 矩形区域拷贝：从 (src_x, src_y) 复制到 (dst_x, dst_y)
+pub fn copyRect(src_x: i32, src_y: i32, dst_x: i32, dst_y: i32, w: i32, h: i32) void {
+    if (w <= 0 or h <= 0) return;
+
+    const bytes_pp: u32 = @as(u32, fb_config.bpp) / 8;
+    const ptr = getDrawBuffer();
+
+    // 裁剪源区域
+    const sx0: u32 = if (src_x < 0) 0 else @intCast(src_x);
+    const sy0: u32 = if (src_y < 0) 0 else @intCast(src_y);
+    const sx1: u32 = addU32Clamped(sx0, @intCast(w), fb_config.width);
+    const sy1: u32 = addU32Clamped(sy0, @intCast(h), fb_config.height);
+    if (sx0 >= sx1 or sy0 >= sy1) return;
+
+    // 裁剪目标区域
+    const dx0: u32 = if (dst_x < 0) 0 else @intCast(dst_x);
+    const dy0: u32 = if (dst_y < 0) 0 else @intCast(dst_y);
+    const copy_w = sx1 - sx0;
+    const copy_h = sy1 - sy0;
+    const dx1: u32 = addU32Clamped(dx0, copy_w, fb_config.width);
+    const dy1: u32 = addU32Clamped(dy0, copy_h, fb_config.height);
+    if (dx0 >= dx1 or dy0 >= dy1) return;
+
+    const actual_w = @min(sx1 - sx0, dx1 - dx0);
+    const actual_h = @min(sy1 - sy0, dy1 - dy0);
+    if (actual_w == 0 or actual_h == 0) return;
+
+    const row_bytes = @as(u32, actual_w) * bytes_pp;
+    if (row_bytes == 0) return;
+
+    // 确定拷贝方向：如果目标区域在源区域上方，需要从下往上拷贝以避免覆盖
+    const forward_copy = (dst_y > src_y) or (dst_y == src_y and dst_x > src_x);
+
+    // 使用更大的块复制优化：每个像素 4 字节时使用 usize 块
+    const word_size: u32 = @sizeOf(usize);
+    const words_per_row = row_bytes / word_size;
+    const tail_bytes = row_bytes % word_size;
+
+    if (forward_copy) {
+        // 正向拷贝：从上往下
+        var sy: u32 = sy0;
+        var dy: u32 = dy0;
+        while (sy < sy0 + actual_h) : ({
+            sy += 1;
+            dy += 1;
+        }) {
+            const src_row_base = pixelByteOffset(sx0, sy, bytes_pp);
+            const dst_row_base = pixelByteOffset(dx0, dy, bytes_pp);
+
+            // 块复制：按 usize 块（源和目标都是 volatile）
+            var wi: u32 = 0;
+            while (wi < words_per_row) : (wi += 1) {
+                const off = wi * word_size;
+                const src_off = src_row_base + off;
+                const dst_off = dst_row_base + off;
+                // 从源读取（volatile read）
+                const w_val: usize = @as(*align(1) const usize, @ptrFromInt(@intFromPtr(ptr) + src_off)).*;
+                // 写入目标（volatile write）
+                @as(*align(1) volatile usize, @ptrFromInt(@intFromPtr(ptr) + dst_off)).* = w_val;
+            }
+            // 尾部字节复制
+            var ti: u32 = 0;
+            while (ti < tail_bytes) : (ti += 1) {
+                ptr[dst_row_base + words_per_row * word_size + ti] = ptr[src_row_base + words_per_row * word_size + ti];
+            }
+        }
+    } else {
+        // 反向拷贝：从下往上
+        var sy_i: i32 = @intCast(sy0 + actual_h - 1);
+        var dy_i: i32 = @intCast(dy0 + actual_h - 1);
+        while (sy_i >= @as(i32, @intCast(sy0))) : ({
+            sy_i -= 1;
+            dy_i -= 1;
+        }) {
+            const src_row_base = pixelByteOffset(sx0, @intCast(sy_i), bytes_pp);
+            const dst_row_base = pixelByteOffset(dx0, @intCast(dy_i), bytes_pp);
+
+            // 块复制：按 usize 块（源和目标都是 volatile）
+            var wi: u32 = 0;
+            while (wi < words_per_row) : (wi += 1) {
+                const off = wi * word_size;
+                const src_off = src_row_base + off;
+                const dst_off = dst_row_base + off;
+                // 从源读取（volatile read）
+                const w_val: usize = @as(*align(1) const usize, @ptrFromInt(@intFromPtr(ptr) + src_off)).*;
+                // 写入目标（volatile write）
+                @as(*align(1) volatile usize, @ptrFromInt(@intFromPtr(ptr) + dst_off)).* = w_val;
+            }
+            // 尾部字节复制
+            var ti: u32 = 0;
+            while (ti < tail_bytes) : (ti += 1) {
+                ptr[dst_row_base + words_per_row * word_size + ti] = ptr[src_row_base + words_per_row * word_size + ti];
+            }
+        }
+    }
+
+    total_draw_calls += 1;
+    addDirtyRect(.{ .x = dst_x, .y = dst_y, .w = w, .h = h });
+}
+
 fn clampDrawCoordI64(v: i64) i32 {
     return @intCast(std.math.clamp(v, std.math.minInt(i32), std.math.maxInt(i32)));
 }
@@ -504,6 +668,156 @@ pub fn drawRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
     drawHLine(x, clampDrawCoordI64(@as(i64, y) + @as(i64, h) - 1), w, color);
     drawVLine(x, y, h, color);
     drawVLine(clampDrawCoordI64(@as(i64, x) + @as(i64, w) - 1), y, h, color);
+}
+
+/// SDF 抗锯齿圆角矩形边框（Wu's algorithm 等效）
+/// 使用符号距离场算法实现边缘平滑过渡
+pub fn drawRoundedRectAA(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32) void {
+    if (w <= 0 or h <= 0 or radius <= 0) return;
+    if (radius > @divTrunc(w, 2)) radius = @divTrunc(w, 2);
+    if (radius > @divTrunc(h, 2)) radius = @divTrunc(h, 2);
+    if (radius <= 0) return;
+
+    const r = radius;
+    const aa_scale: f32 = 1.5;
+
+    // 提取颜色分量
+    const r_ch = (color >> 16) & 0xFF;
+    const g_ch = (color >> 8) & 0xFF;
+    const b_ch = color & 0xFF;
+
+    // 绘制四条边（矩形部分，不包括圆角区域）
+    const edge_x0 = x + r;
+    const edge_w = w - 2 * r;
+    const edge_h = h - 2 * r;
+
+    // 上下边
+    if (edge_w > 0) {
+        drawHLine(edge_x0, y, edge_w, color);
+        drawHLine(edge_x0, y + h - 1, edge_w, color);
+    }
+    // 左右边
+    if (edge_h > 0) {
+        drawVLine(x, y + r, edge_h, color);
+        drawVLine(x + w - 1, y + r, edge_h, color);
+    }
+
+    // 绘制四个圆角弧（SDF 抗锯齿）
+    // 四个角的位置：左上、右上、左下、右下
+    const corners = [_]struct { cx: i32, cy: i32 }{
+        .{ .cx = x + r, .cy = y + r },
+        .{ .cx = x + w - r, .cy = y + r },
+        .{ .cx = x + r, .cy = y + h - r },
+        .{ .cx = x + w - r, .cy = y + h - r },
+    };
+
+    for (corners) |corner| {
+        var dy: i32 = 0;
+        while (dy <= r) : (dy += 1) {
+            var dx: i32 = 0;
+            while (dx <= r) : (dx += 1) {
+                const cdx = @as(f32, @intCast(dx));
+                const cdy = @as(f32, @intCast(dy));
+                const dist_sq = cdx * cdx + cdy * cdy;
+                const r_f = @as(f32, @intCast(r));
+
+                // 仅在边界附近绘制
+                if (dist_sq > r_f * r_f + r_f * 2.0) continue;
+
+                const dist = @sqrt(dist_sq);
+                const edge_dist = @abs(dist - r_f);
+
+                // 抗锯齿透明度计算
+                var alpha: u8 = 255;
+                if (edge_dist > 0) {
+                    const t = @min(edge_dist / aa_scale, 1.0);
+                    alpha = @intFromFloat(@round((1.0 - t) * 255.0));
+                }
+
+                if (alpha < 255) {
+                    const px = corner.cx + dx;
+                    const py = corner.cy + dy;
+
+                    if (px >= 0 and px < @as(i32, @intCast(fb_config.width)) and
+                        py >= 0 and py < @as(i32, @intCast(fb_config.height))) {
+                        const existing = getPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)));
+                        const er = (existing >> 16) & 0xFF;
+                        const eg = (existing >> 8) & 0xFF;
+                        const eb = existing & 0xFF;
+
+                        const inv_alpha: u32 = 255 - @as(u32, alpha);
+                        const out_r = (@as(u32, r_ch) * @as(u32, alpha) + @as(u32, er) * inv_alpha) / 255;
+                        const out_g = (@as(u32, g_ch) * @as(u32, alpha) + @as(u32, eg) * inv_alpha) / 255;
+                        const out_b = (@as(u32, b_ch) * @as(u32, alpha) + @as(u32, eb) * inv_alpha) / 255;
+
+                        putPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)),
+                            (out_r << 16) | (out_g << 8) | out_b);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Wu's anti-aliased line algorithm（抗锯齿线段）
+pub fn drawLineAA(x1: i32, y1: i32, x2: i32, y2: i32, color: u32) void {
+    const dx: u32 = @intCast(@abs(x2 - x1));
+    const dy: u32 = @intCast(@abs(y2 - y1));
+
+    const r_ch: u8 = @intCast((color >> 16) & 0xFF);
+    const g_ch: u8 = @intCast((color >> 8) & 0xFF);
+    const b_ch: u8 = @intCast(color & 0xFF);
+
+    const sx: i32 = if (x1 < x2) 1 else -1;
+    const sy: i32 = if (y1 < y2) 1 else -1;
+    var err: i32 = @as(i32, @intCast(dx)) -| @as(i32, @intCast(dy));
+
+    var x = x1;
+    var y = y1;
+
+    while (true) {
+        // 绘制主像素
+        if (x >= 0 and x < @as(i32, @intCast(fb_config.width)) and
+            y >= 0 and y < @as(i32, @intCast(fb_config.height))) {
+            const existing = getPixel32(@as(u32, @intCast(x)), @as(u32, @intCast(y)));
+            blendPixelWithAA(@as(u32, @intCast(x)), @as(u32, @intCast(y)), r_ch, g_ch, b_ch, @as(u8, 255), existing);
+        }
+
+        if (x == x2 and y == y2) break;
+
+        // 计算误差并更新像素位置
+        const e2: i32 = err * 2;
+        const dy_i: i32 = @as(i32, @intCast(dy));
+        const dx_i: i32 = @as(i32, @intCast(dx));
+        if (e2 > -dy_i) {
+            err -= dy_i;
+            x += sx;
+        }
+        if (e2 < dx_i) {
+            err += dx_i;
+            y += sy;
+        }
+    }
+}
+
+/// 基于 alpha 混合像素
+fn blendPixelWithAA(px: u32, py: u32, r_ch: u8, g_ch: u8, b_ch: u8, alpha: u8, existing: u32) void {
+    if (alpha >= 255) {
+        putPixel32(px, py, (@as(u32, r_ch) << 16) | (@as(u32, g_ch) << 8) | @as(u32, b_ch));
+        return;
+    }
+    if (alpha == 0) return;
+
+    const er = (existing >> 16) & 0xFF;
+    const eg = (existing >> 8) & 0xFF;
+    const eb = existing & 0xFF;
+
+    const inv_alpha: u32 = 255 - @as(u32, alpha);
+    const out_r = (@as(u32, r_ch) * @as(u32, alpha) + @as(u32, er) * inv_alpha) / 255;
+    const out_g = (@as(u32, g_ch) * @as(u32, alpha) + @as(u32, eg) * inv_alpha) / 255;
+    const out_b = (@as(u32, b_ch) * @as(u32, alpha) + @as(u32, eb) * inv_alpha) / 255;
+
+    putPixel32(px, py, (out_r << 16) | (out_g << 8) | out_b);
 }
 
 pub fn drawHLine(x: i32, y: i32, length: i32, color: u32) void {
@@ -631,25 +945,64 @@ pub fn clearScreen(color: u32) void {
 
 // ── Text Rendering (8x16 bitmap font) ──
 
+/// 默认字体尺寸
 const CHAR_W: u32 = 8;
 const CHAR_H: u32 = 16;
+
+/// 字体缩放因子（支持 DPI 缩放）
+var font_scale: u32 = 1;
+
+/// 缩放后的字体尺寸（派生值）
+fn scaledCharW() u32 {
+    return CHAR_W * font_scale;
+}
+fn scaledCharH() u32 {
+    return CHAR_H * font_scale;
+}
+
+/// 字体配置结构
+pub const FontConfig = struct {
+    scale: u32 = 1,
+};
+
+var font_cfg: FontConfig = .{};
+
+/// 配置字体缩放（用于高 DPI 屏幕）
+pub fn configureFont(cfg: FontConfig) void {
+    font_cfg = cfg;
+    font_scale = if (cfg.scale == 0) 1 else cfg.scale;
+}
+
+/// 获取当前字体配置
+pub fn getFontConfig() FontConfig {
+    return font_cfg;
+}
+
+/// 获取当前字体缩放因子
+pub fn getFontScale() u32 {
+    return font_scale;
+}
 
 pub fn drawChar(x: i32, y: i32, ch: u8, fg: u32, bg: u32) void {
     const glyph = getGlyph(ch);
     const bytes_pp = @as(u32, fb_config.bpp) / 8;
     const ptr = getDrawBuffer();
+    const sw = scaledCharW();
+    const sh = scaledCharH();
 
     var dy: u32 = 0;
-    while (dy < CHAR_H) : (dy += 1) {
+    while (dy < sh) : (dy += 1) {
+        const row_idx = @divTrunc(dy, font_scale);
         const py = if (y < 0) return else @as(u32, @intCast(y)) + dy;
         if (py >= fb_config.height) break;
-        const bits = glyph[dy];
+        const bits = glyph[row_idx];
 
         var dx: u32 = 0;
-        while (dx < CHAR_W) : (dx += 1) {
+        while (dx < sw) : (dx += 1) {
+            const bit_idx = @divTrunc(dx, font_scale);
             const px = if (x < 0) continue else @as(u32, @intCast(x)) + dx;
             if (px >= fb_config.width) break;
-            const on = (bits >> @intCast(7 - dx)) & 1;
+            const on = (bits >> @intCast(7 - bit_idx)) & 1;
             const color: u32 = if (on != 0) fg else bg;
             const off = pixelByteOffset(px, py, bytes_pp);
             if (bytes_pp == 4) {
@@ -665,16 +1018,20 @@ pub fn drawCharTransparent(x: i32, y: i32, ch: u8, fg: u32) void {
     const glyph = getGlyph(ch);
     const fw: i64 = @intCast(fb_config.width);
     const fh: i64 = @intCast(fb_config.height);
+    const sw = scaledCharW();
+    const sh = scaledCharH();
 
     var dy: u32 = 0;
-    while (dy < CHAR_H) : (dy += 1) {
+    while (dy < sh) : (dy += 1) {
+        const row_idx = @divTrunc(dy, font_scale);
         const py_i = @as(i64, y) + @as(i64, dy);
         if (py_i < 0 or py_i >= fh) continue;
-        const bits = glyph[dy];
+        const bits = glyph[row_idx];
 
         var dx: u32 = 0;
-        while (dx < CHAR_W) : (dx += 1) {
-            if ((bits >> @intCast(7 - dx)) & 1 != 0) {
+        while (dx < sw) : (dx += 1) {
+            const bit_idx = @divTrunc(dx, font_scale);
+            if ((bits >> @intCast(7 - bit_idx)) & 1 != 0) {
                 const px_i = @as(i64, x) + @as(i64, dx);
                 if (px_i >= 0 and px_i < fw) {
                     putPixel32(@intCast(px_i), @intCast(py_i), fg);
@@ -705,16 +1062,17 @@ fn drawCjk16Transparent(x: i32, y: i32, rows: [16]u16, fg: u32) void {
 }
 
 fn drawTextTransparentClippedInner(x: i32, y: i32, text: []const u8, fg: u32, clip_max_x: ?i32) void {
+    const cw_i64 = @as(i64, @intCast(scaledCharW()));
     const view = std.unicode.Utf8View.init(text) catch {
         var cx64 = @as(i64, x);
         for (text) |b| {
             if (clip_max_x) |mx| {
-                if (cx64 + @as(i64, CHAR_W) > @as(i64, mx)) break;
+                if (cx64 + cw_i64 > @as(i64, mx)) break;
             }
             const cx_clamped = std.math.clamp(cx64, @as(i64, std.math.minInt(i32)), @as(i64, std.math.maxInt(i32)));
             const cxi: i32 = @intCast(cx_clamped);
             drawCharTransparent(cxi, y, b, fg);
-            cx64 += @as(i64, CHAR_W);
+            cx64 += cw_i64;
         }
         return;
     };
@@ -747,13 +1105,13 @@ pub fn drawTextTransparentClipped(x: i32, y: i32, x_max_excl: i32, text: []const
 
 pub fn drawText(x: i32, y: i32, text: []const u8, fg: u32, bg: u32) void {
     const fw: i64 = @intCast(fb_config.width);
+    const cw_i64 = @as(i64, @intCast(scaledCharW()));
     var cx64 = @as(i64, x);
-    const adv = @as(i64, CHAR_W);
     for (text) |ch| {
-        if (cx64 + adv > fw) break;
+        if (cx64 + cw_i64 > fw) break;
         const cxi = clampDrawCoordI64(cx64);
         drawChar(cxi, y, ch, fg, bg);
-        cx64 += adv;
+        cx64 += cw_i64;
     }
 }
 
@@ -823,7 +1181,7 @@ pub fn textWidthScaled(text: []const u8, scale: u32) i32 {
 pub fn drawTextCentered(x: i32, y: i32, w: i32, h: i32, text: []const u8, fg: u32) void {
     const text_w: i32 = textWidth(text);
     const tx = x + @divTrunc(w - text_w, 2);
-    const ty = y + @divTrunc(h - @as(i32, CHAR_H), 2);
+    const ty = y + @divTrunc(h - @as(i32, @intCast(scaledCharH())), 2);
     drawTextTransparent(tx, ty, text, fg);
 }
 
@@ -982,7 +1340,39 @@ pub fn draw3DRect(x: i32, y: i32, w: i32, h: i32, highlight: u32, shadow: u32) v
 
 const BLUR_MAX_LINE: usize = 4096;
 var blur_line: [BLUR_MAX_LINE]u32 = [_]u32{0} ** BLUR_MAX_LINE;
+/// 水平 pass 临时结果缓冲区（避免同缓冲区读写导致垂直 pass 基于错误数据计算）。
+var blur_line_h: [BLUR_MAX_LINE]u32 = [_]u32{0} ** BLUR_MAX_LINE;
 
+// ── Blur Performance Configuration ──
+
+/// 小于此面积（像素数）的区域直接跳过模糊（避免过度计算）
+const BLUR_MIN_AREA_PIXELS: u32 = 64 * 64;
+
+/// 下采样阈值：宽或高超过此值时启用下采样模糊
+const BLUR_DOWNSCALE_THRESHOLD: u32 = 512;
+
+/// 下采样比例（2=缩小一半）
+const BLUR_DOWNSCALE_FACTOR: u32 = 2;
+
+/// 最小可模糊面积（避免死循环或极小区域开销不成比例）
+const BLUR_MIN_DIMENSION: u32 = 8;
+
+// ── Blur Efficiency Helper ──
+
+/// 判断给定矩形是否应该跳过模糊处理（面积太小不值得模糊）
+fn shouldSkipBlur(w: u32, h: u32) bool {
+    return w < BLUR_MIN_DIMENSION or h < BLUR_MIN_DIMENSION or
+        w * h < BLUR_MIN_AREA_PIXELS;
+}
+
+/// 检查是否应该使用下采样模糊
+fn shouldUseDownscaledBlur(w: u32, h: u32) bool {
+    return w > BLUR_DOWNSCALE_THRESHOLD or h > BLUR_DOWNSCALE_THRESHOLD;
+}
+
+/// 优化的模糊矩形处理：
+/// 1. 小区域早退出（面积 < 64×64 直接跳过）
+/// 2. 大区域下采样（>512px 边长时缩小后模糊再放大）
 pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) void {
     if (w <= 0 or h <= 0 or radius == 0 or passes == 0) return;
     if (!config_ready) return;
@@ -996,7 +1386,31 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
 
     const rw = x1 - x0;
     const rh = y1 - y0;
+
+    // 早退出：小区域不值得模糊
+    if (shouldSkipBlur(rw, rh)) return;
+
+    // 边界检查
     if (rw > BLUR_MAX_LINE or rh > BLUR_MAX_LINE) return;
+
+    // 大区域使用下采样优化
+    if (shouldUseDownscaledBlur(rw, rh)) {
+        boxBlurRectDownscaled(x0, y0, rw, rh, radius, passes);
+        return;
+    }
+
+    boxBlurRectCore(x0, y0, rw, rh, radius, passes);
+}
+
+/// 下采样模糊：缩小→模糊→放大
+fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: u32) void {
+    const factor = BLUR_DOWNSCALE_FACTOR;
+    const sw = @max(w / factor, 1);
+    const sh = @max(h / factor, 1);
+    const sr = @max(radius / factor, 1);
+
+    var small_buf: [BLUR_MAX_LINE]u32 = undefined;
+    var small_tmp: [BLUR_MAX_LINE]u32 = undefined;
 
     const buf = getDrawBuffer();
     const pitch = fb_config.pitch;
@@ -1004,7 +1418,135 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
 
     var pass: u32 = 0;
     while (pass < passes) : (pass += 1) {
-        // Horizontal pass: process each row
+        // 下采样阶段：每 2×2 区块合并为 1 个像素
+        var sy: u32 = 0;
+        while (sy < sh) : (sy += 1) {
+            const src_y0 = y0 + sy * factor;
+            const src_y1 = @min(src_y0 + factor, y0 + h);
+            var sx: u32 = 0;
+            while (sx < sw) : (sx += 1) {
+                const src_x0 = x0 + sx * factor;
+                var sr_sum: u64 = 0;
+                var sg_sum: u64 = 0;
+                var sb_sum: u64 = 0;
+                var cnt: u64 = 0;
+                var cy: u32 = src_y0;
+                while (cy < src_y1) : (cy += 1) {
+                    var cx: u32 = src_x0;
+                    while (cx < @min(src_x0 + factor, x0 + w)) : (cx += 1) {
+                        const off = cy * pitch + cx * bpp;
+                        sr_sum += buf[off + 2];
+                        sg_sum += buf[off + 1];
+                        sb_sum += buf[off];
+                        cnt += 1;
+                    }
+                }
+                if (cnt > 0) {
+                    small_buf[sx] = (@as(u32, @truncate(sr_sum / cnt)) << 16) |
+                        (@as(u32, @truncate(sg_sum / cnt)) << 8) |
+                        @as(u32, @truncate(sb_sum / cnt));
+                }
+            }
+            // 对下采样行执行一维水平模糊
+            blurRow1DPacked(small_buf[0..sw], small_tmp[0..sw], sr, sw);
+            @memcpy(small_buf[0..sw], small_tmp[0..sw]);
+        }
+
+        // 垂直方向模糊（下采样空间）
+        var sx2: u32 = 0;
+        while (sx2 < sw) : (sx2 += 1) {
+            blurCol1DPacked(small_buf[0..sh], small_tmp[0..sh], sr, sh);
+            @memcpy(small_buf[0..sh], small_tmp[0..sh]);
+        }
+
+        // 上采样阶段：将模糊后的像素写回原区域（每个小像素覆盖 2×2 区块）
+        var sy2: u32 = 0;
+        while (sy2 < sh) : (sy2 += 1) {
+            const dst_y0 = y0 + sy2 * factor;
+            const dst_y1 = @min(dst_y0 + factor, y0 + h);
+            var sx2b: u32 = 0;
+            while (sx2b < sw) : (sx2b += 1) {
+                const p = small_buf[sx2b];
+                const r: u8 = @intCast((p >> 16) & 0xFF);
+                const g: u8 = @intCast((p >> 8) & 0xFF);
+                const b: u8 = @intCast(p & 0xFF);
+                const dst_x0 = x0 + sx2b * factor;
+                const dst_x1 = @min(dst_x0 + factor, x0 + w);
+                var cy: u32 = dst_y0;
+                while (cy < dst_y1) : (cy += 1) {
+                    var cx: u32 = dst_x0;
+                    while (cx < dst_x1) : (cx += 1) {
+                        const off = cy * pitch + cx * bpp;
+                        buf[off + 2] = r;
+                        buf[off + 1] = g;
+                        buf[off] = b;
+                    }
+                }
+            }
+        }
+    }
+    total_draw_calls += 1;
+}
+
+/// 一维水平模糊（原地，src → dst，处理 RGBXRGBXRGBX 格式）
+fn blurRow1DPacked(src: []u32, dst: []u32, radius: u32, len: u32) void {
+    var i: u32 = 0;
+    while (i < len) : (i += 1) {
+        const lo: u32 = if (i >= radius) i - radius else 0;
+        const hi: u32 = @min(i + radius + 1, len);
+        const cnt = hi - lo;
+        var sr: u64 = 0;
+        var sg: u64 = 0;
+        var sb: u64 = 0;
+        var j: u32 = lo;
+        while (j < hi) : (j += 1) {
+            const p = src[j];
+            sr += (p >> 16) & 0xFF;
+            sg += (p >> 8) & 0xFF;
+            sb += p & 0xFF;
+        }
+        dst[i] = (@as(u32, @truncate(sr / cnt)) << 16) |
+            (@as(u32, @truncate(sg / cnt)) << 8) |
+            @as(u32, @truncate(sb / cnt));
+    }
+}
+
+/// 一维垂直模糊（原地，src → dst）
+fn blurCol1DPacked(src: []u32, dst: []u32, radius: u32, len: u32) void {
+    var i: u32 = 0;
+    while (i < len) : (i += 1) {
+        const lo: u32 = if (i >= radius) i - radius else 0;
+        const hi: u32 = @min(i + radius + 1, len);
+        const cnt = hi - lo;
+        var sr: u64 = 0;
+        var sg: u64 = 0;
+        var sb: u64 = 0;
+        var j: u32 = lo;
+        while (j < hi) : (j += 1) {
+            const p = src[j];
+            sr += (p >> 16) & 0xFF;
+            sg += (p >> 8) & 0xFF;
+            sb += p & 0xFF;
+        }
+        dst[i] = (@as(u32, @truncate(sr / cnt)) << 16) |
+            (@as(u32, @truncate(sg / cnt)) << 8) |
+            @as(u32, @truncate(sb / cnt));
+    }
+}
+
+/// 核心模糊实现（原始算法，无下采样）
+fn boxBlurRectCore(x0: u32, y0: u32, rw: u32, rh: u32, radius: u32, passes: u32) void {
+    if (rw > BLUR_MAX_LINE or rh > BLUR_MAX_LINE) return;
+
+    const buf = getDrawBuffer();
+    const pitch = fb_config.pitch;
+    const bpp: u32 = @as(u32, fb_config.bpp) / 8;
+    const x1 = x0 + rw;
+    const y1 = y0 + rh;
+
+    var pass: u32 = 0;
+    while (pass < passes) : (pass += 1) {
+        // Horizontal pass: process each row, store result in blur_line_h
         var row: u32 = y0;
         while (row < y1) : (row += 1) {
             const row_base: usize = @as(usize, row) * @as(usize, pitch) + @as(usize, x0) * @as(usize, bpp);
@@ -1032,25 +1574,17 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
                     sg += @as(u64, (px >> 8) & 0xFF);
                     sb += @as(u64, (px >> 16) & 0xFF);
                 }
-                const off = row_base + @as(usize, i) * @as(usize, bpp);
-                const rb: u8 = @truncate(sr / cnt);
-                const gb: u8 = @truncate(sg / cnt);
-                const bb: u8 = @truncate(sb / cnt);
-                buf[off] = rb;
-                buf[off + 1] = gb;
-                buf[off + 2] = bb;
+                blur_line_h[i] = (@as(u32, @truncate(sr / cnt))) | (@as(u32, @truncate(sg / cnt)) << 8) | (@as(u32, @truncate(sb / cnt)) << 16);
             }
         }
 
-        // Vertical pass: process each column
+        // Vertical pass: process each column, read from blur_line_h, write to buf
         var col: u32 = x0;
         while (col < x1) : (col += 1) {
-            const col_off: usize = @as(usize, col) * @as(usize, bpp);
-            // Read column pixels into blur_line
+            // Read column from blur_line_h (horizontal result) into blur_line
             var j: u32 = 0;
             while (j < rh) : (j += 1) {
-                const off = @as(usize, y0 + j) * @as(usize, pitch) + col_off;
-                blur_line[j] = @as(u32, buf[off]) | (@as(u32, buf[off + 1]) << 8) | (@as(u32, buf[off + 2]) << 16);
+                blur_line[j] = blur_line_h[j];
             }
             // Running-sum vertical blur
             j = 0;
@@ -1070,13 +1604,10 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
                     sg += @as(u64, (px >> 8) & 0xFF);
                     sb += @as(u64, (px >> 16) & 0xFF);
                 }
-                const off = @as(usize, y0 + j) * @as(usize, pitch) + col_off;
-                const rb: u8 = @truncate(sr / cnt);
-                const gb: u8 = @truncate(sg / cnt);
-                const bb: u8 = @truncate(sb / cnt);
-                buf[off] = rb;
-                buf[off + 1] = gb;
-                buf[off + 2] = bb;
+                const off = @as(usize, y0 + j) * @as(usize, pitch) + @as(usize, col) * @as(usize, bpp);
+                buf[off] = @truncate(sr / cnt);
+                buf[off + 1] = @truncate(sg / cnt);
+                buf[off + 2] = @truncate(sb / cnt);
             }
         }
     }
@@ -1492,13 +2023,53 @@ fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
             return io.STATUS_SUCCESS;
         },
         IOCTL_FB_FILL_RECT => {
+            if (irp.buffer_size < @sizeOf(FillRectRequest)) {
+                irp.complete(io.STATUS_BUFFER_TOO_SMALL, 0);
+                return io.STATUS_BUFFER_TOO_SMALL;
+            }
+            const req: *const FillRectRequest = @ptrFromInt(irp.buffer_ptr);
+            fillRect(req.x, req.y, req.w, req.h, req.color);
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
+        },
+        IOCTL_FB_COPY_RECT => {
+            if (irp.buffer_size < @sizeOf(CopyRectRequest)) {
+                irp.complete(io.STATUS_BUFFER_TOO_SMALL, 0);
+                return io.STATUS_BUFFER_TOO_SMALL;
+            }
+            const req: *const CopyRectRequest = @ptrFromInt(irp.buffer_ptr);
+            copyRect(req.src_x, req.src_y, req.dst_x, req.dst_y, req.w, req.h);
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
+        },
+        IOCTL_FB_DRAW_LINE => {
+            if (irp.buffer_size < @sizeOf(DrawLineRequest)) {
+                irp.complete(io.STATUS_BUFFER_TOO_SMALL, 0);
+                return io.STATUS_BUFFER_TOO_SMALL;
+            }
+            const req: *const DrawLineRequest = @ptrFromInt(irp.buffer_ptr);
+            drawLineAA(req.x1, req.y1, req.x2, req.y2, req.color);
             irp.complete(io.STATUS_SUCCESS, 0);
             return io.STATUS_SUCCESS;
         },
         IOCTL_FB_GET_STATS => {
-            irp.buffer_ptr = total_draw_calls;
-            irp.bytes_transferred = @intCast(total_flips);
-            irp.complete(io.STATUS_SUCCESS, 0);
+            if (irp.buffer_size < @sizeOf(FbStatsResponse)) {
+                irp.complete(io.STATUS_BUFFER_TOO_SMALL, 0);
+                return io.STATUS_BUFFER_TOO_SMALL;
+            }
+            const stats: *FbStatsResponse = @ptrFromInt(irp.buffer_ptr);
+            stats.* = .{
+                .total_draw_calls = total_draw_calls,
+                .total_flips = total_flips,
+                .width = fb_config.width,
+                .height = fb_config.height,
+                .bpp = fb_config.bpp,
+                .double_buffer_active = double_buffer_active,
+                .triple_buffer_active = triple_buffer_active,
+                .reserved = [_]u8{0} ** 2,
+            };
+            irp.bytes_transferred = @sizeOf(FbStatsResponse);
+            irp.complete(io.STATUS_SUCCESS, @sizeOf(FbStatsResponse));
             return io.STATUS_SUCCESS;
         },
         else => {
@@ -1699,13 +2270,19 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
         bytes_per_slot = required;
         const total_for_triple = required * 2;
 
-        if (required <= BACK_BUF_MAX and (!want_triple or total_for_triple <= BACK_BUF_MAX)) {
+        // 小分辨率（单缓冲 <= 2MB）：使用静态缓冲区
+        if (required <= STATIC_BACK_BUF_MAX and (!want_triple or total_for_triple <= STATIC_BACK_BUF_MAX)) {
             double_buffer_active = true;
-            triple_buffer_active = want_triple and total_for_triple <= BACK_BUF_MAX;
-            const zbytes = if (triple_buffer_active) total_for_triple else required;
-            @memset(back_buf[0..zbytes], 0);
-        } else if (required <= BACK_BUF_MAX and want_triple and total_for_triple > BACK_BUF_MAX) {
-            if (frame_mod.getKernelFrameAllocator()) |fa| {
+            triple_buffer_active = false; // 静态缓冲区仅支持单缓冲
+            if (!back_buf_initialized) {
+                @memset(back_buf[0..required], 0);
+                back_buf_initialized = true;
+            }
+        }
+        // 需要堆分配的情况（单缓冲 > 2MB，或需要三缓冲 > 2MB）
+        else if (frame_mod.getKernelFrameAllocator()) |fa| {
+            if (want_triple and total_for_triple > STATIC_BACK_BUF_MAX) {
+                // 三缓冲：需要堆分配
                 const nframes2 = (total_for_triple + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
                 const ac = phys_pb.allocContiguousPagesWithSource(fa, nframes2);
                 if (ac.phys) |base_phys| {
@@ -1720,67 +2297,37 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
                     klog.info("Framebuffer: heap ping-pong %u pages phys=0x%x (%u bytes 2 slots)", .{
                         nframes2, back_buffer_addr, total_for_triple,
                     });
-                } else {
-                    klog.warn("Framebuffer: triple allocContiguous failed; trying single back buffer", .{});
+                } else if (allow_single_on_fail) {
+                    klog.warn("Framebuffer: triple alloc failed; falling back to single buffer", .{});
                     want_triple = false;
                 }
-            } else {
-                klog.warn("Framebuffer: triple needs heap; no allocator — single static back", .{});
-                want_triple = false;
             }
-            if (!double_buffer_active and !want_triple) {
-                double_buffer_active = true;
-                triple_buffer_active = false;
-                @memset(back_buf[0..required], 0);
-            }
-        } else if (required > BACK_BUF_MAX) {
-            if (frame_mod.getKernelFrameAllocator()) |fa| {
-                if (want_triple) {
-                    const nframes2 = (total_for_triple + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
-                    const ac2 = phys_pb.allocContiguousPagesWithSource(fa, nframes2);
-                    if (ac2.phys) |base_phys| {
-                        back_heap_contig_source = ac2.source;
-                        back_heap_contig_order = ac2.order;
-                        back_buffer_addr = @as(usize, @truncate(base_phys));
-                        back_buffer_heap_nframes = nframes2;
-                        back_buffer_size = nframes2 * frame_mod.FRAME_SIZE;
-                        double_buffer_active = true;
-                        triple_buffer_active = true;
-                        zeroHeapBack(total_for_triple);
-                        klog.info("Framebuffer: heap ping-pong %u pages phys=0x%x (%u bytes)", .{
-                            nframes2, back_buffer_addr, total_for_triple,
-                        });
-                    } else {
-                        klog.warn("Framebuffer: large FB triple alloc failed; trying single back", .{});
-                        want_triple = false;
-                    }
+            // 单缓冲大分辨率：堆分配
+            if (!double_buffer_active) {
+                const nframes = (required + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
+                const ac = phys_pb.allocContiguousPagesWithSource(fa, nframes);
+                if (ac.phys) |base_phys| {
+                    back_heap_contig_source = ac.source;
+                    back_heap_contig_order = ac.order;
+                    back_buffer_addr = @as(usize, @truncate(base_phys));
+                    back_buffer_heap_nframes = nframes;
+                    back_buffer_size = nframes * frame_mod.FRAME_SIZE;
+                    double_buffer_active = true;
+                    triple_buffer_active = false;
+                    zeroHeapBack(required);
+                    klog.info("Framebuffer: heap back buffer %u pages phys=0x%x (%u bytes)", .{
+                        nframes, back_buffer_addr, required,
+                    });
+                } else if (allow_single_on_fail) {
+                    klog.warn("Framebuffer: allocContiguous failed (%u bytes); strategy=single_buffer_direct (GOP)", .{required});
+                } else {
+                    klog.err("Framebuffer: allocContiguous failed and fall_back_single_on_alloc_fail=false; double_buf=OFF", .{});
                 }
-                if (!double_buffer_active) {
-                    const nframes = (required + frame_mod.FRAME_SIZE - 1) / frame_mod.FRAME_SIZE;
-                    const ac3 = phys_pb.allocContiguousPagesWithSource(fa, nframes);
-                    if (ac3.phys) |base_phys| {
-                        back_heap_contig_source = ac3.source;
-                        back_heap_contig_order = ac3.order;
-                        back_buffer_addr = @as(usize, @truncate(base_phys));
-                        back_buffer_heap_nframes = nframes;
-                        back_buffer_size = nframes * frame_mod.FRAME_SIZE;
-                        double_buffer_active = true;
-                        triple_buffer_active = false;
-                        zeroHeapBack(required);
-                        klog.info("Framebuffer: heap back buffer %u pages phys=0x%x (%u bytes)", .{
-                            nframes, back_buffer_addr, required,
-                        });
-                    } else if (allow_single_on_fail) {
-                        klog.warn("Framebuffer: allocContiguous failed (%u bytes); strategy=single_buffer_direct (GOP)", .{required});
-                    } else {
-                        klog.err("Framebuffer: allocContiguous failed and fall_back_single_on_alloc_fail=false; double_buf=OFF", .{});
-                    }
-                }
-            } else if (allow_single_on_fail) {
-                klog.warn("Framebuffer: no kernel frame allocator; large FB strategy=single_buffer_direct", .{});
-            } else {
-                klog.err("Framebuffer: no allocator and fall_back_single_on_alloc_fail=false; double_buf=OFF", .{});
             }
+        } else if (allow_single_on_fail) {
+            klog.warn("Framebuffer: no kernel frame allocator; large FB strategy=single_buffer_direct", .{});
+        } else {
+            klog.err("Framebuffer: no allocator and fall_back_single_on_alloc_fail=false; double_buf=OFF", .{});
         }
     }
 

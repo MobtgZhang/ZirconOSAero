@@ -977,31 +977,7 @@ pub fn patchHarmonyWallpaperRegion(scr_w: i32, scr_h: i32, rx: i32, ry: i32, rw:
     wallpaper_bitmap.drawPresetRegion(renderer_aero.wallpaperPresetIndex(), scr_w, scr_h, rx, ry, rw, rh);
 }
 
-fn patchAeroDragBackground(scr_w: i32, scr_h: i32) void {
-    const pad: i32 = 10;
-    if (drag_active) {
-        const wr = getWindowRect(scr_w, scr_h);
-        const cur = ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
-        var u = rectUnion(explorer_drag_prev_rect, cur);
-        u = rectInflate(u, pad);
-        u = rectClampToScreen(u, scr_w, scr_h);
-        if (u.w > 0 and u.h > 0) {
-            patchHarmonyWallpaperRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
-        }
-        explorer_drag_prev_rect = cur;
-    }
-    if (taskmgr_drag_active) {
-        const cur = ShellRect{ .x = taskmgr_x, .y = taskmgr_y, .w = taskmgr_w, .h = taskmgr_h };
-        var u = rectUnion(taskmgr_drag_prev_rect, cur);
-        u = rectInflate(u, pad);
-        u = rectClampToScreen(u, scr_w, scr_h);
-        if (u.w > 0 and u.h > 0) {
-            patchHarmonyWallpaperRegion(scr_w, scr_h, u.x, u.y, u.w, u.h);
-        }
-        taskmgr_drag_prev_rect = cur;
-    }
-}
-
+/// 拖动历史矩形：用于计算窗口从上一帧到当前位置的脏区（用于壁纸 patch）。
 var explorer_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 var taskmgr_drag_prev_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
@@ -1190,6 +1166,9 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     const shell_glass_lite = ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible;
     dwm_mod.setGlassLiteBlurEnabled(shell_glass_lite);
     defer dwm_mod.setGlassLiteBlurEnabled(false);
+
+    // 每帧推进开始菜单动画状态（展开/收起、子菜单滑动、悬停平滑过渡等）
+    startmenu.updateAnimation();
 
     // 合成顺序：场景（壁纸/窗口/DWM 效果）→ 任务栏等壳层（renderer_aero 内）→ **DWM 缩略图** → CursorPlane（save-under + 绘制）→ 调用方 present。
     // 合成前再排空一轮输入，避免 IRQ/轮询与取样之间存在竞态导致本帧光标滞后一整帧。
@@ -1984,6 +1963,9 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
         startmenu_hover = startmenu.updatePointerHover(x, y, w, h);
     }
 
+    // 右键菜单悬停跟踪
+    _ = updateContextMenuHover(x, y);
+
     const scr_w: i32 = @intCast(fb.getWidth());
     const scr_h: i32 = @intCast(fb.getHeight());
     const mouse = @import("../../input/mouse.zig");
@@ -2011,6 +1993,11 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
     const builtin_moved = builtin_apps.onMouseMove(x, y, scr_w, scr_h, tb_h_move);
     const explorer_moved = drag_active and (window_x != wx0 or window_y != wy0);
     const taskmgr_moved = taskmgr_drag_active and (taskmgr_x != tmx0 or taskmgr_y != tmy0);
+
+    // 勿在此处把 explorer/taskmgr 的 *_drag_prev_rect 写成「当前几何」：`getDragState()` 须在合成时仍保留
+    // **上一帧已呈现** 的位置，以便 `renderer_aero.patchDragBackground` 对 prev∪cur 做壁纸修补并在末尾
+    // `setExplorerDragPrev` / `setTaskMgrDragPrev` 再推进。若在指针移动里提前覆盖 prev，则 prev==cur，
+    // 旧窗格永不进脏区 → 典型「拖窗留痕」。
 
     const prev_expl = explorer_caption_btn_hover;
     const prev_tm = taskmgr_caption_btn_hover;
@@ -2518,18 +2505,20 @@ pub fn renderShadow(x: i32, y: i32, w: i32, h: i32, size: i32) void {
 
     // Multi-layer soft shadow with true alpha blending: each successive
     // layer has a smaller offset and decreasing opacity for soft edges.
+    // 使用冷灰蓝色阴影（与 material.zig 一致），避免纯黑阴影在多窗重叠时产生的生硬边界感。
+    const shadow_tint = rgb(0x30, 0x48, 0x60);
     var layer: i32 = 0;
     while (layer < 4) : (layer += 1) {
         const offset = size - layer * 2;
         if (offset <= 0) break;
-        // Darken the existing background by a small alpha (outer = darker, inner = lighter)
-        const shadow_alpha: u8 = @intCast(@as(u32, @intCast(25 - layer * 5)));
+        // 与 material.zig renderShadow 一致的 alpha 曲线（外层更深、内层更淡）
+        const shadow_alpha: u8 = @intCast(@as(u32, @intCast(18 - @min(layer * 4, 14))));
         fb.blendTintRect(
             clampI32FromI64(@as(i64, x) + @as(i64, offset)),
             clampI32FromI64(@as(i64, y) + @as(i64, offset)),
             w,
             h,
-            rgb(0x00, 0x00, 0x00),
+            shadow_tint,
             shadow_alpha,
             255,
         );
@@ -3356,6 +3345,14 @@ pub fn setShellKeyboardFocus(f: ShellKeyboardFocus) void {
     shell_keyboard_focus = f;
 }
 
+pub fn getKeyboardFocusWindowIndex() usize {
+    return switch (shell_keyboard_focus) {
+        .explorer => 0,
+        .taskmgr => 1,
+        .builtin_apps => 2,
+    };
+}
+
 pub const ShellTitlebarGradient = struct { left: u32, right: u32 };
 
 pub fn shellExplorerTitlebarPair(t: *const theme_mod.ThemeColors) ShellTitlebarGradient {
@@ -4045,39 +4042,84 @@ fn aeroTrayFlyoutPick(px: i32, py: i32, scr_w: i32, scr_h: i32) ?usize {
     return null;
 }
 
-// ── Right-Click Context Menu ──
+// ── Right-Click Context Menu (Windows 7 Aero style) ──
 
 var ctx_menu_visible: bool = false;
 var ctx_menu_x: i32 = 0;
 var ctx_menu_y: i32 = 0;
-/// 关闭壳层弹出后若干帧内跳过盒式模糊（减轻首帧后第一次整场景重绘在 Debug 下的整数/负载尖峰；与 AeroDesktopRuntime 右键菜单路径相关）。
+var ctx_submenu_visible: bool = false;
+var ctx_submenu_x: i32 = 0;
+var ctx_submenu_y: i32 = 0;
+var ctx_submenu_items: [5][]const u8 = undefined;
+var ctx_menu_hover_index: i32 = -1;
+var ctx_menu_frames_since_open: u8 = 0;
+/// 关闭壳层弹出后若干帧内跳过盒式模糊。
 var shell_blur_cooldown_frames: u8 = 0;
 
-const ctx_menu_items = [_][]const u8{
-    "View",
-    "Sort By",
-    "Refresh",
-    "---",
-    "New",
-    "---",
-    "Display Settings",
-    "Personalize",
+/// 悬停平滑过渡状态：当前显示的悬停索引（带平滑过渡）
+var ctx_hover_display_index: i32 = -1;
+/// 悬停过渡进度（0.0 到 1.0）
+var ctx_hover_transition_progress: f32 = 1.0;
+/// 悬停过渡帧数（约 50ms @ 60fps）
+const CTX_HOVER_TRANSITION_FRAMES: f32 = 3.0;
+
+/// 子菜单滑动动画进度（0.0 到 1.0）
+var ctx_submenu_anim_progress: f32 = 0.0;
+/// 子菜单滑动动画帧数（约 100ms @ 60fps）
+const CTX_SUBMENU_ANIM_FRAMES: f32 = 6.0;
+
+/// 子菜单悬停索引（独立跟踪）
+var ctx_submenu_hover_index: i32 = -1;
+/// 子菜单悬停过渡状态
+var ctx_submenu_hover_display_index: i32 = -1;
+var ctx_submenu_hover_transition_progress: f32 = 1.0;
+
+const CTX_MENU_PAD: i32 = 4;
+const CTX_ITEM_H: i32 = 24;
+const CTX_MENU_W: i32 = 200;
+const CTX_CORNER_RADIUS: i32 = 3;
+const CTX_ICON_X: i32 = 8;
+const CTX_TEXT_X: i32 = 28;
+const CTX_ARROW_X: i32 = 174;
+
+/// Win7 风格菜单项结构体（含图标 ID 与子菜单标记）。
+const CtxMenuItem = struct {
+    label: []const u8,
+    icon_id: ?icons.IconId,
+    has_submenu: bool,
 };
 
-const CTX_ITEM_H: i32 = 24;
-const CTX_MENU_W: i32 = 180;
-const CTX_SEP_H: i32 = 8;
+/// 桌面右键菜单项：图标参照 startmenu.zig Win7 布局。
+const ctx_menu_items = [_]CtxMenuItem{
+    .{ .label = "View",             .icon_id = .info,        .has_submenu = false },
+    .{ .label = "Sort By",          .icon_id = null,         .has_submenu = false },
+    .{ .label = "Refresh",          .icon_id = null,         .has_submenu = false },
+    .{ .label = "---",              .icon_id = null,         .has_submenu = false },
+    .{ .label = "New",              .icon_id = .folder,      .has_submenu = true  },
+    .{ .label = "---",              .icon_id = null,         .has_submenu = false },
+    .{ .label = "Display Settings", .icon_id = .settings,    .has_submenu = false },
+    .{ .label = "Personalize",      .icon_id = .pictures,    .has_submenu = false },
+};
+
+/// 子菜单项（New > 展开内容）。
+const new_submenu_items = [_][]const u8{
+    "Folder",
+    "Shortcut",
+    "Text Document",
+    "---",
+    "Bitmap Image",
+};
 
 fn ctxMenuHeight() i32 {
-    var h: i32 = 8;
+    var h: i32 = CTX_MENU_PAD;
     for (ctx_menu_items) |item| {
-        if (item.len == 3 and item[0] == '-') {
-            h += CTX_SEP_H;
+        if (std.mem.eql(u8, item.label, "---")) {
+            h += 8;
         } else {
             h += CTX_ITEM_H;
         }
     }
-    return h + 4;
+    return h + CTX_MENU_PAD;
 }
 
 pub fn showContextMenu(x: i32, y: i32) void {
@@ -4085,7 +4127,16 @@ pub fn showContextMenu(x: i32, y: i32) void {
     const w: i32 = @intCast(fb.getWidth());
     const menu_h: i32 = ctxMenuHeight();
     const tb_h: i32 = getTaskbarHeight();
-    // 菜单锚点用 i64 计算，避免 `x+CTX_MENU_W` / `y+menu_h` 在 i32 上 Debug 溢出 panic（异常指针坐标或极端分辨率）。
+    ctx_menu_hover_index = -1;
+    ctx_hover_display_index = -1;
+    ctx_hover_transition_progress = 1.0;
+    ctx_submenu_visible = false;
+    ctx_submenu_anim_progress = 0.0;
+    ctx_submenu_hover_index = -1;
+    ctx_submenu_hover_display_index = -1;
+    ctx_submenu_hover_transition_progress = 1.0;
+    ctx_menu_frames_since_open = 0;
+    // 菜单锚点用 i64 计算，避免溢出。
     const wx = @as(i64, w);
     const hx = @as(i64, h);
     const xi = @as(i64, x);
@@ -4106,7 +4157,15 @@ pub fn showContextMenu(x: i32, y: i32) void {
 
 pub fn hideContextMenu() void {
     ctx_menu_visible = false;
-    // 略长于 3 帧：关闭右键/壳层后多几帧跳过任务栏盒式模糊，减轻 Refresh 等与全帧叠加之 CPU 尖峰。
+    ctx_submenu_visible = false;
+    ctx_submenu_anim_progress = 0.0;
+    ctx_menu_hover_index = -1;
+    ctx_hover_display_index = -1;
+    ctx_hover_transition_progress = 1.0;
+    ctx_submenu_hover_index = -1;
+    ctx_submenu_hover_display_index = -1;
+    ctx_submenu_hover_transition_progress = 1.0;
+    // 略长于 3 帧：关闭后多几帧跳过任务栏盒式模糊，减轻 Refresh 等与全帧叠加之 CPU 尖峰。
     shell_blur_cooldown_frames = 6;
     cursor_plane.invalidate();
 }
@@ -4117,7 +4176,120 @@ pub fn isContextMenuVisible() bool {
 
 pub fn getContextMenuPaintRect() ShellRect {
     if (!ctx_menu_visible) return .{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    return .{ .x = ctx_menu_x, .y = ctx_menu_y, .w = CTX_MENU_W, .h = ctxMenuHeight() };
+    const r = rectUnion(
+        .{ .x = ctx_menu_x, .y = ctx_menu_y, .w = CTX_MENU_W, .h = ctxMenuHeight() },
+        .{ .x = ctx_submenu_x, .y = ctx_submenu_y, .w = CTX_MENU_W, .h = submenuHeight() },
+    );
+    return r;
+}
+
+fn submenuHeight() i32 {
+    if (!ctx_submenu_visible and ctx_submenu_anim_progress <= 0.0) return 0;
+    var h: i32 = CTX_MENU_PAD;
+    for (ctx_submenu_items) |item| {
+        if (std.mem.eql(u8, item, "---")) {
+            h += 8;
+        } else {
+            h += CTX_ITEM_H;
+        }
+    }
+    return h + CTX_MENU_PAD;
+}
+
+/// 更新右键菜单悬停和子菜单动画状态
+pub fn updateContextMenuAnimation() void {
+    // 更新悬停平滑过渡（主菜单）
+    if (ctx_menu_hover_index != ctx_hover_display_index) {
+        if (ctx_hover_transition_progress >= 1.0) {
+            ctx_hover_display_index = ctx_menu_hover_index;
+            ctx_hover_transition_progress = 0.0;
+        }
+    }
+    if (ctx_hover_transition_progress < 1.0) {
+        ctx_hover_transition_progress += 1.0 / CTX_HOVER_TRANSITION_FRAMES;
+        if (ctx_hover_transition_progress > 1.0) {
+            ctx_hover_transition_progress = 1.0;
+            ctx_hover_display_index = ctx_menu_hover_index;
+        }
+    }
+
+    // 更新子菜单悬停平滑过渡
+    if (ctx_submenu_hover_index != ctx_submenu_hover_display_index) {
+        if (ctx_submenu_hover_transition_progress >= 1.0) {
+            ctx_submenu_hover_display_index = ctx_submenu_hover_index;
+            ctx_submenu_hover_transition_progress = 0.0;
+        }
+    }
+    if (ctx_submenu_hover_transition_progress < 1.0) {
+        ctx_submenu_hover_transition_progress += 1.0 / CTX_HOVER_TRANSITION_FRAMES;
+        if (ctx_submenu_hover_transition_progress > 1.0) {
+            ctx_submenu_hover_transition_progress = 1.0;
+            ctx_submenu_hover_display_index = ctx_submenu_hover_index;
+        }
+    }
+
+    // 更新子菜单滑动动画
+    if (ctx_submenu_visible) {
+        if (ctx_submenu_anim_progress < 1.0) {
+            ctx_submenu_anim_progress += 1.0 / CTX_SUBMENU_ANIM_FRAMES;
+            if (ctx_submenu_anim_progress > 1.0) ctx_submenu_anim_progress = 1.0;
+        }
+    } else {
+        if (ctx_submenu_anim_progress > 0.0) {
+            ctx_submenu_anim_progress -= 1.0 / CTX_SUBMENU_ANIM_FRAMES;
+            if (ctx_submenu_anim_progress < 0.0) ctx_submenu_anim_progress = 0.0;
+        }
+    }
+}
+
+/// 在父项右侧展开子菜单，超出屏幕右侧时flip到左侧。
+fn showContextSubmenu(parent_idx: usize) void {
+    if (parent_idx >= ctx_menu_items.len) return;
+    _ = ctx_menu_items[parent_idx];
+    const submenu_w: i32 = 180;
+    const pw: i32 = @intCast(fb.getWidth());
+    const tb_h = getTaskbarHeight();
+    const ph: i32 = @intCast(fb.getHeight());
+
+    // 父菜单项的Y坐标
+    var iy: i32 = ctx_menu_y + CTX_MENU_PAD;
+    for (ctx_menu_items, 0..) |item, idx| {
+        if (idx == parent_idx) break;
+        if (!std.mem.eql(u8, item.label, "---")) {
+            iy += CTX_ITEM_H;
+        } else {
+            iy += 8;
+        }
+    }
+
+    // 计算子菜单位置：先尝试右侧
+    var sx: i64 = @as(i64, ctx_menu_x) + @as(i64, CTX_MENU_W);
+    if (sx + submenu_w > pw) {
+        // 超出右边界，flip到左侧
+        sx = @as(i64, ctx_menu_x) - @as(i64, submenu_w);
+    }
+    if (sx < 2) sx = 2;
+
+    var sy_i: i64 = @as(i64, iy);
+    const sm_h: i64 = @as(i64, submenuHeight());
+    const work_bottom: i64 = @as(i64, ph) - @as(i64, tb_h);
+    if (sy_i + sm_h > work_bottom) sy_i = work_bottom - sm_h - 2;
+    if (sy_i < 2) sy_i = 2;
+
+    ctx_submenu_x = clampI32FromI64(sx);
+    ctx_submenu_y = clampI32FromI64(sy_i);
+    ctx_submenu_visible = true;
+    ctx_submenu_anim_progress = 0.0;
+    ctx_submenu_hover_index = -1;
+    ctx_submenu_hover_display_index = -1;
+    ctx_submenu_hover_transition_progress = 1.0;
+
+    // 填充子菜单项内容
+    const parent_item = ctx_menu_items[parent_idx];
+    if (std.mem.eql(u8, parent_item.label, "New")) {
+        ctx_submenu_items = new_submenu_items;
+    }
+    cursor_plane.invalidate();
 }
 
 pub fn renderContextMenu() void {
@@ -4125,73 +4297,298 @@ pub fn renderContextMenu() void {
     const t = active_theme;
     const menu_h = ctxMenuHeight();
 
-    // DWM shadow (soft offset)
+    ctx_menu_frames_since_open +%= 1;
+    const panel_open_lite = ctx_menu_frames_since_open <= 2;
+
+    // 1. 阴影
     if (dwm_initialized and dwm_config.shadow_enabled) {
         renderShadow(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, 4);
     } else {
-        fb.fillRect(
-            clampI32FromI64(@as(i64, ctx_menu_x) + 2),
-            clampI32FromI64(@as(i64, ctx_menu_y) + 2),
-            CTX_MENU_W,
-            menu_h,
-            rgb(0x20, 0x20, 0x20),
-        );
+        fb.fillRect(ctx_menu_x + 2, ctx_menu_y + 2, CTX_MENU_W, menu_h, rgb(0x18, 0x18, 0x18));
     }
 
-    fb.fillRect(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, t.window_bg);
+    // 2. 圆角背景
+    fb.fillRoundedRect(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, CTX_CORNER_RADIUS, t.window_bg);
+
+    // 3. 玻璃/渐变效果
     if (dwm_initialized and dwm_config.glass_enabled) {
-        // 小矩形避免盒式模糊，减轻右键菜单打开后整壳层路径的 CPU 压力。
-        renderGlassTintOnly(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, t.titlebar_active_left, .caption);
+        if (panel_open_lite) {
+            renderGlassTintOnly(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, rgb(0x28, 0x40, 0x60), .caption);
+        } else {
+            renderGlassEffect(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, rgb(0x28, 0x40, 0x60), .caption);
+        }
+    } else {
+        fb.drawGradientH(ctx_menu_x, ctx_menu_y, CTX_MENU_W, 2, rgb(0xC0, 0xD0, 0xE8), t.window_bg);
     }
 
-    fb.drawRect(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, t.window_border);
+    // 4. 边框
+    fb.drawRect(ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h, rgb(0x40, 0x58, 0x80));
 
-    const text_color: u32 = t.titlebar_text;
-    const sep_color: u32 = rgb(0xB8, 0xB8, 0xC0);
+    // 5. 顶部高光条
+    fb.drawHLine(ctx_menu_x + 1, ctx_menu_y + 1, CTX_MENU_W - 2, rgb(0xD0, 0xE0, 0xF0));
 
-    var iy: i32 = clampI32FromI64(@as(i64, ctx_menu_y) + 4);
+    // 6. 绘制菜单项
+    // 非悬停时使用黑色字体，悬停时使用白色
+    const sep_color: u32 = rgb(0x60, 0x70, 0x88);
+    const icon_s: u32 = 1; // scale=1 (16x16)
+
+    var iy: i32 = ctx_menu_y + CTX_MENU_PAD;
+    var item_idx: i32 = 0;
     for (ctx_menu_items) |item| {
-        if (item.len == 3 and item[0] == '-') {
-            fb.drawHLine(clampI32FromI64(@as(i64, ctx_menu_x) + 4), iy + 3, CTX_MENU_W - 8, sep_color);
-            iy += CTX_SEP_H;
-        } else {
-            fb.drawTextTransparent(clampI32FromI64(@as(i64, ctx_menu_x) + 28), iy + 4, item, text_color);
-            iy += CTX_ITEM_H;
+        if (std.mem.eql(u8, item.label, "---")) {
+            fb.drawHLine(ctx_menu_x + 6, iy + 4, CTX_MENU_W - 12, sep_color);
+            iy += 8;
+            continue;
         }
+        // 使用平滑过渡的悬停状态
+        const is_hov = (ctx_hover_display_index == item_idx);
+        // 计算悬停过渡的 alpha（用于渐变效果）
+        // 修正：非悬停项不应有悬停高亮，alpha 直接使用过渡进度
+        const hov_alpha: f32 = if (is_hov) ctx_hover_transition_progress else 0.0;
+        if (hov_alpha > 0.0) {
+            // Win7 Aero 蓝色悬停高亮（带平滑过渡）
+            const alpha_byte = @as(u8, @intFromFloat(hov_alpha * 55.0));
+            fb.blendTintRect(ctx_menu_x + 2, iy, CTX_MENU_W - 4, CTX_ITEM_H, rgb(0x70, 0x98, 0xC8), alpha_byte, 255);
+        }
+        // 图标
+        if (item.icon_id) |iid| {
+            icons.drawThemedIcon(iid, ctx_menu_x + CTX_ICON_X, iy + 4, icon_s, .aero);
+        }
+        // 文字颜色插值：黑色 -> 白色
+        const text_r: u8 = @intFromFloat(@as(f32, 0x18) + (@as(f32, 0xFF) - @as(f32, 0x18)) * hov_alpha);
+        const text_g: u8 = @intFromFloat(@as(f32, 0x1C) + (@as(f32, 0xFF) - @as(f32, 0x1C)) * hov_alpha);
+        const text_b: u8 = @intFromFloat(@as(f32, 0x22) + (@as(f32, 0xFF) - @as(f32, 0x22)) * hov_alpha);
+        const cur_text_color: u32 = rgb(@as(u32, text_r), @as(u32, text_g), @as(u32, text_b));
+        fb.drawTextTransparent(ctx_menu_x + CTX_TEXT_X, iy + 5, item.label, cur_text_color);
+        // 子菜单箭头
+        if (item.has_submenu) {
+            fb.drawTextTransparent(ctx_menu_x + CTX_ARROW_X, iy + 5, ">", cur_text_color);
+        }
+        iy += CTX_ITEM_H;
+        item_idx += 1;
+    }
+
+    // 7. 子菜单（带滑动动画）
+    if (ctx_submenu_visible or ctx_submenu_anim_progress > 0.0) {
+        renderContextSubmenu();
+    }
+}
+
+/// 渲染子菜单（带滑动动画）。
+fn renderContextSubmenu() void {
+    const menu_h = submenuHeight();
+    if (menu_h <= 0) return;
+
+    // 计算滑动动画偏移（从右侧滑入）
+    const submenu_w: i32 = CTX_MENU_W;
+    const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(submenu_w)) * (1.0 - ctx_submenu_anim_progress)));
+    const anim_x = ctx_submenu_x + anim_offset;
+
+    // 计算可见性 alpha（用于关闭动画）
+    const vis_alpha: f32 = if (ctx_submenu_visible) ctx_submenu_anim_progress else (1.0 - ctx_submenu_anim_progress);
+    if (vis_alpha <= 0.0) return;
+
+    if (dwm_initialized and dwm_config.shadow_enabled) {
+        renderShadow(anim_x, ctx_submenu_y, CTX_MENU_W, menu_h, 3);
+    }
+    fb.fillRoundedRect(anim_x, ctx_submenu_y, CTX_MENU_W, menu_h, CTX_CORNER_RADIUS, rgb(0x1C, 0x28, 0x3C));
+    if (dwm_initialized and dwm_config.glass_enabled) {
+        renderGlassTintOnly(anim_x, ctx_submenu_y, CTX_MENU_W, menu_h, rgb(0x28, 0x40, 0x60), .caption);
+    }
+    fb.drawRect(anim_x, ctx_submenu_y, CTX_MENU_W, menu_h, rgb(0x40, 0x58, 0x80));
+    fb.drawHLine(anim_x + 1, ctx_submenu_y + 1, CTX_MENU_W - 2, rgb(0xD0, 0xE0, 0xF0));
+
+    // 子菜单字体颜色：非悬停黑色，悬停白色
+    const sep_color: u32 = rgb(0x60, 0x70, 0x88);
+
+    var iy: i32 = ctx_submenu_y + CTX_MENU_PAD;
+    var sub_item_idx: i32 = 0;
+    for (ctx_submenu_items) |item| {
+        if (std.mem.eql(u8, item, "---")) {
+            fb.drawHLine(anim_x + 6, iy + 4, CTX_MENU_W - 12, sep_color);
+            iy += 8;
+            continue;
+        }
+        // 使用平滑过渡的悬停状态
+        const is_hov = (ctx_submenu_hover_display_index == sub_item_idx);
+        // 计算悬停过渡的 alpha
+        const hov_alpha: f32 = if (is_hov) ctx_submenu_hover_transition_progress else (1.0 - ctx_submenu_hover_transition_progress);
+        if (hov_alpha > 0.0) {
+            const alpha_byte = @as(u8, @intFromFloat(hov_alpha * 55.0));
+            fb.blendTintRect(anim_x + 2, iy, CTX_MENU_W - 4, CTX_ITEM_H, rgb(0x70, 0x98, 0xC8), alpha_byte, 255);
+        }
+        // 文字颜色插值：黑色 -> 白色
+        const text_r: u8 = @intFromFloat(@as(f32, 0x18) + (@as(f32, 0xFF) - @as(f32, 0x18)) * hov_alpha);
+        const text_g: u8 = @intFromFloat(@as(f32, 0x1C) + (@as(f32, 0xFF) - @as(f32, 0x1C)) * hov_alpha);
+        const text_b: u8 = @intFromFloat(@as(f32, 0x22) + (@as(f32, 0xFF) - @as(f32, 0x22)) * hov_alpha);
+        const cur_text_color: u32 = rgb(@as(u32, text_r), @as(u32, text_g), @as(u32, text_b));
+        fb.drawTextTransparent(anim_x + CTX_TEXT_X, iy + 5, item, cur_text_color);
+        iy += CTX_ITEM_H;
+        sub_item_idx += 1;
     }
 }
 
 fn isInsideContextMenu(x: i32, y: i32) bool {
     if (!ctx_menu_visible) return false;
-    const menu_h = ctxMenuHeight();
-    return pointInRectI32(x, y, ctx_menu_x, ctx_menu_y, CTX_MENU_W, menu_h);
+
+    // 检查子菜单区域（带动画偏移）
+    const submenu_h = submenuHeight();
+    if (submenu_h > 0) {
+        const submenu_w: i32 = CTX_MENU_W;
+        const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(submenu_w)) * (1.0 - ctx_submenu_anim_progress)));
+        const anim_x = ctx_submenu_x + anim_offset;
+        if (pointInRectI32(x, y, anim_x, ctx_submenu_y, CTX_MENU_W, submenu_h)) {
+            return true;
+        }
+    }
+
+    return pointInRectI32(x, y, ctx_menu_x, ctx_menu_y, CTX_MENU_W, ctxMenuHeight());
 }
 
-/// 左键在桌面上下文菜单内：可点项执行占位并关闭；分隔条不关闭；边距内点击关闭（与常见 Shell 一致）。
+/// 计算当前指针位置下的菜单项索引（忽略分隔符）。
+/// 主菜单返回 >= 0 的索引，子菜单返回 -2
+fn ctxMenuHoverIndex(px: i32, py: i32) i32 {
+    if (!ctx_menu_visible) return -1;
+
+    // 检查子菜单区域（带动画偏移）
+    const submenu_h = submenuHeight();
+    if (submenu_h > 0) {
+        const submenu_w: i32 = CTX_MENU_W;
+        const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(submenu_w)) * (1.0 - ctx_submenu_anim_progress)));
+        const anim_x = ctx_submenu_x + anim_offset;
+        if (pointInRectI32(px, py, anim_x, ctx_submenu_y, CTX_MENU_W, submenu_h)) {
+            var iy: i32 = ctx_submenu_y + CTX_MENU_PAD;
+            var sub_idx: i32 = 0;
+            for (ctx_submenu_items) |item| {
+                if (std.mem.eql(u8, item, "---")) {
+                    iy += 8;
+                    continue;
+                }
+                if (py >= iy and py < iy + CTX_ITEM_H) {
+                    ctx_submenu_hover_index = sub_idx;
+                    return -2;
+                }
+                iy += CTX_ITEM_H;
+                sub_idx += 1;
+            }
+            ctx_submenu_hover_index = -1;
+            return -2;
+        }
+    }
+
+    if (!pointInRectI32(px, py, ctx_menu_x, ctx_menu_y, CTX_MENU_W, ctxMenuHeight())) return -1;
+    var iy: i32 = ctx_menu_y + CTX_MENU_PAD;
+    var item_idx: i32 = 0;
+    for (ctx_menu_items) |item| {
+        if (std.mem.eql(u8, item.label, "---")) {
+            iy += 8;
+            continue;
+        }
+        if (py >= iy and py < iy + CTX_ITEM_H) return item_idx;
+        iy += CTX_ITEM_H;
+        item_idx += 1;
+    }
+    return -1;
+}
+
+/// 左键在桌面上下文菜单内：子菜单入口展开子菜单；可点项执行后关闭；分隔条不关闭。
 fn handleContextMenuLeftClick(px: i32, py: i32) bool {
     if (!ctx_menu_visible) return false;
     if (!isInsideContextMenu(px, py)) return false;
 
-    const py_i = @as(i64, py);
-    var iy: i64 = @as(i64, ctx_menu_y) + 4;
+    // 处理子菜单点击（带动画偏移检测）
+    const submenu_h = submenuHeight();
+    if (submenu_h > 0) {
+        const submenu_w: i32 = CTX_MENU_W;
+        const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(submenu_w)) * (1.0 - ctx_submenu_anim_progress)));
+        const anim_x = ctx_submenu_x + anim_offset;
+        if (pointInRectI32(px, py, anim_x, ctx_submenu_y, CTX_MENU_W, submenu_h)) {
+            ctx_submenu_visible = false; // 触发关闭动画
+            return true;
+        }
+    }
+
+    // 计算主菜单内点击的项索引
+    var iy: i64 = @as(i64, ctx_menu_y) + CTX_MENU_PAD;
+    var item_idx: usize = 0;
     for (ctx_menu_items) |item| {
-        if (item.len == 3 and item[0] == '-') {
-            if (py_i >= iy and py_i < iy + CTX_SEP_H) return true;
-            iy += CTX_SEP_H;
+        if (std.mem.eql(u8, item.label, "---")) {
+            iy += 8;
+            if (py >= iy and py < iy + 8) return true;
             continue;
         }
-        if (py_i >= iy and py_i < iy + CTX_ITEM_H) {
-            if (std.mem.eql(u8, item, "Refresh")) {
+        if (py >= iy and py < iy + CTX_ITEM_H) {
+            // 子菜单入口：展开子菜单
+            if (item.has_submenu) {
+                showContextSubmenu(item_idx);
+                return true;
+            }
+            // 执行动作
+            if (std.mem.eql(u8, item.label, "Refresh")) {
                 renderer_aero.cycleWallpaperPreset();
             }
             hideContextMenu();
-            klog.info("Desktop context menu: %s", .{item});
+            klog.info("Desktop context menu: %s", .{item.label});
             return true;
         }
         iy += CTX_ITEM_H;
+        item_idx += 1;
     }
     hideContextMenu();
     return true;
+}
+
+/// 更新右键菜单悬停状态，返回是否发生了变化。
+pub fn updateContextMenuHover(px: i32, py: i32) bool {
+    if (!ctx_menu_visible) return false;
+    const prev = ctx_menu_hover_index;
+    ctx_menu_hover_index = ctxMenuHoverIndex(px, py);
+    return prev != ctx_menu_hover_index;
+}
+
+/// 键盘导航：上下键在菜单内移动（跳过分隔符）。
+pub fn navigateContextMenu(direction: enum { up, down }) void {
+    if (!ctx_menu_visible) return;
+    if (ctx_menu_hover_index < 0) ctx_menu_hover_index = 0;
+    var idx = ctx_menu_hover_index;
+
+    if (direction == .down) {
+        idx += 1;
+        if (idx >= ctx_menu_items.len) idx = 0;
+    } else {
+        idx -= 1;
+        if (idx < 0) idx = @as(i32, @intCast(ctx_menu_items.len)) - 1;
+    }
+    // 跳过分隔符
+    while (std.mem.eql(u8, ctx_menu_items[@as(usize, @intCast(idx))].label, "---")) {
+        if (direction == .down) {
+            idx += 1;
+            if (idx >= ctx_menu_items.len) idx = 0;
+        } else {
+            idx -= 1;
+            if (idx < 0) idx = @as(i32, @intCast(ctx_menu_items.len)) - 1;
+        }
+    }
+    ctx_menu_hover_index = idx;
+    cursor_plane.invalidate();
+}
+
+/// 执行当前键盘选中的菜单项动作。
+pub fn activateContextMenuItem() void {
+    if (!ctx_menu_visible) return;
+    const idx = @as(usize, @intCast(ctx_menu_hover_index));
+    if (idx >= ctx_menu_items.len) return;
+    const item = ctx_menu_items[idx];
+    if (std.mem.eql(u8, item.label, "---")) return;
+    if (item.has_submenu) {
+        showContextSubmenu(idx);
+        return;
+    }
+    if (std.mem.eql(u8, item.label, "Refresh")) {
+        renderer_aero.cycleWallpaperPreset();
+    }
+    hideContextMenu();
+    klog.info("Desktop context menu (keyboard): %s", .{item.label});
 }
 
 // ── Cursor Rendering (Aero crystal style) ──
@@ -4538,6 +4935,16 @@ fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
             const st = applyDesktopResolutionChange(req_ptr);
             irp.complete(st, 0);
             return st;
+        },
+        fb.IOCTL_FB_FILL_RECT => {
+            if (irp.buffer_size < @sizeOf(fb.FillRectRequest)) {
+                irp.complete(io.STATUS_BUFFER_TOO_SMALL, 0);
+                return io.STATUS_BUFFER_TOO_SMALL;
+            }
+            const req: *const fb.FillRectRequest = @ptrFromInt(irp.buffer_ptr);
+            fb.fillRect(req.x, req.y, req.w, req.h, req.color);
+            irp.complete(io.STATUS_SUCCESS, 0);
+            return io.STATUS_SUCCESS;
         },
         else => {
             irp.complete(io.STATUS_NOT_IMPLEMENTED, 0);

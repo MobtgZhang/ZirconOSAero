@@ -149,6 +149,7 @@ pub fn redrawStartMenuRegionOnly(w: i32, h: i32, t: *const theme.ThemeColors, tb
     }
 
     startmenu.render(w, h);
+    display.updateContextMenuAnimation();
     display.renderContextMenu();
 
     dirty = display.rectClampToScreen(dirty, w, h);
@@ -193,6 +194,7 @@ pub fn redrawCaptionBandsOnly() void {
     }
 
     if (display.isContextMenuVisible()) {
+        display.updateContextMenuAnimation();
         display.renderContextMenu();
         dirty = display.rectUnion(dirty, display.getContextMenuPaintRect());
     }
@@ -312,6 +314,7 @@ fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_
         startmenu.render(w, h);
     }
     panic_ctx.setPhase(0x0002_0087);
+    display.updateContextMenuAnimation();
     display.renderContextMenu();
     if (draw_cursor) {
         display.renderCursorAt();
@@ -352,40 +355,40 @@ fn dragFrameDirtyUnion(scr_w: i32, scr_h: i32, ds: display.DragState, pad: i32) 
 }
 
 fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: display.DragState, draw_cursor: bool, shell_windows_overlap: bool) void {
-    // 略大于拖影/伪阴影外扩，避免局部重绘与 `paint_icons`/`paint_taskbar` 判定漏区。
+    // 渲染顺序（与 renderFullFrame 一致）：
+    //   1. 壁纸（或局部 patch）
+    //   2. 窗口（按焦点序，轻量阴影）
+    //   3. 桌面图标 + 任务栏（在窗口之后绘制，确保不被窗口覆盖）
+    //
+    // 问题根因：之前的渲染顺序是 壁纸→图标→任务栏→窗口，窗口会覆盖图标/任务栏。
+    // 解决方案：图标/任务栏必须在窗口之后重绘。
     const dirty_pad: i32 = 22;
-    const dirty_u = dragFrameDirtyUnion(w, h, ds, dirty_pad);
-    // `paint_icons` / `paint_taskbar` 仅在脏区与图标带/任务栏相交时重画，避免每像素移动全屏副产物。
 
     if (shell_windows_overlap) {
-        // 多窗重叠时局部 patch + 拖窗底块可能污染邻窗边框；整幅壁纸重绘代价更高但像素一致。
+        // 多窗重叠时：整幅壁纸重绘 + 窗口 + 图标 + 任务栏
         renderBackground(w, h);
-    } else {
-        patchDragBackground(w, h);
-    }
-
-    const icon_b = display.desktopIconStripBounds(w, h);
-    const tb_b = display.taskbarBoundsRect(w, h);
-    const paint_icons = shell_windows_overlap or if (dirty_u) |du| display.rectsOverlap(du, icon_b) else true;
-    const paint_taskbar = shell_windows_overlap or if (dirty_u) |du| display.rectsOverlap(du, tb_b) else true;
-
-    if (paint_icons) {
+        renderShellWindowsInFocusOrderDrag(w, h, t, ds);
+        // 图标和任务栏无条件重绘（与 renderFullFrame 一致）
         display.renderDesktopIcons(w, h, t);
-    }
-
-    renderShellWindowsInFocusOrderDrag(w, h, t, ds);
-
-    if (paint_taskbar) {
         const panic_ctx = @import("../../../rtl/panic_context.zig");
         panic_ctx.setPhase(0x0002_00A0);
         renderTaskbar(w, h, t, tb_h);
-        const tb_y = display.clampI32FromI64(@as(i64, h) - @as(i64, tb_h));
-        fb.markDirtyRegion(0, tb_y, w, tb_h);
+    } else {
+        // 单窗拖动：局部 patch 壁纸 + 窗口 + 图标 + 任务栏
+        patchDragBackground(w, h);
+        renderShellWindowsInFocusOrderDrag(w, h, t, ds);
+        // 图标和任务栏在窗口之后绘制，确保不被窗口覆盖
+        // 这与 renderFullFrame 的行为一致：图标和任务栏是场景的最上层
+        display.renderDesktopIcons(w, h, t);
+        const panic_ctx = @import("../../../rtl/panic_context.zig");
+        panic_ctx.setPhase(0x0002_00A0);
+        renderTaskbar(w, h, t, tb_h);
     }
 
     if (startmenu.isVisible()) {
         startmenu.render(w, h);
     }
+    display.updateContextMenuAnimation();
     display.renderContextMenu();
 
     if (draw_cursor) {
@@ -393,42 +396,44 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
     }
     display.incFrameCount();
 
-    if (ds.explorer_active) {
-        const wr = display.getWindowRect(w, h);
-        const cur = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
-        var u = display.rectUnion(ds.explorer_prev, cur);
-        u = display.rectInflate(u, dirty_pad);
-        u = display.rectClampToScreen(u, w, h);
-        fb.markDirtyRegion(u.x, u.y, u.w, u.h);
-    }
-    if (ds.taskmgr_active) {
-        const tm_pos = display.getTaskMgrPos();
-        const tm_sz = display.getTaskMgrSize();
-        const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_sz.w, .h = tm_sz.h };
-        var u = display.rectUnion(ds.taskmgr_prev, cur);
-        u = display.rectInflate(u, dirty_pad);
-        u = display.rectClampToScreen(u, w, h);
-        fb.markDirtyRegion(u.x, u.y, u.w, u.h);
-    }
-    if (ds.builtin_active) {
-        if (builtin_apps.topDraggedWindowRect()) |br| {
-            const cur = display.ShellRect{ .x = br.x, .y = br.y, .w = br.w, .h = br.h };
-            var u = display.rectUnion(ds.builtin_prev, cur);
+    // 脏区标记：多窗重叠时标记全屏（整个渲染区都需要更新），单窗拖动时标记具体窗口脏区
+    if (shell_windows_overlap) {
+        // 多窗重叠时全屏标记，避免逐窗标记与全屏重绘不一致
+        fb.markFullScreenDirty();
+    } else {
+        // 单窗拖动：标记具体窗口脏区
+        if (ds.explorer_active) {
+            const wr = display.getWindowRect(w, h);
+            const cur = display.ShellRect{ .x = wr.x, .y = wr.y, .w = wr.w, .h = wr.h };
+            var u = display.rectUnion(ds.explorer_prev, cur);
             u = display.rectInflate(u, dirty_pad);
             u = display.rectClampToScreen(u, w, h);
             fb.markDirtyRegion(u.x, u.y, u.w, u.h);
         }
-    }
-
-    display.markCursorMotionDirtyRegions();
-
-    if (shell_windows_overlap) {
-        fb.markFullScreenDirty();
+        if (ds.taskmgr_active) {
+            const tm_pos = display.getTaskMgrPos();
+            const tm_sz = display.getTaskMgrSize();
+            const cur = display.ShellRect{ .x = tm_pos.x, .y = tm_pos.y, .w = tm_sz.w, .h = tm_sz.h };
+            var u = display.rectUnion(ds.taskmgr_prev, cur);
+            u = display.rectInflate(u, dirty_pad);
+            u = display.rectClampToScreen(u, w, h);
+            fb.markDirtyRegion(u.x, u.y, u.w, u.h);
+        }
+        if (ds.builtin_active) {
+            if (builtin_apps.topDraggedWindowRect()) |br| {
+                const cur = display.ShellRect{ .x = br.x, .y = br.y, .w = br.w, .h = br.h };
+                var u = display.rectUnion(ds.builtin_prev, cur);
+                u = display.rectInflate(u, dirty_pad);
+                u = display.rectClampToScreen(u, w, h);
+                fb.markDirtyRegion(u.x, u.y, u.w, u.h);
+            }
+        }
+        display.markCursorMotionDirtyRegions();
     }
 }
 
-/// 拖动态：标题栏仍为 TintOnly（无盒式模糊）；客户区与常态相同，避免「白板」观感。
-/// 不调用 `mat.renderShadow`：软阴影会 blend 到已绘制的邻窗 Aero 边框上，拖动态表现为「邻窗发灰」。
+/// 拖动态：保留轻量阴影（2层、较低透明度）以保持视觉反馈，
+/// 避免纯黑矩形与邻窗 Aero 边框 blend 后产生「邻窗发灰」观感。
 fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors) void {
     const wr = display.getWindowRect(scr_w, scr_h);
     const win_w = wr.w;
@@ -437,7 +442,13 @@ fn renderExplorerWindowDragLight(scr_w: i32, scr_h: i32, t: *const theme.ThemeCo
     const win_y = wr.y;
     const aero_tb_h: i32 = display.AERO_TITLEBAR_H;
 
-    fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
+    // 轻量阴影：2层、透明度约为正常的50%，避免「邻窗发灰」
+    if (dwm.isShadowEnabled() and display.getPresentCount() > 0) {
+        mat.renderShadow(win_x, win_y, win_w, win_h, 6, 2);
+    } else {
+        fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
+    }
+
     fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
     const ex_dl = display.shellExplorerTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
@@ -462,7 +473,13 @@ fn renderExplorerWindowFast(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors)
     const win_y = wr.y;
     const aero_tb_h: i32 = display.AERO_TITLEBAR_H;
 
-    fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
+    // 快速路径阴影（3层、缩小尺寸），比全量阴影快但比纯色矩形更柔和
+    if (dwm.isShadowEnabled() and display.getPresentCount() > 0) {
+        mat.renderShadow(win_x, win_y, win_w, win_h, 6, 3);
+    } else {
+        fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
+    }
+
     fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
     const ex_f = display.shellExplorerTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
@@ -1064,4 +1081,11 @@ fn patchDragBackground(scr_w: i32, scr_h: i32) void {
         }
         builtin_apps.advanceBuiltinDragPrev();
     }
+}
+
+/// 拖动时修补壁纸后重新绘制桌面图标和任务栏（避免图标/任务栏被壁纸覆盖后消失）。
+/// 主题参数由调用方从 `theme.getActiveTheme()` 传入，避免在 patch 函数内重复获取。
+fn patchDragOverlays(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors, tb_h: i32) void {
+    display.renderDesktopIcons(scr_w, scr_h, t);
+    renderTaskbar(scr_w, scr_h, t, tb_h);
 }

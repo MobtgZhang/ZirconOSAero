@@ -162,6 +162,7 @@ pub const en_startmenu = struct {
     pub const all_prog_stub_system = "System Tools";
     pub const all_prog_stub_startup = "Startup";
     pub const all_prog_stub_note = "(Full list not installed)";
+    pub const back = "Back";
 };
 
 /// 开始菜单中文串（与 `explorer_use_zh` 同步切换）。
@@ -186,6 +187,7 @@ pub const zh_cn_startmenu = struct {
     pub const all_prog_stub_system = "系统工具";
     pub const all_prog_stub_startup = "启动";
     pub const all_prog_stub_note = "（完整列表尚未提供）";
+    pub const back = "返回";
 };
 
 /// Aero 资源管理器壳层：true 使用 `zh_cn_explorer`，false 使用 `en` 中带 `ex_lib_*` 的字段。

@@ -855,19 +855,60 @@ const aero_palettes = [icon_embedded_count]IconPalette{
     .{ 0, rgb(0x1A, 0x5C, 0x6C), rgb(0x38, 0x88, 0x98), rgb(0xC8, 0x88, 0x30), rgb(0x88, 0x60, 0xC0), rgb(0xE8, 0xE8, 0xF0), rgb(0x10, 0x38, 0x44), rgb(0xF0, 0xD8, 0xA8), rgb(0xD0, 0xC8, 0xF0) },
 };
 
+/// 绘制 Aero 图标：玻璃渐变底板 + 高光 + 阴影 + 抗锯齿边缘
 fn drawAeroIcon(id: IconId, screen_x: i32, screen_y: i32, scale: u32) void {
     const s: i32 = if (scale < 1) 1 else @intCast(scale);
     const sz: i32 = 16 * s;
-    // Win7 任务栏/桌面图标：较大圆角「药丸」底板 + 玻璃渐变（非直角 UEFI 风贴图）
     const corner: i32 = @max(5, @min(@divTrunc(sz, 3), 12));
-    fb.fillRoundedRect(screen_x, screen_y, sz, sz, corner, rgb(0x28, 0x48, 0x68));
-    fb.drawGradientV(screen_x + 1, screen_y + 1, sz - 2, @max(2, @divTrunc(sz * 2, 5)), rgb(0x68, 0x90, 0xB8), rgb(0x30, 0x50, 0x70));
-    fb.drawRect(screen_x, screen_y, sz, sz, rgb(0x98, 0xC0, 0xE8));
-    fb.drawHLine(screen_x + 2, screen_y + 1, sz - 4, rgb(0xE0, 0xF0, 0xFF));
+
+    // 1. 底部阴影效果（Aero 3D 浮起感）
+    const shadow_offset: i32 = @max(1, @divTrunc(sz, 12));
+    const shadow_alpha: u8 = 40;
+    fb.blendTintRect(screen_x + shadow_offset, screen_y + shadow_offset, sz, sz, rgb(0x00, 0x00, 0x00), shadow_alpha, 255);
+
+    // 2. 玻璃渐变底板（多层渐变创造深度感）
+    fb.fillRoundedRect(screen_x, screen_y, sz, sz, corner, rgb(0x18, 0x38, 0x58));
+
+    // 顶部高光渐变层
+    const grad_h: i32 = @max(2, @divTrunc(sz * 2, 5));
+    fb.drawGradientV(screen_x + 1, screen_y + 1, sz - 2, grad_h, rgb(0x50, 0x80, 0xC0), rgb(0x28, 0x50, 0x78));
+
+    // 底部微光层（玻璃底部反光）
+    const bottom_grad_h: i32 = @max(1, @divTrunc(sz, 6));
+    fb.drawGradientV(screen_x + 1, screen_y + sz - bottom_grad_h - 1, sz - 2, bottom_grad_h, rgb(0x30, 0x50, 0x70), rgb(0x20, 0x38, 0x50));
+
+    // 3. 抗锯齿边缘高光（顶部和左侧）
+    // 顶部边缘高光（玻璃顶棱）
+    fb.drawHLine(screen_x + 2, screen_y + 1, sz - 4, rgb(0xB0, 0xD8, 0xFF));
+    // 左侧边缘高光
+    fb.drawVLine(screen_x + 1, screen_y + 2, sz - 4, rgb(0x90, 0xC0, 0xE8));
+
+    // 4. 底部和右侧边缘阴影（创造 3D 深度）
+    fb.drawHLine(screen_x + 2, screen_y + sz - 2, sz - 4, rgb(0x10, 0x28, 0x40));
+    fb.drawVLine(screen_x + sz - 2, screen_y + 2, sz - 4, rgb(0x18, 0x30, 0x48));
+
+    // 5. 外边框（玻璃容器边缘）
+    fb.drawRect(screen_x, screen_y, sz, sz, rgb(0x70, 0xA8, 0xD8));
+
+    // 6. 绘制图标像素内容
     drawPixelIcon(id, screen_x, screen_y, scale, &aero_palettes, &aero_desktop_icon_pixels);
-    const hi_h = @divTrunc(sz, 3);
-    if (hi_h > 1) {
-        fb.addSpecularBand(screen_x, screen_y, sz, hi_h, 24);
+
+    // 7. 顶部高光带（创造玻璃反光效果）
+    const hi_h = @divTrunc(sz, 4);
+    if (hi_h > 2) {
+        fb.addSpecularBand(screen_x + 2, screen_y + 2, sz - 4, hi_h, 32);
+    }
+
+    // 8. 左上角点状高光（模拟光源反射）
+    const corner_hi_sz: i32 = @max(1, @divTrunc(sz, 8));
+    if (corner_hi_sz >= 1) {
+        fb.blendTintRect(screen_x + 2, screen_y + 2, corner_hi_sz, corner_hi_sz, rgb(0xFF, 0xFF, 0xFF), 60, 255);
+    }
+
+    // 9. 右下角微阴影（增强立体感）
+    if (sz > 16) {
+        const corner_shadow_sz: i32 = @max(1, @divTrunc(sz, 10));
+        fb.blendTintRect(screen_x + sz - corner_shadow_sz - 2, screen_y + sz - corner_shadow_sz - 2, corner_shadow_sz, corner_shadow_sz, rgb(0x00, 0x00, 0x00), 25, 255);
     }
 }
 

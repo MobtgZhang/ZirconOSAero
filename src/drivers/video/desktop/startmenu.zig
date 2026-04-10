@@ -86,12 +86,18 @@ const AERO7_IDX_ALL: i32 = 48;
 const IDX_FOOT_SHUTDOWN_BTN: i32 = 201;
 const IDX_FOOT_SHUTDOWN_CHEVRON: i32 = 204;
 
+/// 左列视图状态：`pinned` 时显示固定程序列表，'all_programs' 时显示可滚动程序列表。
+const LeftPaneView = enum(u8) {
+    pinned,
+    all_programs,
+};
+
 /// 电源弹出层（Switch user … Shut down）
 const IDX_FLYOUT_BASE: i32 = 300;
-
-/// 「所有程序」侧栏项（二级面板）
-const IDX_ALLPROG_BASE: i32 = 400;
-const ALL_PROG_COUNT: i32 = @intCast(builtin_apps.allProgramsCount());
+/// 「返回」行（仅在 all_programs 视图下出现）。
+const IDX_BACK: i32 = 50;
+/// 「所有程序」列表行基索引。
+const IDX_ALLPROG_BASE: i32 = 60;
 
 pub const MenuAction = enum {
     none,
@@ -112,36 +118,280 @@ var hover_prev_for_partial_repaint: i32 = -1;
 var search_buf: [96]u8 = [_]u8{0} ** 96;
 var search_len: usize = 0;
 var power_flyout_open: bool = false;
-var all_programs_open: bool = false;
+/// 左列视图状态（替换原 all_programs_open 侧栏语义）：pinned=固定列表，all_programs=程序列表。
+var left_pane_view: LeftPaneView = .pinned;
+/// all_programs 视图下的滚动行索引（0..ALL_PROG_COUNT-1），超过可视行数时自动钳位。
+var all_prog_scroll_row: i32 = 0;
+const ALL_PROG_COUNT: i32 = @intCast(builtin_apps.allProgramsCount());
 /// 打开后已绘制的帧数；0 = 首帧走 tint-only 大面板，降低首屏延迟。
 var menu_frames_since_open: u8 = 0;
 
+// ========== 动画系统 ==========
+/// 动画状态
+const AnimState = enum {
+    hidden,
+    opening,
+    open,
+    closing,
+};
+
+/// 开始菜单展开/收起动画状态
+var anim_state: AnimState = .hidden;
+/// 动画进度：0.0（完全收起）到 1.0（完全展开）
+var anim_progress: f32 = 0.0;
+/// 目标菜单高度（用于动画计算）
+var anim_target_h: i32 = 0;
+/// 动画开始时的菜单高度
+var anim_start_h: i32 = 0;
+
+/// 电源弹出菜单滑动动画状态
+var flyout_anim_progress: f32 = 0.0;
+var flyout_anim_target_x: i32 = 0;
+var flyout_anim_start_x: i32 = 0;
+
+/// 悬停平滑过渡状态
+/// 当前显示的悬停索引（带平滑过渡）
+var hover_display_index: i32 = -1;
+/// 悬停过渡进度（0.0 到 1.0）
+var hover_transition_progress: f32 = 1.0;
+/// 悬停过渡帧数
+const HOVER_TRANSITION_FRAMES: u8 = 3;
+
+/// 鼠标轨迹插值状态（用于快速移动时防漏检）
+var last_hover_px: i32 = -1;
+var last_hover_py: i32 = -1;
+var hover_interp_active: bool = false;
+var interp_step: u8 = 0;
+const INTERP_STEPS: u8 = 4;
+
+/// 开始 Orb 悬停状态（用于发光效果）
+var orb_hover_progress: f32 = 0.0;
+var orb_pressed: bool = false;
+var orb_press_progress: f32 = 0.0;
+
+/// 动画持续时间（帧数，约 200ms @ 60fps）
+const ANIM_FRAMES: u8 = 12;
+/// 子菜单滑动动画帧数（约 100ms）
+const SUBMENU_ANIM_FRAMES: u8 = 6;
+
+/// 计算 ease-out 缓动曲线：快速启动，缓慢收尾
+fn easeOutProgress(t: f32) f32 {
+    return 1.0 - (1.0 - t) * (1.0 - t);
+}
+
+/// 获取当前动画进度对应的菜单高度
+fn animCurrentHeight() i32 {
+    const diff = @as(i64, anim_target_h) - @as(i64, anim_start_h);
+    return anim_start_h + @as(i32, @intFromFloat(@as(f32, @floatFromInt(diff)) * easeOutProgress(anim_progress)));
+}
+
 pub fn isVisible() bool {
-    return menu_visible;
+    return menu_visible or anim_state == .opening or anim_state == .closing;
+}
+
+/// 开始菜单是否完全展开（用于交互）
+pub fn isFullyOpen() bool {
+    return anim_state == .open and anim_progress >= 1.0;
 }
 
 pub fn show(_: MenuStyle) void {
     menu_visible = true;
     hover_index = -1;
     hover_prev_for_partial_repaint = -1;
+    hover_display_index = -1;
+    hover_transition_progress = 1.0;
+    last_hover_px = -1;
+    last_hover_py = -1;
+    hover_interp_active = false;
+    interp_step = 0;
+    orb_hover_progress = 0.0;
+    orb_pressed = false;
+    orb_press_progress = 0.0;
     power_flyout_open = false;
-    all_programs_open = false;
+    left_pane_view = .pinned;
+    all_prog_scroll_row = 0;
+    menu_frames_since_open = 0;
+    search_len = 0;
+    search_hover_cached_bounds = null;
+    search_hover_cache_tick = 0;
+    // 初始化高度动画：从 0 开始，让展开动画自然进行（约 200ms）
+    anim_start_h = 0;
+    anim_target_h = AERO7_DESIRED_MENU_H;
+    // 启动展开动画，从 progress = 0 开始展开
+    anim_state = .opening;
+    anim_progress = 0.0;
+    // 初始化子菜单动画状态
+    flyout_anim_progress = 0.0;
+}
+
+pub fn hide() void {
+    // 启动关闭动画（保持可见直到动画完成）
+    if (anim_state != .hidden) {
+        // 设置关闭动画：从当前高度开始收起
+        anim_start_h = animCurrentHeight();
+        anim_target_h = 0;
+        anim_state = .closing;
+    } else {
+        menu_visible = false;
+    }
+    hover_index = -1;
+    hover_prev_for_partial_repaint = -1;
+    hover_display_index = -1;
+    hover_transition_progress = 1.0;
+    last_hover_px = -1;
+    last_hover_py = -1;
+    hover_interp_active = false;
+    interp_step = 0;
+    orb_hover_progress = 0.0;
+    orb_pressed = false;
+    orb_press_progress = 0.0;
+    power_flyout_open = false;
+    left_pane_view = .pinned;
+    all_prog_scroll_row = 0;
     menu_frames_since_open = 0;
     search_len = 0;
     search_hover_cached_bounds = null;
     search_hover_cache_tick = 0;
 }
 
-pub fn hide() void {
-    menu_visible = false;
-    hover_index = -1;
-    hover_prev_for_partial_repaint = -1;
-    power_flyout_open = false;
-    all_programs_open = false;
-    menu_frames_since_open = 0;
-    search_len = 0;
-    search_hover_cached_bounds = null;
-    search_hover_cache_tick = 0;
+/// 每帧调用以推进动画状态
+pub fn updateAnimation() void {
+    switch (anim_state) {
+        .hidden => {},
+        .opening => {
+            anim_progress += 1.0 / @as(f32, @floatFromInt(ANIM_FRAMES));
+            if (anim_progress >= 1.0) {
+                anim_progress = 1.0;
+                anim_state = .open;
+                menu_visible = true;
+            }
+        },
+        .open => {
+            menu_visible = true;
+        },
+        .closing => {
+            anim_progress -= 1.0 / @as(f32, @floatFromInt(ANIM_FRAMES));
+            if (anim_progress <= 0.0) {
+                anim_progress = 0.0;
+                anim_state = .hidden;
+                menu_visible = false;
+            }
+        },
+    }
+
+    // 更新电源弹出菜单滑动动画
+    if (power_flyout_open) {
+        if (flyout_anim_progress < 1.0) {
+            flyout_anim_progress += 1.0 / @as(f32, @floatFromInt(SUBMENU_ANIM_FRAMES));
+            if (flyout_anim_progress > 1.0) flyout_anim_progress = 1.0;
+        }
+    } else {
+        if (flyout_anim_progress > 0.0) {
+            flyout_anim_progress -= 1.0 / @as(f32, @floatFromInt(SUBMENU_ANIM_FRAMES));
+            if (flyout_anim_progress < 0.0) flyout_anim_progress = 0.0;
+        }
+    }
+
+    // 电源弹出菜单滑动动画在 updateAnimation 中管理。
+
+    // 更新悬停平滑过渡
+    if (hover_index != hover_display_index) {
+        if (hover_transition_progress >= 1.0) {
+            // 开始新的过渡
+            hover_display_index = hover_index;
+            hover_transition_progress = 0.0;
+        }
+    }
+    if (hover_transition_progress < 1.0) {
+        hover_transition_progress += 1.0 / @as(f32, @floatFromInt(HOVER_TRANSITION_FRAMES));
+        if (hover_transition_progress > 1.0) {
+            hover_transition_progress = 1.0;
+            hover_display_index = hover_index;
+        }
+    }
+
+    // 更新鼠标轨迹插值（用于快速移动时平滑过渡）
+    if (hover_interp_active and interp_step < INTERP_STEPS) {
+        interp_step += 1;
+        if (interp_step >= INTERP_STEPS) {
+            hover_interp_active = false;
+            interp_step = 0;
+        }
+    }
+
+    // 更新 Orb 悬停动画
+    if (orb_hover_progress < 1.0) {
+        orb_hover_progress += 1.0 / @as(f32, @floatFromInt(HOVER_TRANSITION_FRAMES));
+        if (orb_hover_progress > 1.0) orb_hover_progress = 1.0;
+    }
+
+    // 更新 Orb 按压动画
+    if (orb_pressed) {
+        if (orb_press_progress < 1.0) {
+            orb_press_progress += 1.0 / 3.0; // 快速按下
+            if (orb_press_progress > 1.0) orb_press_progress = 1.0;
+        }
+    } else {
+        if (orb_press_progress > 0.0) {
+            orb_press_progress -= 1.0 / 6.0; // 较慢释放
+            if (orb_press_progress < 0.0) orb_press_progress = 0.0;
+        }
+    }
+}
+
+/// 更新鼠标位置并检查是否需要插值
+pub fn updateMousePosition(px: i32, py: i32, _: i32, _: i32) void {
+    if (px != last_hover_px or py != last_hover_py) {
+        // 鼠标位置变化，启动插值
+        last_hover_px = px;
+        last_hover_py = py;
+        interp_step = 0;
+        hover_interp_active = true;
+    }
+}
+
+/// 获取当前应该显示的悬停索引
+pub fn getHoverDisplayIndex() i32 {
+    return hover_display_index;
+}
+
+/// 设置 Orb 悬停状态
+pub fn setOrbHover(hovering: bool) void {
+    if (hovering) {
+        orb_hover_progress = 0.0; // 开始悬停动画
+    } else {
+        orb_hover_progress = 1.0; // 停止悬停效果
+    }
+}
+
+/// 设置 Orb 按压状态
+pub fn setOrbPressed(pressed: bool) void {
+    orb_pressed = pressed;
+}
+
+/// 获取 Orb 按压状态
+pub fn isOrbPressed() bool {
+    return orb_pressed;
+}
+
+/// 获取 Orb 悬停进度
+pub fn getOrbHoverProgress() f32 {
+    return orb_hover_progress;
+}
+
+/// 获取 Orb 按压进度
+pub fn getOrbPressProgress() f32 {
+    return orb_press_progress;
+}
+
+/// 获取当前动画进度（0.0 到 1.0）
+pub fn getAnimProgress() f32 {
+    return anim_progress;
+}
+
+/// 菜单是否正在执行动画
+pub fn isAnimating() bool {
+    return anim_state == .opening or anim_state == .closing;
 }
 
 /// 开始菜单可见时消费键盘字符；有缓冲变化返回 true。
@@ -169,11 +419,16 @@ fn menuItemMatchesSearch(label: []const u8) bool {
 }
 
 pub fn feedSearchFromKeyboard() bool {
-    if (!menu_visible) return false;
+    if (anim_state == .hidden) return false;
     const arch = @import("../../../arch.zig");
     var dirty = false;
     while (arch.readInputChar()) |c| {
-        if (c == 0x08 or c == 127) {
+        if (c == 0x1B) { // ESC 键：关闭菜单
+            hide();
+            return true;
+        } else if (c == 0x0D) { // Enter 键：执行当前悬停项
+            return true;
+        } else if (c == 0x08 or c == 127) { // 退格键
             if (search_len > 0) {
                 search_len -= 1;
                 dirty = true;
@@ -188,7 +443,127 @@ pub fn feedSearchFromKeyboard() bool {
 }
 
 pub fn toggle(_: MenuStyle) void {
-    if (menu_visible) hide() else show(.aero);
+    // 如果菜单当前可见（open、opening 或 closing），则关闭
+    // 如果菜单已隐藏（hidden），则打开
+    if (isVisible()) {
+        hide();
+    } else {
+        show(.aero);
+    }
+}
+
+/// 键盘导航：向上移动选择
+pub fn navigateUp() void {
+    if (anim_state == .hidden) return;
+    const current = hover_index;
+
+    if (current < 0) {
+        hover_index = 0;
+    } else if (left_pane_view == .all_programs) {
+        // all_programs 视图：程序行 ↔ 返回行。
+        if (current >= IDX_ALLPROG_BASE and current < IDX_ALLPROG_BASE + ALL_PROG_COUNT) {
+            if (current > IDX_ALLPROG_BASE) hover_index = current - 1;
+        } else if (current == IDX_BACK) {
+            hover_index = IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1;
+        }
+    } else {
+        // pinned 视图。
+        if (current < aero7_left.len) {
+            if (current > 0) hover_index = current - 1;
+        } else if (current == AERO7_IDX_ALL) {
+            hover_index = @as(i32, @intCast(aero7_left.len)) - 1;
+        } else if (current >= 100 and current < IDX_FLYOUT_BASE) {
+            if (current > 100) {
+                hover_index = current - 1;
+            } else {
+                hover_index = 100 + @as(i32, @intCast(aero7_right.len)) - 1;
+            }
+        }
+    }
+    updateHoverTransition();
+}
+
+/// 键盘导航：向下移动选择
+pub fn navigateDown() void {
+    if (anim_state == .hidden) return;
+    const current = hover_index;
+
+    if (current < 0) {
+        hover_index = 0;
+    } else if (left_pane_view == .all_programs) {
+        // all_programs 视图：程序行 ↔ 返回行。
+        if (current >= IDX_ALLPROG_BASE and current < IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1) {
+            hover_index = current + 1;
+        } else if (current == IDX_BACK or current < IDX_ALLPROG_BASE) {
+            hover_index = IDX_ALLPROG_BASE;
+        } else if (current == IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1) {
+            hover_index = IDX_BACK;
+        }
+    } else {
+        // pinned 视图。
+        if (current < aero7_left.len - 1) {
+            hover_index = current + 1;
+        } else if (current == aero7_left.len - 1) {
+            hover_index = AERO7_IDX_ALL;
+        } else if (current == AERO7_IDX_ALL) {
+            hover_index = 100;
+        } else if (current >= 100 and current < IDX_FLYOUT_BASE - 1) {
+            hover_index = current + 1;
+        }
+    }
+    updateHoverTransition();
+}
+
+/// 键盘导航：向左移动（切换到左列）
+pub fn navigateLeft() void {
+    if (anim_state == .hidden) return;
+    const current = hover_index;
+
+    if (left_pane_view == .all_programs) {
+        // all_programs 视图：返回行。
+        if (current == IDX_BACK or (current >= IDX_ALLPROG_BASE and current < IDX_ALLPROG_BASE + ALL_PROG_COUNT)) {
+            hover_index = IDX_BACK;
+        }
+    } else {
+        if (current >= 100 and current < IDX_FLYOUT_BASE) {
+            hover_index = AERO7_IDX_ALL;
+        } else if (current == AERO7_IDX_ALL) {
+            hover_index = @as(i32, @intCast(aero7_left.len)) - 1;
+        }
+    }
+    updateHoverTransition();
+}
+
+/// 键盘导航：向右移动（切换到右列）
+pub fn navigateRight() void {
+    if (anim_state == .hidden) return;
+    const current = hover_index;
+
+    if (left_pane_view == .all_programs) {
+        // all_programs 视图下右侧无独立区，移到右列第一项。
+        hover_index = 100;
+    } else {
+        if (current >= 0 and current < aero7_left.len) {
+            hover_index = 100;
+        } else if (current == AERO7_IDX_ALL) {
+            hover_index = 100;
+        }
+    }
+    updateHoverTransition();
+}
+
+/// 执行当前选中项
+pub fn executeSelectedItem(scr_w: i32, scr_h: i32) MenuAction {
+    if (!isFullyOpen()) return .none;
+    return handleAero7MenuClick(0, 0, scr_w, scr_h);
+}
+
+/// 更新悬停过渡状态
+fn updateHoverTransition() void {
+    if (hover_index != hover_display_index) {
+        hover_display_index = hover_index;
+        hover_transition_progress = 0.0;
+    }
 }
 
 pub fn setHoverIndex(idx: i32) void {
@@ -203,6 +578,18 @@ fn aeroRect(scr_h: i32) MenuRect {
     const sh64 = @as(i64, scr_h);
     const max_h64 = @min(@as(i64, AERO7_DESIRED_MENU_H), @max(40, sh64 - 8));
     const h: i32 = @intCast(std.math.clamp(max_h64, 40, @as(i64, std.math.maxInt(i32))));
+    const w: i32 = 428;
+    const y64 = sh64 - 40 - @as(i64, h);
+    const yy: i32 = @intCast(std.math.clamp(y64, std.math.minInt(i32), std.math.maxInt(i32)));
+    return .{ .x = 0, .y = yy, .w = w, .h = h };
+}
+
+/// 带动画的主面板矩形计算
+fn aeroRectWithAnim(scr_h: i32) MenuRect {
+    const sh64 = @as(i64, scr_h);
+    const max_h64 = @min(@as(i64, AERO7_DESIRED_MENU_H), @max(40, sh64 - 8));
+    anim_target_h = @intCast(std.math.clamp(max_h64, 40, @as(i64, std.math.maxInt(i32))));
+    const h: i32 = animCurrentHeight();
     const w: i32 = 428;
     const y64 = sh64 - 40 - @as(i64, h);
     const yy: i32 = @intCast(std.math.clamp(y64, std.math.minInt(i32), std.math.maxInt(i32)));
@@ -229,7 +616,7 @@ fn rectUnion(a: MenuRect, b: MenuRect) MenuRect {
 /// 与 `aeroRect` 一致的主面板（用于未展开时命中）。
 pub fn getMenuRect(scr_w: i32, scr_h: i32) MenuRect {
     _ = scr_w;
-    return aeroRect(scr_h);
+    return aeroRectWithAnim(scr_h);
 }
 
 fn menuCornerRadius() i32 {
@@ -237,26 +624,12 @@ fn menuCornerRadius() i32 {
     return @intCast(@max(4, @min(r, 24)));
 }
 
-fn allProgramsPanelRect(scr_w: i32, scr_h: i32) MenuRect {
-    const r = aeroRect(scr_h);
-    const L = innerLayout(scr_h);
-    const panel_w: i32 = 196;
-    const px0 = @as(i64, r.x) + @as(i64, r.w);
-    var px = clampMenuI32(px0);
-    const sw = @as(i64, scr_w);
-    if (@as(i64, px) + @as(i64, panel_w) > sw - 2) {
-        px = @max(2, clampMenuI32(sw - 2 - @as(i64, panel_w)));
-    }
-    const panel_h_i64 = @as(i64, L.bottom_y) + @as(i64, AERO7_BOTTOM_BAND_H) - @as(i64, L.content_y);
-    const panel_h = @max(1, clampMenuI32(panel_h_i64));
-    return .{ .x = px, .y = L.content_y, .w = panel_w, .h = panel_h };
-}
 
-/// 主菜单 + 电源飞出 +「所有程序」侧栏（点击区外关闭用）。
+/// 主菜单 + 电源飞出（点击区外关闭用）。
+/// Win7 风格下「所有程序」视图切换不外扩面板，始终返回主面板矩形。
 pub fn getInteractiveBounds(scr_w: i32, scr_h: i32) MenuRect {
-    var u = aeroRect(scr_h);
+    var u = aeroRectWithAnim(scr_h);
     if (power_flyout_open) u = rectUnion(u, powerFlyoutRect(scr_w, scr_h));
-    if (all_programs_open) u = rectUnion(u, allProgramsPanelRect(scr_w, scr_h));
     return u;
 }
 
@@ -304,7 +677,9 @@ fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
     const bottom_y = L.bottom_y;
     const split_x = L.split_x;
     const all_prog_y = L.all_prog_y;
+    const left_col_end_y = leftColumnBottomY(content_y, all_prog_y);
 
+    // 固定索引（pinned/all_programs 视图均存在）。
     if (idx >= 0 and idx < aero7_left.len) {
         return hoverIndexRowBoundsLeft(scr_h, idx, content_y, all_prog_y, main_x, split_x);
     }
@@ -312,6 +687,15 @@ fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
         const ri = idx - 100;
         if (ri < 0 or ri >= aero7_right.len) return null;
         return hoverIndexRowBoundsRight(scr_h, @intCast(ri), content_y, bottom_y, split_x, main_x, main_w);
+    }
+    if (idx == IDX_BACK) {
+        // 「返回」行：左列底部。
+        return .{
+            .x = main_x + 6,
+            .y = left_col_end_y - AERO7_ROW_H,
+            .w = AERO7_LEFT_W - 12,
+            .h = AERO7_ROW_H,
+        };
     }
     if (idx == AERO7_IDX_ALL) {
         return .{
@@ -333,16 +717,20 @@ fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
         const iy = fr.y + 3 + row * row_h;
         return .{ .x = fr.x + 3, .y = iy - 1, .w = fr.w - 6, .h = row_h };
     }
+    // all_programs 视图下的程序行：在左列内渲染，使用左列几何。
     if (idx >= IDX_ALLPROG_BASE and idx < IDX_ALLPROG_BASE + ALL_PROG_COUNT) {
-        const pr = allProgramsPanelRect(scr_w, scr_h);
         const row_i = idx - IDX_ALLPROG_BASE;
-        const pad: i32 = 8;
-        var iy: i32 = pr.y + pad;
+        var iy: i32 = content_y + 6;
         var i: i32 = 0;
         while (i < ALL_PROG_COUNT) : (i += 1) {
             if (!menuItemMatchesSearch(allProgEntryLabel(i))) continue;
             if (i == row_i) {
-                return .{ .x = pr.x + 4, .y = iy - 1, .w = pr.w - 8, .h = AERO7_ROW_H };
+                return .{
+                    .x = main_x + 6,
+                    .y = iy - 1,
+                    .w = AERO7_LEFT_W - 12,
+                    .h = AERO7_ROW_H,
+                };
             }
             iy += AERO7_ROW_H;
         }
@@ -429,7 +817,7 @@ fn innerLayout(scr_h: i32) struct {
     split_x: i32,
     all_prog_y: i32,
 } {
-    const r = aeroRect(scr_h);
+    const r = aeroRectWithAnim(scr_h);
     const rx = @as(i64, r.x);
     const ry = @as(i64, r.y);
     const rw = @as(i64, r.w);
@@ -501,20 +889,49 @@ fn rightColumnHoverIndex(px: i32, py: i32, content_y: i32, bottom_y: i32, split_
     return -1;
 }
 
-fn allProgramsHoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
-    if (!all_programs_open) return -1;
-    const pr = allProgramsPanelRect(scr_w, scr_h);
-    if (!pr.contains(px, py)) return -1;
-    const pad: i32 = 8;
-    var iy = pr.y + pad;
+/// 计算 pinned 视图下左列内容底部 Y 坐标（含「所有程序」行高度）。
+fn leftColumnBottomY(_: i32, all_prog_y: i32) i32 {
+    return all_prog_y + AERO7_ROW_H;
+}
+
+/// 在 all_programs 视图下计算左列底部 Y（含「返回」行）。
+fn allProgramsLeftBottomY(_: i32, all_prog_y: i32) i32 {
+    return all_prog_y + AERO7_ROW_H + 2;
+}
+
+/// all_programs 视图下左列内程序列表悬停索引（使用左列几何，非侧栏）。
+fn allProgramsLeftHoverIndex(px: i32, py: i32, content_y: i32, left_end_y: i32, main_x: i32, split_x: i32) i32 {
+    const pxi = @as(i64, px);
+    const pyi = @as(i64, py);
+    if (pxi < @as(i64, main_x) + 8 or pxi >= @as(i64, split_x) or
+        pyi < @as(i64, content_y) + 6 or pyi >= @as(i64, left_end_y) - @as(i64, AERO7_ROW_H) - 2) return -1;
+    var iy = @as(i64, content_y) + 6;
     var i: i32 = 0;
     while (i < ALL_PROG_COUNT) : (i += 1) {
         if (!menuItemMatchesSearch(allProgEntryLabel(i))) continue;
-        if (py >= iy and py < iy + AERO7_ROW_H) return IDX_ALLPROG_BASE + i;
-        iy += AERO7_ROW_H;
+        if (pyi >= iy and pyi < iy + @as(i64, AERO7_ROW_H)) return IDX_ALLPROG_BASE + i;
+        iy += @as(i64, AERO7_ROW_H);
     }
     return -1;
 }
+
+fn flyoutAnimX(scr_w: i32, scr_h: i32) i32 {
+    const L = innerLayout(scr_h);
+    const flyout_w: i32 = 176;
+    const sd_x = clampMenuI32(@as(i64, L.main_x) + @as(i64, L.main_w) - 116);
+    var fx = clampMenuI32(@as(i64, sd_x) + 108);
+    const sw = @as(i64, scr_w);
+    if (@as(i64, fx) + @as(i64, flyout_w) > sw - 2) {
+        fx = @max(2, clampMenuI32(sw - 2 - @as(i64, flyout_w)));
+    }
+    const r = aeroRectWithAnim(scr_h);
+    if (fx < r.x) fx = r.x;
+
+    // 计算滑动动画偏移：从右侧滑入
+    const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(flyout_w)) * (1.0 - easeOutProgress(flyout_anim_progress))));
+    return fx - anim_offset;
+}
+
 
 fn powerFlyoutRect(scr_w: i32, scr_h: i32) MenuRect {
     const L = innerLayout(scr_h);
@@ -528,7 +945,7 @@ fn powerFlyoutRect(scr_w: i32, scr_h: i32) MenuRect {
     if (@as(i64, fx) + @as(i64, flyout_w) > sw - 2) {
         fx = @max(2, clampMenuI32(sw - 2 - @as(i64, flyout_w)));
     }
-    const r = aeroRect(scr_h);
+    const r = aeroRectWithAnim(scr_h);
     if (fx < r.x) fx = r.x;
     const fy = clampMenuI32(@as(i64, L.bottom_y) - @as(i64, flyout_h) + 2);
     return .{ .x = fx, .y = fy, .w = flyout_w, .h = flyout_h };
@@ -545,7 +962,9 @@ fn powerFlyoutHoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
 }
 
 pub fn updatePointerHover(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
-    if (!menu_visible) return false;
+    // 允许在展开过程中检测悬停，提供流畅的交互体验
+    // 只有完全隐藏时才跳过
+    if (anim_state == .hidden) return false;
     const prev = hover_index;
     hover_index = aero7HoverIndex(px, py, scr_w, scr_h);
     if (prev != hover_index) {
@@ -555,21 +974,15 @@ pub fn updatePointerHover(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
 }
 
 fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
-    const r = aeroRect(scr_h);
+    const r = aeroRectWithAnim(scr_h);
     const in_flyout = power_flyout_open and powerFlyoutRect(scr_w, scr_h).contains(px, py);
-    const in_allprog = all_programs_open and allProgramsPanelRect(scr_w, scr_h).contains(px, py);
-    if (!r.contains(px, py) and !in_flyout and !in_allprog) {
+    if (!r.contains(px, py) and !in_flyout) {
         return -1;
     }
 
     if (power_flyout_open) {
         const fh = powerFlyoutHoverIndex(px, py, scr_w, scr_h);
         if (fh >= 0) return fh;
-    }
-
-    if (all_programs_open) {
-        const ap = allProgramsHoverIndex(px, py, scr_w, scr_h);
-        if (ap >= 0) return ap;
     }
 
     const L = innerLayout(scr_h);
@@ -581,9 +994,12 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
     const all_prog_y = L.all_prog_y;
     const inner_y = L.inner_y;
     const inner_h = L.inner_h;
+    const left_col_end_y = leftColumnBottomY(content_y, all_prog_y);
 
     const pyi = @as(i64, py);
     const pxi = @as(i64, px);
+
+    // 底栏：关机按钮 + 右箭头。
     if (pyi >= @as(i64, bottom_y) and pyi < @as(i64, inner_y) + @as(i64, inner_h)) {
         const sd_y = @as(i64, bottom_y) + @divTrunc(AERO7_BOTTOM_BAND_H - 28, 2);
         if (pyi >= sd_y and pyi < sd_y + 28) {
@@ -594,13 +1010,34 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
         return -1;
     }
 
-    if (pyi >= @as(i64, all_prog_y) and pyi < @as(i64, all_prog_y) + @as(i64, AERO7_ROW_H) and
+    // all_programs 视图：左列渲染程序列表 + 底部「返回」。
+    if (left_pane_view == .all_programs) {
+        // 底部「返回」行。
+        if (pyi >= @as(i64, left_col_end_y) - @as(i64, AERO7_ROW_H) and
+            pyi < @as(i64, left_col_end_y) and
+            pxi >= @as(i64, main_x) + 8 and pxi < @as(i64, split_x))
+            return IDX_BACK;
+
+        // 程序列表行（左列内，带滚动偏移计算）。
+        const ap = allProgramsLeftHoverIndex(px, py, content_y, left_col_end_y, main_x, split_x);
+        if (ap >= 0) return ap;
+
+        // all_programs 视图中点击右列仍可命中右列项（视图切换后右列不动）。
+    }
+
+    // pinned 视图或 all_programs 视图的右列：底部「所有程序」行（pinned 专用）。
+    if (left_pane_view == .pinned and
+        pyi >= @as(i64, all_prog_y) and pyi < @as(i64, all_prog_y) + @as(i64, AERO7_ROW_H) and
         pxi >= @as(i64, main_x) + 8 and pxi < @as(i64, split_x))
         return AERO7_IDX_ALL;
 
-    const lh = leftColumnHoverIndex(px, py, content_y, all_prog_y, main_x, split_x);
-    if (lh >= 0) return lh;
+    // pinned 视图：左列固定列表。
+    if (left_pane_view == .pinned) {
+        const lh = leftColumnHoverIndex(px, py, content_y, all_prog_y, main_x, split_x);
+        if (lh >= 0) return lh;
+    }
 
+    // 右列（两种视图均存在）。
     const rh = rightColumnHoverIndex(px, py, content_y, bottom_y, split_x, main_x, main_w);
     if (rh >= 0) return rh;
 
@@ -639,14 +1076,24 @@ fn handleAero7MenuClick(px: i32, py: i32, scr_w: i32, scr_h: i32) MenuAction {
     }
     if (h == IDX_FOOT_SHUTDOWN_CHEVRON) {
         power_flyout_open = !power_flyout_open;
-        if (power_flyout_open) all_programs_open = false;
         return .none;
     }
     if (h == IDX_FOOT_SHUTDOWN_BTN) return .shutdown;
-    if (all_programs_open and h >= IDX_ALLPROG_BASE and h < IDX_ALLPROG_BASE + ALL_PROG_COUNT) {
-        builtin_apps.launch(builtin_apps.allProgramsId(@intCast(h - IDX_ALLPROG_BASE)));
-        return .none;
+
+    // all_programs 视图：点击「返回」切回 pinned。
+    if (left_pane_view == .all_programs) {
+        if (h == IDX_BACK) {
+            left_pane_view = .pinned;
+            return .none;
+        }
+        if (h >= IDX_ALLPROG_BASE and h < IDX_ALLPROG_BASE + ALL_PROG_COUNT) {
+            builtin_apps.launch(builtin_apps.allProgramsId(@intCast(h - IDX_ALLPROG_BASE)));
+            return .none;
+        }
+        // all_programs 视图下点右列项仍可触发。
     }
+
+    // pinned 视图行为。
     if (h >= 0 and h < aero7_left.len) {
         builtin_apps.launch(switch (@as(usize, @intCast(h))) {
             0 => .ie8,
@@ -659,9 +1106,10 @@ fn handleAero7MenuClick(px: i32, py: i32, scr_w: i32, scr_h: i32) MenuAction {
         });
         return .none;
     }
+    // 点击「所有程序」进入 all_programs 视图（单向切换，不再 toggle）。
     if (h == AERO7_IDX_ALL) {
-        all_programs_open = !all_programs_open;
-        if (all_programs_open) power_flyout_open = false;
+        left_pane_view = .all_programs;
+        all_prog_scroll_row = 0;
         return .none;
     }
     if (h >= 100 and h < IDX_FLYOUT_BASE) {
@@ -690,7 +1138,8 @@ fn handleAero7MenuClick(px: i32, py: i32, scr_w: i32, scr_h: i32) MenuAction {
 }
 
 pub fn handleMenuClick(px: i32, py: i32, scr_w: i32, scr_h: i32) MenuAction {
-    if (!menu_visible) return .none;
+    // 只有菜单完全展开时才处理点击
+    if (!isFullyOpen()) return .none;
     const r = getInteractiveBounds(scr_w, scr_h);
     if (!r.contains(px, py)) return .none;
     if (@import("build_options").desktop_bisect) {
@@ -701,6 +1150,8 @@ pub fn handleMenuClick(px: i32, py: i32, scr_w: i32, scr_h: i32) MenuAction {
 
 fn drawPowerFlyout(scr_w: i32, scr_h: i32) void {
     const fr = powerFlyoutRect(scr_w, scr_h);
+    // 应用滑动动画
+    const anim_x = flyoutAnimX(scr_w, scr_h);
     const text_dark = rgb(0x18, 0x1C, 0x22);
     const text_white = rgb(0xFF, 0xFF, 0xFF);
     const sep = rgb(0xB8, 0xC4, 0xD4);
@@ -708,25 +1159,25 @@ fn drawPowerFlyout(scr_w: i32, scr_h: i32) void {
     const cr = @max(4, menuCornerRadius() - 2);
     const labels = shell_strings.powerFlyoutLabels();
 
-    fb.fillRoundedRect(fr.x, fr.y, fr.w, fr.h, cr, rgb(0xF2, 0xF4, 0xF8));
-    fb.draw3DRect(fr.x, fr.y, fr.w, fr.h, rgb(0xFF, 0xFF, 0xFF), rgb(0x70, 0x80, 0x90));
+    fb.fillRoundedRect(anim_x, fr.y, fr.w, fr.h, cr, rgb(0xF2, 0xF4, 0xF8));
+    fb.draw3DRect(anim_x, fr.y, fr.w, fr.h, rgb(0xFF, 0xFF, 0xFF), rgb(0x70, 0x80, 0x90));
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(fr.x + 1, fr.y + 1, fr.w - 2, fr.h - 2, rgb(0x40, 0x58, 0x70), .panel);
+        dwm.renderGlassEffect(anim_x + 1, fr.y + 1, fr.w - 2, fr.h - 2, rgb(0x40, 0x58, 0x70), .panel);
     }
 
     var iy: i32 = fr.y + 3;
     for (labels, 0..) |label, i| {
         const idx: i32 = IDX_FLYOUT_BASE + 1 + @as(i32, @intCast(i));
-        const row_r = hover_index == idx;
+        const row_r = hover_display_index == idx;
         if (row_r) {
-            fb.blendTintRect(fr.x + 3, iy - 1, fr.w - 6, row_h, rgb(0x70, 0x98, 0xC8), 55, 255);
-            fb.drawTextTransparentUi(fr.x + 10, iy + 4, label, text_white);
+            fb.blendTintRect(anim_x + 3, iy - 1, fr.w - 6, row_h, rgb(0x70, 0x98, 0xC8), 55, 255);
+            fb.drawTextTransparentUi(anim_x + 10, iy + 4, label, text_white);
         } else {
-            fb.drawTextTransparentUi(fr.x + 10, iy + 4, label, text_dark);
+            fb.drawTextTransparentUi(anim_x + 10, iy + 4, label, text_dark);
         }
         iy += row_h;
         if (i == 0 or i == 2 or i == 5) {
-            fb.drawHLine(fr.x + 6, iy - 1, fr.w - 12, sep);
+            fb.drawHLine(anim_x + 6, iy - 1, fr.w - 12, sep);
         }
     }
 }
@@ -740,60 +1191,59 @@ fn drawSearchMagnifier(cx: i32, cy: i32, fg: u32) void {
     fb.drawVLine(ox + 6, oy + 6, 6, fg);
 }
 
-fn drawOrbGraphic(ox: i32, oy: i32) void {
-    fb.fillRoundedRect(ox, oy, 36, 36, 18, rgb(0x28, 0x48, 0x78));
-    fb.drawGradientV(ox + 1, oy + 1, 34, 17, rgb(0x50, 0x78, 0xA8), rgb(0x28, 0x48, 0x78));
-    const inset: i32 = 9;
-    const cell: i32 = 8;
-    const g: i32 = 1;
-    fb.fillRect(ox + inset, oy + inset, cell, cell, rgb(0xA8, 0xD4, 0xF8));
-    fb.fillRect(ox + inset + cell + g, oy + inset, cell, cell, rgb(0xA8, 0xD4, 0xF8));
-    fb.fillRect(ox + inset, oy + inset + cell + g, cell, cell, rgb(0x78, 0xB0, 0xE8));
-    fb.fillRect(ox + inset + cell + g, oy + inset + cell + g, cell, cell, rgb(0x78, 0xB0, 0xE8));
-}
+/// 绘制开始 Orb（Windows 图标）
+/// orb_hover: 悬停进度（0.0 到 1.0）
+/// orb_press: 按压进度（0.0 到 1.0，1.0 表示完全按下）
+fn drawOrbGraphic(ox: i32, oy: i32, orb_hover: f32, orb_press: f32) void {
+    // 按压时缩小效果
+    const press_scale: f32 = 1.0 - orb_press * 0.08;
+    const size: i32 = 36;
+    const scaled_size = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size)) * press_scale));
+    const offset = @divTrunc(size - scaled_size, 2);
+    const sx = ox + offset;
+    const sy = oy + offset;
 
-fn drawAllProgramsSidePanel(scr_w: i32, scr_h: i32) void {
-    if (!all_programs_open) return;
-    const pr = allProgramsPanelRect(scr_w, scr_h);
-    const cr = menuCornerRadius();
-    const text_dark = rgb(0x18, 0x1C, 0x22);
-    const text_white = rgb(0xFF, 0xFF, 0xFF);
-    const sep = rgb(0xB8, 0xC4, 0xD4);
-
-    fb.fillRoundedRect(pr.x, pr.y, pr.w, pr.h, cr, rgb(0xF4, 0xF6, 0xFA));
-    fb.draw3DRect(pr.x, pr.y, pr.w, pr.h, rgb(0xFF, 0xFF, 0xFF), rgb(0x70, 0x80, 0x90));
-    if (dwm.isGlassEnabled()) {
-        dwm.renderGlassEffect(pr.x + 1, pr.y + 1, pr.w - 2, pr.h - 2, rgb(0x40, 0x58, 0x70), .panel);
+    // 悬停时发光效果
+    if (orb_hover > 0.0) {
+        const glow_size = @as(i32, @intFromFloat(@as(f32, @floatFromInt(scaled_size)) + orb_hover * 8.0));
+        const glow_offset = @divTrunc(size - glow_size, 2);
+        const gx = ox + glow_offset;
+        const gy = oy + glow_offset;
+        const glow_alpha = @as(u8, @intFromFloat(orb_hover * 60.0));
+        fb.blendTintRect(gx, gy, glow_size, glow_size, rgb(0x70, 0xB0, 0xFF), glow_alpha, 255);
     }
 
-    var iy: i32 = pr.y + 8;
-    var i: i32 = 0;
-    while (i < ALL_PROG_COUNT) : (i += 1) {
-        const lab = allProgEntryLabel(i);
-        if (!menuItemMatchesSearch(lab)) continue;
-        const idx = IDX_ALLPROG_BASE + i;
-        const row_r = hover_index == idx;
-        if (row_r) {
-            fb.blendTintRect(pr.x + 4, iy - 1, pr.w - 8, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 55, 255);
-            fb.drawTextTransparentUi(pr.x + 12, iy + 5, lab, text_white);
-        } else {
-            fb.drawTextTransparentUi(pr.x + 12, iy + 5, lab, text_dark);
-        }
-        iy += AERO7_ROW_H;
-    }
-    fb.drawHLine(pr.x + 8, iy + 2, pr.w - 16, sep);
-    iy += 6;
-    fb.drawTextTransparentUi(pr.x + 10, iy, shell_strings.startmenuLine("all_prog_stub_note"), rgb(0x78, 0x80, 0x8A)); // 仍用通用提示串
+    fb.fillRoundedRect(sx, sy, scaled_size, scaled_size, @as(i32, @intFromFloat(@as(f32, @floatFromInt(18)) * press_scale)), rgb(0x28, 0x48, 0x78));
+    fb.drawGradientV(sx + 1, sy + 1, scaled_size - 2, @as(i32, @intFromFloat(@as(f32, @floatFromInt(scaled_size - 2)) * 0.5)), rgb(0x50, 0x78, 0xA8), rgb(0x28, 0x48, 0x78));
+
+    const inset: i32 = @as(i32, @intFromFloat(@as(f32, @floatFromInt(9)) * press_scale));
+    const cell: i32 = @as(i32, @intFromFloat(@as(f32, @floatFromInt(8)) * press_scale));
+    const g: i32 = @as(i32, @intFromFloat(@as(f32, @floatFromInt(1)) * press_scale));
+    fb.fillRect(sx + inset, sy + inset, cell, cell, rgb(0xA8, 0xD4, 0xF8));
+    fb.fillRect(sx + inset + cell + g, sy + inset, cell, cell, rgb(0xA8, 0xD4, 0xF8));
+    fb.fillRect(sx + inset, sy + inset + cell + g, cell, cell, rgb(0x78, 0xB0, 0xE8));
+    fb.fillRect(sx + inset + cell + g, sy + inset + cell + g, cell, cell, rgb(0x78, 0xB0, 0xE8));
 }
+
 
 pub fn render(scr_w: i32, scr_h: i32) void {
-    if (!menu_visible or !fb.isInitialized()) return;
+    // 动画进行中或完全隐藏时才退出
+    if (anim_state == .hidden and menu_frames_since_open == 0) return;
+    if (!fb.isInitialized()) return;
+
+    // 更新动画状态
+    updateAnimation();
+
+    // 如果完全隐藏，不再渲染
+    if (anim_state == .hidden and anim_progress <= 0.0) return;
+
     defer {
         if (menu_visible and menu_frames_since_open < 255) menu_frames_since_open +%= 1;
     }
 
-    const r = aeroRect(scr_h);
+    const r = aeroRectWithAnim(scr_h);
     const L = innerLayout(scr_h);
+
     const text_dark = rgb(0x18, 0x1C, 0x22);
     const text_dim = rgb(0x50, 0x58, 0x62);
     const text_white = rgb(0xFF, 0xFF, 0xFF);
@@ -832,16 +1282,20 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.drawGradientV(inner_x, inner_y, rail, @divTrunc(inner_h, 2), rgb(0x18, 0x28, 0x40), rail_bg);
     fb.drawVLine(main_x - 1, inner_y, inner_h, rgb(0x30, 0x44, 0x5C));
     const orb_y = clampMenuI32(@as(i64, inner_y) + @as(i64, inner_h) - @as(i64, rail) - 6);
-    drawOrbGraphic(inner_x + 8, orb_y);
+    drawOrbGraphic(inner_x + 8, orb_y, orb_hover_progress, orb_press_progress);
 
+    // 用户头栏（头像+名称+副标题）限制在右列区域，遵循 Win7 布局。
+    // 右列 x 范围：[split_x, split_x + right_col_w)，标题从右列左边界起始。
+    const split_x = L.split_x;
+    const right_col_w = main_w - AERO7_LEFT_W;
     const hdr_h = AERO7_HEADER_H;
-    fb.drawGradientH(main_x, inner_y, main_w, hdr_h, rgb(0x5C, 0x6C, 0x7C), rgb(0x88, 0x94, 0xA4));
-    fb.blendTintRect(main_x, inner_y, main_w, hdr_h, rgb(0xE0, 0xE8, 0xF0), 40, 215);
-    fb.addSpecularBand(main_x, inner_y, main_w, @divTrunc(hdr_h, 3), 20);
-    fb.drawHLine(main_x + 2, inner_y + 2, main_w - 4, rgb(0xF8, 0xFC, 0xFF));
+    fb.drawGradientH(split_x, inner_y, right_col_w, hdr_h, rgb(0x5C, 0x6C, 0x7C), rgb(0x88, 0x94, 0xA4));
+    fb.blendTintRect(split_x, inner_y, right_col_w, hdr_h, rgb(0xE0, 0xE8, 0xF0), 40, 215);
+    fb.addSpecularBand(split_x, inner_y, right_col_w, @divTrunc(hdr_h, 3), 20);
+    fb.drawHLine(split_x + 2, inner_y + 2, right_col_w - 4, rgb(0xF8, 0xFC, 0xFF));
 
     const av_sz: i32 = 40;
-    const av_x = clampMenuI32(@as(i64, main_x) + @as(i64, main_w) - @as(i64, av_sz) - 10);
+    const av_x = clampMenuI32(@as(i64, split_x) + @as(i64, right_col_w) - @as(i64, av_sz) - 10);
     fb.fillRoundedRect(av_x, inner_y + 8, av_sz, av_sz, 5, rgb(0xA8, 0xB8, 0xC8));
     fb.blendTintRect(av_x, inner_y + 8, av_sz, av_sz, rgb(0xFF, 0xFF, 0xFF), 35, 255);
     fb.drawRect(av_x, inner_y + 8, av_sz, av_sz, rgb(0xD8, 0xE4, 0xF0));
@@ -850,7 +1304,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const name_w = fb.textWidth(disp_name);
     const name_right = av_x - 8;
     var name_x = name_right - name_w;
-    const name_min_x = main_x + 12;
+    const name_min_x = split_x + 12;
     if (name_x < name_min_x) name_x = name_min_x;
     fb.drawTextTransparentUi(name_x, inner_y + 11, disp_name, text_white);
     const sub = app_cfg.getStartMenuAccountSubtitle();
@@ -861,9 +1315,9 @@ pub fn render(scr_w: i32, scr_h: i32) void {
         fb.drawTextTransparentUi(sx, inner_y + 29, sub, rgb(0xC8, 0xD4, 0xE4));
     }
 
+
     const content_y = L.content_y;
     const bottom_y = L.bottom_y;
-    const split_x = L.split_x;
     const all_prog_y = L.all_prog_y;
     const col_h = @max(0, clampMenuI32(@as(i64, bottom_y) + @as(i64, AERO7_BOTTOM_BAND_H) - @as(i64, content_y)));
 
@@ -873,7 +1327,6 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.blendTintRect(main_x, content_y, AERO7_LEFT_W, col_h, rgb(0xF8, 0xFA, 0xFC), 38, 220);
     fb.blendTintRect(main_x, content_y, AERO7_LEFT_W, col_h, rgb(0x58, 0x78, 0x98), 22, 130);
 
-    const right_col_w = main_w - AERO7_LEFT_W;
     const right_bg = rgb(0x1C, 0x34, 0x50);
     const right_bg_hi = rgb(0x38, 0x54, 0x74);
     fb.fillRect(split_x, content_y, right_col_w, col_h, right_bg);
@@ -882,42 +1335,76 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.blendTintRect(split_x, content_y, right_col_w, col_h, rgb(0x20, 0x38, 0x50), 14, 180);
     fb.drawVLine(split_x, content_y, col_h, sep);
 
-    var iy: i32 = content_y + 6;
-    for (aero7_left, 0..) |item, li| {
-        if (!menuItemMatchesSearch(item.label)) continue;
-        if (iy + AERO7_ROW_H > all_prog_y - 2) break;
-        const row_r = hover_index == @as(i32, @intCast(li));
-        if (row_r) {
-            fb.blendTintRect(main_x + 6, iy - 1, AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 55, 255);
-            if (item.icon_id) |iid| {
-                drawMenuIcon(iid, main_x + 10, iy + 3, 1);
+    // 左列：根据视图状态渲染 pinned 程序列表 或 all_programs 程序列表。
+    if (left_pane_view == .pinned) {
+        var iy: i32 = content_y + 6;
+        for (aero7_left, 0..) |item, li| {
+            if (!menuItemMatchesSearch(item.label)) continue;
+            if (iy + AERO7_ROW_H > all_prog_y - 2) break;
+            const row_r = hover_display_index == @as(i32, @intCast(li));
+            if (row_r) {
+                fb.blendTintRect(main_x + 6, iy - 1, AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 55, 255);
+                if (item.icon_id) |iid| {
+                    drawMenuIcon(iid, main_x + 10, iy + 3, 1);
+                }
+                fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, text_white);
+            } else {
+                if (item.icon_id) |iid| {
+                    drawMenuIcon(iid, main_x + 10, iy + 3, 1);
+                }
+                const tc = if (item.bold) text_dark else text_dim;
+                fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, tc);
             }
-            fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, text_white);
-        } else {
-            if (item.icon_id) |iid| {
-                drawMenuIcon(iid, main_x + 10, iy + 3, 1);
+            iy += AERO7_ROW_H;
+            if (search_len == 0 and item.separator_after) {
+                fb.drawHLine(main_x + 8, iy, AERO7_LEFT_W - 14, sep);
+                iy += 4;
+                if (li + 1 == pinned_left_count) iy += 5;
             }
-            const tc = if (item.bold) text_dark else text_dim;
-            fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, tc);
         }
-        iy += AERO7_ROW_H;
-        if (search_len == 0 and item.separator_after) {
-            fb.drawHLine(main_x + 8, iy, AERO7_LEFT_W - 14, sep);
-            iy += 4;
-            if (li + 1 == pinned_left_count) iy += 5;
-        }
-    }
 
-    fb.drawHLine(main_x + 8, all_prog_y - 2, AERO7_LEFT_W - 14, sep);
-    const ap_hov = hover_index == AERO7_IDX_ALL;
-    const all_prog_lbl = shell_strings.startmenuLine("all_programs");
-    if (ap_hov) {
-        fb.blendTintRect(main_x + 6, all_prog_y - 1, AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
-        fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, all_prog_lbl, text_white);
-        fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", rgb(0xE8, 0xF4, 0xFF));
+        fb.drawHLine(main_x + 8, all_prog_y - 2, AERO7_LEFT_W - 14, sep);
+        const ap_hov = hover_display_index == AERO7_IDX_ALL;
+        const all_prog_lbl = shell_strings.startmenuLine("all_programs");
+        if (ap_hov) {
+            fb.blendTintRect(main_x + 6, all_prog_y - 1, AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
+            fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, all_prog_lbl, text_white);
+            fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", rgb(0xE8, 0xF4, 0xFF));
+        } else {
+            fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, all_prog_lbl, rgb(0x20, 0x50, 0x88));
+            fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", text_dim);
+        }
     } else {
-        fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, all_prog_lbl, rgb(0x20, 0x50, 0x88));
-        fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, all_prog_y + 5, ">", text_dim);
+        // all_programs 视图：在左列内渲染程序列表，底部「返回」行。
+        var iy: i32 = content_y + 6;
+        var i: i32 = 0;
+        while (i < ALL_PROG_COUNT) : (i += 1) {
+            const lab = allProgEntryLabel(i);
+            if (!menuItemMatchesSearch(lab)) continue;
+            if (iy + AERO7_ROW_H > all_prog_y) break;
+            const idx = IDX_ALLPROG_BASE + i;
+            const row_r = hover_display_index == idx;
+            if (row_r) {
+                fb.blendTintRect(main_x + 6, iy - 1, AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 55, 255);
+                fb.drawTextTransparentUi(main_x + 36, iy + 5, lab, text_white);
+            } else {
+                fb.drawTextTransparentUi(main_x + 36, iy + 5, lab, text_dim);
+            }
+            iy += AERO7_ROW_H;
+        }
+
+        // 底部「返回」行：Win7 左箭头 + "Back" 文案。
+        const back_bottom_y = leftColumnBottomY(content_y, all_prog_y);
+        const back_hov = hover_display_index == IDX_BACK;
+        const back_lbl = shell_strings.startmenuLine("back");
+        if (back_hov) {
+            fb.blendTintRect(main_x + 6, back_bottom_y - AERO7_ROW_H - 1, AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
+            fb.drawTextTransparentUi(main_x + 36, back_bottom_y - AERO7_ROW_H + 5, back_lbl, text_white);
+            fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, back_bottom_y - AERO7_ROW_H + 5, "<", rgb(0xE8, 0xF4, 0xFF));
+        } else {
+            fb.drawTextTransparentUi(main_x + 36, back_bottom_y - AERO7_ROW_H + 5, back_lbl, rgb(0x20, 0x50, 0x88));
+            fb.drawTextTransparentUi(main_x + AERO7_LEFT_W - 22, back_bottom_y - AERO7_ROW_H + 5, "<", text_dim);
+        }
     }
 
     const icon_cell: i32 = icons.getIconTotalSize(1);
@@ -926,11 +1413,11 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const right_bold = rgb(0xF2, 0xF6, 0xFC);
     const right_norm = rgb(0xC8, 0xD8, 0xEC);
 
-    iy = content_y + 6;
+    var iy: i32 = content_y + 6;
     for (aero7_right, 0..) |item, ri| {
         if (!menuItemMatchesSearch(item.label)) continue;
         if (iy + AERO7_ROW_H > bottom_y - 6) break;
-        const row_r = hover_index == 100 + @as(i32, @intCast(ri));
+        const row_r = hover_display_index == 100 + @as(i32, @intCast(ri));
         const icon_y = iy + @divTrunc(AERO7_ROW_H - icon_cell, 2);
         if (row_r) {
             fb.blendTintRect(split_x + 4, iy - 1, main_w - AERO7_LEFT_W - 12, AERO7_ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
@@ -969,8 +1456,8 @@ pub fn render(scr_w: i32, scr_h: i32) void {
 
     const sd_x = main_x + main_w - 116;
     const sd_y = bottom_y + @divTrunc(AERO7_BOTTOM_BAND_H - 28, 2);
-    const sd_body_hov = hover_index == IDX_FOOT_SHUTDOWN_BTN;
-    const sd_ch_hov = hover_index == IDX_FOOT_SHUTDOWN_CHEVRON;
+    const sd_body_hov = hover_display_index == IDX_FOOT_SHUTDOWN_BTN;
+    const sd_ch_hov = hover_display_index == IDX_FOOT_SHUTDOWN_CHEVRON;
     const sd_hov = sd_body_hov or sd_ch_hov;
     const sd_cr = @max(3, cr - 3);
     // Aero 透明凸起：冷色玻璃 + 顶缘高光，非实心红色关机块。
@@ -987,9 +1474,8 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     fb.drawTextTransparentUiCenteredInRect(sd_x + 2, sd_y, 76, 28, shell_strings.startmenuLine("foot_shut_down"), text_white);
     fb.drawTextTransparentUi(sd_x + 88, sd_y + @divTrunc(28 - 16, 2), ">", if (sd_ch_hov) rgb(0xFF, 0xFF, 0xFF) else rgb(0xE8, 0xF2, 0xFC));
 
-    drawAllProgramsSidePanel(scr_w, scr_h);
-
-    if (power_flyout_open) {
+    // 电源弹出菜单：即使未打开，只要有动画进度就渲染
+    if (power_flyout_open or flyout_anim_progress > 0.0) {
         drawPowerFlyout(scr_w, scr_h);
     }
 }

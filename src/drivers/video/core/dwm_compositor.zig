@@ -479,7 +479,7 @@ fn refreshSurfaceThumbFromFramebuffer(id: u16, now_tick: u64) void {
                     bb += (c >> 16) & 0xFF;
                 }
             }
-            surface_thumb_buf[id][ty * surface_thumb_w + tx] = (rr / 4) | ((gg / 4) << 8) | ((bb / 4) << 16);
+            surface_thumb_buf[id][ty * surface_thumb_w + tx] = (rr / 4) | ((gg / 4) << 8) | ((bb / 4) << 16) | 0xFF000000;
         }
     }
 }

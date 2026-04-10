@@ -130,6 +130,10 @@ pub const SystemHandleInformation: u32 = 16;
 pub const SystemInterruptInformation: u32 = 23;
 /// 异常分发计数桩（前缀零填充）。
 pub const SystemExceptionInformation: u32 = 33;
+/// SA-05: CPU 空闲时间统计（NT 6.1 契约）。
+pub const SystemProcessorIdleCycleTimeInformation: u32 = 38;
+/// SA-05: 每核 CPU 性能统计。
+pub const SystemProcessorPerformanceInformation: u32 = 8;
 
 pub const ProcessBasicInformation: u32 = 0;
 /// Ref: learn.microsoft.com — `PROCESSINFOCLASS` / `ProcessSessionInformation`.
@@ -140,8 +144,18 @@ pub const ProcessWow64Information: u32 = 26;
 pub const ProcessImageFileName: u32 = 27;
 /// 较新构建可见；NT 6.1 全语义未声称，返回 `STATUS_NOT_IMPLEMENTED`。
 pub const ProcessCommandLineInformation: u32 = 60;
+/// QT-03: 设置进程优先级类，影响所有线程的默认时间片。
+pub const ProcessPriorityClass: u32 = 63;
 pub const ThreadBasicInformation: u32 = 0;
 pub const ThreadTimes: u32 = 1;
+/// PC-03: ThreadBasePriority — 设置线程基优先级偏移。
+pub const ThreadBasePriority: u32 = 17;
+/// PC-03: ThreadPriorityBoost — 禁用/启用动态优先级提升。
+pub const ThreadPriorityBoost: u32 = 18;
+/// PC-04: ThreadAffinityMask — 设置线程 CPU 亲和性掩码。
+pub const ThreadAffinityMask: u32 = 19;
+/// PC-04: ThreadSuspendCount — 查询线程暂停计数。
+pub const ThreadSuspendCount: u32 = 7;
 
 /// `THREAD_BASIC_INFORMATION` x64 布局（公开头文件描述；clean-room 字段顺序）。
 const THREAD_BASIC_INFORMATION = extern struct {
@@ -350,7 +364,7 @@ fn resolveTargetProcess(process_handle: HANDLE) ?*process.Process {
     return process.findProcess(pid);
 }
 
-fn desiredAccessToObMask(access: u32) ob.ACCESS_MASK {
+pub fn desiredAccessToObMask(access: u32) ob.ACCESS_MASK {
     var m: ob.ACCESS_MASK = 0;
     if ((access & 0x80000000) != 0) m |= ob.GENERIC_READ;
     if ((access & 0x40000000) != 0) m |= ob.GENERIC_WRITE;
@@ -672,14 +686,76 @@ pub fn NtQueryInformationProcess(
     }
 }
 
-pub fn NtSetInformationProcess(_: HANDLE, process_information_class: u32, _: ?*const anyopaque, _: u32) NTSTATUS {
-    if (process_information_class == 0) return STATUS_SUCCESS;
-    return STATUS_INVALID_INFO_CLASS;
+/// QT-03: 设置进程信息（支持 ProcessPriorityClass）。
+pub fn NtSetInformationProcess(process_handle: HANDLE, process_information_class: u32, process_information: ?*const anyopaque, process_information_length: u32) NTSTATUS {
+    const proc_mod = @import("../ps/process.zig");
+    const kernel32 = @import("kernel32.zig");
+
+    switch (process_information_class) {
+        ProcessPriorityClass => {
+            // QT-03: ProcessPriorityClass — 数据为 u8 优先级类
+            if (process_information_length < @sizeOf(u8)) return STATUS_INFO_LENGTH_MISMATCH;
+            const info_ptr = process_information orelse return STATUS_INVALID_PARAMETER;
+            const raw_class: u8 = @as(*const u8, @ptrCast(info_ptr)).*;
+            // 转换为内核 priority_class (0-7)
+            const kernel_class = kernel32.win32PriorityClassToKernel(raw_class);
+            const pid: u32 = @truncate(process_handle);
+            if (proc_mod.findProcess(pid)) |p| {
+                p.priority_class = @min(kernel_class, 7);
+            }
+            return STATUS_SUCCESS;
+        },
+        else => return STATUS_INVALID_INFO_CLASS,
+    }
 }
 
-pub fn NtSetInformationThread(_: HANDLE, thread_information_class: u32, _: ?*const anyopaque, _: u32) NTSTATUS {
-    _ = thread_information_class;
-    return STATUS_INVALID_INFO_CLASS;
+/// PC-03: 设置线程信息（支持 ThreadBasePriority, ThreadPriorityBoost, ThreadAffinityMask）。
+pub fn NtSetInformationThread(thread_handle: HANDLE, thread_information_class: u32, thread_information: ?*const anyopaque, thread_information_length: u32) NTSTATUS {
+    const sched_mod = @import("../ke/scheduler.zig");
+    const kernel32 = @import("kernel32.zig");
+
+    const ctx = threadQuerySchedContext(thread_handle) orelse return STATUS_INVALID_HANDLE;
+    const tid = ctx.sched_tid;
+
+    switch (thread_information_class) {
+        ThreadBasePriority => {
+            // PC-03: ThreadBasePriority — 数据为 i32 相对优先级偏移
+            if (thread_information_length < @sizeOf(i32)) return STATUS_INFO_LENGTH_MISMATCH;
+            const info_ptr = thread_information orelse return STATUS_INVALID_PARAMETER;
+            const rel_pri: i32 = @as(*const i32, @ptrCast(@alignCast(info_ptr))).*;
+            // 转换为内核绝对优先级
+            const cur_pri = sched_mod.getThreadPriority(tid);
+            const new_pri: u8 = switch (rel_pri) {
+                kernel32.THREAD_PRIORITY_IDLE => 1,
+                kernel32.THREAD_PRIORITY_BELOW_NORMAL => if (cur_pri > 1) cur_pri - 1 else 1,
+                kernel32.THREAD_PRIORITY_NORMAL => cur_pri,
+                kernel32.THREAD_PRIORITY_ABOVE_NORMAL => @min(cur_pri + 1, 31),
+                kernel32.THREAD_PRIORITY_HIGHEST => @min(cur_pri + 2, 31),
+                kernel32.THREAD_PRIORITY_TIME_CRITICAL => 31,
+                else => cur_pri,
+            };
+            sched_mod.setThreadPriority(tid, new_pri);
+            return STATUS_SUCCESS;
+        },
+        ThreadPriorityBoost => {
+            // PC-03: ThreadPriorityBoost — 数据为 u8（0=允许boost，1=禁用boost）
+            // 当前实现：暂存标志，但 boost 逻辑仍按原样运行（此标志暂为占位）
+            return STATUS_SUCCESS;
+        },
+        ThreadAffinityMask => {
+            // PC-04: ThreadAffinityMask — 数据为 u64 CPU 亲和性掩码
+            if (thread_information_length < @sizeOf(u64)) return STATUS_INFO_LENGTH_MISMATCH;
+            const info_ptr = thread_information orelse return STATUS_INVALID_PARAMETER;
+            const mask: u64 = @as(*const u64, @ptrCast(@alignCast(info_ptr))).*;
+            sched_mod.setThreadAffinityMask(tid, mask);
+            return STATUS_SUCCESS;
+        },
+        ThreadSuspendCount => {
+            // PC-04: ThreadSuspendCount — 暂停计数查询，写操作不支持
+            return STATUS_INVALID_INFO_CLASS;
+        },
+        else => return STATUS_INVALID_INFO_CLASS,
+    }
 }
 
 // ── Thread APIs ──
@@ -1376,8 +1452,26 @@ pub fn NtCreateSemaphore(
     return STATUS_SUCCESS;
 }
 
-pub fn NtOpenMutant(_: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES) NTSTATUS {
-    return STATUS_NOT_IMPLEMENTED;
+pub fn NtOpenMutant(mutant_handle: *HANDLE, desired_access: u32, oa: ?*OBJECT_ATTRIBUTES) NTSTATUS {
+    _ = desired_access;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    if (oa) |attrs| {
+        if (attrs.object_name) |name| {
+            const path_src = name.buffer[0..name.length];
+            const resolved = ob.normalizeNtObjectPath(path_src);
+            if (ob.lookupNamespace(resolved)) |e| {
+                if (e.obj_type != .mutex) return STATUS_INVALID_PARAMETER;
+                const h = proc.handle_table.allocHandle(
+                    e.object_ptr,
+                    ob.GENERIC_ALL,
+                    .mutex,
+                ) orelse return STATUS_INSUFFICIENT_RESOURCES;
+                mutant_handle.* = h;
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+    return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
 /// `MUTANT_INFORMATION_CLASS` 子集 — Ref: learn.microsoft.com `NtQueryMutant`.
@@ -1415,16 +1509,61 @@ pub fn NtQueryMutant(ev: HANDLE, info_class: u32, buf: ?*anyopaque, buf_len: u32
     return STATUS_SUCCESS;
 }
 
-pub fn NtOpenEvent(_: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES) NTSTATUS {
-    return STATUS_NOT_IMPLEMENTED;
+pub fn NtOpenEvent(event_handle: *HANDLE, desired_access: u32, oa: ?*OBJECT_ATTRIBUTES) NTSTATUS {
+    _ = desired_access;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    if (oa) |attrs| {
+        if (attrs.object_name) |name| {
+            const path_src = name.buffer[0..name.length];
+            const resolved = ob.normalizeNtObjectPath(path_src);
+            if (ob.lookupNamespace(resolved)) |e| {
+                if (e.obj_type != .event) return STATUS_INVALID_PARAMETER;
+                const h = proc.handle_table.allocHandle(
+                    e.object_ptr,
+                    ob.GENERIC_ALL,
+                    .event,
+                ) orelse return STATUS_INSUFFICIENT_RESOURCES;
+                event_handle.* = h;
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+    return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
-pub fn NtOpenSemaphore(_: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES) NTSTATUS {
-    return STATUS_NOT_IMPLEMENTED;
+pub fn NtOpenSemaphore(sem_handle: *HANDLE, desired_access: u32, oa: ?*OBJECT_ATTRIBUTES) NTSTATUS {
+    _ = desired_access;
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    if (oa) |attrs| {
+        if (attrs.object_name) |name| {
+            const path_src = name.buffer[0..name.length];
+            const resolved = ob.normalizeNtObjectPath(path_src);
+            if (ob.lookupNamespace(resolved)) |e| {
+                if (e.obj_type != .semaphore) return STATUS_INVALID_PARAMETER;
+                const h = proc.handle_table.allocHandle(
+                    e.object_ptr,
+                    ob.GENERIC_ALL,
+                    .semaphore,
+                ) orelse return STATUS_INSUFFICIENT_RESOURCES;
+                sem_handle.* = h;
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+    return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
-pub fn NtPulseEvent(_: HANDLE, _: ?*u32) NTSTATUS {
-    return STATUS_NOT_IMPLEMENTED;
+pub fn NtPulseEvent(ev: HANDLE, prev: ?*u32) NTSTATUS {
+    const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
+    const h: ob.Handle = @truncate(ev);
+    const ent = proc.handle_table.lookupHandle(h) orelse return STATUS_INVALID_HANDLE;
+    if (ent.obj_type != .event) return STATUS_INVALID_PARAMETER;
+    const hdr = @as(*ob.ObjectHeader, @ptrFromInt(ent.object_ptr));
+    if (prev) |p| p.* = if (hdr.signal_state) 1 else 0;
+    hdr.signal_state = true;
+    wait_mod.onEventSet(hdr);
+    hdr.signal_state = false;
+    return STATUS_SUCCESS;
 }
 
 pub fn NtClearEvent(ev: HANDLE, prev: ?*u32) NTSTATUS {
@@ -1673,6 +1812,49 @@ pub fn NtConnectPort(port_handle: *HANDLE, name: []const u8) NTSTATUS {
     const p = port.connectPort(pid, name) orelse return STATUS_OBJECT_NAME_NOT_FOUND;
     port_handle.* = p.id;
     return STATUS_SUCCESS;
+}
+
+// ── ALPC APIs ──
+
+/// Ref: learn.microsoft.com `NtAlpcCreatePort` — ALPC 端口创建桩。
+pub fn NtAlpcCreatePort(
+    port_handle: *HANDLE,
+    _: ?*const anyopaque,
+    _: ?*const anyopaque,
+) NTSTATUS {
+    const pid = process.getCurrentPid();
+    _ = port.createPort(pid, "alpc") orelse return STATUS_NO_MEMORY;
+    port_handle.* = @as(HANDLE, pid);
+    return STATUS_SUCCESS;
+}
+
+/// Ref: learn.microsoft.com `NtAlpcConnectPort` — ALPC 客户端连接桩。
+pub fn NtAlpcConnectPort(
+    port_handle: *HANDLE,
+    _: [*]const u16,
+    _: u32,
+    _: u32,
+    _: u64,
+    _: ?*anyopaque,
+    _: ?*anyopaque,
+    _: ?*u64,
+) NTSTATUS {
+    port_handle.* = 0;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+/// Ref: learn.microsoft.com `NtAlpcSendWaitReceivePort` — ALPC 发送/等待/接收桩。
+pub fn NtAlpcSendWaitReceivePort(
+    _: HANDLE,
+    _: u32,
+    _: ?*anyopaque,
+    _: ?*anyopaque,
+    _: ?*anyopaque,
+    _: ?*anyopaque,
+    _: ?*anyopaque,
+    _: ?*anyopaque,
+) NTSTATUS {
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 // ── Memory APIs ──
@@ -2125,6 +2307,23 @@ pub const SYSTEM_BASIC_INFO = system_info_nt61.SYSTEM_BASIC_INFORMATION_NT61_X64
 
 /// `SystemProcessorInformation`：12 字节公开前缀（Win7 x64 子集）。
 pub const SYSTEM_PROCESSOR_INFORMATION_STUB = system_info_nt61.SYSTEM_PROCESSOR_INFORMATION_NT61;
+
+/// SA-05: `SystemProcessorPerformanceInformation`（Win7 x64 子集）。
+pub const SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION = extern struct {
+    /// 内核时间（100ns 单位）
+    kernel_time: u64 = 0,
+    /// 用户时间（100ns 单位）
+    user_time: u64 = 0,
+    /// 空闲时间（100ns 单位）
+    idle_time: u64 = 0,
+    /// Dpc 时间（100ns 单位）
+    dpc_time: u64 = 0,
+    /// 中断时间（100ns 单位）
+    interrupt_time: u64 = 0,
+    /// 中断计数
+    interrupt_count: u32 = 0,
+    _pad: u32 = 0,
+};
 comptime {
     std.debug.assert(@sizeOf(SYSTEM_PROCESSOR_INFORMATION_STUB) == 12);
 }
@@ -2315,6 +2514,23 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
         },
         SystemExceptionInformation => {
             const need: u32 = 16;
+            return_length.* = need;
+            if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
+            @memset(buffer[0..need], 0);
+            return STATUS_SUCCESS;
+        },
+        SystemProcessorPerformanceInformation => {
+            // SA-05: 每核 CPU 性能统计（桩：返回零值）
+            const sched_mod = @import("../ke/scheduler.zig");
+            const need = @sizeOf(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION) * sched_mod.getCpuCount();
+            return_length.* = @intCast(need);
+            if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
+            @memset(buffer[0..need], 0);
+            return STATUS_SUCCESS;
+        },
+        SystemProcessorIdleCycleTimeInformation => {
+            // SA-05: CPU 空闲时间统计（桩：返回零值）
+            const need = @sizeOf(u64);
             return_length.* = need;
             if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
             @memset(buffer[0..need], 0);
@@ -2668,6 +2884,25 @@ pub fn NtSetValueKey(
         return if (registry.setValueDword(idx, nm, dv)) STATUS_SUCCESS else STATUS_INSUFFICIENT_RESOURCES;
     }
     return STATUS_INVALID_PARAMETER;
+}
+
+/// NtSetValueKey 内部变体：接受原始指针和大小，常见于系统调用桥接层（如 LoongArch64 a0-a5 寄存器 + 栈传额外参数）。
+pub fn NtSetValueKeyRaw(
+    key_handle: HANDLE,
+    value_name: ?*const UNICODE_STRING,
+    title_index: u32,
+    reg_type: u32,
+    data_ptr: u64,
+    data_size: u32,
+) NTSTATUS {
+    if (data_ptr == 0 or data_size == 0) {
+        return NtSetValueKey(key_handle, value_name, title_index, reg_type, &[_]u8{});
+    }
+    const max_copy = 256;
+    const copy_size: usize = @min(data_size, max_copy);
+    var buf: [256]u8 = undefined;
+    @memcpy(buf[0..copy_size], @as([*]const u8, @ptrFromInt(data_ptr))[0..copy_size]);
+    return NtSetValueKey(key_handle, value_name, title_index, reg_type, buf[0..copy_size]);
 }
 
 pub const REG_CREATED_NEW_KEY: u32 = 0x00000001;

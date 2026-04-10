@@ -12,6 +12,9 @@ const fat32 = @import("../fs/fat32.zig");
 const ntfs = @import("../fs/ntfs.zig");
 const pe_loader = @import("../loader/pe.zig");
 const arch = @import("../arch.zig");
+const heap = @import("../mm/heap.zig");
+const vm = @import("../mm/vm.zig");
+const paging = @import("../arch.zig").paging;
 
 pub const BOOL = u32;
 pub const TRUE: BOOL = 1;
@@ -67,6 +70,49 @@ pub const WAIT_ABANDONED: DWORD = 128;
 pub const WAIT_FAILED: DWORD = 0xFFFFFFFF;
 
 pub const NORMAL_PRIORITY_CLASS: DWORD = 0x20;
+pub const IDLE_PRIORITY_CLASS: DWORD = 0x40;
+pub const BELOW_NORMAL_PRIORITY_CLASS: DWORD = 0x4000;
+pub const ABOVE_NORMAL_PRIORITY_CLASS: DWORD = 0x8000;
+pub const HIGH_PRIORITY_CLASS: DWORD = 0x80;
+pub const REALTIME_PRIORITY_CLASS: DWORD = 0x100;
+
+/// NT 6.1 风格线程相对优先级（clean-room，非 Windows 内部表）。
+/// 数值范围：-15 到 +15，0 为 NORMAL。
+pub const THREAD_PRIORITY_IDLE: i32 = -15;
+pub const THREAD_PRIORITY_BELOW_NORMAL: i32 = -1;
+pub const THREAD_PRIORITY_NORMAL: i32 = 0;
+pub const THREAD_PRIORITY_ABOVE_NORMAL: i32 = 1;
+pub const THREAD_PRIORITY_HIGHEST: i32 = 2;
+pub const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+pub const THREAD_PRIORITY_ERROR_RETURN: i32 = 2147483647; // MAXLONG
+
+/// 将 Win32 `THREAD_PRIORITY_*` 相对优先级转换为内核 0-31 绝对优先级。
+/// clean-room 实现，与 Windows 内部表无关。
+pub fn win32RelativePriorityToKernel(relative: i32, base_priority: u8) u8 {
+    switch (relative) {
+        THREAD_PRIORITY_IDLE => return 1,           // 最低
+        THREAD_PRIORITY_BELOW_NORMAL => return if (base_priority > 1) base_priority - 1 else 1,
+        THREAD_PRIORITY_NORMAL => return base_priority,
+        THREAD_PRIORITY_ABOVE_NORMAL => return @min(base_priority + 1, 31),
+        THREAD_PRIORITY_HIGHEST => return @min(base_priority + 2, 31),
+        THREAD_PRIORITY_TIME_CRITICAL => return 31, // 最高
+        else => return base_priority,
+    }
+}
+
+/// 将 Win32 进程优先级类转换为内核 priority_class (0-7)。
+/// clean-room 实现，与 Windows 内部表无关。
+pub fn win32PriorityClassToKernel(class: DWORD) u8 {
+    switch (class) {
+        IDLE_PRIORITY_CLASS => return 0,           // 0
+        BELOW_NORMAL_PRIORITY_CLASS => return 1,   // 1
+        NORMAL_PRIORITY_CLASS => return 2,         // 2
+        ABOVE_NORMAL_PRIORITY_CLASS => return 3,   // 3
+        HIGH_PRIORITY_CLASS => return 4,           // 4
+        REALTIME_PRIORITY_CLASS => return 7,       // 7 (最高)
+        else => return 2,                          // 默认为 NORMAL
+    }
+}
 pub const CREATE_NEW_CONSOLE: DWORD = 0x10;
 pub const CREATE_NO_WINDOW: DWORD = 0x08000000;
 pub const DETACHED_PROCESS: DWORD = 0x08;
@@ -503,32 +549,127 @@ pub const CONSOLE_SCREEN_BUFFER_INFO = struct {
 
 // ── Memory APIs ──
 
+fn ntProtectToMapFlags(protect: DWORD) ?vm.MapFlags {
+    return switch (protect) {
+        PAGE_READONLY => .{
+            .writable = false,
+            .user = true,
+            .executable = false,
+        },
+        PAGE_READWRITE, PAGE_EXECUTE_READ => .{
+            .writable = true,
+            .user = true,
+            .executable = false,
+        },
+        PAGE_EXECUTE, PAGE_EXECUTE_READWRITE => .{
+            .writable = true,
+            .user = true,
+            .executable = true,
+        },
+        PAGE_NOACCESS => .{
+            .writable = false,
+            .user = true,
+            .executable = false,
+        },
+        else => null,
+    };
+}
+
 pub fn GetProcessHeap() HANDLE {
     return 1;
 }
 
-pub fn HeapAlloc(_: HANDLE, _: DWORD, _: usize) u64 {
-    return 0;
+pub fn HeapAlloc(heap_handle: HANDLE, flags: DWORD, size: usize) u64 {
+    _ = heap_handle;
+    _ = flags;
+    if (size == 0) return 0;
+    const ptr = heap.alloc(size, @alignOf(u64)) orelse return 0;
+    return @intFromPtr(ptr);
 }
 
-pub fn HeapFree(_: HANDLE, _: DWORD, _: u64) BOOL {
+pub fn HeapFree(heap_handle: HANDLE, flags: DWORD, mem: u64) BOOL {
+    _ = heap_handle;
+    _ = flags;
+    if (mem == 0) return TRUE;
+    const ptr: [*]u8 = @ptrFromInt(mem);
+    heap.free(ptr, 0, @alignOf(u64));
     return TRUE;
 }
 
-pub fn HeapReAlloc(_: HANDLE, _: DWORD, _: u64, _: usize) u64 {
+pub fn HeapReAlloc(_: HANDLE, flags: DWORD, mem: u64, size: usize) u64 {
+    _ = flags;
+    if (size == 0) {
+        if (mem != 0) {
+            const ptr: [*]u8 = @ptrFromInt(mem);
+            heap.free(ptr, 0, @alignOf(u64));
+        }
+        return 0;
+    }
+    const old_ptr: ?[*]u8 = if (mem == 0) null else @ptrFromInt(mem);
+    const new_ptr = heap.realloc(old_ptr, 0, @alignOf(u64), size, @alignOf(u64)) orelse return 0;
+    return @intFromPtr(new_ptr);
+}
+
+pub fn HeapSize(heap_handle: HANDLE, flags: DWORD, mem: u64) usize {
+    _ = heap_handle;
+    _ = flags;
+    _ = mem;
     return 0;
 }
 
-pub fn HeapSize(_: HANDLE, _: DWORD, _: u64) usize {
-    return 0;
+pub fn VirtualAlloc(addr: ?u64, size: usize, alloc_type: DWORD, protect: DWORD) u64 {
+    if (size == 0) return 0;
+    const ps: u64 = @intCast(paging.page_size);
+    const num_pages: usize = @intCast((size + ps - 1) / ps);
+    const protect_flags = ntProtectToMapFlags(protect) orelse return 0;
+
+    const current = process.getCurrentProcess() orelse return 0;
+    const asp = current.address_space orelse return 0;
+
+    const base_addr: u64 = addr orelse {
+        const proposed_base = findFreeVirtualRangeInProcess(asp) orelse return 0;
+        if (!asp.reserveVirtualRange(proposed_base, @intCast(num_pages), protect)) return 0;
+        return proposed_base;
+    };
+
+    if (alloc_type & MEM_RESERVE != 0) {
+        if (!asp.reserveVirtualRange(base_addr, @intCast(num_pages), protect)) return 0;
+    }
+
+    if (alloc_type & MEM_COMMIT != 0) {
+        if (vm.mapRange(asp, base_addr, num_pages, protect_flags)) return base_addr;
+        return 0;
+    }
+
+    return base_addr;
 }
 
-pub fn VirtualAlloc(_: ?u64, _: usize, _: DWORD, _: DWORD) u64 {
-    return 0;
+fn findFreeVirtualRangeInProcess(asp: *vm.AddressSpace) ?u64 {
+    const ps: u64 = @intCast(paging.page_size);
+    const start: u64 = 0x10000;
+    const end: u64 = 0x7FFF_FFFF_FFFF;
+    var candidate: u64 = start;
+
+    while (candidate < end) : (candidate += ps) {
+        const found = asp.vad.findFreeHole(candidate, ps) orelse continue;
+        if (vm.userVaRangeAllowedNt61(found, ps)) {
+            const reserved_ok = !vm.isVirtInReservedRange(asp, found, 1);
+            if (reserved_ok) return found;
+        }
+    }
+    return null;
 }
 
-pub fn VirtualFree(_: u64, _: usize, _: DWORD) BOOL {
-    return TRUE;
+pub fn VirtualFree(addr: u64, size: usize, free_type: DWORD) BOOL {
+    if (addr == 0) return FALSE;
+    if (size == 0) return FALSE;
+    _ = free_type;
+    const current = process.getCurrentProcess() orelse return FALSE;
+    const asp = current.address_space orelse return FALSE;
+    const ps: u64 = @intCast(paging.page_size);
+    const num_pages = (size + ps - 1) / ps;
+    if (asp.unmapRange(addr, num_pages)) return TRUE;
+    return FALSE;
 }
 
 pub fn VirtualProtect(_: u64, _: usize, _: DWORD, _: *DWORD) BOOL {

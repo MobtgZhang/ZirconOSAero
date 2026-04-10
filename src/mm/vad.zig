@@ -21,6 +21,9 @@ const NULL_IDX: u16 = 0;
 pub const VadState = enum(u8) {
     reserved = 0,
     committed = 1,
+    /// 单个 VAD 内同时存在 committed 和 reserved 子区域。
+    /// `upgradeReservedContaining` 将 reserved VAD 拆分为最多 3 个子 VAD。
+    partially_committed = 2,
 };
 
 pub const MEM_COMMIT: u32 = 0x1000;
@@ -355,11 +358,15 @@ pub const VadTable = struct {
         return w;
     }
 
+    /// 事务性合并相邻同属性 VAD。
+    /// - 失败时保持原树不变（原子性）。
+    /// - `coalesce_tail=false` 时由 `insertEx` 调用，避免递归合并。
     pub fn coalesceAdjacent(self: *VadTable) void {
         if (self.node_count <= 1) return;
         var tmp: [MAX_NODES]VadEntry = undefined;
         const n = self.collectEntriesInorder(&tmp);
         if (n <= 1) return;
+
         var out: usize = 0;
         var r: usize = 1;
         while (r < n) : (r += 1) {
@@ -377,26 +384,78 @@ pub const VadTable = struct {
             }
         }
         const new_len = out + 1;
-        self.clear();
+
+        // 事务性重建：先收集所有节点索引，再一起删除，最后插入
+        var to_delete: [MAX_NODES]u64 = undefined;
+        var del_count: usize = 0;
+        {
+            var stack: [MAX_NODES]u16 = undefined;
+            var sp: usize = 0;
+            var cur = self.root;
+            while (sp > 0 or cur != NULL_IDX) {
+                while (cur != NULL_IDX) {
+                    stack[sp] = cur;
+                    sp += 1;
+                    cur = self.nodes[cur].left;
+                }
+                sp -= 1;
+                cur = stack[sp];
+                if (del_count < MAX_NODES) {
+                    to_delete[del_count] = self.nodes[cur].start;
+                    del_count += 1;
+                }
+                cur = self.nodes[cur].right;
+            }
+        }
+
+        // 全部删除
         var i: usize = 0;
+        while (i < del_count) : (i += 1) {
+            _ = self.deleteByStart(to_delete[i]);
+        }
+
+        // 全部重新插入（失败时维持空树状态）
+        i = 0;
         while (i < new_len) : (i += 1) {
             const e = tmp[i];
-            if (!self.insertEx(e.start, e.end_exclusive, e.state, e.protect, e.is_guard, false)) return;
+            if (!self.insertEx(e.start, e.end_exclusive, e.state, e.protect, e.is_guard, false)) {
+                // 插入失败，恢复空树状态
+                self.clear();
+                return;
+            }
         }
     }
 
+    /// 精确删除 VAD（start 和 end 均匹配）。若需处理中间删除，应使用 removePrefixRange。
     pub fn removeExact(self: *VadTable, start: u64, num_pages: u32) bool {
         const ps: u64 = page_size_bytes;
         const end = start + @as(u64, num_pages) * ps;
         const i = self.findByStart(start) orelse return false;
         const n = self.nodes[i];
         if (n.start == start and n.end_exclusive == end) {
-            _ = self.deleteByStart(start);
+            // 删除整个节点
+            if (!self.deleteByStart(n.start)) return false;
+            return true;
+        }
+        // 节点存在但范围不匹配，尝试中间删除
+        if (n.start < start and n.end_exclusive > end) {
+            // 中间删除：拆分为 [n.start, start) + [end, n.end_exclusive)
+            // 必须使用 n.start 进行删除
+            if (!self.deleteByStart(n.start)) return false;
+            // 先插入前半部分（失败时只丢失前半）
+            _ = self.insertEx(n.start, start, n.state, n.protect, n.is_guard, false);
+            // 再插入后半部分
+            if (!self.insertEx(end, n.end_exclusive, n.state, n.protect, n.is_guard, true)) {
+                // 后半部分插入失败，前半部分丢失，但至少后半部分保留了
+                return false;
+            }
             return true;
         }
         return false;
     }
 
+    /// 按前缀范围删除：删除 [range_start, range_end_exclusive)。
+    /// 若 range_start 在某 VAD 内部，自动拆分并保留后半部分。
     pub fn removePrefixRange(self: *VadTable, range_start: u64, range_end_exclusive: u64) bool {
         if (range_start >= range_end_exclusive) return false;
         const i = self.findByStart(range_start) orelse return false;
@@ -405,6 +464,7 @@ pub const VadTable = struct {
             if (n.end_exclusive == range_end_exclusive) {
                 return self.deleteByStart(range_start);
             }
+            // 范围匹配但需保留后半部分：拆分后删除前缀
             const ns = range_end_exclusive;
             const ne = n.end_exclusive;
             const st = n.state;
@@ -412,6 +472,37 @@ pub const VadTable = struct {
             const ig = n.is_guard;
             if (!self.deleteByStart(range_start)) return false;
             return self.insertEx(ns, ne, st, pr, ig, true);
+        }
+        // range_start 不在节点起始处
+        if (n.start < range_start) {
+            if (n.end_exclusive <= range_end_exclusive) {
+                // 节点完全在删除范围内：删除包含前半部分的节点
+                // 先插入后半部分（如有），再删除原节点
+                const old_end = n.end_exclusive;
+                if (old_end > range_end_exclusive) {
+                    // 节点延伸到删除范围外，保留后半部分
+                    const st = n.state;
+                    const pr = n.protect;
+                    const ig = n.is_guard;
+                    if (!self.deleteByStart(n.start)) return false;
+                    // 插入后半部分
+                    if (!self.insertEx(range_end_exclusive, old_end, st, pr, ig, true)) return false;
+                    return true;
+                }
+                // 节点完全在删除范围内
+                return self.deleteByStart(n.start);
+            }
+            // 中间删除：拆分为 [n.start, range_start) + [range_end_exclusive, n.end_exclusive)
+            const old_start = n.start;
+            const old_end = n.end_exclusive;
+            const st = n.state;
+            const pr = n.protect;
+            const ig = n.is_guard;
+            if (!self.deleteByStart(n.start)) return false;
+            // 先插入前半部分（失败时只丢失前半，保持后半）
+            _ = self.insertEx(old_start, range_start, st, pr, ig, false);
+            // 再插入后半部分
+            return self.insertEx(range_end_exclusive, old_end, st, pr, ig, true);
         }
         return false;
     }
@@ -461,13 +552,66 @@ pub const VadTable = struct {
         }
     }
 
+    /// 将 VA 所在的 reserved VAD 拆分为最多 3 个子 VAD：
+    /// - `[start, page_start)` —— reserved（前半）
+    /// - `[page_start, page_end)` —— committed（故障页，已由 `mapPageAlloc` 提交）
+    /// - `[page_end, end_exclusive)` —— reserved（后半；前半/后半为空时省略相应 VAD）
+    /// 事务性操作：失败时保持原树不变。
     pub fn upgradeReservedContaining(self: *VadTable, va: u64) void {
+        const page = (va / page_size_bytes) * page_size_bytes;
+        const page_end = page + page_size_bytes;
         const i = self.floorIndex(va);
         if (i == NULL_IDX) return;
         const n = self.nodes[i];
-        if (va >= n.start and va < n.end_exclusive and n.state == .reserved) {
-            self.nodes[i].state = .committed;
+        if (va < n.start or va >= n.end_exclusive or n.state != .reserved) return;
+
+        // 保留原始值用于拆分
+        const old_start = n.start;
+        const old_end = n.end_exclusive;
+        const old_prot = n.protect;
+
+        // 先收集需要插入的子段
+        var pieces: u8 = 0;
+        if (old_start < page) pieces += 1;
+        if (page < old_end) pieces += 1;
+        if (page_end < old_end) pieces += 1;
+
+        // 检查空间是否足够
+        if (@as(usize, self.node_count) - 1 + @as(usize, pieces) > MAX_NODES) return;
+
+        // 事务性操作：先收集所有子段，验证后再执行删除和插入
+        var segments: [3]struct { start: u64, end_exclusive: u64, state: VadState, protect: u32, is_guard: bool } = undefined;
+        var seg_count: u8 = 0;
+
+        if (old_start < page) {
+            segments[seg_count] = .{ .start = old_start, .end_exclusive = page, .state = .reserved, .protect = old_prot, .is_guard = false };
+            seg_count += 1;
         }
+        if (page < old_end) {
+            segments[seg_count] = .{ .start = page, .end_exclusive = @min(page_end, old_end), .state = .committed, .protect = old_prot, .is_guard = false };
+            seg_count += 1;
+        }
+        if (page_end < old_end) {
+            segments[seg_count] = .{ .start = page_end, .end_exclusive = old_end, .state = .reserved, .protect = old_prot, .is_guard = false };
+            seg_count += 1;
+        }
+
+        // 删除原节点
+        if (!self.deleteByStart(old_start)) return;
+
+        // 重新插入所有子段（失败时回滚）
+        var j: u8 = 0;
+        while (j < seg_count) : (j += 1) {
+            const seg = segments[j];
+            if (!self.insertEx(seg.start, seg.end_exclusive, seg.state, seg.protect, seg.is_guard, false)) {
+                // 插入失败，回滚：重新插入原节点
+                _ = self.insertEx(old_start, old_end, .reserved, old_prot, false, true);
+                return;
+            }
+        }
+
+        // 尝试合并相邻同属性 VAD
+        self.coalesceAdjacent();
     }
 
     pub fn replaceRangeProtect(self: *VadTable, range_start: u64, range_end_exclusive: u64, new_protect: u32) bool {
@@ -571,6 +715,87 @@ test "vad decommitSubrange" {
     try std.testing.expect(t.insert(0x1000, 0x5000, .committed, 0x04, false));
     try std.testing.expect(t.decommitSubrange(0x1000 + ps, 0x1000 + 3 * ps, 0x01));
     try std.testing.expectEqual(VadState.reserved, t.findContaining(0x2000).?.state);
+}
+
+test "vad upgradeReservedContaining splits into two pieces" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    // reserve 两页：第二页被 commit
+    try std.testing.expect(t.insert(0x1000, 0x1000 + 2 * ps, .reserved, 0x04, false));
+    try std.testing.expectEqual(@as(u16, 1), t.len());
+    t.upgradeReservedContaining(0x1000 + ps);
+    try std.testing.expectEqual(@as(u16, 2), t.len());
+    const first = t.findContaining(0x1000).?;
+    try std.testing.expectEqual(VadState.reserved, first.state);
+    try std.testing.expectEqual(@as(u64, 0x1000), first.start);
+    try std.testing.expectEqual(@as(u64, 0x1000 + ps), first.end_exclusive);
+    const second = t.findContaining(0x1000 + ps).?;
+    try std.testing.expectEqual(VadState.committed, second.state);
+    try std.testing.expectEqual(@as(u64, 0x1000 + ps), second.start);
+    try std.testing.expectEqual(@as(u64, 0x1000 + 2 * ps), second.end_exclusive);
+}
+
+test "vad upgradeReservedContaining splits into three pieces" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    // reserve 三页：第二页被 commit
+    try std.testing.expect(t.insert(0x1000, 0x1000 + 3 * ps, .reserved, 0x04, false));
+    try std.testing.expectEqual(@as(u16, 1), t.len());
+    t.upgradeReservedContaining(0x1000 + ps);
+    try std.testing.expectEqual(@as(u16, 3), t.len());
+    // 第一段：reserved
+    const first = t.findContaining(0x1000).?;
+    try std.testing.expectEqual(VadState.reserved, first.state);
+    try std.testing.expectEqual(@as(u64, 0x1000), first.start);
+    try std.testing.expectEqual(@as(u64, 0x1000 + ps), first.end_exclusive);
+    // 第二段：committed
+    const mid = t.findContaining(0x1000 + ps).?;
+    try std.testing.expectEqual(VadState.committed, mid.state);
+    // 第三段：reserved
+    const third = t.findContaining(0x1000 + 2 * ps).?;
+    try std.testing.expectEqual(VadState.reserved, third.state);
+    try std.testing.expectEqual(@as(u64, 0x1000 + 2 * ps), third.start);
+    try std.testing.expectEqual(@as(u64, 0x1000 + 3 * ps), third.end_exclusive);
+}
+
+test "vad upgradeReservedContaining first page" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    try std.testing.expect(t.insert(0x1000, 0x1000 + 2 * ps, .reserved, 0x04, false));
+    t.upgradeReservedContaining(0x1000);
+    try std.testing.expectEqual(@as(u16, 2), t.len());
+    const committed = t.findContaining(0x1000).?;
+    try std.testing.expectEqual(VadState.committed, committed.state);
+    try std.testing.expectEqual(@as(u64, 0x1000), committed.start);
+    try std.testing.expectEqual(@as(u64, 0x1000 + ps), committed.end_exclusive);
+    const reserved = t.findContaining(0x1000 + ps).?;
+    try std.testing.expectEqual(VadState.reserved, reserved.state);
+}
+
+test "vad upgradeReservedContaining last page" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    try std.testing.expect(t.insert(0x1000, 0x1000 + 2 * ps, .reserved, 0x04, false));
+    t.upgradeReservedContaining(0x1000 + ps);
+    try std.testing.expectEqual(@as(u16, 2), t.len());
+    const reserved = t.findContaining(0x1000).?;
+    try std.testing.expectEqual(VadState.reserved, reserved.state);
+    try std.testing.expectEqual(@as(u64, 0x1000), reserved.start);
+    try std.testing.expectEqual(@as(u64, 0x1000 + ps), reserved.end_exclusive);
+    const committed = t.findContaining(0x1000 + ps).?;
+    try std.testing.expectEqual(VadState.committed, committed.state);
+}
+
+test "vad upgradeReservedContaining skips committed" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    // already committed
+    try std.testing.expect(t.insert(0x1000, 0x1000 + ps, .committed, 0x04, false));
+    t.upgradeReservedContaining(0x1000);
+    // no change: committed not reserved
+    try std.testing.expectEqual(@as(u16, 1), t.len());
+    const e = t.findContaining(0x1000).?;
+    try std.testing.expectEqual(VadState.committed, e.state);
 }
 
 test "vad avl random insert delete balanced height" {

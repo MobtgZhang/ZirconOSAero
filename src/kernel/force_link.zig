@@ -40,8 +40,19 @@ comptime {
         _ = @import("../arch/aarch64/syscall_dispatch.zig");
         _ = @import("../hal/aarch64/cpu_topology.zig");
         _ = @import("../hal/aarch64/tlb_flush.zig");
+        _ = @import("../hal/aarch64/smp_boot_stub.zig");
+        _ = @import("../hal/aarch64/psci.zig");
+        _ = @import("../hal/aarch64/gic_sgi.zig");
     }
     if (builtin.cpu.arch == .loongarch64) {
         _ = @import("../hal/loongarch64/smp_boot_stub.zig");
+    }
+    if (builtin.cpu.arch == .riscv64) {
+        _ = @import("../hal/riscv64/smp_boot_stub.zig");
+        _ = @import("../hal/riscv64/cpu_topology.zig");
+        _ = @import("../hal/riscv64/sbi_hsm.zig");
+        _ = @import("../hal/riscv64/fdt.zig");
+        _ = @import("../hal/riscv64/percpu.zig");
+        _ = @import("../hal/riscv64/sbi_timebase.zig");
     }
 }

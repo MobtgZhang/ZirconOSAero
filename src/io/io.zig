@@ -120,6 +120,9 @@ pub const Irp = struct {
     cancel: bool = false,
     completion_depth: u8 = 0,
     completion_stack: [MAX_COMPLETION_ROUTINES]?IrpCompletionRoutine = .{ null, null },
+    /// NT 6.1: IRP 发起者线程 ID（用于 I/O boost 与调度器集成）。
+    /// 0 表示内核上下文（如启动线程），不触发 boost。
+    originating_thread_id: u32 = 0,
 
     pub fn complete(self: *Irp, nt_status: NTSTATUS, transferred: usize) void {
         self.status = nt_status;
@@ -162,6 +165,7 @@ pub fn IoDetachMdlFromIrp(irp: *Irp) void {
 }
 
 /// WDK `IoCompleteRequest`：写状态、传输长度、可选 `IO_STATUS_BLOCK`、LIFO 调用完成例程。
+/// IB-01: I/O boost 集成 — 当 IRP 有发起者线程时，唤醒线程并提升其优先级。
 pub fn IoCompleteRequest(irp: *Irp, status: NTSTATUS, transferred: usize) void {
     irp.complete(status, transferred);
     if (irp.io_status_block_ptr != 0) {
@@ -170,6 +174,12 @@ pub fn IoCompleteRequest(irp: *Irp, status: NTSTATUS, transferred: usize) void {
         iosb.status = status;
         iosb.information = transferred;
     }
+
+    // IB-01: 唤醒等待该 IRP 的线程并给予 I/O boost
+    if (irp.originating_thread_id != 0) {
+        boostThreadForIoCompletion(irp.originating_thread_id);
+    }
+
     while (irp.completion_depth > 0) {
         irp.completion_depth -= 1;
         if (irp.completion_stack[irp.completion_depth]) |cb| {
@@ -177,6 +187,22 @@ pub fn IoCompleteRequest(irp: *Irp, status: NTSTATUS, transferred: usize) void {
             cb(irp);
         }
     }
+}
+
+/// IB-01: I/O 完成时唤醒线程并给予优先级 boost（可选集成）。
+/// 若调度器未初始化或回调未注册，操作为空操作。
+fn boostThreadForIoCompletion(tid: u32) void {
+    if (ke_scheduler_boost_fn) |cb| {
+        cb(tid);
+    }
+}
+
+/// IB-01: 引导阶段由 scheduler.zig 调用此函数注册 boost 回调。
+/// 避免 io.zig 直接依赖 scheduler.zig 以防循环引用。
+var ke_scheduler_boost_fn: ?*const fn (u32) void = null;
+
+pub fn registerIoBoostCallback(cb: ?*const fn (u32) void) void {
+    ke_scheduler_boost_fn = cb;
 }
 
 pub fn attachDeviceToDeviceStack(upper_idx: u32, lower_idx: u32) bool {

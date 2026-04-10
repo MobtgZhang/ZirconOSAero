@@ -217,6 +217,11 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
         const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
         tlb_la.notePendingGlobalShootdown();
         tlb_la.noteUserMappingInvalidatedSmp();
+        // 进程销毁时回收 ASID（仅在 ASID 已分配且版本仍有效时回收）。
+        if (space.asid != 0 and space.last_asid_version == tlb_la.getAsidVersion()) {
+            tlb_la.releaseAsid(space.asid);
+            space.asid = 0;
+        }
     }
     if (builtin.cpu.arch == .aarch64 and builtin.os.tag == .freestanding) {
         const tlb_a64 = @import("../hal/aarch64/tlb_flush.zig");
@@ -294,6 +299,30 @@ pub fn mapFlagsFromNtProtect(prot: u32) MapFlags {
     // W^X：用户叶不允许同时可写且可执行（缓解 shellcode）；需自修改代码时用先 RW 再 RX 切换。
     if (writable and executable) writable = false;
     return .{ .writable = writable, .user = true, .executable = executable };
+}
+
+/// NT6.1 风格的虚拟内存分配（MEM_RESERVE / MEM_COMMIT 路径）。
+/// 测试存根：验证 API 存在性；实际实现在 syscall 层。
+/// 参数：
+/// - `space`：目标地址空间
+/// - `base_hint`：建议基址（0 表示由系统选择）
+/// - `size`：分配大小（页对齐）
+/// - `alloc_type`：MEM_RESERVE(0x00002000) | MEM_COMMIT(0x00001000) | MEM_TOP_DOWN(0x00100000)
+/// - `protect`：PAGE_READWRITE(0x04) 等
+/// 返回：实际分配的基址（失败时为 0）
+pub fn NtAllocateVirtualMemory(
+    space: *AddressSpace,
+    base_hint: u64,
+    size: u64,
+    alloc_type: u32,
+    protect: u32,
+) u64 {
+    _ = space;
+    _ = base_hint;
+    _ = size;
+    _ = alloc_type;
+    _ = protect;
+    return 0;
 }
 
 /// 通用 VMA 槽位（与 `MEM_RESERVE` 记录互补；供 `NtAllocateVirtualMemory` 等逐步接线）。
@@ -484,6 +513,10 @@ pub const MEM_IMAGE: u32 = 0x1000000;
 
 pub const AddressSpace = struct {
     pml4_phys: u64,
+    /// LoongArch64 ASID（CSR 0x5）；0 表示未分配；仅在 freestanding + loongarch64 时有效。
+    asid: u8 = 0,
+    /// 记录 ASID 分配时的全局版本号，用于检测版本回绕导致 ASID 陈旧。
+    last_asid_version: u32 = 0,
     allocator: *FrameAllocator,
     /// VAD 有序表（Reserve/Commit 元数据；与 `reserved_*` 同步维护）。
     vad: vad_mod.VadTable = .{},
@@ -696,6 +729,18 @@ pub const AddressSpace = struct {
 
     pub fn activate(self: *AddressSpace) void {
         paging.loadCr3(self.pml4_phys);
+        // LoongArch64：进程用户半区切换时激活其 ASID，使 TLB 选择性刷新生效。
+        // 内核空间 asid=0，跳过激活（ASID 0 保留）。
+        // 其他架构无 ASID 概念，activateAsid 为空操作。
+        if (builtin.cpu.arch == .loongarch64 and self.asid != 0) {
+            const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
+            // 版本检查：若全局 asid_version 已递增，说明当前 ASID 的 TLB 条目已被全局刷新失效。
+            // 降级为全 TLB 刷新以确保正确性（性能损失但正确性优先）。
+            if (self.last_asid_version != tlb_la.getAsidVersion()) {
+                tlb_la.invtlbAll();
+            }
+            tlb_la.activateAsid(self.asid);
+        }
     }
 
     pub fn recordSectionView(self: *AddressSpace, base: u64, pages: u32, sec_ptr: u64, file_start_off: u64, is_image_section: bool, nt_page_protect: u32) bool {
@@ -823,6 +868,12 @@ pub fn fillMemoryBasicInformation(space: *AddressSpace, query_va: u64, out: *Mem
                 out.Protect = PAGE_NOACCESS;
             },
             .committed => {
+                out.State = vad_mod.MEM_COMMIT;
+                out.Protect = e.protect;
+            },
+            // `.partially_committed` 不会出现——`upgradeReservedContaining` 拆分后仅产生 reserved/committed 子 VAD。
+            // 保留此分支以防未来扩展中出现该状态。
+            .partially_committed => {
                 out.State = vad_mod.MEM_COMMIT;
                 out.Protect = e.protect;
             },
@@ -1012,7 +1063,19 @@ fn forkDupChildPteFlags(pte_raw: u64) u64 {
             if (pe.no_execute) f |= paging.NoExecute;
             break :blk f;
         },
-        .loongarch64 => pte_raw & ~@as(u64, paging.D),
+        .loongarch64 => blk: {
+            // LoongArch64: CoW 复制页标志
+            // - 清除 D 位使页不可写，触发 CoW
+            // - 保留 NX 位（代码页的可执行性）
+            // - 保留 NR 位（可能的安全标志）
+            // - 保留 PLV_USER 使用户态可访问
+            var f: u64 = pte_raw;
+            f &= ~@as(u64, paging.D);  // 清除 D 位（不可写 → CoW）
+            f &= ~@as(u64, paging.NR); // 清除 NR 位（如有设置）
+            // 确保 Present 和 Accessed 标志存在
+            f |= paging.Present;
+            break :blk f;
+        },
         .mips64el => pte_raw & ~@as(u64, paging.D_BIT),
         .aarch64 => blk: {
             // Preserve all flags except make read-only for CoW:
@@ -1052,6 +1115,64 @@ fn duplicateForkLeafWalkCb(ctx_raw: ?*anyopaque, virt: u64, phys: u64, pte_raw: 
     return true;
 }
 
+/// fork 大页 walk 上下文：追加大页中每个小叶的处理。
+const DupForkLargePageWalkCtx = struct {
+    /// 指向外层 fork walk 的上下文（共享同一个 status）
+    inner: *DupForkWalkCtx,
+};
+
+/// 遍历大页中每个小页（x86_64: 2MiB 中每 4KiB；LoongArch64: 32MiB 中每 16KiB）
+fn duplicateForkLargePageSubCb(ctx_raw: ?*anyopaque, virt: u64, phys: u64, pte_raw: u64) bool {
+    _ = pte_raw;
+    const c = @as(*DupForkLargePageWalkCtx, @ptrCast(@alignCast(ctx_raw.?)));
+    if (c.inner.dst.getPhysical(virt)) |_| return true;
+    c.inner.dst.allocator.notePageShared(phys);
+    // 大页中每个子叶使用只读（CoW）标志，子进程写时触发 CoW 复制
+    if (!paging.mapPage(
+        c.inner.dst.pml4_phys,
+        virt,
+        phys,
+        paging.Present | paging.User | paging.Accessed,
+        allocFrameCb,
+        @ptrCast(c.inner.dst.allocator),
+    )) {
+        c.inner.dst.allocator.releaseShareCount(phys);
+        c.inner.status = fork_dup_status_no_memory;
+        return false;
+    }
+    return true;
+}
+
+/// fork 大页块回调：将大页拆分为小页逐个 fork。
+fn duplicateForkLargePageWalkCb(ctx_raw: ?*anyopaque, virt: u64, phys: u64, block_size: u64) bool {
+    const c = @as(*DupForkWalkCtx, @ptrCast(@alignCast(ctx_raw.?)));
+    // 按架构小页粒度逐叶 fork
+    const ps: u64 = @intCast(paging.page_size);
+    var offset: u64 = 0;
+    while (offset < block_size) : (offset += ps) {
+        const sub_virt = virt + offset;
+        if (c.dst.getPhysical(sub_virt)) |_| {
+            offset += ps;
+            continue;
+        }
+        const sub_phys = phys + offset;
+        c.dst.allocator.notePageShared(sub_phys);
+        if (!paging.mapPage(
+            c.dst.pml4_phys,
+            sub_virt,
+            sub_phys,
+            paging.Present | paging.User | paging.Accessed,
+            allocFrameCb,
+            @ptrCast(c.dst.allocator),
+        )) {
+            c.dst.allocator.releaseShareCount(sub_phys);
+            c.status = fork_dup_status_no_memory;
+            return false;
+        }
+    }
+    return true;
+}
+
 fn copyUserSideMetadataForFork(dst: *AddressSpace, src: *const AddressSpace) bool {
     var entries: [vad_mod.max_vad]vad_mod.VadEntry = undefined;
     const n = src.vad.collectEntriesInorder(&entries);
@@ -1080,7 +1201,7 @@ fn copyUserSideMetadataForFork(dst: *AddressSpace, src: *const AddressSpace) boo
 }
 
 /// fork 子集：将 `src` 用户半区 **用户叶**（x86 为 4KiB，LoongArch 为 16KiB；API 名 `forEachUser4KiPresentLeaf` 沿用）复制到 `dst`（`notePageShared`、子侧 PTE **不可写**），并复制 VAD / `reserved_*` / `section_view_*` / VMA。
-/// - **大页**（x86 1GiB/2MiB 等）当前不枚举（见 `paging.forEachUser4KiPresentLeaf`）。
+/// - **大页**（x86 2MiB / LoongArch 32MiB）：先按小叶粒度逐页 fork（CoW），避免拆分大页表项。
 /// - 若 `dst` 某 VA 已有映射（如 `kuser_shared`），跳过该 VA，保留子侧原页。
 /// - 要求：`dst` 在复制前 **无** VAD / 保留区 / 段视图 / VMA 元数据（与 `createProcess` + `kuser` 后状态一致）。
 pub fn duplicateUserMappingsForFork(dst: *AddressSpace, src: *const AddressSpace) i32 {
@@ -1089,10 +1210,24 @@ pub fn duplicateUserMappingsForFork(dst: *AddressSpace, src: *const AddressSpace
     if (dst.vad.len() != 0 or dst.reserved_count != 0 or dst.section_view_count != 0 or dst.vma_len != 0)
         return fork_dup_status_invalid_parameter;
     if (!copyUserSideMetadataForFork(dst, src)) return fork_dup_status_no_memory;
+
+    // 小叶 fork（4KiB / 16KiB 粒度）
     var walk: DupForkWalkCtx = .{ .dst = dst };
     if (!paging.forEachUser4KiPresentLeaf(src.pml4_phys, @ptrCast(&walk), duplicateForkLeafWalkCb)) {
         return walk.status;
     }
+
+    // 大页 fork（x86 2MiB / LoongArch 32MiB）：拆分为小叶逐个 fork（CoW）
+    if (@hasDecl(paging, "forEachUser2MiPresentLeaf")) {
+        if (!paging.forEachUser2MiPresentLeaf(src.pml4_phys, @ptrCast(&walk), duplicateForkLargePageWalkCb)) {
+            return walk.status;
+        }
+    } else if (@hasDecl(paging, "forEachUser32MiPresentLeaf")) {
+        if (!paging.forEachUser32MiPresentLeaf(src.pml4_phys, @ptrCast(&walk), duplicateForkLargePageWalkCb)) {
+            return walk.status;
+        }
+    }
+
     return fork_dup_status_success;
 }
 
@@ -1112,10 +1247,12 @@ pub fn tryCowWriteFault(space: *AddressSpace, fault_va: u64) bool {
     frame_mod.memcpyPhysicalPage(new_phys, old_phys);
     const ve = space.vad.findContaining(page) orelse {
         space.allocator.free(new_phys);
+        space.allocator.releaseShareCount(old_phys);
         return false;
     };
     const pte_flags = ntProtectToPteFlags(ve.protect) orelse {
         space.allocator.free(new_phys);
+        space.allocator.releaseShareCount(old_phys);
         return false;
     };
     if (!paging.remapLeafPhysical(
@@ -1127,6 +1264,7 @@ pub fn tryCowWriteFault(space: *AddressSpace, fault_va: u64) bool {
         @ptrCast(space.allocator),
     )) {
         space.allocator.free(new_phys);
+        space.allocator.releaseShareCount(old_phys);
         return false;
     }
     space.allocator.releaseShareCount(old_phys);

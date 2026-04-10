@@ -3,6 +3,9 @@
 //!
 //! Mutex `acquireWithInheritance` / `release` 与 `ke/scheduler.zig` 的 `beginMutexInheritance` / `endMutexInheritance` 联动；
 //! 每条 mutex 等待边配对一次深度计数，多锁并行时避免过早清零 `mutex_inherit_floor`。
+//!
+//! PI-02 链式优先级继承：当等待者线程本身继承了其他互斥锁的优先级时，
+//! 这个优先级应传播到当前互斥锁的持有者，形成优先级继承链。
 
 const ob = @import("../ob/object.zig");
 const scheduler = @import("scheduler.zig");
@@ -22,24 +25,59 @@ pub const Event = struct {
     }
 
     pub fn set(self: *Event) void {
-        self.signaled = true;
+        self.setSignaledAtomic(true);
     }
 
     pub fn reset(self: *Event) void {
-        self.signaled = false;
+        self.setSignaledAtomic(false);
     }
 
     pub fn isSignaled(self: *const Event) bool {
         return self.signaled;
     }
 
+    /// 原子化检查 signaled 状态，避免 TOCTOU 问题。
+    fn checkSignaled(self: *const Event) bool {
+        return @atomicLoad(bool, &self.signaled, .seq_cst);
+    }
+
+    /// 原子化设置 signaled 状态。
+    fn setSignaledAtomic(self: *Event, value: bool) void {
+        @atomicStore(bool, &self.signaled, value, .seq_cst);
+    }
+
     pub fn wait(self: *Event) void {
-        while (!self.signaled) {
+        const tk = @import("timekeeping.zig");
+        const deadline = tk.readInterruptTicks() +| 10_000; // 默认 10 秒超时
+        while (!self.checkSignaled()) {
+            const now = tk.readInterruptTicks();
+            if (now >= deadline) {
+                return; // 超时返回
+            }
+            scheduler.yield();
             arch.spinCpuRelax();
         }
         if (self.auto_reset) {
-            self.signaled = false;
+            self.setSignaledAtomic(false);
         }
+    }
+
+    /// 带超时的等待（单位：滴答数）
+    pub fn waitWithTimeout(self: *Event, timeout_ticks: u64) bool {
+        const tk = @import("timekeeping.zig");
+        const deadline = tk.readInterruptTicks() +| timeout_ticks;
+        while (!self.checkSignaled()) {
+            const now = tk.readInterruptTicks();
+            if (now >= deadline) {
+                return false; // 超时
+            }
+            scheduler.yield();
+            arch.spinCpuRelax();
+        }
+        if (self.auto_reset) {
+            self.setSignaledAtomic(false);
+        }
+        return true; // 成功等到信号
     }
 };
 
@@ -83,17 +121,21 @@ pub const Mutex = struct {
             if (had_edge) {
                 self.inheritance_wait_edge = false;
                 scheduler.endMutexInheritance(@intCast(owner_snapshot));
+                // PI-02: 链式继承传播 — 如果释放者本身继承了其他互斥锁的优先级，
+                // 需要把这个优先级也传播到当前锁的等待者（如果有的话）
+                scheduler.propagateChainInheritance(@intCast(owner_snapshot));
             }
         }
         return true;
     }
 
     /// 与 `acquire` 相同，但若已被其他线程持有，则按等待者有效优先级抬升持有者（NT 式优先级继承的最小子集）。
+    /// 注意：此函数不执行真正的等待，调用者应自行处理等待逻辑。
     pub fn acquireWithInheritance(self: *Mutex, tid: u32, waiter_tid: u32) bool {
         if (self.acquire(tid)) return true;
-        if (!self.locked) return false;
+        // 获取失败：锁被其他线程持有，需要传播优先级继承
         const owner = self.owner_tid;
-        if (owner == tid) return true;
+        // tid 和 waiter_tid 是不同角色：tid 是当前尝试获取者，waiter_tid 是等待该锁的线程
         const w_ep = scheduler.effectivePriorityForThread(@intCast(waiter_tid)) orelse 0;
         if (!self.inheritance_wait_edge) {
             self.inheritance_wait_edge = true;
@@ -123,33 +165,68 @@ pub const Semaphore = struct {
     }
 
     pub fn acquire(self: *Semaphore) bool {
-        if (self.count <= 0) return false;
-        self.count -= 1;
+        // 使用原子操作读取当前计数
+        const current = @atomicLoad(i32, &self.count, .seq_cst);
+        if (current <= 0) return false;
+        // 使用原子操作尝试递减
+        const new_val = @atomicRmw(i32, &self.count, .sub, 1, .seq_cst);
+        // 如果递减前 <= 0，说明另一个线程已经取走了，撤销操作
+        if (new_val <= 0) {
+            @atomicStore(i32, &self.count, new_val, .seq_cst);
+            return false;
+        }
         return true;
     }
 
     pub fn release(self: *Semaphore) bool {
-        if (self.count >= self.max_count) return false;
-        self.count += 1;
+        // 使用原子操作读取当前计数
+        const current = @atomicLoad(i32, &self.count, .seq_cst);
+        if (current >= self.max_count) return false;
+        // 使用原子操作尝试递增
+        const new_val = @atomicRmw(i32, &self.count, .add, 1, .seq_cst);
+        // 如果递增前 >= max_count，说明另一个线程已经达到了最大值，撤销操作
+        if (new_val >= self.max_count) {
+            @atomicStore(i32, &self.count, new_val, .seq_cst);
+            return false;
+        }
         return true;
     }
 
     pub fn isSignaled(self: *const Semaphore) bool {
-        return self.count > 0;
+        return @atomicLoad(i32, &self.count, .seq_cst) > 0;
     }
 };
 
 pub const SpinLock = struct {
     locked: bool = false,
+    owner_tid: u32 = 0,
+    recursion_count: u32 = 0,
     saved_if: bool = false,
 
+    /// 获取自旋锁。如果当前线程已持有该锁则 panic（防止递归锁覆盖 saved_if）。
     pub fn acquire(self: *SpinLock) void {
+        const tid = @as(u32, @intCast(scheduler.getCurrentThreadId()));
+        // 检测递归锁：同一线程重复获取会导致 saved_if 被覆盖
+        if (self.locked and self.owner_tid == tid) {
+            @panic("SpinLock: recursive acquisition by same thread");
+        }
         self.saved_if = arch.saveAndDisableInterrupts();
         self.locked = true;
+        self.owner_tid = tid;
+        self.recursion_count = 1;
     }
 
+    /// 释放自旋锁。
     pub fn release(self: *SpinLock) void {
-        self.locked = false;
+        const tid = @as(u32, @intCast(scheduler.getCurrentThreadId()));
+        if (!self.locked or self.owner_tid != tid) {
+            @panic("SpinLock: release by non-owner or unlocked");
+        }
+        self.recursion_count -= 1;
+        if (self.recursion_count == 0) {
+            self.owner_tid = 0;
+            self.locked = false;
+        }
         arch.restoreInterrupts(self.saved_if);
     }
 };

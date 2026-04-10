@@ -269,6 +269,8 @@ pub fn enterDesktopSession(
         const ui_tid = ps_proc.allocTid() orelse 0;
         ps_proc.registerDesktopSession(shell.pid, ui_tid);
         ps_proc.setCurrentProcess(shell.pid);
+        // FG-02: DWM 进程是前台进程，获得额外时间片加成
+        shell.setForeground(true);
         if (log_dwm_session) {
             klog.info("Desktop: session shell PID=%u UI_TID=%u (dwm.exe)", .{ shell.pid, ui_tid });
         }

@@ -25,7 +25,8 @@ pub fn isReady() bool {
     return fb_initialized;
 }
 
-pub fn init(addr: u64, pitch: u32, width: u32, height: u32, bpp: u8) void {
+/// 参数顺序与其他架构统一: (addr, width, height, pitch, bpp)
+pub fn init(addr: u64, width: u32, height: u32, pitch: u32, bpp: u8) void {
     fb_addr = addr;
     fb_pitch = pitch;
     fb_width = width;

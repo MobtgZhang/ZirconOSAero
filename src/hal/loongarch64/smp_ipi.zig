@@ -21,8 +21,11 @@ pub fn broadcastFullTlbShootdownStub() void {
 fn broadcastIpi(action: u32) void {
     if (builtin.os.tag != .freestanding) return;
     const n = @import("cpu_topology.zig").logicalCpuCount();
+    const self = @import("cpu_topology.zig").currentProcessorNumberForAsid();
     var cpu: u32 = 0;
     while (cpu < n) : (cpu += 1) {
+        // 跳过当前 CPU（自己已在调用方执行 invtlbAll/Asid）
+        if (cpu == self) continue;
         // IOCSR_IPI_SEND 格式：[31:26]=CPU [25:0]=action 编码
         const val: u64 = (@as(u64, cpu) << 26) | @as(u64, action);
         iocsrWrite32(IOCSR_IPI_SEND, @truncate(val));

@@ -1,8 +1,10 @@
-//! LoongArch64 逻辑 CPU 数：通过 CPUCFG 探测或 ACPI MADT 解析。
+//! LoongArch64 逻辑 CPU 数：通过 ACPI MADT 解析；若 RSDP 不可用则回退到 CPUCFG。
 //! 与 `ke/scheduler.zig` `schedNumCpus`、`ke/percpu_sched.zig` 对齐。
 
 const builtin = @import("builtin");
 const klog = @import("../../rtl/klog.zig");
+const acpi_core = @import("acpi_core.zig");
+const madt = @import("madt.zig");
 
 var detected_cpu_count: u32 = 0;
 
@@ -23,9 +25,19 @@ pub fn initTopology() void {
     const prid = cpucfg0 & 0xFFFF;
     klog.info("LoongArch SMP: PRID=0x%x", .{@as(u32, @truncate(prid))});
 
-    // QEMU virt 上 CPUCFG 不直接暴露核数；真实硬件需解析 ACPI MADT。
-    // 当前阶段设为 1 核，后续接入 MADT 后动态更新。
+    // 优先通过 ACPI MADT 获取 CPU 拓扑
+    if (acpi_core.g_rsdp_ok) {
+        madt.loadFromAcpiCore();
+        if (madt.logical_cpu_count >= 1) {
+            detected_cpu_count = madt.logical_cpu_count;
+            klog.info("LoongArch SMP: MADT-based CPU count = %u", .{detected_cpu_count});
+            return;
+        }
+    }
+
+    // 回退：设为 1 核（QEMU virt 等无完整 ACPI 场景）
     detected_cpu_count = 1;
+    klog.info("LoongArch SMP: MADT unavailable, falling back to 1 CPU", .{});
 }
 
 fn cpucfgRead(idx: u32) u64 {
@@ -34,4 +46,12 @@ fn cpucfgRead(idx: u32) u64 {
         : [o] "=r" (-> u64),
         : [i] "r" (@as(u64, idx)),
     );
+}
+
+/// 返回当前处理器的逻辑编号（供 per-CPU ASID 等用途）。
+/// 非 freestanding 或未初始化时回退为 0。
+pub fn currentProcessorNumberForAsid() u32 {
+    if (builtin.os.tag != .freestanding) return 0;
+    const kpcr = @import("../../ke/kpcr.zig");
+    return kpcr.currentProcessorNumber();
 }

@@ -25,6 +25,9 @@ pub var hpet_usable: bool = false;
 /// 由 GCAP_ID 高半部推算的计数器频率（Hz）；`period_fs==0` 时按规范假定为 10MHz。
 pub var hpet_counter_hz_approx: u64 = 0;
 
+/// `initOptional()` 成功时记录的主计数器快照，供 `timekeeping.readBootElapsedUs()` 计算启动后经过时间。
+pub var boot_counter_base: u64 = 0;
+
 /// 由 **ACPI HPET 表** GAS 解析得到时写入；否则为 `HPET_MMIO_PHYS_BASE`（I4：表优先、常量回退）。
 var g_mmio_phys_base: u64 = HPET_MMIO_PHYS_BASE;
 
@@ -69,6 +72,7 @@ pub fn initOptional() bool {
 
     hpet_counter_hz_approx = hz;
     hpet_usable = true;
+    boot_counter_base = readMmioU64(HPET_MAIN_COUNTER_OFFSET);
 
     klog.info("HPET: GCAP_ID rev=%u timers_cap=%u period_fs=%u -> ~%u Hz (tick still PIT; see TimerPrecisionRoadmap)", .{
         d.rev_id,

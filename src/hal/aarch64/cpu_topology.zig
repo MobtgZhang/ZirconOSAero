@@ -37,3 +37,14 @@ fn readMpidr() u64 {
         : [o] "=r" (-> u64),
     );
 }
+
+/// 返回当前 CPU 的 MPIDR affinity 值（低 8 位 = CPU index）
+pub fn currentMpidrAffinity() u64 {
+    return readMpidr();
+}
+
+/// 返回当前 CPU 的 Affinity Level 0 值（CPU 索引）
+pub fn currentCpuIndex() u32 {
+    const m = readMpidr();
+    return @as(u32, @truncate(m & 0xFF));
+}

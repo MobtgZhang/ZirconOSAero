@@ -216,6 +216,39 @@ pub fn getActiveGlassTint() u32 {
     return getScheme(active_scheme).glass_tint;
 }
 
+/// 获取是否为深色主题
+pub fn isDarkScheme() bool {
+    return switch (active_scheme) {
+        .zircon_graphite, .zircon_landscapes => true,
+        else => false,
+    };
+}
+
+/// 获取开始菜单背景色（根据主题）
+pub fn getStartMenuBg() u32 {
+    return if (isDarkScheme()) menu_bg_dark else menu_bg;
+}
+
+/// 获取开始菜单右侧背景色
+pub fn getStartMenuRightBg() u32 {
+    return if (isDarkScheme()) menu_right_bg_dark else menu_right_bg;
+}
+
+/// 获取开始菜单文字色
+pub fn getStartMenuText() u32 {
+    return if (isDarkScheme()) menu_text_dark else menu_text;
+}
+
+/// 获取开始菜单悬停背景色
+pub fn getStartMenuHoverBg() u32 {
+    return if (isDarkScheme()) menu_hover_bg_dark else menu_hover_bg;
+}
+
+/// 获取开始菜单分隔线色
+pub fn getStartMenuSeparator() u32 {
+    return if (isDarkScheme()) menu_separator_dark else menu_separator;
+}
+
 // ── Core Aero Palette (Default Blue / Win7 taskbar glass) ──
 
 pub const desktop_bg = rgb(0x12, 0x38, 0x62);
@@ -264,12 +297,26 @@ pub const menu_text = rgb(0x1A, 0x1A, 0x1A);
 pub const menu_hover_bg = rgb(0xD8, 0xE8, 0xF8);
 pub const menu_glass_border = rgb(0x40, 0x68, 0xA0);
 
+// 深色模式开始菜单配色
+pub const menu_bg_dark = rgb(0x1E, 0x22, 0x28);
+pub const menu_right_bg_dark = rgb(0x28, 0x30, 0x38);
+pub const menu_header_left_dark = rgb(0x30, 0x50, 0x80);
+pub const menu_header_right_dark = rgb(0x40, 0x60, 0x90);
+pub const menu_separator_dark = rgb(0x40, 0x48, 0x50);
+pub const menu_text_dark = rgb(0xE8, 0xEC, 0xF0);
+pub const menu_hover_bg_dark = rgb(0x30, 0x40, 0x50);
+pub const menu_glass_border_dark = rgb(0x50, 0x68, 0x90);
+
 pub const search_box_bg = rgb(0xFF, 0xFF, 0xFF);
 pub const search_box_border = rgb(0xA0, 0xB0, 0xC0);
 pub const search_placeholder = rgb(0xA0, 0xA0, 0xA0);
+pub const search_box_bg_dark = rgb(0x2A, 0x30, 0x38);
+pub const search_box_border_dark = rgb(0x50, 0x58, 0x60);
+pub const search_placeholder_dark = rgb(0x70, 0x78, 0x80);
 
 pub const shutdown_btn_bg = rgb(0xE0, 0x40, 0x30);
 pub const shutdown_btn_text = rgb(0xFF, 0xFF, 0xFF);
+pub const shutdown_btn_bg_dark = rgb(0xC0, 0x30, 0x20);
 
 pub const login_bg_top = rgb(0x14, 0x32, 0x5A);
 pub const login_bg_bottom = rgb(0x0A, 0x1E, 0x38);

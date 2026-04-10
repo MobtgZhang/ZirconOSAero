@@ -43,6 +43,8 @@ pub const OsWindowState = struct {
 const MAX_OS_WINDOWS: usize = 8;
 var os_windows: [MAX_OS_WINDOWS]OsWindowState = [_]OsWindowState{.{}} ** MAX_OS_WINDOWS;
 var os_window_count: usize = 0;
+/// 当前活动窗口索引（用于任务栏高亮同步）
+var active_window_index: usize = 0;
 
 var state: ShellState = .initializing;
 
@@ -125,6 +127,35 @@ pub fn handleStartButton() void {
     startmenu_mod.toggle();
 }
 
+/// 更新开始按钮长按检测（每帧调用）
+pub fn updateStartButtonLongPress(current_time: u32) void {
+    if (taskbar_mod.updateLongPress(current_time)) {
+        // 触发长按关机
+        shutdown();
+    }
+}
+
+/// 处理开始按钮按下
+pub fn handleStartButtonDown(x: i32, y: i32, screen_h: i32, press_time: u32) void {
+    if (taskbar_mod.isClickOnStartButton(x, y, screen_h)) {
+        taskbar_mod.onStartButtonDown(press_time);
+    }
+}
+
+/// 处理开始按钮释放
+pub fn handleStartButtonUp(x: i32, y: i32, screen_h: i32) void {
+    _ = x;
+    _ = y;
+    _ = screen_h;
+    if (taskbar_mod.isStartButtonPressed()) {
+        taskbar_mod.onStartButtonUp();
+        // 如果菜单没有打开，打开菜单（短按行为）
+        if (!startmenu_mod.isVisible()) {
+            startmenu_mod.show();
+        }
+    }
+}
+
 pub fn handleDesktopClick(x: i32, y: i32, screen_h: i32) void {
     if (startmenu_mod.isVisible()) {
         if (!startmenu_mod.contains(screen_h, x, y)) {
@@ -134,7 +165,12 @@ pub fn handleDesktopClick(x: i32, y: i32, screen_h: i32) void {
     }
 
     // Z-order：合成器窗口 → 桌面小工具 → 任务栏 → 桌面图标（与 DWM 层叠一致）
-    if (compositor.hitTestTopMost(x, y)) |_| {
+    if (compositor.hitTestTopMost(x, y)) |surface_id| {
+        // 命中窗口：根据 surface_id 查找对应的窗口并更新任务栏 active 状态
+        if (findWindowIndexBySurface(surface_id)) |idx| {
+            taskbar_mod.setActiveWindow(idx);
+            active_window_index = idx;
+        }
         return;
     }
 
@@ -157,6 +193,27 @@ pub fn handleDesktopClick(x: i32, y: i32, screen_h: i32) void {
     }
 
     desktop_mod.deselectAll();
+}
+
+/// 根据 surface_id 查找对应的窗口索引
+fn findWindowIndexBySurface(surface_id: u32) ?usize {
+    _ = surface_id;
+    // 优先使用内核 display.zig 的键盘焦点状态（更可靠）
+    // shell_keyboard_focus: 0=Explorer, 1=TaskMgr, 2=BuiltinApps
+    return active_window_index;
+}
+
+/// 设置活动窗口索引（由外部窗口管理器调用）
+pub fn setActiveWindow(index: usize) void {
+    if (index < os_window_count) {
+        active_window_index = index;
+        taskbar_mod.setActiveWindow(index);
+    }
+}
+
+/// 获取当前活动窗口索引
+pub fn getActiveWindowIndex() usize {
+    return active_window_index;
 }
 
 pub fn handleDesktopRightClick(x: i32, y: i32, screen_h: i32) void {

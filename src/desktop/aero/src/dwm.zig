@@ -196,20 +196,61 @@ pub fn blurRect(
     const radius: u32 = @as(u32, config.blur_radius);
     if (radius == 0) return;
 
+    blurRectImpl(&px, x0, y0, x1, y1, w, h, passes, radius);
+}
+
+/// 低预算模糊（用于拖动等高频率场景）：仅执行 1 遍模糊
+pub fn blurRectLight(
+    fb_addr: usize,
+    fb_width: u32,
+    fb_height: u32,
+    fb_pitch: u32,
+    fb_bpp: u8,
+    rect_x: i32,
+    rect_y: i32,
+    rect_w: i32,
+    rect_h: i32,
+) void {
+    if (!config.glass_enabled or rect_w <= 0 or rect_h <= 0) return;
+
+    const px = PixelReader{
+        .base = fb_addr,
+        .pitch = fb_pitch,
+        .width = fb_width,
+        .height = fb_height,
+        .bpp = fb_bpp,
+    };
+
+    const x0: u32 = if (rect_x < 0) 0 else @intCast(rect_x);
+    const y0: u32 = if (rect_y < 0) 0 else @intCast(rect_y);
+    const x1: u32 = @min(x0 + @as(u32, @intCast(rect_w)), fb_width);
+    const y1: u32 = @min(y0 + @as(u32, @intCast(rect_h)), fb_height);
+    if (x0 >= x1 or y0 >= y1) return;
+
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w > MAX_LINE or h > MAX_LINE) return;
+
+    // 低预算：仅 1 遍模糊，半径减半以提升速度
+    blurRectImpl(&px, x0, y0, x1, y1, w, h, 1, @divTrunc(@as(u32, config.blur_radius), 2));
+}
+
+/// 模糊实现的核心逻辑（可被不同预算复用）
+fn blurRectImpl(px: *const PixelReader, x0: u32, y0: u32, x1: u32, y1: u32, w: u32, h: u32, passes: u8, radius: u32) void {
     var pass: u8 = 0;
     while (pass < passes) : (pass += 1) {
         // Horizontal blur pass
         var row: u32 = y0;
         while (row < y1) : (row += 1) {
-            hblurReadRow(&px, row, x0, x1);
-            hblurWriteRow(&px, row, x0, x1, w, radius);
+            hblurReadRow(px, row, x0, x1);
+            hblurWriteRow(px, row, x0, x1, w, radius);
         }
 
         // Vertical blur pass
         var vcol: u32 = x0;
         while (vcol < x1) : (vcol += 1) {
-            vblurReadCol(&px, vcol, y0, y1);
-            vblurWriteCol(&px, vcol, y0, y1, h, radius);
+            vblurReadCol(px, vcol, y0, y1);
+            vblurWriteCol(px, vcol, y0, y1, h, radius);
         }
     }
 }
@@ -331,6 +372,7 @@ pub fn applySpecularHighlight(
 
 // ── Soft Drop Shadow ──
 // Multi-layer shadow with decreasing opacity for soft edges.
+// 使用冷灰蓝色阴影（与 material.zig / display.zig 一致），避免纯黑阴影的生硬观感。
 
 pub fn renderSoftShadow(
     fb_addr: usize,
@@ -355,14 +397,18 @@ pub fn renderSoftShadow(
 
     const layers = @as(u32, config.shadow_layers);
     const size = @as(i32, @intCast(config.shadow_size));
+    // 冷灰蓝色阴影（与 material.zig / display.zig 一致）
+    const shadow_tint_r: u32 = 0x30;
+    const shadow_tint_g: u32 = 0x48;
+    const shadow_tint_b: u32 = 0x60;
 
     var layer: u32 = 0;
     while (layer < layers) : (layer += 1) {
         const offset = size - @as(i32, @intCast(layer * 2));
         if (offset <= 0) break;
 
-        // Outer layers are more transparent (darker with less contribution)
-        const base_alpha: u32 = 30 - layer * 6;
+        // 与 material.zig 一致的 alpha 曲线：外层更深（更大 alpha）、内层更淡
+        const base_alpha: u32 = 18 - @min(layer * 4, 14);
         const shadow_alpha: u32 = if (base_alpha > 255) 0 else base_alpha;
 
         const sx: i32 = rect_x + offset;
@@ -384,10 +430,11 @@ pub fn renderSoftShadow(
                 const eg: u32 = (existing >> 8) & 0xFF;
                 const eb: u32 = (existing >> 16) & 0xFF;
 
-                const out_r = er * (255 - shadow_alpha) / 255;
-                const out_g = eg * (255 - shadow_alpha) / 255;
-                const out_b = eb * (255 - shadow_alpha) / 255;
-                px.writePixel(col, row, (out_r & 0xFF) | ((out_g & 0xFF) << 8) | ((out_b & 0xFF) << 16));
+                // 冷灰蓝色阴影 blend：先用 alpha 衰减目标色，再用冷色注入
+                const blend_r = (er * (255 - shadow_alpha) + shadow_tint_r * shadow_alpha) / 255;
+                const blend_g = (eg * (255 - shadow_alpha) + shadow_tint_g * shadow_alpha) / 255;
+                const blend_b = (eb * (255 - shadow_alpha) + shadow_tint_b * shadow_alpha) / 255;
+                px.writePixel(col, row, (blend_r & 0xFF) | ((blend_g & 0xFF) << 8) | ((blend_b & 0xFF) << 16));
             }
         }
     }

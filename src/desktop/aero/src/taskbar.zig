@@ -33,12 +33,47 @@ var initialized_flag: bool = false;
 /// Shell / 合成器可查询：用户按住 Show Desktop 条时的 Aero Peek 预览态（阶段 2 Shell 占位）。
 var aero_peek_active: bool = false;
 
+/// 开始按钮长按状态
+var start_btn_pressed: bool = false;
+var start_btn_press_time: u32 = 0;
+/// 长按关机阈值（毫秒）
+const LONG_PRESS_SHUTDOWN_MS: u32 = 500;
+
 pub fn setAeroPeekActive(active: bool) void {
     aero_peek_active = active;
 }
 
 pub fn isAeroPeekActive() bool {
     return aero_peek_active;
+}
+
+/// 开始按钮按下时调用（返回是否触发长按关机）
+pub fn onStartButtonDown(press_time: u32) bool {
+    start_btn_pressed = true;
+    start_btn_press_time = press_time;
+    return false; // 短按先打开菜单，长按由 updateLongPress 检测
+}
+
+/// 开始按钮释放时调用
+pub fn onStartButtonUp() void {
+    start_btn_pressed = false;
+    start_btn_press_time = 0;
+}
+
+/// 检查是否触发长按关机（每帧调用）
+pub fn updateLongPress(current_time: u32) bool {
+    if (!start_btn_pressed) return false;
+    if (current_time -% start_btn_press_time >= LONG_PRESS_SHUTDOWN_MS) {
+        start_btn_pressed = false;
+        start_btn_press_time = 0;
+        return true; // 触发关机
+    }
+    return false;
+}
+
+/// 获取开始按钮是否正在被按压
+pub fn isStartButtonPressed() bool {
+    return start_btn_pressed;
 }
 
 pub fn init(config: TaskbarConfig) void {
@@ -71,6 +106,27 @@ pub fn setActive(icon_id: u16) void {
     for (buttons[0..button_count]) |*btn| {
         btn.active = (btn.icon_id == icon_id);
     }
+}
+
+/// 按窗口索引设置活动按钮（由 shell.zig 窗口点击/激活时调用）
+pub fn setActiveWindow(index: usize) void {
+    var i: usize = 0;
+    for (buttons[0..button_count]) |*btn| {
+        if (i == index) {
+            btn.active = true;
+        } else {
+            btn.active = false;
+        }
+        i += 1;
+    }
+}
+
+/// 获取当前活动按钮索引（用于窗口切换检测）
+pub fn getActiveIndex() ?usize {
+    for (buttons[0..button_count], 0..) |btn, idx| {
+        if (btn.active) return idx;
+    }
+    return null;
 }
 
 pub fn getButtons() []const TaskButton {

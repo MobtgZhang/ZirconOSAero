@@ -5,6 +5,68 @@
 
 const theme = @import("theme.zig");
 
+/// 动画状态
+const AnimState = enum {
+    hidden,
+    opening,
+    open,
+    closing,
+};
+
+/// 开始菜单动画状态
+var anim_state: AnimState = .hidden;
+/// 动画进度：0.0（完全收起）到 1.0（完全展开）
+var anim_progress: f32 = 0.0;
+
+/// 动画持续时间（帧数，约 200ms @ 60fps）
+const ANIM_FRAMES: u32 = 12;
+
+/// 计算 ease-out 缓动曲线
+fn easeOutProgress(t: f32) f32 {
+    return 1.0 - (1.0 - t) * (1.0 - t);
+}
+
+/// 每帧调用以推进动画状态
+pub fn updateAnimation() void {
+    switch (anim_state) {
+        .hidden => {},
+        .opening => {
+            anim_progress += 1.0 / @as(f32, @floatFromInt(ANIM_FRAMES));
+            if (anim_progress >= 1.0) {
+                anim_progress = 1.0;
+                anim_state = .open;
+                visible = true;
+            }
+        },
+        .open => {
+            visible = true;
+        },
+        .closing => {
+            anim_progress -= 1.0 / @as(f32, @floatFromInt(ANIM_FRAMES));
+            if (anim_progress <= 0.0) {
+                anim_progress = 0.0;
+                anim_state = .hidden;
+                visible = false;
+            }
+        },
+    }
+}
+
+/// 获取动画进度（0.0 到 1.0）
+pub fn getAnimProgress() f32 {
+    return anim_progress;
+}
+
+/// 菜单是否正在执行动画
+pub fn isAnimating() bool {
+    return anim_state == .opening or anim_state == .closing;
+}
+
+/// 菜单是否完全展开（用于交互）
+pub fn isFullyOpen() bool {
+    return anim_state == .open and anim_progress >= 1.0;
+}
+
 pub const MenuItem = struct {
     name: [32]u8 = [_]u8{0} ** 32,
     name_len: u8 = 0,
@@ -108,26 +170,33 @@ fn addDefaultItems() void {
 }
 
 pub fn toggle() void {
-    visible = !visible;
-    if (!visible) {
-        search_len = 0;
+    if (visible or anim_state == .opening or anim_state == .open) {
+        hide();
+    } else {
+        show();
     }
 }
 
 pub fn show() void {
     visible = true;
+    anim_state = .opening;
+    anim_progress = 0.0;
 }
 
 pub fn hide() void {
-    visible = false;
+    if (anim_state != .hidden) {
+        anim_state = .closing;
+    }
     search_len = 0;
 }
 
 pub fn isVisible() bool {
-    return visible;
+    return visible or anim_state == .opening or anim_state == .closing;
 }
 
 pub fn contains(screen_h: i32, x: i32, y: i32) bool {
+    // 如果菜单正在关闭，不响应点击
+    if (anim_state == .closing and anim_progress <= 0.1) return false;
     const menu_h = theme.Layout.startmenu_height;
     const menu_w = theme.Layout.startmenu_width;
     const taskbar_h = theme.Layout.taskbar_height;

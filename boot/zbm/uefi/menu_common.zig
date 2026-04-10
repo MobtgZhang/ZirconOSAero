@@ -174,6 +174,22 @@ pub fn runMenuLoop(
             if (tryReadKeyUnified(con_in)) |key| {
                 timer_active = false;
 
+                // 调试日志：打印按键信息（帮助诊断方向键问题）
+                const dbg_row: usize = 23;
+                zto.setCursorPosition(out, 0, dbg_row);
+                zto.setAttribute(out, Attr.dim);
+                zto.outputString(out, @as([*:0]const u16, @ptrCast(&SPACES_79_U16)));
+                zto.setCursorPosition(out, 0, dbg_row);
+                puts(out, "    [dbg] scan=");
+                printDecimal(out, key.scan_code);
+                puts(out, " unicode=");
+                printDecimal(out, @as(u32, key.unicode_char));
+                if (g_text_in_ex == null) {
+                    puts(out, " [NoSimpleTextInputEx]");
+                }
+                puts(out, "            ");
+                zto.setCursorPosition(out, 0, 3);
+
                 if (key.unicode_char == '\t') {
                     menu_focus = if (menu_focus == .os_list) .tools_list else .os_list;
                     need_full_redraw = true;
@@ -286,6 +302,24 @@ fn readKeyStrokeSimple(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
 }
 
 fn tryReadKeyUnified(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
+    // 方向键的 scan_code 只能通过 SimpleTextInputEx 获取。
+    // 在 x86_64 和 LoongArch64 上，优先尝试 SimpleTextInputEx，再用 SimpleTextInput 兜底。
+    if (builtin.cpu.arch == .loongarch64 or builtin.cpu.arch == .x86_64) {
+        // 关键修复：先尝试 SimpleTextInputEx（方向键必须从这获取）
+        if (g_text_in_ex) |ex| {
+            if (zcall.readKeyStrokeEx(ex)) |full| return full.input;
+            if (zcall.checkEventSignaled(bs, ex.wait_for_key_ex)) {
+                if (zcall.readKeyStrokeEx(ex)) |full| return full.input;
+            }
+        }
+        // 普通读取兜底：Enter/ESC/数字键/TAB 等字符键
+        if (readKeyStrokeSimple(cin)) |k| return k;
+        if (zcall.checkEventSignaled(bs, cin.wait_for_key)) {
+            return readKeyStrokeSimple(cin);
+        }
+        return null;
+    }
+    // 其他架构：原逻辑
     if (g_text_in_ex) |ex| {
         if (zcall.readKeyStrokeEx(ex)) |full| {
             return full.input;

@@ -41,6 +41,10 @@ pub const Process = struct {
     name_len: usize = 0,
     /// 前台量子加成（`scheduler.quantumTicksForThread`）；桌面会话可置位。
     is_foreground: bool = false,
+    /// QT-03: 进程优先级类（0-7），影响线程的默认时间片长度。
+    /// 由 `NtSetInformationProcess` 的 `ProcessPriorityClass` 设置。
+    /// 默认为 2（NORMAL_PRIORITY_CLASS）。
+    priority_class: u8 = 2,
     /// NT 6.1 里程碑：主模块首选基址（PE `OptionalHeader.ImageBase`）；未加载 PE 时为 0。
     image_base_address: u64 = 0,
     /// NT 6.1 里程碑：进程环境块用户 VA；由加载器/Nt 路径填写，供 syscall 与用户异常对齐。
@@ -59,6 +63,11 @@ pub const Process = struct {
             .state = .creating,
             .handle_table = ob.HandleTable.init(pid),
         };
+    }
+
+    /// FG-01: 设置前台状态，窗口激活时调用以获得额外时间片加成。
+    pub fn setForeground(self: *Process, foreground: bool) void {
+        self.is_foreground = foreground;
     }
 };
 
@@ -161,11 +170,25 @@ pub fn init() void {
 }
 
 pub fn allocPid() ?u32 {
-    if (next_pid == 0) return null;
-    if (next_pid == std.math.maxInt(u32)) return null;
-    const pid = next_pid;
-    next_pid += 1;
-    return pid;
+    if (next_pid != 0 and next_pid != std.math.maxInt(u32)) {
+        const pid = next_pid;
+        next_pid +%= 1;
+        return pid;
+    }
+    // next_pid 达到上限，遍历整个数组回收已终止进程的 PID
+    for (&processes) |*p| {
+        if (p.state == .terminated) {
+            const recycled_pid = p.pid;
+            p.pid = 0; // 标记为未分配
+            p.state = .creating;
+            // 回收成功后，尝试重置 next_pid（从 1 开始找最小的可用值）
+            if (next_pid == std.math.maxInt(u32)) {
+                next_pid = 1;
+            }
+            return recycled_pid;
+        }
+    }
+    return null;
 }
 
 pub fn allocTid() ?u32 {
@@ -204,6 +227,19 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
             }
         }
     }
+    // LoongArch64：为用户地址空间分配 ASID
+    if (builtin.cpu.arch == .loongarch64 and builtin.os.tag == .freestanding) {
+        const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
+        const asid = tlb_la.allocateProcessAsid();
+        if (asid == 0) {
+            vm.releaseProcessAddressSpace(space_ptr);
+            freeProcessAddressSpaceSlot(space_ptr);
+            panic_ctx.setPhase(0);
+            return null;
+        }
+        space_ptr.asid = asid;
+        space_ptr.last_asid_version = tlb_la.getAsidVersion();
+    }
     panic_ctx.setPhase(0x0005_0013);
 
     var p = &processes[process_count];
@@ -241,10 +277,11 @@ pub fn terminateProcess(pid: u32, exit_code: u32) bool {
     if (before_release_process_address_space) |hook| {
         hook(pid);
     }
-    if (p.address_space) |asp| {
+    const asp = p.address_space;
+    if (asp != null) {
         // `releaseProcessAddressSpace` 清空 VAD / 用户半区页表；须先经 `before_release_process_address_space` 使无线程再以该 CR3 运行（K2.1）。
-        vm.releaseProcessAddressSpace(asp);
-        freeProcessAddressSpaceSlot(asp);
+        vm.releaseProcessAddressSpace(asp.?);
+        freeProcessAddressSpaceSlot(asp.?);
         p.address_space = null;
     }
     p.handle_table.closeAllOpenHandles();

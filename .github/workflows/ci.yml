@@ -59,15 +59,29 @@ jobs:
           zig build uefi -Darch=x86_64
           zig build uefi -Darch=aarch64
 
-      - name: Kernel + ZBM objects (aarch64, riscv64, loongarch64)
+      - name: Kernel + ZBM objects (aarch64, riscv64, loongarch64, mips64el)
         run: |
           zig build kernel -Darch=aarch64
           zig build kernel -Darch=aarch64 -Ddesktop-full=true
           zig build kernel -Darch=riscv64
           zig build kernel -Darch=loongarch64
+          zig build kernel -Darch=mips64el
           # Named ZBM object steps are registered only when -Darch matches (see build.zig).
           zig build zbm-riscv64-uefi -Darch=riscv64
           zig build zbm-loongarch-uefi -Darch=loongarch64
+          zig build zbm-mips64el-uefi -Darch=mips64el
+
+      # LoongArch64 交叉编译 host 测试
+      - name: Host tests (LoongArch64 cross-compile)
+        run: zig build test-host -Darch=loongarch64
+
+      # MIPS64EL 交叉编译 host 测试
+      - name: Host tests (MIPS64EL cross-compile)
+        run: zig build test-host -Darch=mips64el
+
+      # RISC-V64 交叉编译 host 测试
+      - name: Host tests (RISC-V64 cross-compile)
+        run: zig build test-host -Darch=riscv64
 
       # 可选收紧串口：export CI_SMOKE_MIN_SERIAL=32（见 scripts/smoke-qemu-mbr.sh --min-serial-bytes）
       - name: QEMU serial smoke (ZBM MBR, headless)

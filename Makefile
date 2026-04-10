@@ -234,7 +234,8 @@ QEMU_COMMON_X86_UEFI := -machine $(QEMU_X86_UEFI_MACHINE),accel=$(QEMU_X86_UEFI_
 QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,$(QEMU_GTK_ZOOM)$(QEMU_GTK_EXTRA)
 
-QEMU_COMMON_RISCV64 := -M virt -cpu rv64 -m $(QEMU_MEM) -serial stdio \
+QEMU_COMMON_RISCV64 := -M virt -cpu rv64 -m $(QEMU_MEM) \
+	-serial file:/tmp/zircon-riscv64-serial.txt \
 	-no-reboot -no-shutdown -display gtk,$(QEMU_GTK_ZOOM)$(QEMU_GTK_EXTRA)
 
 # AArch64：默认 **仅 ramfb + virtio-mouse/keyboard（不绑 display）**，GTK 扫 ramfb，避免 “Display output is not active”；ZBM 方向键走全局 VirtIO/USB。
@@ -912,14 +913,9 @@ run-aarch64-debug:
 
 run-riscv64:
 	@$(MAKE) build-esp ARCH=riscv64
-	@echo "[ZirconOSAero] RISC-V64 UEFI boot ($(RISCV64_EFI_CODE))..."
-	@if [ ! -f "$(RISCV64_EFI_CODE)" ]; then \
-		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
-		exit 1; \
-	fi
+	@echo "[ZirconOSAero] RISC-V64 UEFI boot (QEMU default fw_dynamic → BOOTRISCV64.EFI from ESP)..."
 	qemu-system-riscv64 \
 		$(QEMU_COMMON_RISCV64) \
-		-bios $(RISCV64_EFI_CODE) \
 		-drive if=none,id=zircon-esp0,file=$(ESP_IMG_RISCV64),format=raw \
 		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
 		$(QEMU_RISCV64_EXTRA)
@@ -927,13 +923,8 @@ run-riscv64:
 run-riscv64-debug:
 	@$(MAKE) build-esp ARCH=riscv64
 	@echo "[ZirconOSAero] RISC-V64 UEFI debug (GDB on :1234)..."
-	@if [ ! -f "$(RISCV64_EFI_CODE)" ]; then \
-		echo "[ZirconOSAero] Firmware not found. Run: make fetch-firmware"; \
-		exit 1; \
-	fi
 	qemu-system-riscv64 \
 		$(QEMU_COMMON_RISCV64) \
-		-bios $(RISCV64_EFI_CODE) \
 		-drive if=none,id=zircon-esp0,file=$(ESP_IMG_RISCV64),format=raw \
 		-device virtio-blk-pci,drive=zircon-esp0,bootindex=0 \
 		$(QEMU_RISCV64_EXTRA) \

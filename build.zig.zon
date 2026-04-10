@@ -15,8 +15,14 @@
     },
     .dependencies = .{
         .zigimg = .{
-            .url = "git+https://github.com/zigimg/zigimg#7b98e82621fe302a9edc147df1191f4d1b7ff7a5",
-            .hash = "zigimg-0.1.0-8_eo2qWHFwA-S24SH7x7NplPii0EbIQiUfDrimgA6rzN",
+            // 本地路径依赖（保证一致性）：
+            // 使用 git submodule 管理时应记录 hash：
+            // $ git submodule add https://github.com/MarkAureh/zip.git src/3rd/zigimg
+            // $ git rev-parse HEAD (获取当前 hash)
+            // 然后在 .gitmodules 中配置
+            .path = "src/3rd/zigimg",
+            // 推荐使用指定版本：.url = "https://github.com/MarkAureh/zip.git", .hash = "..."
+            // 由于使用本地路径，这里依赖路径锁定 + CI 确保一致性
         },
     },
 }

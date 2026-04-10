@@ -435,6 +435,7 @@ pub fn build(b: *std.Build) void {
             kernel.addAssemblyFile(b.path("src/arch/x86_64/isr_common.s"));
             kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_lstar.s"));
         }
+        kernel.addAssemblyFile(b.path("src/arch/x86_64/context_switch.S"));
         kernel.addAssemblyFile(b.path("src/arch/x86_64/kernel_end.s"));
     } else if (mem.eql(u8, arch_opt, "aarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/aarch64/start.S"));
@@ -444,10 +445,12 @@ pub fn build(b: *std.Build) void {
         kernel.addAssemblyFile(b.path("src/arch/riscv64/start.S"));
         kernel.addAssemblyFile(b.path("src/arch/riscv64/trap.S"));
         kernel.addAssemblyFile(b.path("src/arch/riscv64/context_switch.S"));
+        kernel.addAssemblyFile(b.path("src/arch/riscv64/ap_entry.S"));
     } else if (mem.eql(u8, arch_opt, "loongarch64")) {
         kernel.addAssemblyFile(b.path("src/arch/loongarch64/crt0.S"));
         kernel.addAssemblyFile(b.path("src/arch/loongarch64/exc_vec.S"));
         kernel.addAssemblyFile(b.path("src/arch/loongarch64/context_switch.S"));
+        kernel.addAssemblyFile(b.path("src/arch/loongarch64/ap_entry.S"));
     } else if (mem.eql(u8, arch_opt, "mips64el")) {
         kernel.addAssemblyFile(b.path("src/arch/mips64el/start.S"));
         kernel.addAssemblyFile(b.path("src/arch/mips64el/exceptions.S"));
@@ -1662,6 +1665,21 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_vm_user_va_policy_nt61_tests.step);
     test_step.dependOn(&run_loongarch_nt61_mm_host_tests.step);
     test_step.dependOn(&run_mips64el_nt61_mm_host_tests.step);
+
+    // ── 阶段3 SMP 集成测试 ──
+    // 运行 QEMU LoongArch64 SMP 烟测（依赖 QEMU、固件和 ESP 镜像）。
+    // 用法：zig build run-qemu-smp-test（需先 zig build && make build-esp ARCH=loongarch64）
+    const qemu_smp_test = b.addSystemCommand(&.{
+        "bash",
+        "scripts/qemu_loongarch64_smp_test.sh",
+    });
+    qemu_smp_test.setCwd(b.path("."));
+    qemu_smp_test.has_side_effects = true;
+    const qemu_smp_test_step = b.step(
+        "run-qemu-smp-test",
+        "Run LoongArch64 SMP smoke test via QEMU (requires QEMU + firmware + ESP image)",
+    );
+    qemu_smp_test_step.dependOn(&qemu_smp_test.step);
 
     const pwsh_lite_mod = b.createModule(.{
         .root_source_file = b.path("tools/pwsh-lite/main.zig"),

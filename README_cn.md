@@ -52,7 +52,7 @@
 
 状态标签：`Stub` · `Partial` · `Done` · `Verified`。**工程三态**：`Verified`（CI/`zig build test` 或 QEMU 冒烟可重复）、`InProgress`（接口已建、语义对齐中）、`Planned`（仅文档/桩）。API 覆盖：[docs/cn/API_COMPAT_MATRIX.md](docs/cn/API_COMPAT_MATRIX.md)。
 
-更多：[`docs/README.md`](docs/README.md) · [`docs/cn/README.md`](docs/cn/README.md) · [`docs/cn/Architecture.md`](docs/cn/Architecture.md) · [`docs/cn/Kernel.md`](docs/cn/Kernel.md) · [`docs/cn/Boot.md`](docs/cn/Boot.md) · [`docs/cn/BuildSystem.md`](docs/cn/BuildSystem.md) · [`docs/cn/Roadmap.md`](docs/cn/Roadmap.md)
+更多文档见 [`docs/cn/README.md`](docs/cn/README.md)。契约矩阵：[`docs/cn/NT61_CONTRACT_MATRIX.md`](docs/cn/NT61_CONTRACT_MATRIX.md)；流程规范：[`docs/cn/PROCESS_NT61.md`](docs/cn/PROCESS_NT61.md)；测试索引：[`docs/cn/MVT_NT61.md`](docs/cn/MVT_NT61.md)。
 
 ## 项目结构
 
@@ -174,48 +174,48 @@ Clean-room；矩阵 **Done** = 烟测主路径可演示且与 [契约矩阵](doc
 
 ## Phase 0–11 功能矩阵（继承上游能力）
 
-状态以代码与契约为准；**Partial / Stub** 非「全部完成」。
+状态以代码与契约为准；**Partial / Stub** 非「全部完成」。详细说明与内联链接见 [`docs/cn/NT61_CONTRACT_MATRIX.md`](docs/cn/NT61_CONTRACT_MATRIX.md)。
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | ZBM 引导 | Done | BIOS/MBR + UEFI；Windows 7 风格文本菜单 |
-| UEFI 引导 | Done | UEFI 应用，Debug/Release，Phase 0–11 横幅 |
+| UEFI 引导 | Done | UEFI 应用，Debug/Release |
 | VGA | Done | 文本控制台 |
 | 串口 | Done | COM1 |
-| 物理帧分配器 | Partial | 位图 + mmap 过滤；伙伴连续页见 `phys_buddy.zig`（契约矩阵 §0） |
-| 分页 | Partial | 四级表、恒等映射；每进程 CR3（`linkKernelHalfMappings` 共享高半区 PML4）+ SMEP 见契约矩阵 |
-| 内核堆 | Partial | Bump 快路径 + 空闲链表 + `mm/pool` 档位；路径见 [MM_ALLOC_PATHS.md](docs/cn/MM_ALLOC_PATHS.md)；契约矩阵 §0 |
-| Section 对象 | Partial | 匿名节 + `ntdll`/`section.zig`；syscall 分发节区 API（[MM_Section_Roadmap.md](docs/cn/MM_Section_Roadmap.md)） |
-| IPC (LPC) | Partial | 队列、端口；连接/通信端口分离雏形、`section_view_handle` 占位 |
-| 系统调用 | Partial | **仅 `syscall`/`sysret`**（[SyscallABI.md](docs/cn/SyscallABI.md)；无 SYSCALL/SYSRET 的 CPU 会 bugcheck）；SSDT 含 `NtCreateProcess`、`NtCreateUserProcess`（**0xAA**）、`NtWaitForMultipleObjects`（**0x57**）、`NtDeviceIoControlFile`（**0x52**）、Lock/Unlock VM（**0x53/0x54**）等；`NtQuerySystemInformation` 多类子集 + `probe`；**ssdt_stub_parity**；阶段 E 见 [PHASE_E_NATIVE_API.md](docs/cn/PHASE_E_NATIVE_API.md) |
+| 物理帧分配器 | Partial | 位图 + mmap；伙伴系统见 `phys_buddy.zig` |
+| 分页 | Partial | 四级表、恒等映射；每进程 CR3 + SMEP |
+| 内核堆 | Partial | Bump 快路径 + 空闲链表 + `mm/pool` 档位 |
+| Section 对象 | Partial | 匿名节 + `ntdll`/`section.zig` |
+| IPC (LPC) | Partial | 队列、端口；连接/通信端口分离 |
+| 系统调用 | Partial | **仅 `syscall`/`sysret`**；SSDT 子集（含 `NtCreateUserProcess` 0xAA、`NtDeviceIoControlFile` 0x52 等） |
 | IDT/ISR | Done | 256 向量 |
-| 调度器 | Partial | **已实现**：每逻辑 CPU **32** 档 FIFO 分桶、`non_empty` 位图、按 **priority class** 时间片、饥饿提升、I/O boost、互斥优先级继承（`mutex_inherit_depth`）、亲和与 `home_cpu`、tick 路径 CR3 切换；**对象等待队列** + `keWait` 与 `tick` 协同（[SCHEDULER_API.md](docs/cn/SCHEDULER_API.md) 阶段 C）。**未等同 NT**：NUMA/公平份额、完整 IRQL 抢占、AP **INIT-SIPI** 实路径与多核 tick 等见契约矩阵与 K2.x |
-| 定时器 | Partial | PIC + PIT ~100Hz；高精度见 [TimerPrecisionRoadmap.md](docs/cn/TimerPrecisionRoadmap.md) |
-| 同步 | Partial | 内核 `ke/sync.zig` 有 Event/Mutex/Semaphore/SpinLock；**ntdll 句柄路径**：`NtCreateEvent`/`NtWait`/`NtSetEvent`（含手动/自动复位）与 `ObjectHeader` 等待队列一致；`NtCreateMutant`/`NtReleaseSemaphore` 等仍为桩 — 见 [SCHEDULER_API.md](docs/cn/SCHEDULER_API.md)、契约矩阵 §2 |
-| Object Manager | Partial | 类型、句柄表、命名空间子集；主机测试 [zircon_host_ob_test.zig](src/zircon_host_ob_test.zig) |
-| Process Manager | Partial | 进程/线程、Process Server；CR3/隔离见契约矩阵 §0 |
+| 调度器 | Partial | 每逻辑 CPU 32 档 FIFO 分桶、priority class 时间片、饥饿提升、I/O boost、互斥优先级继承 |
+| 定时器 | Partial | PIC + PIT ~100Hz；HPET 高精度见路线图 |
+| 同步 | Partial | Event/Mutex/Semaphore/SpinLock；ntdll 句柄路径部分实现 |
+| Object Manager | Partial | 类型、句柄表、命名空间子集 |
+| Process Manager | Partial | 进程/线程、Process Server；CR3/隔离 |
 | Session Manager | Done | SMSS、会话、子系统注册 |
-| Security | Partial | 令牌、SID、`checkAccess` 类检查；**完整 DACL / AuthZ** 仍为路线图 — 契约矩阵 **B3**（[NT61_CONTRACT_MATRIX.md](docs/cn/NT61_CONTRACT_MATRIX.md)） |
-| I/O Manager | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP；PCI 早期见 `acpi_pci_early.zig` |
+| Security | Partial | 令牌、SID、`checkAccess` 类检查；DACL/AuthZ 见路线图 |
+| I/O Manager | Partial | 设备、驱动、`IoCompleteRequest` 与 VFS IRP |
 | VFS | Partial | 挂载点；完整语义见契约矩阵 |
-| FAT32 | Partial | `C:\` 主路径；与 NT 格式化完全互操作非目标 |
-| NTFS | Partial | MFT 子集与基本路径；**非**完整 NTFS（日志/压缩等见路线图） |
-| PE32+ 加载器 | Partial | 头、导入、重定位、PEB/TEB 子集；与 SSDT 持续对齐 |
-| PE32 加载器 | Partial | 32 位 PE + WOW64；与官方 SysWOW64/SSDT 不对齐 |
-| ELF 加载器 | Partial | ELF64 头与加载子集；glibc 动态全兼容非目标 |
-| ntdll | Partial | Native API 子集；含 `RtlVerifyVersionInfo`（`os_version` 驱动）；服务号见 SSDT 路线图 |
+| FAT32 | Partial | `C:\` 主路径 |
+| NTFS | Partial | MFT 子集与基本路径；日志/压缩见路线图 |
+| PE32+ 加载器 | Partial | 头、导入、重定位、PEB/TEB 子集 |
+| PE32 加载器 | Partial | 32 位 PE + WOW64 |
+| ELF 加载器 | Partial | ELF64 头与加载子集 |
+| ntdll | Partial | Native API 子集（含 `RtlVerifyVersionInfo`） |
 | kernel32 | Partial | Win32 基础 API 子集 |
-| user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集；**下阶段跟踪**：[PHASE_D_WIN32_MSG_PUMP_DWM.md](docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md)（消息泵与 DWM/LPC 详尽待办） |
-| gdi32 | Partial | DC/原语/字体/位图子集；见 `gdi32.zig` 与契约矩阵 |
+| user32 | Partial | 窗口/消息/类；NC HitTest、DWM 广播子集 |
+| gdi32 | Partial | DC/原语/字体/位图子集 |
 | Console | Done | 控制台运行时 |
 | CMD | Done | dir、cd、set、ver、systeminfo、tasklist 等 |
-| .NET Shell（用户态，预留） | Planned | 内核 ZirconShell 已移除；由未来 .NET 用户态提供 |
+| .NET Shell（用户态，预留） | Planned | 内核 ZirconShell 已移除 |
 | csrss | Partial | Win32 服务器、窗口站、桌面、GUI 分发 |
 | 执行引擎 | Partial | PE 加载、DLL 绑定、生命周期 |
 | WOW64 | Partial | PE32、thunk；见 `subsystems/win32/wow64/` 子模块 |
-| 注册表运行时 | Partial | 内存树与若干键；RegF/hive 持久化 Planned |
-| Aero / DWM（内核壳） | Partial | 脏区/Present 契约、`thumb_refresh` 节流、任务栏缩略 `enqueueIconicThumbnailRequest` 与 Flip3D 表面枚举；**Aero 模糊/合成仍以 CPU 为主**（`blur_budget`）。**VirtIO-GPU**：`SET_SCANOUT` + 屏前 RAM `RESOURCE_FLUSH`；≤32×32 scratch `TRANSFER` PoC。**NVIDIA**：PCI/BAR0 + 可选诊断映射、`IOCTL_NVIDIA_BAR0_FIRST_U32`（非 WDDM）。见 [AeroDesktopRuntime.md](docs/cn/AeroDesktopRuntime.md)、契约矩阵 §4.1、[SOFTWARE_COMPOSITOR_WDDM.md](docs/cn/SOFTWARE_COMPOSITOR_WDDM.md) |
-| 多架构 Win32 栈 | Partial | **x86_64** 为主验证路径。**LoongArch64**：UEFI/ZBM 引导 + ramfb 桌面可达；paging/TLB/SMP 逐步完善中。**AArch64/RISC-V64**：引导骨架已搭建，异常/MMU/调度未完整。**MIPS64el**：空壳 |
+| 注册表运行时 | Partial | 内存树与若干键；RegF/hive 持久化见路线图 |
+| Aero / DWM（内核壳） | Partial | 脏区/Present 契约、Aero 模糊（CPU 合成）；VirtIO-GPU ≤32×32 PoC；NVIDIA PCI/BAR0 诊断映射 |
+| 多架构 Win32 栈 | Partial | **x86_64** 为主；LoongArch64 UEFI/ZBM + ramfb 桌面可达；AArch64/RISC-V64 引导骨架；MIPS64el 空壳 |
 
 ## 里程碑（路线图阶段，非「全部已完成」）
 

@@ -4,9 +4,11 @@ ZirconOSAero is an **NT 6.1–target hybrid microkernel operating system** imple
 
 **简体中文**：[cn/README.md](cn/README.md)
 
-**Full classified index** (every Markdown file under `docs/`): [DOCS_INDEX.md](DOCS_INDEX.md). **Who maintains which table**: [DOCS_MAINTAINERS.md](DOCS_MAINTAINERS.md).
+**Full classified index** (every Markdown file under `docs/`): [DOCS_INDEX.md](DOCS_INDEX.md). **Status label legend and document ownership**: see [DOCS_INDEX.md](DOCS_INDEX.md) §STATUS_LEGEND and §维护约定.
 
 **Reproducible builds / CI toolchain**: [REPRODUCE_BUILD.md](REPRODUCE_BUILD.md).
+
+> **最后更新**：2026-04-10。文档更新原则：PR 涉及语义变更时必须同步更新对应文档；禁止仅凭文档勾选「完成」而不增加可运行验证。
 
 NT 6.1–specific contracts, verification steps, and kernel work items are documented primarily in **Chinese** (`cn/`). English readers: [en/NT61_REFERENCE.md](en/NT61_REFERENCE.md) or the table below.
 
@@ -78,8 +80,7 @@ ZirconOSAero/
 ├── assets/                # Screenshots and project artwork
 ├── docs/
 │   ├── README.md          # This index (English)
-│   ├── DOCS_INDEX.md      # Classified list of all docs
-│   ├── DOCS_MAINTAINERS.md# Which doc owns which tables
+│   ├── DOCS_INDEX.md      # Classified list + status legend + maintenance rules
 │   ├── REPRODUCE_BUILD.md # Toolchain + release checklist
 │   ├── en/                # English documentation
 │   └── cn/                # Chinese documentation (NT61 depth)

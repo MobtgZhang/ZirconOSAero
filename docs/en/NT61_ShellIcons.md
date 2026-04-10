@@ -1,63 +1,75 @@
-# NT 6.1 shell icons and ZirconOS resource DLL
+# NT 6.1 Shell Icons and ZirconOS Resource DLL
 
-This document maps **public Windows 7 knowledge** about where system icons live to **ZirconOS-original** artwork, and describes a **Win32-compatible** host-built PE DLL.  
-**Do not** extract or replicate bitmaps from Microsoft `shell32.dll` / `imageres.dll`. See [Assets.md](../cn/Assets.md) (Chinese) / project rules `zig-nt61-copyright-safety-testing.mdc`.
+This document explains **Windows 7 public knowledge** on system icon storage, **ZirconOS original** asset correspondence, and **Win32-compatible** host-side resource DLL build. **Prohibited**: extracting or replicating bitmaps from Windows installation media (`shell32.dll` / `imageres.dll`). Clean-room compliance: [Assets.md](../cn/Assets.md).
 
-## 1. Windows 7 reference (informational)
+## 1. Windows 7 Reference: Main Icon Resource Files
 
-- **`shell32.dll`**: large system icon set (folders, drives, recycle bin, control panel, network, printers, overlays, etc.).
-- **`imageres.dll`**: high-resolution icons (often including 256×256 PNG) for devices, media, status glyphs, security, networking.
-- Other modules (`setupapi.dll`, `ddores.dll`, `wmploc.dll`, …) and various **EXE** files hold additional icons. Public docs do **not** publish a complete index of every resource ID.
+### 1.1 `%SystemRoot%\System32\shell32.dll`
 
-Tools such as Resource Hacker can browse PE resources. Shell syntax `module.dll,-<id>` is documented under Microsoft Learn (offline: `desktop-src/shell/...`).
+One of the largest icon libraries (hundreds of icons): folders, drives, Computer, Recycle Bin, Control Panel items, network, printers, shortcut arrows, etc.
 
-## 2. ZirconOS policy
+### 1.2 `%SystemRoot%\System32\imageres.dll`
 
-| Role | Artifact | Notes |
-|------|----------|-------|
-| Combined shell icon library | `zircon_shell32_res.dll` | `RT_ICON` / `RT_GROUP_ICON` only; IDs **101–125** (see `src/desktop/aero/resources/win32/ICON_RESOURCE_IDS.md`) |
-| LoongArch64 / “Windows for LoongArch64” stand-in | `zig-out/assets/loongarch64/win/System32/` | **Not a PE**: Zig cannot emit `loongarch64-windows-gnu` COFF DLLs yet (`UnsupportedCoffArchitecture`). This tree is **flat `.ico` files + `zircon_shell32_res.manifest.json`**, carrying the same logical `dll,-<id>` IDs and **PE machine 0x6264** (`IMAGE_FILE_MACHINE_LOONGARCH64`) for host-side tooling. |
-| Source vectors | `src/desktop/aero/resources/icons/*.svg` | Canonical art; `DESIGN.md` |
+Windows 7+ common high-resolution icon library (including 256×256 PNG): devices, media, system status (info/warning/error), users and security, network, etc.
 
-IDs are **Zircon-owned**; visuals are **LGPL / in-tree original**, not binary-compatible with Microsoft’s resource numbering.
+### 1.3 Other DLL / EXE (Summary)
 
-### 2.1 LoongArch PE and community status (compatibility)
+`imagehlp.dll`, `pifmgr.dll`, `moricons.dll`, `wmploc.dll`, `setupapi.dll`, `ddores.dll`, `accessibilitycpl.dll`, `netcenter.dll` / `netshell.dll` each have specialized icons. `explorer.exe`, `notepad.exe`, `calc.exe` etc. carry app icons.
 
-- PE32+ **`.rsrc`** layout is orthogonal to the COFF **`Machine`** field: if the image is **PE32+ (magic 0x20B)** and the resource directory is valid, IDs can be walked. **[`pe_icon_resource.zig`](../../src/desktop/aero/src/pe_icon_resource.zig)** whitelists **`0x8664` (AMD64)**, **`0xAA64` (ARM64)**, **`0x6232`/`0x6264` (LoongArch32/64)**, and UEFI’s **RISC-V32/64/128 `0x5032`/`0x5064`/`0x5128`** (see [UEFI 2.10 — Debugger Support](https://uefi.org/specs/UEFI/2.10_A/18_Protocols_Debugger_Support.html)). This does **not** mean Zig already ships working `aarch64-windows-gnu` / `riscv64-windows-gnu` resource DLLs; toolchain gaps mirror LoongArch.
-- **[loongson-community/discussions#108](https://github.com/loongson-community/discussions/issues/108)** (LoongArch PE relocations, Rust LoongArch64 UEFI preview, LLVM/Rust forks) is about **UEFI / experimental toolchains**, **not** a guarantee that Windows user-mode loaders behave like x64 for LoongArch resource DLLs. **Tier 1** remains the **`ico_bundle` + manifest** tree; **Tier 2** depends on mature **`loongarch64-windows-gnu` COFF** in Zig/LLVM. Use **`zig build aero-loongarch-windows-pe-probe`** to probe; it is **expected to fail** until upstream support lands.
-- **Dual track**: the real x86_64 PE DLL and the LoongArch directory bundle stay **semantically aligned** (same `shell_reference` / PE ids). Hosts can branch on manifest **`binary_form`** (ICO vs PE) via **`loadIconFromShellSystem32Dir`** in [`pe_icon_loader.zig`](../../src/desktop/aero/src/pe_icon_loader.zig).
+### 1.4 How to View (Tools)
 
-## 3. Windows 7 / Win32 API compatibility
+Resource Hacker, IcoFX, etc. can browse PE resources; `dll,-<id>` syntax in "Change Icon" dialog: see Microsoft Learn.
 
-The generated DLL is a normal **PE DLL** with a minimal **`DllMain`** (`zircon_shell32_res_stub.c`). On Windows 7+ it can be loaded with **`LoadLibrary`/`LoadLibraryEx`** and icons retrieved via **`LoadImage`**, **`ExtractIconEx`**, or raw **`FindResource`/`LoadResource`**, using the numeric IDs **101–125**.
+> Public documentation **does not provide** a complete per-index listing of `shell32`/`imageres`. ZirconOS uses **its own** resource numbering.
 
-This matches how **resource-only** system DLLs are consumed; it does **not** copy Microsoft exports or proprietary code.
+## 2. ZirconOS Strategy: Logical Correspondence to Microsoft, Content Not Corresponding to Binary
 
-Design guidance for `.ico` sizes: `desktop-src/uxguide/vis-icons.md`.
+| Logical role | Repository build artifact | Notes |
+|-------------|---------------------------|-------|
+| Shell system icons (merged library) | `zircon_shell32_res.dll` | RT_ICON / RT_GROUP_ICON only; resource IDs **101–125** (see below) |
+| LoongArch64 / "Windows for LoongArch64" placeholder | `zig-out/assets/loongarch64/win/System32/` | **Not PE**: Zig cannot yet produce `loongarch64-windows-gnu` COFF DLL (`UnsupportedCoffArchitecture`). This directory is **ICO tiles + `zircon_shell32_res.manifest.json`**; semantic alignment with `dll,-<id>` and PE machine **0x6264** (`IMAGE_FILE_MACHINE_LOONGARCH64`) for host/test manifest parsing |
+| Optional split | `zircon_imageres_res.dll` | planned; currently merged into one DLL |
+| Vector master source | `src/desktop/aero/resources/icons/*.svg` | see `DESIGN.md` in same directory |
 
-## 4. IDs and files
+Shell reference form matches Win7 (e.g., `zircon_shell32_res.dll,-101`), but **integer IDs differ** from Microsoft DLL; art is **LGPL/original**.
 
-Logical **`IconId` 1–25** align with PE **101–125** and ICO basenames — see `src/desktop/aero/resources/icons/README.md`. In Zig, the member for ID 25 is **`err`** (`error` is reserved); the file remains `error.svg`.
+### 2.1 LoongArch PE and Community Progress (Compatibility Strategy)
 
-## 5. Build
+- **PE32+ `.rsrc`** resource directory layout is **orthogonal** to COFF `Machine` field: as long as image is PE32+ (magic 0x20B) with valid resource directory, traversal by type/language ID works. The repository's **`.rsrc` parsing** (`pe_icon_resource.zig`) allows parsing for whitelisted COFF machine types: **AMD64 `0x8664`**, **ARM64 `0xAA64`**, **LoongArch32/64 `0x6232`/`0x6264`**, and UEFI-specified **RISC-V32/64/128 `0x5032`/`0x5064`/`0x5128`** (see [UEFI 2.10 — Debugger Support](https://uefi.org/specs/UEFI/2.10_A/18_Protocols_Debugger_Support.html)). Does **not** mean Zig can already produce `*-windows-gnu` resource DLL for these; toolchain gap similar to LoongArch.
+- Community discussion **[LoongArch PE text relocations & Rust LoongArch64 UEFI Preview (#108)](https://github.com/loongson-community/discussions/issues/108)** focuses on **UEFI/experimental toolchains** for LoongArch PE and relocations, LLVM/Rust forks; **not equivalent** to "any Windows user-mode loader can load LoongArch DLL with `.rsrc` like x64". Zircon Tier 1 still delivers **`ico_bundle` + manifest**; Tier 2 depends on Zig/LLVM maturity for **`loongarch64-windows-gnu` COFF**.
+- **Dual-track**: real PE DLL (x86_64) and LoongArch directory placeholder **semantically aligned** (same `shell_reference` / PE resource numbers); host can select ICO or PE by **`binary_form`** in manifest (see `pe_icon_loader.loadIconFromShellSystem32Dir`).
 
-| Step | Command | Tooling |
-|------|---------|---------|
-| SVG → ICO | `./scripts/build/build-aero-icons.sh` | Inkscape or `rsvg-convert`; ImageMagick |
-| ICO + RC → DLL | `./scripts/build/build-zircon-icon-dll.sh` | MinGW `windres` + **`zig cc -target x86_64-windows-gnu`**; optional `SKIP_AERO_ICO_BUILD=1` |
-| Via Zig | `zig build aero-shell-icons-dll` | `windres` + **`zig cc -target x86_64-windows-gnu -shared`**; installs to `zig-out/assets/` |
-| LoongArch bundle (no DLL) | `zig build aero-shell-icons-la-bundle` | Installs **25 ICOs** + **`zircon_shell32_res.manifest.json`** under **`zig-out/assets/loongarch64/win/System32/`** (same ICO prerequisites as the DLL step, or `-Daero-skip-ico-build=true`). |
-| Skip ICO regen | `zig build -Daero-skip-ico-build=true aero-shell-icons-dll` | Reuse existing `ico/*.ico` |
-| Custom windres | `zig build -Daero-windres=... aero-shell-icons-dll` | Default `x86_64-w64-mingw32-windres` |
-| Tier 2 probe (optional) | `zig build aero-loongarch-windows-pe-probe` | Runs `scripts/build/probe-loongarch-windows-gnu-shared.sh`; **expected to fail** until the toolchain supports LoongArch COFF DLLs (e.g. `UnsupportedCoffArchitecture`). CI may use `continue-on-error`. |
-| Reserved option | `-Daero-la-pe-dll` | **Placeholder** for a future LoongArch PE resource-DLL build path (default false; use `aero-shell-icons-la-bundle` today). |
+## 3. Win32 / Windows 7 API Compatibility Notes
 
-Outputs: `src/desktop/aero/resources/win32/ico/*.ico` (gitignored), `zig-out/assets/zircon_shell32_res.dll` (under ignored `zig-out/`), and optionally **`zig-out/assets/loongarch64/win/System32/`** (manifest lists `logical_id`, `pe_resource_id`, `shell_reference`, `pe_machine`, `binary_form: ico_bundle`; aligned with `ICON_RESOURCE_IDS.md`).
+The generated `zircon_shell32_res.dll` is a **valid PE DLL** with standard **`DllMain`** (`resources/win32/zircon_shell32_res_stub.c`). On Windows 7+ it supports:
 
-## 6. Kernel vs host
+- **`LoadLibraryW` / `LoadLibraryExW`** to load the module
+- **`FindResource` / `LoadResource`** or upper **`LoadImage`**, **`ExtractIconEx`** to retrieve icons by **integer resource ID**
 
-The kernel framebuffer path still uses embedded 16×16 fallbacks in `src/drivers/video/desktop/icons.zig` plus SVG registration in `resource_loader.zig`. **`pe_icon_resource.zig`** implements PE32+ `.rsrc` lookup from raw bytes (MS PE/COFF spec only). **`pe_icon_loader.loadIconResource`** reads a file on the host and locates `RT_GROUP_ICON` without calling Win32 APIs; pixel decode is still TODO. Manifest **`binary_form`** is parsed in **`shell_icons_manifest.zig`**; **`loadIconFromShellSystem32Dir`** selects ICO bundle vs PE for a `System32`-style directory.
+This is consistent with how the system's own `shell32.dll` "resource DLL" is used. Zircon kernel path still uses [`icons.zig`](../../src/drivers/video/desktop/icons.zig) embedded bitmaps + SVG manifest; PE parsing deferred to future user-mode.
 
-## 7. See also (Chinese)
+## 4. Build Commands and Artifacts
 
-Detailed tables and roadmap gaps: [NT61_ShellIcons.md](../cn/NT61_ShellIcons.md). Aero drawing notes: [AeroRendering.md](../cn/AeroRendering.md).
+| Step | Command | Dependencies |
+|------|---------|-------------|
+| SVG → ICO | `./scripts/build/build-aero-icons.sh` | `inkscape` or `rsvg-convert`; `magick` or `convert` |
+| ICO + RC → DLL | `./scripts/build/build-zircon-icon-dll.sh` | MinGW `windres` + **`zig cc -target x86_64-windows-gnu`** |
+| Integration (recommended) | `zig build aero-shell-icons-dll` | host: `windres` + **`zig cc -target x86_64-windows-gnu -shared`** (MinGW ABI) |
+| LoongArch resource bundle (no DLL) | `zig build aero-shell-icons-la-bundle` | Installs 25 ICOs + **`zircon_shell32_res.manifest.json`** to **`zig-out/assets/loongarch64/win/System32/`** |
+| Skip ICO regeneration | `zig build -Daero-skip-ico-build=true aero-shell-icons-dll` | reuse existing `resources/win32/ico/*.ico` |
+| Tier 2 probe (optional) | `zig build aero-loongarch-windows-pe-probe` | expected to fail until upstream toolchain supports |
+
+Artifacts: ICO in `src/desktop/aero/resources/win32/ico/*.ico`; DLL in `zig-out/assets/zircon_shell32_res.dll`; LoongArch bundle in `zig-out/assets/loongarch64/win/System32/*.ico` + manifest.
+
+## 5. Related Source Code and PE Parsing (Clean-room)
+
+- Kernel drawing: [`src/drivers/video/desktop/icons.zig`](../../src/drivers/video/desktop/icons.zig)
+- Resource registration: [`src/desktop/aero/src/resource_loader.zig`](../../src/desktop/aero/src/resource_loader.zig)
+- PE ID constants: [`src/desktop/aero/src/icon_resource_ids.zig`](../../src/desktop/aero/src/icon_resource_ids.zig)
+- `.rsrc` by type/ID for raw bytes: [`src/desktop/aero/src/pe_icon_resource.zig`](../../src/desktop/aero/src/pe_icon_resource.zig)
+- Disk read + RT_GROUP_ICON probe: [`src/desktop/aero/src/pe_icon_loader.zig`](../../src/desktop/aero/src/pe_icon_loader.zig)
+- Manifest `binary_form`: [`shell_icons_manifest.zig`](../../src/desktop/aero/src/shell_icons_manifest.zig)
+
+## 6. Relationship with Aero Rendering Document
+
+Framebuffer and `IconId` mapping: [AeroRendering.md](../cn/AeroRendering.md).

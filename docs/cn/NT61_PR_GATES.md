@@ -28,7 +28,7 @@
 - [ ] 若 README、[docs/en/Subsystems.md](../en/Subsystems.md)、[docs/cn/Subsystems.md](Subsystems.md) 或营销性「功能列表」中**扩大** Win32、WOW64、ntdll、csrss、user32、gdi32 的完成度表述，须**同一 PR** 更新 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与（如适用）[API_COMPAT_MATRIX.md](API_COMPAT_MATRIX.md)，并在 [MVT_NT61.md](MVT_NT61.md) 或 `tests/` 增加可复现验证，或明确保持 `Stub`/`Partial`。
 - [ ] 实现与文档引用仅限 **Microsoft Learn、WDK、硬件规范、公开发表的 ABI 对照**；行为细节不足时以实验 + 文档迭代，不依赖非白名单逆向代码库。
 
-**分阶段路线图**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
+**分阶段路线图**：[../DOCS_INDEX.md](../DOCS_INDEX.md) §维护约定。
 
 ## 相关链接
 

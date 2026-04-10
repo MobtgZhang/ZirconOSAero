@@ -1,6 +1,6 @@
 # NT 6.1 最小可验证测试（MVT）索引
 
-本页维护 **可复现验证** 步骤及与 `tests/`、`zig build test` 的映射。**子系统承诺与状态列**以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与根 [README.md](../../README.md) 为准；状态标签定义见契约矩阵文首。**文档职责划分**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
+本页维护 **可复现验证** 步骤及与 `tests/`、`zig build test` 的映射。**子系统承诺与状态列**以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 与根 [README.md](../../README.md) 为准；**状态标签定义**见 [../DOCS_INDEX.md](../DOCS_INDEX.md) §STATUS_LEGEND。**文档职责与状态标签**：[../DOCS_INDEX.md](../DOCS_INDEX.md) §STATUS_LEGEND 与 §维护约定。
 
 **PR 门禁**：[NT61_PR_GATES.md](NT61_PR_GATES.md)。**何时扩展本表**： [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) Phase K0。
 
@@ -45,6 +45,7 @@
 | PE TLS/delay/bound 策略失败码（镜像） | 同上 → **pe_loader_policy_host** | [tests/pe_loader_policy_host.zig](../../tests/pe_loader_policy_host.zig) |
 | `SEC_IMAGE` + `IMAGE_SECTION_HEADER` 40 字节 | 同上 → **pe64_nt61_host** | [sdk/pe64_nt61.zig](../../sdk/pe64_nt61.zig) |
 | fork 子集 dup + 只读子映射 + `tryCowWriteFault` PFN 分离 | 同上 → **fork_cow_share_nt61_host** | [src/fork_cow_share_nt61_host.zig](../../src/fork_cow_share_nt61_host.zig)（模块根在 `src/`，与 `vm.zig` 同模块） |
+| **阶段3：LoongArch64 ASID / fork / VAD**（K1.4/K1.4b/K1.8）：ASID 位图分配/释放（255 次压力）、version_bump 递增验证；KPCR `PerCpu.current_asid` 访问器；fork/CoW API 存在性；VAD `partially_committed` / `upgradeReservedContaining` / `coalesceAdjacent` / `decommitSubrange` API 存在性；32MiB 块 = 2048×16KiB 页 | 同上 → **loongarch_nt61_mm_host** | [tests/host/loongarch_nt61_mm_host.zig](../../tests/host/loongarch_nt61_mm_host.zig) |
 | 缺口优先级表（K1–K8 × 二进制兼容） | 文档审查 | [BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md) |
 | IPv4 固定首部 + ARP 首部解析 | 同上 → minimal_net | [src/drivers/net/minimal_stack.zig](../../src/drivers/net/minimal_stack.zig) |
 | MDL 子集（PFN 槽、恒等映射填 PFN） | 同上 → mdl_host | [src/mm/mdl.zig](../../src/mm/mdl.zig) |
@@ -91,6 +92,7 @@
 |--------|------|------|
 | 构建与 ELF | `.github/workflows/ci.yml`；本地 `zig build install` | ReleaseSafe 与横幅校验见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) |
 | 最小 x64 PE（仓库内，`ExitProcess`） | `zig build minimal-pe-nt61` | 输出 `zig-out/bin/zircon_nt61_minimal_pe.exe`；[`tools/minimal_pe_nt61/minimal_pe.zig`](../../tools/minimal_pe_nt61/minimal_pe.zig)；可选 QEMU 加载实验（不依赖微软闭源 DLL） |
+| **阶段3：LoongArch64 SMP 烟测**（AP 启动、ASID 分配、调度器多核） | `zig build run-qemu-smp-test` | 需 QEMU + LoongArch64 固件 + ESP 镜像；SMP=2；串口检索 `LoongArch SMP: AP%u initializing`；脚本 [`scripts/qemu_loongarch64_smp_test.sh`](../../scripts/qemu_loongarch64_smp_test.sh)；构建闸门：`zig build` |
 | ZBM / 无头启动 | `bash scripts/ci-qemu-smoke.sh` | MBR 盘、串口可选断言；`CI_SMOKE_DESKTOP=aero` 可走完整壳层（见脚本注释） |
 | **ACPI S5 / `NtShutdownSystem`** | QEMU `-no-reboot` 或串口检索 `ACPI PM:` | [`acpi_pm.zig`](../../src/hal/x86_64/acpi_pm.zig)；须令牌 **`PRIV_SHUTDOWN`**；SSDT **0x40/0x41**（[`ssdt_nt61.zig`](../../src/arch/x86_64/ssdt_nt61.zig)）。无 PM1a 时回退 `arch.shutdown()`。 |
 | **PIC 向量 0x30+（WOW64 释放 0x2E）** | 串口 tick/键盘中断仍正常 | [`pic.zig`](../../src/hal/x86_64/pic.zig)、[`lapic_timer_tick.zig`](../../src/hal/x86_64/lapic_timer_tick.zig) |

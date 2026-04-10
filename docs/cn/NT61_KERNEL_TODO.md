@@ -1,6 +1,6 @@
 # ZirconOSAero：NT 6.1 内核实现详细待办清单（Clean-room）
 
-本页为内核模式 **K0–K8** 落地清单；**契约状态**见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)，**验证映射**见 [MVT_NT61.md](MVT_NT61.md)，**文档职责**见 [DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。实现须 clean-room：**仅** Microsoft Learn、WDK 与硬件规范；禁止 Windows/ReactOS/Wine 源码。
+本页为内核模式 **K0–K8** 落地清单；**契约状态**见 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md)，**验证映射**见 [MVT_NT61.md](MVT_NT61.md)，**文档职责与状态标签**见 [../DOCS_INDEX.md](../DOCS_INDEX.md) §STATUS_LEGEND 与 §维护约定。
 
 **基线引用**：阶段 A — 契约矩阵 §0、[MM_ALLOC_PATHS.md](MM_ALLOC_PATHS.md)、[VM_ISOLATION.md](VM_ISOLATION.md)；阶段 B — [SyscallABI.md](SyscallABI.md)、[SSDT_Roadmap.md](SSDT_Roadmap.md) 与 `ssdt_nt61.zig` / `syscall.zig`；阶段 C — [SCHEDULER_API.md](SCHEDULER_API.md)、契约矩阵 §2、`wait.zig` / `object.zig` / `scheduler.zig`。长期 API 面见 [NT61_FULL_API_BACKLOG.md](NT61_FULL_API_BACKLOG.md)（非本页交付范围）。桌面 / LPC / DWM 常量见契约矩阵 §4.1、`dwm_nt61_api_contract.zig`、[NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md)。二进制缺口见 [BINARY_COMPAT_GAP_AUDIT.md](BINARY_COMPAT_GAP_AUDIT.md)。
 
@@ -27,7 +27,9 @@
 | K1.1 | PFN 链表（Free/Zeroed/Active）+ 位图连续分配；伙伴/连续页接线 | `src/mm/frame.zig`, `buddy.zig`, `phys_buddy.zig` |
 | K1.2 | 池：`pool_zone.zig` + `lookaside.zig` + `pool.zig` / `ex_pool.zig`；IRQL 与 WDK 对齐 | [MM_HEAP_POOL_SLAB.md](MM_HEAP_POOL_SLAB.md), `src/mm/percpu_index.zig` |
 | K1.3 | Slab/堆统计与不变量 | `slab.zig`, `heap.zig` |
-| K1.4 | VMA 释放与泄漏回归；VAD AVL、惰性提交、文件视图 demand、`remapLeafPhysical` CoW、**`duplicateUserMappingsForFork`**（fork 子集） | `vm.zig`, `vad.zig`, `section.zig`, `arch/x86_64/paging.zig`；主机 **fork_cow_share_nt61_host** |
+| K1.4 | VMA 释放与泄漏回归；VAD AVL、惰性提交、文件视图 demand、`remapLeafPhysical` CoW、**`duplicateUserMappingsForFork`**（fork 子集，含大页 2MiB/32MiB 拆分小叶 fork） | `vm.zig`, `vad.zig`, `section.zig`, `arch/x86_64/paging.zig`, `arch/loongarch64/paging.zig`；主机 **fork_cow_share_nt61_host** |
+| K1.4b | VAD Reserve 语义：部分提交（reserved VAD 按页拆分为 reserved/comitted 子 VAD）、`upgradeReservedContaining` 重写、coalesceAdjacent 严格字段匹配 | `vad.zig`, `vm.zig` |
+| K1.8 | **LoongArch64 ASID/PGDL 集成**：ASID 生命周期（allocate/release/version_bump）、`AddressSpace.asid`/`last_asid_version`、per-CPU ASID 表、`invtlbAllAsid` 选择性刷新、`noteCurrentPageTablePossiblyMutated` | `hal/loongarch64/tlb_flush.zig`, `mm/vm.zig`, `ps/process.zig`, `arch/loongarch64/paging.zig` |
 | K1.5 | syscall 用户缓冲 probe 审计 | `probe.zig`, `syscall.zig` |
 | K1.6 | 节区对象与 VM 生命周期；**匿名 `PAGE_WRITECOPY`** 已按私有 RW 映射（fork CoW）；**文件后备 WRITECOPY** 仍 `STATUS_NOT_IMPLEMENTED` | [MM_Section_Roadmap.md](MM_Section_Roadmap.md), `section.zig`, [PFN_REFCOUNT_ROADMAP.md](PFN_REFCOUNT_ROADMAP.md) |
 | K1.7 | MDL 最小抽象（DMA 前置） | `src/mm/mdl.zig` |

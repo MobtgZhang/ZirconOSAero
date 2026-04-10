@@ -1,6 +1,6 @@
 # Win32 / Native API 兼容性矩阵（骨架）
 
-本表用于路线图 **C-T09**：随实现推进在 PR 中更新行，不依赖逆向 Windows 二进制。**与契约矩阵分工**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
+本表用于路线图 **C-T09**：随实现推进在 PR 中更新行，不依赖逆向 Windows 二进制。**与契约矩阵分工**：[../DOCS_INDEX.md](../DOCS_INDEX.md) §维护约定。
 
 **边界**：本表仅声明 **子集** 与 **Partial** 语义；完整能力与延后项以 [NT61_CONTRACT_MATRIX.md](NT61_CONTRACT_MATRIX.md) 及 [NT61_DEFERRED_SURFACES.md](NT61_DEFERRED_SURFACES.md) 为准。
 

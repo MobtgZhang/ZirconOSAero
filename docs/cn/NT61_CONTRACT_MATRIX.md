@@ -14,7 +14,7 @@
 
 **图例**：已实现 / 部分 / 未实现 — 以 `src/` 代码为准。
 
-**验证**：须与 `zig build test`、CI、[MVT_NT61.md](MVT_NT61.md)、[REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 一致；禁止仅凭文档勾选「完成」。**各文档职责**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
+**验证**：须与 `zig build test`、CI、[MVT_NT61.md](MVT_NT61.md)、[REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) 一致；禁止仅凭文档勾选「完成」。**各文档职责与状态标签**：[../DOCS_INDEX.md](../DOCS_INDEX.md) §STATUS_LEGEND 与 §维护约定。
 
 ## Win32 兼容层：现实落差与项目边界
 
@@ -37,10 +37,11 @@
 | Ex 池路径 + IRQL + 分配全景 | `src/mm/ex_pool.zig`、`docs/cn/MM_ALLOC_PATHS.md` | 部分 — **Verified**（主机 `pool` / 注释）；Paged **软上限** `setPagedPoolSoftLimitForTest` |
 | Slab cache | `src/mm/slab.zig` | 部分 |
 | VMA 槽位 + `mmFreeVirtualRange` | `src/mm/vm.zig` | 部分 |
-| fork 子集：用户 4Ki 叶 dup + `notePageShared` + 子侧只读 PTE + `#PF` CoW | `vm.zig` / `paging.zig` / `frame.zig` | 部分 — 大页未展开；节区 `PAGE_WRITECOPY`、页文件、Standby/Modified、每 `mapPage` 级全局 PFN 引用仍为延后；主机 **fork_cow_share_nt61_host**（Verified） |
+| fork 子集：用户 4Ki/16Ki 叶 dup + notePageShared + 子侧只读 PTE + `#PF` CoW；大页（x86 2MiB / LoongArch 32MiB）拆分为小叶逐个 fork（CoW） | `vm.zig` / `paging.zig` / `frame.zig` | 部分 — 节区 `PAGE_WRITECOPY` 文件后备仍为 `STATUS_NOT_IMPLEMENTED`（按 K1.6 路线图）；页文件、Standby/Modified、每 `mapPage` 级全局 PFN 引用仍为延后；**`forEachUser2MiPresentLeaf`（x86）/ `forEachUser32MiPresentLeaf`（LoongArch）**大页拆分小叶 fork 已实现；`NtAllocateVirtualMemory` + MEM_RESERVE + 部分 commit → VAD 拆分（reserved/comitted 子 VAD）；主机 **fork_cow_share_nt61_host**（Verified）；**阶段3 K1.4 Verified** |
 | 用户指针探测 | `src/mm/probe.zig` | 部分 — `syscall*.zig` 已覆盖主路径；K1.5 以契约矩阵 + 代码审查为闸门 |
 | 进程页表释放（用户半区） | `arch/x86_64/paging.zig` `releaseUserHalfAddressSpace` | 部分 — `vm.releaseProcessAddressSpace` 前递增 TLB shootdown 提示（`tlb_broadcast`） |
-| 调度切换 CR3 | `src/ke/scheduler.zig` | 部分 — tick 路径 `activateCr3ForProcessId`；`terminateProcess` 前经 `before_release_process_address_space` 拆除该 pid 的调度线程（K2.1） |
+| 调度切换 CR3 | `src/ke/scheduler.zig` | 部分 — tick 路径 `activateCr3ForProcessId`；`terminateProcess` 前经 `before_release_process_address_space` 拆除该 pid 的调度线程（K2.1）；**LoongArch64 ASID 激活**通过 `AddressSpace.activate()` + `tlb_la.activateAsid(asp.asid)` + 版本检查 + `kpcr.setCurrentAsid(asid)`；**阶段3 K1.8 Verified** |
+| LoongArch64 ASID 管理 | `hal/loongarch64/tlb_flush.zig` / `ke/kpcr.zig` | 部分 — ASID 生命周期（allocate/release/version_bump）、**KPCR `PerCpu.current_asid` per-CPU 存储**（`setCurrentAsid`/`getCurrentAsid`）、`invtlbAllAsid` 选择性刷新、`noteCurrentPageTablePossiblyMutated`（内部调用 `invtlbAllAsid`）；**TLB IPI（IOCSR mailbox）**：`handleIpiInterrupt` 执行 `invtlb 0x0`；**`remapLeafPhysical` TLB 修复**：删除冗余 `invtlbAddrVa`（ASID=0 会误刷其他进程）；**阶段3完成** |
 | ACPI MADT / LAPIC / 首 IOAPIC 基址枚举 | `src/hal/x86_64/madt.zig` | 部分 |
 | AP 入口 / TLB IPI / LAPIC tick | `ap_entry.zig` / `tlb_broadcast.zig` / `smp_boot.zig` / `lapic_smp.zig` / `lapic_timer_tick.zig` / `interrupt_x86.zig` / `idt.zig` | 部分 — AP 经实模式跳板 **`0x8000`** 进入长模式 `apKernelEntry`；**IDT 向量 254** = TLB flush IPI；**x86_64 默认 `-Dsmp_tlb_ipi=true`**（可显式关）；**`-Dlapic_periodic_tick`** 时 BSP 与 AP 均编程 LVT 周期定时器；IRQ0 上 AP 在 `currentThreadIndex()<0` 时跳过 `scheduler.tick`（见 [VM_ISOLATION.md](VM_ISOLATION.md)） |
 | 每 CPU 调度与窃取 | `percpu_sched.zig` / `scheduler.zig` | 部分 — 新线程 `home_cpu` 由最短就绪队列选取；`workStealBalanceIfIdleImpl` 以 `kpcr.currentProcessorNumber()` 为槽索引，**窃取仍仅 BSP（槽 0）**直至全每核 `current_thread` 闭环 |
@@ -105,6 +106,8 @@ NT 6.1 上仍具参考意义的 **`DwmIsCompositionEnabled`、BlurBehind、Exten
 | PnP / Power | 即插即用与电源 IRP（长期） | 驱动目录 |
 | IRQL、DPC、APC、等待 | 同步级别约束（简化须在注释声明）；**IRQL/DPC 每 CPU 槽**（`MAX_IRQL_CPUS`，默认 BSP）；**等待（阶段 C）**：`ObjectHeader` FIFO 等待队列 + `ke/wait` 与 `blockThread`/`tick` 协同；`NtWaitForSingleObject` / WaitAny（≤64）+ **tick 超时** + **alertable**（`NtAlertThread` → `STATUS_ALERTED`，用户 APC → `STATUS_USER_APC`）；**WaitAll**：**抢占调度关** 时协作式子集；**调度开** 仍为 `STATUS_NOT_IMPLEMENTED`；**事件** 手动/自动复位与 `NtSetEvent`/`onEventSet` 一致。非完整 CR8/设备 IRQL 谱系；用户 APC **例程交付** 仍为 Partial | `ob/object.zig`（`WaitEntry`）、`ke/irql.zig`、`ke/dpc.zig`、`ke/apc.zig`、`ke/wait.zig`、`ke/scheduler.zig`、`interrupt_x86.zig`、`syscall.zig`（返用户前 `deliverKernelApcsForCurrentThread`） |
 | 内存管理器 | 池标签、`Mdl`（长期） | `src/mm/` |
+| LoongArch64 ASID/PGDL 集成 | ASID 生命周期（allocate/release）、进程切换激活（CSR 0x5）、invtlbAllAsid 选择性刷新、ASID 耗尽 version_bump 策略、**KPCR `PerCpu.current_asid`** per-CPU 存储、`tlb_flush.zig` → `kpcr.zig` ASID 访问器；**阶段3 K1.8 Verified**（主机测试 `loongarch_nt61_mm_host`） | `hal/loongarch64/tlb_flush.zig`、`mm/vm.zig`、`ps/process.zig`、`arch/loongarch64/paging.zig` |
+| VAD Reserve 语义完善（部分提交） | `partially_committed` 状态、reserved VAD 按页拆分（最多 3 个子 VAD）、coalesceAdjacent 严格字段匹配、架构页大小对齐；**`upgradeReservedContaining` 按 `page_size_bytes` 边界拆分**、`decommitSubrange` 物理页回收、`coalesceAdjacent` 支持 `.partially_committed` 合并；**阶段3 K1.4b Verified** | `mm/vad.zig`、`mm/vm.zig` |
 
 ## 2.1 HAL / 总线与网络（阶段性）
 
@@ -363,3 +366,87 @@ PR 合并前将对应行更新为 **Partial / Done / Verified**；**Verified** �
 | VFS 访问掩码常量 | `FileAccessMode` 与 NT 风格 GENERIC 位一致 | `zig build test` → **fs_vfs_constants_host** |
 | PCI 类/厂商 → 驱动绑定表（占位） | `src/drivers/bus/pci_driver_bind.zig`；供 USB/显示等枚举后选型 | `zig build test` → **pci_driver_bind_host** |
 | SMP TLB 占位诊断 | 多逻辑 CPU：`unmapRange` 递增 `noteUserMappingInvalidatedSmp`；全局 flush 仍为 BSP 本地 | `tlb_broadcast.zig`；Debug 构建串口提示 |
+
+### 10.1 阶段2：LoongArch64 Syscall 服务补全（2026-04-08）
+
+**目标**：将 LoongArch64 syscall 服务从约 20 个扩展到 50+ 个
+
+**已完成服务列表**：
+
+|| 服务 | SSDT索引 | 状态 | 位置 |
+|------|---------|--------|------|
+| NtClose | 0x0C | ✅ 已实现 | syscall_dispatch.zig |
+| NtWaitForSingleObject | 0x04 | ✅ 已实现 | syscall_dispatch.zig |
+| NtAllocateVirtualMemory | 0x18 | ✅ 已实现 | syscall_dispatch.zig |
+| NtFreeVirtualMemory | 0x1B | ✅ 已实现 | syscall_dispatch.zig |
+| NtProtectVirtualMemory | 0x4D | ✅ 已实现 | syscall_dispatch.zig |
+| NtQuerySystemInformation | 0x25 | ✅ 已实现 | syscall_dispatch.zig |
+| NtCreateFile | 0x2C | ✅ 已实现 | dispatchNtCreateFile |
+| NtYieldExecution | 0x43 | ✅ 已实现 | syscall_dispatch.zig |
+| NtTerminateProcess | 0x29 | ✅ 已实现 | syscall_dispatch.zig |
+| NtCreateThread | 0x4B | ✅ 已实现 | syscall_dispatch.zig |
+| NtTerminateThread | 0x55 | ✅ 已实现 | syscall_dispatch.zig |
+| NtDelayExecution | 0x31 | ✅ 已实现 | syscall_dispatch.zig |
+| NtDisplayString | 0xB8 | ✅ 已实现 | syscall_dispatch.zig |
+| NtCreateSection | 0x47 | ✅ 已实现 | syscall_dispatch.zig |
+| **NtReadFile** | 0x07 | ✅ 已实现 | dispatchNtReadFile |
+| **NtWriteFile** | 0x08 | ✅ 已实现 | dispatchNtWriteFile |
+| **NtOpenFile** | 0x33 | ✅ 已实现 | dispatchNtOpenFile |
+| **NtFlushBuffersFile** | 0x39 | ✅ 已实现 | ntdll.zig |
+| **NtDeviceIoControlFile** | 0x52 | ✅ 已实现 | dispatchNtDeviceIoControlFile |
+| **NtOpenProcess** | 0x23 | ✅ 已实现 | dispatchNtOpenProcess |
+| NtOpenThread | 0x36 | ✅ 已实现 | ntdll.zig |
+| NtQueryVirtualMemory | 0x20 | ✅ 已实现 | ntdll.zig |
+| NtReadVirtualMemory | 0x3D | ✅ 已实现 | ntdll.zig |
+| NtWriteVirtualMemory | 0x3E | ✅ 已实现 | ntdll.zig |
+| NtMapViewOfSection | 0x48 | ✅ 已实现 | ntdll.zig |
+| NtUnmapViewOfSection | 0x2A | ✅ 已实现 | ntdll.zig |
+| **NtCreateEvent** | 0x4A | ✅ 已实现 | ntdll.zig |
+| **NtOpenEvent** | 0x3F | ✅ 已实现 | ntdll.zig |
+| **NtSetEvent** | 0x0A | ✅ 已实现 | ntdll.zig |
+| **NtResetEvent** | 0x50 | ✅ 已实现 | ntdll.zig |
+| **NtPulseEvent** | 0x3C | ✅ 已实现 | ntdll.zig |
+| **NtClearEvent** | 0x3B | ✅ 已实现 | ntdll.zig |
+| **NtCreateMutant** | 0x0B | ✅ 已实现 | ntdll.zig |
+| **NtOpenMutant** | 0x0D | ✅ 已实现 | ntdll.zig |
+| **NtReleaseMutant** | 0x1E | ✅ 已实现 | ntdll.zig |
+| **NtQueryMutant** | 0x0E | ✅ 已实现 | ntdll.zig |
+| **NtCreateSemaphore** | 0x4F | ✅ 已实现 | ntdll.zig |
+| **NtOpenSemaphore** | 0x15 | ✅ 已实现 | ntdll.zig |
+| **NtReleaseSemaphore** | 0x1D | ✅ 已实现 | ntdll.zig |
+| **NtWaitForMultipleObjects** | 0x57 | ✅ 已实现 | ntdll.zig |
+| **NtSignalAndWaitForSingleObject** | 0x176 | ✅ 已实现 | ntdll.zig |
+| NtQueryInformationProcess | 0x16 | ✅ 已实现 | ntdll.zig |
+| NtSetInformationProcess | 0x1C | ✅ 已实现 | ntdll.zig |
+| NtQueryInformationThread | 0x11 | ✅ 已实现 | ntdll.zig |
+| NtSetInformationThread | 0x28 | ✅ 已实现 | ntdll.zig |
+| NtResumeThread | 0x51 | ✅ 已实现 | ntdll.zig |
+| NtSuspendThread | 0x45 | ✅ 已实现 | ntdll.zig |
+| NtAlertThread | 0x22 | ✅ 已实现 | ntdll.zig |
+| NtTestAlert | 0x42 | ✅ 已实现 | ntdll.zig |
+| NtDuplicateObject | 0x44 | ✅ 已实现 | ntdll.zig |
+| NtQueryObject | 0x10 | ✅ 已实现 | ntdll.zig |
+| NtSetInformationObject | 0x56 | ✅ 已实现 | ntdll.zig |
+| NtShutdownSystem | 0x40 | ✅ 已实现 | ntdll.zig |
+| NtInitiatePowerAction | 0x41 | ✅ 已实现 | ntdll.zig |
+| NtCreateProcess | 0x9F | ✅ 已实现 | ntdll.zig |
+| NtAlpcCreatePort | 0x6D | ✅ 桩实现 | ntdll.zig |
+| NtAlpcConnectPort | 0x2D | ✅ 桩实现 | ntdll.zig |
+| NtAlpcSendWaitReceivePort | 0x6E | ✅ 桩实现 | ntdll.zig |
+| NtConnectPort | 0x8F | ✅ 桩实现 | ntdll.zig |
+| NtCreatePort | 0x9D | ✅ 桩实现 | ntdll.zig |
+| NtRequestWaitReplyPort | 0x1F | ✅ 桩实现 | ntdll.zig |
+| NtOpenKey | 0x0F | ✅ 桩实现 | ntdll.zig |
+| NtQueryValueKey | 0x14 | ✅ 桩实现 | ntdll.zig |
+| NtCreateKey | 0x1A | ✅ 桩实现 | ntdll.zig |
+| NtSetValueKey | 0x5D | ✅ 桩实现 | ntdll.zig |
+| NtEnumerateKey | 0x32 | ✅ 桩实现 | ntdll.zig |
+| NtEnumerateValueKey | 0x13 | ✅ 桩实现 | ntdll.zig |
+| NtUserGetMessage | 0x58 | ✅ 已实现 | user32.zig |
+| NtUserPostMessage | 0x5A | ✅ 已实现 | user32.zig |
+| NtUserSendMessage | 0x5C | ✅ 已实现 | user32.zig |
+| NtUserPeekMessage | 0x59 | ✅ 已实现 | user32.zig |
+| NtUserSetWindowPos | 0x5B | ✅ 已实现 | user32.zig |
+| NtUserDispatchMessage | 0x5E | ✅ 已实现 | user32.zig |
+
+**统计**：阶段2完成后，LoongArch64 syscall 分发器从约 20 个服务扩展到 **70+ 个服务**

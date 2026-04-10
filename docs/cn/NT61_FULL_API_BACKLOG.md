@@ -1,6 +1,6 @@
 # NT 6.1 完整 Native / Win32 API 能力 backlog（与「基础迭代」分离）
 
-本文件列出 **长期目标**：在 clean-room 前提下对齐 Microsoft 公开文档中的 **NT 6.1 全量 API 面**（含后续 Win32 子系统、WOW64、注册表全类等）。**当前工程交付**仍以 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 的 K0–K8 与 [MVT_NT61.md](MVT_NT61.md) 为闸门；本 backlog **不**表示已实现。**与契约矩阵 / API 骨架表分工**：[DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md)。
+本文件列出 **长期目标**：在 clean-room 前提下对齐 Microsoft 公开文档中的 **NT 6.1 全量 API 面**（含后续 Win32 子系统、WOW64、注册表全类等）。**当前工程交付**仍以 [NT61_KERNEL_TODO.md](NT61_KERNEL_TODO.md) 的 K0–K8 与 [MVT_NT61.md](MVT_NT61.md) 为闸门；本 backlog **不**表示已实现。**与契约矩阵 / API 骨架表分工**：[../DOCS_INDEX.md](../DOCS_INDEX.md) §维护约定。
 
 **Phase 7 分节 PR**：`zig build test` → **nt61_full_api_backlog_anchors_host**（每节至少一条与 `ssdt_nt61` / 常量同源的**真断言**；阶段 E 总表见 [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md)）。
 

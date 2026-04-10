@@ -1,6 +1,6 @@
-# NT 6.1 风格内存管理 — LoongArch64「新世界」QEMU virt / UEFI（中文姊妹篇）
+# NT 6.1 风格内存管理 — LoongArch64「新世界」QEMU virt / UEFI
 
-本文档与英文规格 [MemoryManagement_NT61_LoongArch64_NewWorld.md](../specs/MemoryManagement_NT61_LoongArch64_NewWorld.md) **同步维护**：描述 ZirconOSAero 在 **LoongArch64、QEMU `virt`、低地址恒等映射内核** 下的 NT6.1 **可观测行为**边界；**不**复制 WDK/微软头文件。实现以 `src/arch/loongarch64/paging.zig` 与 `src/mm/vm.zig` 为准。
+本文档与英文规格 [MemoryManagement_NT61_LoongArch64_NewWorld.md](../en/MemoryManagement_NT61_LoongArch64_NewWorld.md) **同步维护**：描述 ZirconOSAero 在 **LoongArch64、QEMU `virt`、低地址恒等映射内核** 下的 NT6.1 **可观测行为**边界；**不**复制 WDK/微软头文件。实现以 `src/arch/loongarch64/paging.zig` 与 `src/mm/vm.zig` 为准。
 
 惰性提交、VAD 与 fork/CoW 矩阵另见 [MVT_NT61.md](MVT_NT61.md)。
 

@@ -2,7 +2,7 @@
 
 ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。内核除机制（调度、虚拟内存、IPC、中断、系统调用）外，仍含大量 **Executive**（对象、I/O、安全、加载器等 — 见 [Architecture.md](Architecture.md)）；**独立用户态**当前主要为 Process Server、SMSS 与 Win32 侧库。Win32 兼容为**文档化子集**，非零售 Windows 等价。
 
-**英文总索引**：[../README.md](../README.md) · **全部分类列表**：[../DOCS_INDEX.md](../DOCS_INDEX.md) · **文档职责划分**：[../DOCS_MAINTAINERS.md](../DOCS_MAINTAINERS.md) · **可复现构建**：[../REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) · **English pages**：[`../en/`](../en/)
+**英文总索引**：[../README.md](../README.md) · **全部分类列表**：[../DOCS_INDEX.md](../DOCS_INDEX.md) · **可复现构建**：[../REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md) · **English pages**：[`../en/`](../en/)
 
 ## Phase / 路线图命名区分（权威说明）
 
@@ -10,13 +10,19 @@ ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。�
 
 **另一套编号：内核初始化 Phase 0–12** — [Boot.md](Boot.md)、[Kernel.md](Kernel.md) 与 `src/main.zig` 中的 **顺序拉起步骤** 使用 **0–12**；与路线图 **0–11** **不是同一计数**。勿把「Phase 11 里程碑」与「init Phase 11」混为一谈。
 
+> **重要**：同一文档中避免重复长段 Phase 对照说明；引用本表格即可。
+
 | 文档中的名称 | 与 Roadmap 的关系（摘要） |
 |--------------|---------------------------|
+| **内核启动 Phase 0–12** | [Boot.md](Boot.md)、[Kernel.md](Kernel.md) 与 `src/main.zig` 的**顺序拉起步骤**；与路线图 **Phase 0–11** **不是同一计数**；勿把「Phase 11 里程碑」与「init Phase 11」混为一谈 |
+| [Roadmap.md](Roadmap.md) | **Roadmap Phase 0–11**；里程碑范围标题，≠「全部完成」 |
 | [PHASE_D_WIN32_MSG_PUMP_DWM.md](PHASE_D_WIN32_MSG_PUMP_DWM.md) | 消息泵 / DWM / LPC；≠ PLAN_REMAINING 内「Phase D 合成器」全文 |
 | [PHASE_E_NATIVE_API.md](PHASE_E_NATIVE_API.md) | Native / SSDT / ntdll 深度；≠ PLAN_REMAINING「Phase E — Shell」 |
 | [PHASE_F_PROCESS_CREATE.md](PHASE_F_PROCESS_CREATE.md) | `NtCreateUserProcess` 等；≠ PLAN_REMAINING「Phase F — 集成」 |
 | [PHASE_G_WOW64.md](PHASE_G_WOW64.md) | WOW64 可测子集；≠ Roadmap「Phase 11 — WOW64 + 音频」全文 |
-| [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) | 硬件呈现 + csrss + WOW64 + NTFS 等官方范围 |
+| [PHASE4_HARDWARE_SYSTEM_INTEGRATION.md](PHASE4_HARDWARE_SYSTEM_INTEGRATION.md) | 硬件呈现 + csrss + WOW64 + NTFS 等官方范围；与内核 Phase 4（对象/句柄）不同 |
+
+> **重要**：同一文档中避免重复长段 Phase 对照说明；引用本表格即可。
 
 ## 核心三件套（契约 / 验证 / 内核待办）
 
@@ -107,6 +113,8 @@ ZirconOSAero 是基于 Zig 的 **NT 6.1 目标混合微内核操作系统**。�
 **更细的条目与 en/cn 对照**：见 [../DOCS_INDEX.md](../DOCS_INDEX.md)。**仓库目录树与根 README 特性矩阵**：见仓库根目录 [README.md](../../README.md)。
 
 ## 核心技术栈
+
+> **最后更新**：2026-04-10。文档更新原则：PR 涉及语义变更时必须同步更新对应文档；禁止仅凭文档勾选「完成」而不增加可运行验证。
 
 - **语言**: Zig（内核构建无 libc 依赖）；**主构建**：`zig build`（`minimum_zig_version` 见 `build.zig.zon`；CI 锁定见 [REPRODUCE_BUILD.md](../REPRODUCE_BUILD.md)）
 - **架构**: x86_64（主要）、aarch64、loongarch64、riscv64；mips64el 试验

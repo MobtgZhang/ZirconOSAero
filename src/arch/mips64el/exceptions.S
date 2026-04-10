@@ -105,18 +105,54 @@ _mips_exc_vectors:
     .org    _mips_exc_vectors + 0x000
     .globl  _mips_tlb_refill_vector
 _mips_tlb_refill_vector:
+    /* Read BadVAddr before touching any register */
+    dmfc0   $k1, CP0_BADVADDR
+    ehb
+    /* Save original sp to k0, switch to kernel stack */
+    move    $k0, $sp
+    dla     $sp, _stack_top
+    daddiu  $sp, $sp, -32
+    /* Call Zig fast-path: a0 = BadVAddr; returns 1 on success, 0 on fail */
+    move    $a0, $k1
+    dla     $t9, mips_tlb_refill_fastpath
+    jalr    $t9
+    nop
+    /* Check return value in $v0 */
+    bnez    $v0, 1f
+    nop
+    /* Fast-path failed — fall through to full trap handler */
+    move    $sp, $k0
     move    $k0, $sp
     dla     $at, mips_exc_enter_kernel_stack
     jr      $at
     nop
+1:
+    /* Success — restore sp and eret */
+    move    $sp, $k0
+    eret
 
     .org    _mips_exc_vectors + 0x080
     .globl  _mips_xtlb_refill_vector
 _mips_xtlb_refill_vector:
+    dmfc0   $k1, CP0_BADVADDR
+    ehb
+    move    $k0, $sp
+    dla     $sp, _stack_top
+    daddiu  $sp, $sp, -32
+    move    $a0, $k1
+    dla     $t9, mips_tlb_refill_fastpath
+    jalr    $t9
+    nop
+    bnez    $v0, 1f
+    nop
+    move    $sp, $k0
     move    $k0, $sp
     dla     $at, mips_exc_enter_kernel_stack
     jr      $at
     nop
+1:
+    move    $sp, $k0
+    eret
 
     .org    _mips_exc_vectors + 0x100
     .globl  _mips_cache_error_vector

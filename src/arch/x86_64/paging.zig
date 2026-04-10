@@ -526,6 +526,46 @@ pub fn forEachUser4KiPresentLeaf(
     return true;
 }
 
+/// 枚举 PML4[0..256) 下 **2MiB 用户大页**（PDE.PS=1 且 User=1）。
+/// 用于 fork 时识别可作为整体复制的大块匿名映射。
+/// 回调参数 `phys` 为大页基帧，`pte_raw` 为大页大小（2MiB）。
+/// 回调返回 `false` 时中止遍历。
+pub fn forEachUser2MiPresentLeaf(
+    pml4_phys: u64,
+    ctx: ?*anyopaque,
+    cb: *const fn (ctx: ?*anyopaque, virt: u64, phys: u64, pte_raw: u64) bool,
+) bool {
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    var p4: usize = 0;
+    while (p4 < 256) : (p4 += 1) {
+        const pml4e = &pml4.entries[p4];
+        if (!pml4e.isPresent()) continue;
+        const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+        var p3: usize = 0;
+        while (p3 < 512) : (p3 += 1) {
+            const pdpte = &pdpt.entries[p3];
+            if (!pdpte.isPresent()) continue;
+            const pdpte_raw = @as(u64, @bitCast(pdpte.*));
+            if ((pdpte_raw & LargePage) != 0) continue;
+            const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+            var p2: usize = 0;
+            while (p2 < 512) : (p2 += 1) {
+                const pde = &pd.entries[p2];
+                if (!pde.isPresent()) { p2 += 1; continue; }
+                const pde_raw = @as(u64, @bitCast(pde.*));
+                if ((pde_raw & LargePage) == 0) { p2 += 1; continue; }
+                if (!pde.user) { p2 += 1; continue; }
+                const virt = (@as(u64, @intCast(p4)) << 39) |
+                    (@as(u64, @intCast(p3)) << 30) |
+                    (@as(u64, @intCast(p2)) << 21);
+                const phys = pde_raw & 0x0000_ffff_ffe0_0000;
+                if (!cb(ctx, virt, phys, HUGE_PAGE_SIZE)) return false;
+            }
+        }
+    }
+    return true;
+}
+
 /// 释放 PML4 **用户子树**（索引 **0..255**，即 NT/x86_64 典型布局下 canonical **低半区** 的 PML4 槽位）。
 /// 索引 **256..511** 保留给内核共享映射（与内核 `CR3` 可能共享中间页表物理页），此处**绝不**释放，避免误拆内核页表。
 /// 用户态应仅通过 **User** 位置位的叶映射访问低半区；高半区内核映射由各进程页表共享副本提供（与 `docs/cn/VM_ISOLATION.md` 一致）。

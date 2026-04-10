@@ -27,7 +27,6 @@ pub fn dispatch(frame: *TrapFrame) u64 {
     const p4 = frame.x3;
     const p5 = frame.x4;
     const p6 = frame.x5;
-    const p7 = frame.x6;
 
     return switch (svc) {
         ssdt.NtClose => ntResult(ntdll.NtClose(p1)),
@@ -48,7 +47,7 @@ pub fn dispatch(frame: *TrapFrame) u64 {
         },
         ssdt.NtTerminateProcess => ntResult(ntdll.NtTerminateProcess(p1, @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
         ssdt.NtCreateThread => ntResult(ntdll.NtCreateThread(@ptrFromInt(p1), @truncate(p2))),
-        ssdt.NtTerminateThread => ntResult(ntdll.NtTerminateThread(p1, @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
+        ssdt.NtTerminateThread => ntResult(ntdll.NtTerminateThread(@truncate(p1), @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
         ssdt.NtDelayExecution => blk: {
             if (p2 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
             const interval = @as(*const volatile i64, @ptrFromInt(p2)).*;
@@ -60,7 +59,7 @@ pub fn dispatch(frame: *TrapFrame) u64 {
             arch_mod.consoleWrite("[NtDisplayString]\r\n");
             break :blk STATUS_SUCCESS;
         },
-        ssdt.NtCreateSection => dispatchCreateSection(p1, p2, p3, p4, p5, p6, p7),
+        ssdt.NtCreateSection => dispatchCreateSection(p1, p2, p3, p4, p5, p6),
         ssdt.NtReadFile => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
         ssdt.NtWriteFile => ntResult(ntdll.STATUS_NOT_IMPLEMENTED),
         ssdt.NtUserGetMessage => ntResult(user32.ntUserGetMessageSyscall(p1, p2, @truncate(p3), @truncate(p4))),
@@ -215,7 +214,6 @@ fn dispatchCreateSection(
     maximum_size_ptr: u64,
     page_protect: u64,
     allocation_attributes: u64,
-    file_handle: u64,
 ) u64 {
     _ = object_attributes_va;
     if (section_handle_user == 0 or maximum_size_ptr == 0)
@@ -234,7 +232,7 @@ fn dispatchCreateSection(
         @ptrFromInt(maximum_size_ptr),
         @truncate(page_protect),
         @truncate(allocation_attributes),
-        @truncate(file_handle),
+        @as(ntdll.NTSTATUS, @bitCast(@as(u32, 0))), // file_handle=0 for anonymous section
     );
     if (st == ntdll.STATUS_SUCCESS) {
         @as(*volatile ntdll.HANDLE, @ptrFromInt(section_handle_user)).* = local;

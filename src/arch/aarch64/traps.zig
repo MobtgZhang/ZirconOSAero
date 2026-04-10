@@ -82,10 +82,12 @@ export fn aarch64_dispatch_sync_el1_sp0(frame: *TrapFrame) callconv(.c) void {
 export fn aarch64_dispatch_sync_el1(frame: *TrapFrame) callconv(.c) void {
     const ec: u32 = @truncate((frame.esr & ESR_EC_MASK) >> ESR_EC_SHIFT);
     switch (ec) {
-        EC_DABT_SAME, EC_IABT_SAME => {
-            klog.err("AArch64: kernel abort ELR=0x%x FAR=0x%x ESR=0x%x", .{
-                frame.elr, frame.far, frame.esr,
-            });
+        EC_DABT_SAME => {
+            decodeAndLogDAbort(frame, "kernel", frame.elr, frame.far, frame.esr);
+            haltForever();
+        },
+        EC_IABT_SAME => {
+            decodeAndLogIAbort(frame, "kernel", frame.elr, frame.far, frame.esr);
             haltForever();
         },
         EC_SP_ALIGN => {
@@ -105,6 +107,68 @@ export fn aarch64_dispatch_sync_el1(frame: *TrapFrame) callconv(.c) void {
     }
 }
 
+/// Decode ISS fields for Data Abort (EC=0x24/0x25) and print diagnostic.
+/// ISS[10] = WnR (0=read, 1=write), ISS[6] = S1PTW, ISS[5:2] = AR.
+fn decodeAndLogDAbort(frame: *TrapFrame, comptime ctx: []const u8, elr: u64, far: u64, esr: u64) void {
+    const iss = esr & 0x1FFF_FFFF;
+    const wnr = (iss >> 10) & 1;
+    const s1ptw = (iss >> 6) & 1;
+    const dfsc = iss & 0x3F;
+    klog.err("AArch64: Data Abort [%s] ELR=0x%x FAR=0x%x", .{ ctx, elr, far });
+    klog.err("  ESR=0x%x ISS=0x%x WnR=%u S1PTW=%u DFSC=0x%x", .{
+        esr, iss, wnr, s1ptw, dfsc,
+    });
+    klog.err("  DFSC meaning: 0x%02X — %s", .{ dfsc, dfscMeaning(dfsc) });
+    _ = frame;
+}
+
+/// Decode ISS fields for Instruction Abort (EC=0x20/0x21) and print diagnostic.
+fn decodeAndLogIAbort(frame: *TrapFrame, comptime ctx: []const u8, elr: u64, far: u64, esr: u64) void {
+    const iss = esr & 0x1FFF_FFFF;
+    const ifsc = iss & 0x3F;
+    klog.err("AArch64: Instruction Abort [%s] ELR=0x%x FAR=0x%x", .{ ctx, elr, far });
+    klog.err("  ESR=0x%x ISS=0x%x IFSC=0x%x", .{
+        esr, iss, ifsc,
+    });
+    klog.err("  IFSC meaning: 0x%02X — %s", .{ ifsc, dfscMeaning(ifsc) });
+    _ = frame;
+}
+
+/// Human-readable translation fault / address size fault description.
+/// Ref: ARM DDI 0487 §D10-3760 / §C5.1.30 DFSC / IFSC.
+fn dfscMeaning(dfsc: u64) []const u8 {
+    return switch (dfsc) {
+        0x00 => "Address size fault, L0",
+        0x01 => "Address size fault, L1",
+        0x02 => "Address size fault, L2",
+        0x03 => "Address size fault, L3",
+        0x04 => "Translation fault, L0",
+        0x05 => "Translation fault, L1",
+        0x06 => "Translation fault, L2",
+        0x07 => "Translation fault, L3",
+        0x09 => "Access flag fault, L1",
+        0x0B => "Access flag fault, L2",
+        0x0D => "Access flag fault, L3",
+        0x0C => "Access flag fault, L0",
+        0x08 => "Permission fault, L0",
+        0x0E => "Permission fault, L1",
+        0x10 => "Permission fault, L2",
+        0x12 => "Permission fault, L3",
+        0x11 => "External abort, L1 non-trans",
+        0x13 => "External abort, L2 non-trans",
+        0x15 => "External abort, L3 non-trans",
+        0x14 => "External abort, L1 trans",
+        0x16 => "External abort, L2 trans",
+        0x18 => "External abort, L3 trans",
+        0x19 => "Domain fault, L1",
+        0x1B => "Domain fault, L2",
+        0x1D => "Domain fault, L3",
+        0x1C => "Domain fault, L0",
+        0x1F => "TLB conflict abort",
+        else => "unknown",
+    };
+}
+
 /// Synchronous exception from lower EL (user mode: SVC, page faults).
 export fn aarch64_dispatch_sync_lower(frame: *TrapFrame) callconv(.c) void {
     const ec: u32 = @truncate((frame.esr & ESR_EC_MASK) >> ESR_EC_SHIFT);
@@ -114,7 +178,12 @@ export fn aarch64_dispatch_sync_lower(frame: *TrapFrame) callconv(.c) void {
             frame.x0 = syscall_a64.dispatch(frame);
             frame.elr += 4;
         },
-        EC_DABT_LOWER, EC_IABT_LOWER => {
+        EC_DABT_LOWER => {
+            decodeAndLogDAbort(frame, "user", frame.elr, frame.far, frame.esr);
+            handleUserPageFault(frame, ec);
+        },
+        EC_IABT_LOWER => {
+            decodeAndLogIAbort(frame, "user", frame.elr, frame.far, frame.esr);
             handleUserPageFault(frame, ec);
         },
         else => {

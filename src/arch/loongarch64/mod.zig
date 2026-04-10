@@ -96,6 +96,13 @@ pub fn initTimer() void {
 pub fn initPic() void {
     liointc.init();
     traps.ecfgEnableInterruptMask(IM_HWI);
+
+    // 配置 DMW（Direct Map Window）用于 MMIO 访问
+    // PCIe ECAM 通常在 0xE000_0000 以上，配置 2GiB DMW 窗口
+    const ecam_phys: u64 = 0xE000_0000;
+    const ecam_size: u2 = 2; // 2GiB 窗口
+    const dmw_mat = paging.DMW_MAT_WUC; // 弱非缓存，适合 MMIO
+    _ = paging.setupMmioDirectWindow(ecam_phys, ecam_size, dmw_mat);
 }
 
 pub fn unmaskIrq(irq: u8) void {

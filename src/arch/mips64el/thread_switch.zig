@@ -1,7 +1,7 @@
 //! MIPS64EL thread context initialization and switch wrappers.
 //! The actual register save/restore is in context_switch.S.
 
-/// Context frame layout saved by mips64_switch_context (13 doublewords = 104 bytes).
+/// Context frame layout saved by mips64_switch_context (23 doublewords = 184 bytes).
 /// Must match the layout in context_switch.S exactly.
 pub const MipsThreadContext = extern struct {
     s0: u64 = 0,
@@ -17,9 +17,19 @@ pub const MipsThreadContext = extern struct {
     ra: u64 = 0,
     status: u64 = 0,
     sp: u64 = 0,
+    t0: u64 = 0,
+    t1: u64 = 0,
+    t2: u64 = 0,
+    t3: u64 = 0,
+    t4: u64 = 0,
+    t5: u64 = 0,
+    t6: u64 = 0,
+    t7: u64 = 0,
+    t8: u64 = 0,
+    t9: u64 = 0,
 };
 
-const CTX_SIZE: usize = 104;
+const CTX_SIZE: usize = 184;
 
 comptime {
     if (@sizeOf(MipsThreadContext) != CTX_SIZE) @compileError("MipsThreadContext size mismatch with context_switch.S");
@@ -51,5 +61,15 @@ pub fn initNewThread(ctx: *MipsThreadContext, entry: u64, stack_top: usize) void
         // Status: IE=1, KX=1, SX=1, UX=1
         .status = (1 << 0) | (1 << 5) | (1 << 6) | (1 << 7),
         .sp = sp,
+        .t0 = 0,
+        .t1 = 0,
+        .t2 = 0,
+        .t3 = 0,
+        .t4 = 0,
+        .t5 = 0,
+        .t6 = 0,
+        .t7 = 0,
+        .t8 = 0,
+        .t9 = 0,
     };
 }

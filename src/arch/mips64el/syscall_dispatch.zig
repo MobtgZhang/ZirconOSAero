@@ -32,6 +32,11 @@ fn readFrame(sp: usize, off: usize) u64 {
     return @as(*const volatile u64, @ptrFromInt(sp + off)).*;
 }
 
+fn notImplemented(svc: u32) u64 {
+    klog.debug("MIPS64EL: unimpl syscall 0x%x", .{svc});
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 pub fn dispatch(frame_sp: usize) u64 {
     const idx = readFrame(frame_sp, OFF_V0);
     const p1 = readFrame(frame_sp, OFF_A0);
@@ -43,12 +48,11 @@ pub fn dispatch(frame_sp: usize) u64 {
     const svc: u32 = @truncate(idx);
 
     return switch (svc) {
-        ssdt.NtClose => ntResult(ntdll.NtClose(p1)),
+        ssdt.NtClose => ntResult(ntdll.NtClose(@truncate(p1))),
         ssdt.NtWaitForSingleObject => blk: {
             const alertable = p2 != 0;
             const timeout_ptr: ?*const i64 = if (p3 == 0) null else @ptrFromInt(p3);
-            const st = ntdll.NtWaitForSingleObject(p1, alertable, timeout_ptr);
-            break :blk ntResult(st);
+            break :blk ntResult(ntdll.NtWaitForSingleObject(@truncate(p1), alertable, timeout_ptr));
         },
         ssdt.NtAllocateVirtualMemory => dispatchAllocVM(p1, p2, p3, p4, p5, p6),
         ssdt.NtFreeVirtualMemory => dispatchFreeVM(p1, p2, p3, p4),
@@ -59,14 +63,13 @@ pub fn dispatch(frame_sp: usize) u64 {
             scheduler.yield();
             break :blk STATUS_SUCCESS;
         },
-        ssdt.NtTerminateProcess => ntResult(ntdll.NtTerminateProcess(p1, @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
+        ssdt.NtTerminateProcess => ntResult(ntdll.NtTerminateProcess(@truncate(p1), @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
         ssdt.NtCreateThread => ntResult(ntdll.NtCreateThread(@ptrFromInt(p1), @truncate(p2))),
-        ssdt.NtTerminateThread => ntResult(ntdll.NtTerminateThread(p1, @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
+        ssdt.NtTerminateThread => ntResult(ntdll.NtTerminateThread(@truncate(p1), @as(ntdll.NTSTATUS, @bitCast(@as(u32, @truncate(p2)))))),
         ssdt.NtDelayExecution => blk: {
             if (p2 == 0) break :blk ntResult(ntdll.STATUS_INVALID_PARAMETER);
             const interval = @as(*const volatile i64, @ptrFromInt(p2)).*;
-            const st = ntdll.NtDelayExecution(@truncate(p1), interval);
-            break :blk ntResult(st);
+            break :blk ntResult(ntdll.NtDelayExecution(@truncate(p1), interval));
         },
         ssdt.NtDisplayString => blk: {
             const arch_mod = @import("../../arch.zig");
@@ -78,48 +81,64 @@ pub fn dispatch(frame_sp: usize) u64 {
         ssdt.NtUserSendMessage => ntResult(user32.ntUserSendMessageSyscall(p1, @truncate(p2), p3, p4)),
         ssdt.NtShutdownSystem => ntResult(ntdll.NtShutdownSystem(@truncate(p1))),
 
-        ssdt.NtQueryInformationProcess,
-        ssdt.NtSetInformationProcess,
-        ssdt.NtQueryInformationThread,
-        ssdt.NtSetInformationThread,
-        ssdt.NtResumeThread,
-        ssdt.NtSuspendThread,
-        ssdt.NtCreateSemaphore,
-        ssdt.NtOpenSemaphore,
-        ssdt.NtReleaseSemaphore,
-        ssdt.NtCreateEvent,
-        ssdt.NtOpenEvent,
-        ssdt.NtSetEvent,
-        ssdt.NtResetEvent,
-        ssdt.NtCreateProcess,
-        ssdt.NtCreateUserProcess,
-        ssdt.NtCreateThreadEx,
-        ssdt.NtAlpcConnectPort,
-        ssdt.NtAlpcCreatePort,
-        ssdt.NtAlpcSendWaitReceivePort,
-        ssdt.NtMapViewOfSection,
-        ssdt.NtUnmapViewOfSection,
-        ssdt.NtQueryVirtualMemory,
-        ssdt.NtOpenProcess,
-        ssdt.NtDuplicateObject,
-        ssdt.NtReadVirtualMemory,
-        ssdt.NtWriteVirtualMemory,
-        ssdt.NtOpenKey,
-        ssdt.NtQueryValueKey,
-        ssdt.NtCreateKey,
-        ssdt.NtSetValueKey,
-        ssdt.NtEnumerateKey,
-        ssdt.NtEnumerateValueKey,
-        ssdt.NtCreateFile,
-        ssdt.NtDeviceIoControlFile,
-        ssdt.NtReadFile,
-        ssdt.NtWriteFile,
-        ssdt.NtConnectPort,
-        ssdt.NtCreatePort,
-        ssdt.NtRequestWaitReplyPort,
-        ssdt.NtWaitForMultipleObjects,
-        ssdt.NtInitiatePowerAction,
-        => STATUS_NOT_IMPLEMENTED,
+        ssdt.NtQueryInformationProcess => notImplemented(svc),
+        ssdt.NtSetInformationProcess => notImplemented(svc),
+        ssdt.NtQueryInformationThread => notImplemented(svc),
+        ssdt.NtSetInformationThread => notImplemented(svc),
+        ssdt.NtResumeThread => notImplemented(svc),
+        ssdt.NtSuspendThread => notImplemented(svc),
+        ssdt.NtAlertThread => notImplemented(svc),
+        ssdt.NtTestAlert => notImplemented(svc),
+        ssdt.NtCreateSemaphore => notImplemented(svc),
+        ssdt.NtOpenSemaphore => notImplemented(svc),
+        ssdt.NtReleaseSemaphore => notImplemented(svc),
+        ssdt.NtCreateEvent => notImplemented(svc),
+        ssdt.NtOpenEvent => notImplemented(svc),
+        ssdt.NtSetEvent => notImplemented(svc),
+        ssdt.NtResetEvent => notImplemented(svc),
+        ssdt.NtPulseEvent => notImplemented(svc),
+        ssdt.NtClearEvent => notImplemented(svc),
+        ssdt.NtOpenThread => notImplemented(svc),
+        ssdt.NtDuplicateObject => notImplemented(svc),
+        ssdt.NtOpenProcess => notImplemented(svc),
+        ssdt.NtMapViewOfSection => notImplemented(svc),
+        ssdt.NtUnmapViewOfSection => notImplemented(svc),
+        ssdt.NtQueryVirtualMemory => notImplemented(svc),
+        ssdt.NtReadVirtualMemory => notImplemented(svc),
+        ssdt.NtWriteVirtualMemory => notImplemented(svc),
+        ssdt.NtOpenKey => notImplemented(svc),
+        ssdt.NtQueryValueKey => notImplemented(svc),
+        ssdt.NtCreateKey => notImplemented(svc),
+        ssdt.NtSetValueKey => notImplemented(svc),
+        ssdt.NtEnumerateKey => notImplemented(svc),
+        ssdt.NtEnumerateValueKey => notImplemented(svc),
+        ssdt.NtCreateFile => notImplemented(svc),
+        ssdt.NtReadFile => notImplemented(svc),
+        ssdt.NtWriteFile => notImplemented(svc),
+        ssdt.NtDeviceIoControlFile => notImplemented(svc),
+        ssdt.NtFsControlFile => notImplemented(svc),
+        ssdt.NtFlushBuffersFile => notImplemented(svc),
+        ssdt.NtCancelIoFile => notImplemented(svc),
+        ssdt.NtCancelIoFileEx => notImplemented(svc),
+        ssdt.NtConnectPort => notImplemented(svc),
+        ssdt.NtCreatePort => notImplemented(svc),
+        ssdt.NtRequestWaitReplyPort => notImplemented(svc),
+        ssdt.NtCreateSection => notImplemented(svc),
+        ssdt.NtCreateMutant => notImplemented(svc),
+        ssdt.NtOpenMutant => notImplemented(svc),
+        ssdt.NtReleaseMutant => notImplemented(svc),
+        ssdt.NtQueryMutant => notImplemented(svc),
+        ssdt.NtCreateProcess => notImplemented(svc),
+        ssdt.NtCreateUserProcess => notImplemented(svc),
+        ssdt.NtCreateThreadEx => notImplemented(svc),
+        ssdt.NtAlpcConnectPort => notImplemented(svc),
+        ssdt.NtAlpcCreatePort => notImplemented(svc),
+        ssdt.NtAlpcSendWaitReceivePort => notImplemented(svc),
+        ssdt.NtWaitForMultipleObjects => notImplemented(svc),
+        ssdt.NtSignalAndWaitForSingleObject => notImplemented(svc),
+        ssdt.NtSetInformationObject => notImplemented(svc),
+        ssdt.NtInitiatePowerAction => notImplemented(svc),
+        ssdt.NtQueryObject => notImplemented(svc),
 
         else => blk: {
             klog.warn("MIPS64EL: unknown NT syscall idx 0x%x", .{svc});

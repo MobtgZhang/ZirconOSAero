@@ -54,12 +54,15 @@ const SCAUSE_LOAD_PAGE_FAULT: u64 = 13;
 const SCAUSE_STORE_PAGE_FAULT: u64 = 15;
 
 /// Approximate QEMU virt timebase frequency (10 MHz typical).
+/// Replaced by sbi_timebase.getTimebase() at runtime when available.
 const TIMER_FREQ: u64 = 10_000_000;
 const TIMER_HZ: u64 = 100;
 
 fn armNextTimer() void {
+    const sbi_timebase_mod = @import("../../hal/riscv64/sbi_timebase.zig");
+    const freq = sbi_timebase_mod.getTimebase();
     const now = sbi.readTime();
-    sbi.setTimer(now + TIMER_FREQ / TIMER_HZ);
+    sbi.setTimer(now + freq / TIMER_HZ);
 }
 
 /// Install the real stvec (replaces the early trap handler from start.S/mod.zig).
@@ -70,6 +73,24 @@ pub fn init() void {
         : [v] "r" (vec_addr),
         : .{ .memory = true });
     armNextTimer();
+}
+
+/// 分发 IRQ 给对应的处理程序
+fn dispatchIrq(irq: u32) void {
+    switch (irq) {
+        // QEMU virt: virtio-net = IRQ 1 (common assignment varies, log for now)
+        1 => {
+            klog.debug("riscv64: virtio-net IRQ %u", .{irq});
+        },
+        // QEMU virt: RTC = IRQ 22
+        22 => {
+            klog.debug("riscv64: RTC IRQ %u", .{irq});
+        },
+        // Console/serial (polled mode, no handler needed)
+        else => {
+            klog.debug("riscv64: unhandled IRQ %u", .{irq});
+        },
+    }
 }
 
 /// Entry from trap.S — exported as C symbol for the assembly `call`.
@@ -86,6 +107,7 @@ export fn riscv_dispatch_trap(frame: *TrapFrame) callconv(.c) void {
     if (cause == SCAUSE_S_EXTERNAL) {
         const irq = plic.claim();
         if (irq != 0) {
+            dispatchIrq(irq);
             plic.complete(irq);
         }
         return;
@@ -104,8 +126,29 @@ export fn riscv_dispatch_trap(frame: *TrapFrame) callconv(.c) void {
         const stval: u64 = asm volatile ("csrr %[r], stval"
             : [r] "=r" (-> u64),
         );
+        const fault_va = stval;
+        const pc = frame.sepc;
+        const is_user = (frame.sstatus & (1 << 18)) != 0; // SSTATUS.SUM bit
+
+        if (is_user) {
+            const is_write = (cause == SCAUSE_STORE_PAGE_FAULT);
+            const process = @import("../../ps/process.zig");
+            if (process.getCurrentProcess()) |proc| {
+                if (proc.address_space) |asp| {
+                    const vm = @import("../../mm/vm.zig");
+                    if (vm.handleUserDemandOrCowFault(asp, fault_va, is_write)) {
+                        return;
+                    }
+                    _ = process.terminateProcess(proc.pid, 0xC0000005);
+                    klog.err("riscv64: user page fault ACCESS_VIOLATION (va=0x%x cause=0x%x) PID=%u",
+                        .{ fault_va, cause, proc.pid });
+                    @import("../riscv64/mod.zig").halt();
+                }
+            }
+        }
+
         klog.err("riscv64: page fault cause=0x%x sepc=0x%x stval=0x%x", .{
-            cause, frame.sepc, stval,
+            cause, pc, fault_va,
         });
         @import("../riscv64/mod.zig").halt();
     }
@@ -116,5 +159,5 @@ export fn riscv_dispatch_trap(frame: *TrapFrame) callconv(.c) void {
 
 fn handleEcallSyscall(frame: *TrapFrame) void {
     const syscall_rv = @import("syscall_dispatch.zig");
-    syscall_rv.dispatch(frame);
+    frame.x10_a0 = @bitCast(syscall_rv.dispatch(frame));
 }

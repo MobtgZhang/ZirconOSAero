@@ -1,9 +1,10 @@
 //! MIPS64EL exception dispatch: called from exceptions.S after trap frame is saved.
-//! Reads CP0.Cause.ExcCode and dispatches to the appropriate handler.
+//! TLB refill fast-path handled by mips_tlb_refill_vector in exceptions.S.
 
 const klog = @import("../../rtl/klog.zig");
 const syscall_mips = @import("syscall_mips.zig");
 const mod = @import("mod.zig");
+const paging = @import("paging.zig");
 
 const EXC_INT: u32 = 0;
 const EXC_MOD: u32 = 1;
@@ -21,6 +22,80 @@ fn haltForever() noreturn {
     while (true) {
         asm volatile ("wait");
     }
+}
+
+/// Fast-path TLB refill handler — called from assembly stub with
+/// $a0 = BadVAddr (virtual address that caused the TLB miss).
+/// Uses CP0 Context.PTEBase to locate the root page table and fills the TLB.
+/// Returns 1 on success, 0 on failure.
+export fn mips_tlb_refill_fastpath(badvaddr: u64) callconv(.c) u64 {
+    const pgd_phys = readPteBase();
+    if (pgd_phys == 0) {
+        klog.err("MIPS TLB refill: PTEBase not set (pgd not loaded yet)", .{});
+        return 0;
+    }
+
+    const pgd: *paging.PageTable = @ptrFromInt(pgd_phys);
+    const v = paging.VirtAddr{ .value = badvaddr };
+
+    const l0e = pgd.entries[v.pml4Index()];
+    if (!l0e.isPresent()) {
+        klog.err("MIPS TLB refill: L0[%d] not present VA=0x%x", .{
+            v.pml4Index(), badvaddr,
+        });
+        return 0;
+    }
+
+    const l1: *paging.PageTable = @ptrFromInt(l0e.toFrame());
+    const l1e = l1.entries[v.pdptIndex()];
+    if (!l1e.isPresent()) {
+        klog.err("MIPS TLB refill: L1[%d] not present VA=0x%x", .{
+            v.pdptIndex(), badvaddr,
+        });
+        return 0;
+    }
+
+    const l2: *paging.PageTable = @ptrFromInt(l1e.toFrame());
+    const l2e = l2.entries[v.ptIndex()];
+    if (!l2e.isPresent()) {
+        klog.err("MIPS TLB refill: L2[%d] not present VA=0x%x", .{
+            v.ptIndex(), badvaddr,
+        });
+        return 0;
+    }
+
+    const entry_hi = badvaddr & ~@as(u64, 0x1FFF);
+    const entry_lo = l2e.raw;
+
+    asm volatile (
+        \\ dmtc0 %[hi], $10
+        \\ ehb
+        \\ dmtc0 %[lo], $2
+        \\ ehb
+        \\ tlbp
+        \\ ehb
+    :
+    : [hi] "r" (entry_hi), [lo] "r" (entry_lo),
+    );
+
+    const idx: i32 = asm ("dmfc0 %[o], $0"
+        : [o] "=r" (-> i32),
+    );
+
+    if (idx >= 0) {
+        asm volatile ("tlbwi\n\tehb");
+    } else {
+        asm volatile ("tlbwr\n\tehb");
+    }
+
+    return 1;
+}
+
+/// Read CP0 Context.PTEBase field (bits [63:23] of CP0 Register 4).
+fn readPteBase() u64 {
+    return asm ("dmfc0 %[out], $4\n\tehb"
+        : [out] "=r" (-> u64),
+    );
 }
 
 /// C-ABI entry from exceptions.S. frame_sp points to the saved MipsTrapFrame.
@@ -71,6 +146,7 @@ fn dispatchHardwareInterrupts(cause: u32) void {
         mod.ackTimerInterrupt();
         const scheduler = @import("../../ke/scheduler.zig");
         scheduler.tick();
+        klog.notifyTimerTick();
     }
 }
 
@@ -118,6 +194,5 @@ fn readTfBadVAddr(sp: usize) u64 {
 
 /// Install exception vectors (called from mod.initPic).
 pub fn init() void {
-    // EBase is set by start.S; here we verify Cause.IV = 1 for separate interrupt vector
-    klog.info("MIPS64EL traps: exception vectors installed by start.S", .{});
+    klog.info("MIPS64EL traps: TLB refill fast-path + exception vectors installed", .{});
 }

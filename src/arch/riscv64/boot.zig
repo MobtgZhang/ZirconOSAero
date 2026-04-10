@@ -1,6 +1,12 @@
-//! RISC-V 64：QEMU `-kernel` 默认参数，或 UEFI ZBM 经 Multiboot2 信息块传入。
+//! RISC-V 64 boot handoff: UEFI ZBM via Multiboot2, or QEMU -kernel via DTB.
+//!
+//! QEMU `-kernel` 启动时：a0=hartid(0), a1=DTB指针(0xD00DFEED)
+//! UEFI ZBM 启动时：a0=0x36d76289, a1=UEFI向量表物理地址
+//!
+//! 当 a0!=MULTIBOOT2_MAGIC 时（QEMU -kernel 路径），尝试从 a1 读取 DTB。
 
 const mb2 = @import("../../boot/multiboot2_parse.zig");
+const fdt = @import("../../hal/riscv64/fdt.zig");
 
 const UefiVectorLayout = extern struct {
     magic: u32,
@@ -40,7 +46,8 @@ pub const DesktopTheme = mb2.DesktopTheme;
 pub const BootMode = mb2.BootMode;
 pub const BootInfo = mb2.BootInfo;
 
-/// QEMU virt：RAM 自 0x8000_0000。
+/// QEMU virt 默认内存信息（无 DTB / DTB 解析失败时回退）。
+/// 128 MiB 与 EDK2 QEMU virt 默认 RAM 大小一致。
 const default_mmap = [_]mb2.MmapEntry{
     .{
         .base_addr = 0x80000000 + 0x400000,
@@ -61,8 +68,34 @@ fn qemuVirtDefault() BootInfo {
 }
 
 pub fn parse(magic: u32, phys_addr: usize) ?BootInfo {
-    if (magic != mb2.MULTIBOOT2_BOOTLOADER_MAGIC) return qemuVirtDefault();
-    const info_phys = multiboot2PhysFromUefiVector(phys_addr);
-    if (info_phys == 0) return qemuVirtDefault();
-    return mb2.parseMultiboot2(info_phys) orelse qemuVirtDefault();
+    // UEFI ZBM 路径：magic == MULTIBOOT2_MAGIC
+    if (magic == mb2.MULTIBOOT2_BOOTLOADER_MAGIC) {
+        const info_phys = multiboot2PhysFromUefiVector(phys_addr);
+        if (info_phys != 0) {
+            return mb2.parseMultiboot2(info_phys);
+        }
+        return qemuVirtDefault();
+    }
+
+    // QEMU -kernel 路径：magic != MULTIBOOT2_MAGIC，phys_addr 是 DTB 指针
+    // QEMU virt 的 DTB 包含完整内存映射和 hart 信息
+    const fdt_phys: usize = @intCast(phys_addr);
+    if (fdt_phys != 0) {
+        const hart_count = fdt.parse(fdt_phys);
+        if (hart_count > 0) {
+            // DTB 解析成功：从 fdt 模块获取内存信息构造 BootInfo
+            const mem_bytes = fdt.dtb_mem_size;
+            const mem_upper_kb: u32 = @truncate(@min(mem_bytes / 1024, 0xFFFFFFFF));
+            return .{
+                .mem_lower_kb = 0,
+                .mem_upper_kb = mem_upper_kb,
+                .mmap_ptr = @ptrFromInt(0), // DTB mmap 由 fdt 模块内部管理
+                .mmap_entry_count = 0,
+                .mmap_entry_size = @sizeOf(mb2.MmapEntry),
+            };
+        }
+    }
+
+    return qemuVirtDefault();
 }
+

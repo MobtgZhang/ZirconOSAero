@@ -9,7 +9,7 @@ pub const name: []const u8 = "mips64el";
 pub const PAGE_SIZE: usize = 4096;
 
 pub fn initFramebuffer(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8) void {
-    framebuffer.init(@intCast(addr), pitch, width, height, bpp);
+    framebuffer.init(@intCast(addr), width, height, pitch, bpp);
 }
 
 extern fn kernel_main(magic_arg: usize, info_addr: usize) callconv(.c) noreturn;

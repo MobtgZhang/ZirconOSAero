@@ -38,6 +38,8 @@ fn csrWrEentry(val: u64) void {
 }
 
 export fn loongarch_dispatch_trap(frame_sp: usize) callconv(.c) void {
+    // CSR 0x5 = ESTAT（Exception STATus），包含 ExcCode@[21:16] 和 IS@[14:0]
+    // ESTAT.EXC=11 对应 syscall（ECALL/break）
     const estat = asm volatile ("csrrd %[o], 0x5"
         : [o] "=r" (-> u64),
     );

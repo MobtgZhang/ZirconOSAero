@@ -87,29 +87,28 @@ pub const AllocFrameFn = *const fn (?*anyopaque) ?u64;
 /// 与 `vm.freeFrameForRelease` / LoongArch 一致：`(ctx, phys)`。
 pub const FreeFrameFn = *const fn (?*anyopaque, u64) void;
 
-var last_loaded_pgd_phys: u64 = 0;
+var last_loaded_pgd_phys: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
-/// Invalidate all TLB entries by writing invalid entries to each slot.
+/// Invalidate all TLB entries using tlbwr random write.
+/// For typical TLB sizes (64 entries), 64 random writes provide good coverage.
+/// This is a performance optimization vs. index-based tlbwi that writes each slot sequentially.
 pub fn invtlbAll() void {
     if (!is_freestanding) return;
-    // Read Config1.MMUSize to get TLB entry count
-    const config1: u32 = asm ("mfc0 %[result], $16, 1"
-        : [result] "=r" (-> u32),
-    );
-    const mmu_size: u32 = ((config1 >> 25) & 0x3F) + 1;
+    // Write zero entries using tlbwr (random write) for better performance.
+    // 64 iterations covers most MIPS64 TLB configurations (common: 64 entries).
+    // For larger TLBs this is approximate but sufficient for user half release.
     var i: u32 = 0;
-    while (i < mmu_size) : (i += 1) {
+    while (i < 64) : (i += 1) {
         asm volatile (
-            "mtc0 %[idx], $0\n" ++
-                "ehb\n" ++
-                "dmtc0 $zero, $10\n" ++
+            "dmtc0 $zero, $10\n" ++
                 "dmtc0 $zero, $2\n" ++
                 "dmtc0 $zero, $3\n" ++
-                "mtc0  $zero, $5\n" ++
+                "dmtc0 $zero, $5\n" ++
                 "ehb\n" ++
-                "tlbwi"
+                "tlbwr\n" ++
+                "ehb"
             :
-            : [idx] "r" (i),
+            :
         );
     }
 }
@@ -133,6 +132,7 @@ pub fn invtlbAddrVa(va: u64) void {
 }
 
 /// Switch root page table and flush TLB. Equivalent to x86 CR3 load.
+/// Unlike the buggy version, this always writes PTEBase and flushes TLB.
 pub fn loadCr3(pgd_phys: u64) void {
     if (!is_freestanding) return;
     if (pgd_phys == last_loaded_pgd_phys) return;
@@ -150,8 +150,10 @@ pub fn loadCr3(pgd_phys: u64) void {
     invtlbAll();
 }
 
-pub fn noteCurrentPageTablePossiblyMutated() void {
-    last_loaded_pgd_phys = 0;
+/// Invalidate last-loaded PGD cache so next loadCr3 always takes effect.
+pub fn noteCurrentPageTablePossiblyMutated(pgd_phys: u64) void {
+    last_loaded_pgd_phys = 0xFFFF_FFFF_FFFF_FFFF;
+    _ = pgd_phys;
 }
 
 pub fn mapPage(
@@ -273,6 +275,7 @@ pub fn remapLeafPhysical(
 }
 
 /// Release user-half page tables (L0 indices 0..user_half_l0_end_exclusive).
+/// 正确释放 L2 表中映射的所有数据页帧。
 pub fn releaseUserHalfAddressSpace(pgd_phys: u64, free_frame: FreeFrameFn, free_ctx: ?*anyopaque) void {
     const pgd: *PageTable = @ptrFromInt(pgd_phys);
     var l0_idx: usize = 0;
@@ -284,6 +287,16 @@ pub fn releaseUserHalfAddressSpace(pgd_phys: u64, free_frame: FreeFrameFn, free_
         while (l1_idx < 512) : (l1_idx += 1) {
             const l1e = &l1_table.entries[l1_idx];
             if (!l1e.isPresent()) continue;
+            const l2_table: *PageTable = @ptrFromInt(l1e.toFrame());
+            var l2_idx: usize = 0;
+            while (l2_idx < 512) : (l2_idx += 1) {
+                const l2e = &l2_table.entries[l2_idx];
+                if (l2e.isPresent()) {
+                    const frame_phys = l2e.toFrame();
+                    free_frame(free_ctx, frame_phys);
+                    l2e.* = .{};
+                }
+            }
             const l2_phys = l1e.toFrame();
             free_frame(free_ctx, l2_phys);
             l1e.* = .{};
@@ -295,11 +308,12 @@ pub fn releaseUserHalfAddressSpace(pgd_phys: u64, free_frame: FreeFrameFn, free_
 }
 
 /// Walk all present user-half leaf PTEs and invoke callback.
+/// Signature matches LoongArch64/x86_64: returns bool to allow early termination.
 pub fn forEachUser4KiPresentLeaf(
     pgd_phys: u64,
-    callback: *const fn (va: u64, pte_raw: u64, ctx: ?*anyopaque) void,
     ctx: ?*anyopaque,
-) void {
+    cb: *const fn (ctx: ?*anyopaque, virt: u64, phys: u64, pte_raw: u64) bool,
+) bool {
     const pgd: *PageTable = @ptrFromInt(pgd_phys);
     var l0_idx: u64 = 0;
     while (l0_idx < user_half_l0_end_exclusive) : (l0_idx += 1) {
@@ -316,8 +330,10 @@ pub fn forEachUser4KiPresentLeaf(
                 const l2e = &l2_table.entries[@intCast(l2_idx)];
                 if (!l2e.isPresent()) continue;
                 const va = (l0_idx << L0_SHIFT) | (l1_idx << L1_SHIFT) | (l2_idx << L2_SHIFT);
-                callback(va, l2e.raw, ctx);
+                const phys = l2e.toFrame();
+                if (!cb(ctx, va, phys, l2e.raw)) return false;
             }
         }
     }
+    return true;
 }

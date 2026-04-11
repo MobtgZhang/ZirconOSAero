@@ -16,8 +16,8 @@
 
 | 依赖 | 要求版本 | 说明 |
 |------|----------|------|
-| **QEMU** | ≥ 8.0（推荐最新） | 开发测试环境；支持 x86_64/aarch64/riscv64/loongarch64 |
-| **QEMU 固件（LoongArch64）** | QEMU 9.0+ 内置 | LoongArch64 UEFI GOP / ramfb_cfg 支持；见 `scripts/qemu_loongarch64_smp_test.sh` |
+| **QEMU** | ≥ 10.2（推荐最新） | 开发测试环境；支持 x86_64/aarch64/riscv64/loongarch64 |
+| **QEMU 固件（LoongArch64）** | QEMU 10.2+ 内置 | LoongArch64 UEFI GOP / ramfb_cfg 支持；见 `scripts/qemu_loongarch64_smp_test.sh` |
 
 ## 构建辅助工具
 
@@ -38,7 +38,7 @@
 ## CI 锁定的版本策略
 
 - **Zig 版本**：CI 固定为 0.15.2，本地开发可使用更新的 Zig（向后兼容），但 CI 以锁定版本为准
-- **QEMU 版本**：CI 使用最新稳定版，本地建议与 CI 对齐；LoongArch64 需要 QEMU 9.0+ 以获得完整 GOP/ramfb_cfg 支持
+- **QEMU 版本**：CI 使用最新稳定版（≥ 10.2），本地建议与 CI 对齐；LoongArch64 需要 QEMU 10.2+ 以获得完整 GOP/ramfb_cfg 支持
 - **依赖哈希**：所有第三方子模块使用具体 commit hash，禁止使用 `main` / `master` HEAD
 
 ## 验证构建可重现性

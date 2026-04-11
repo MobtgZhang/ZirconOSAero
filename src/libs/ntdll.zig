@@ -1941,7 +1941,9 @@ pub fn NtAllocateVirtualMemory(
     const alloc_mask = MEM_COMMIT | MEM_RESERVE;
     if ((allocation_type & ~alloc_mask) != 0) return STATUS_NOT_IMPLEMENTED;
 
-    const page_size: u64 = 4096;
+    const arch_mod = @import("../arch.zig");
+    const paging = arch_mod.impl.paging;
+    const page_size: u64 = @intCast(paging.page_size);
     var size = region_size.*;
     if (size == 0) return STATUS_INVALID_PARAMETER;
     size = (size + page_size - 1) & ~(page_size - 1);
@@ -2024,7 +2026,9 @@ pub fn NtFreeVirtualMemory(
     const proc = process.findProcess(pid) orelse return STATUS_INVALID_HANDLE;
     const space = proc.address_space orelse return STATUS_NO_MEMORY;
 
-    const page_size: u64 = 4096;
+    const arch_mod = @import("../arch.zig");
+    const paging = arch_mod.impl.paging;
+    const page_size: u64 = @intCast(paging.page_size);
     var size = region_size.*;
     if (size == 0) return STATUS_INVALID_PARAMETER;
     size = (size + page_size - 1) & ~(page_size - 1);

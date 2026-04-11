@@ -8,7 +8,7 @@ _start:
 	la.local $sp, stack_top
 	/*
 	 * UEFI ExitBootServices 后：固件常仍置 CRMD.IE、稳定时钟 TCFG.EN、ECFG.IM；EENTRY 亦可能指向已回收的固件向量。
-	 * 若首条 IRQ/时钟在 traps.init() 之前命中，取指/仿真路径可触发 QEMU 8.2 LoongArch TCG
+	 * 若首条 IRQ/时钟在 traps.init() 之前命中，取指/仿真路径可触发 QEMU 10.2 LoongArch TCG
 	 * `qemu_mutex_lock_iothread_impl: !qemu_mutex_iothread_locked()`（cpus.c）。
 	 * 与 `traps.zig` CSR 号一致：CRMD=0x0，ECFG=0x4，EENTRY=0xc，TCFG=0x41。
 	 */

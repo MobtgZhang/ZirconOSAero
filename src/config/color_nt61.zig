@@ -10,10 +10,10 @@
 const std = @import("std");
 
 /// ## Canonical 内部色策略（content2.4 / DesktopManagerSpec §4）
-/// **方案 1（本仓库选定）**：**内核帧缓冲与合成管线**以 **`KernelBgr888Low24`** 为唯一 canonical 打包形式（低 24 位 BGR，与 `drivers/video/desktop/theme.rgb` 一致）。
+/// **方案 1（本仓库选定）**：**内核帧缓冲与合成管线**以 **`KernelBgr888Low24`** 为唯一 canonical 打包形式（低 24 位 BGR，与 `desktop/kernel/theme/theme.zig` 一致）。
 /// **跨界输入**（注册表、`WM_DWMCOLORIZATIONCOLORCHANGED`、用户态 Aero）使用 **`ColorrefLow24`**（MS Learn COLORREF 低 24，R 最低字节），**仅允许**经本模块 `kernelDwmTintFromColorrefLow24` / `colorrefLow24FromKernelBgr24` 等命名函数进出内核路径。
 /// **不引入全路径 ARGB u32 中间层**（避免与帧缓冲 B8G8R8X8 写入再混序）；若将来需要 ARGB，仅允许在 **单函数边界** 内临时展开，不得作为跨模块 API 的裸 `u32`。
-/// 内核帧缓冲 / `theme.rgb`（drivers/video/desktop）低 24 位：**BGR**（B 最低字节）。勿与裸 `u32` 混用跨界 API。
+/// 内核帧缓冲 / `theme.rgb`（desktop/kernel/theme）低 24 位：**BGR**（B 最低字节）。勿与裸 `u32` 混用跨界 API。
 pub const KernelBgr888Low24 = u32;
 /// 注册表 DWORD / `WM_DWMCOLORIZATIONCOLORCHANGED` / Aero `theme.rgb`：**COLORREF** 低 24（R 最低字节，MS Learn）。
 pub const ColorrefLow24 = u32;
@@ -24,6 +24,11 @@ pub const ColorrefLow24 = u32;
 /// - 文档化 **0xAARRGGBB** 仅作「含 alpha 时」的惯例说明；当前 Shell 大量路径仍用低 24 位。跨界、注册表 DWORD、`WM_DWMCOLORIZATIONCOLORCHANGED` 载荷请只用本模块转换函数，勿混用字面量。
 pub fn bgrPacked24FromRgbBytes(r: u8, g: u8, b: u8) KernelBgr888Low24 {
     return @as(u32, b) | (@as(u32, g) << 8) | (@as(u32, r) << 16);
+}
+
+/// MS Learn COLORREF low24 helper (`r | (g<<8) | (b<<16)`).
+pub fn colorrefPacked24FromRgbBytes(r: u8, g: u8, b: u8) ColorrefLow24 {
+    return @as(u32, r) | (@as(u32, g) << 8) | (@as(u32, b) << 16);
 }
 
 /// Convert Aero/userland **COLORREF-style** low 24 bits (`r | (g<<8) | (b<<16)`) to kernel `theme.rgb`-compatible dword (same numeric remap).

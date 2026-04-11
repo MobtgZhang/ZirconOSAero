@@ -2,7 +2,7 @@
 //! 内核帧缓冲路径（`src/drivers/video/`）与用户态 Aero 库（`src/desktop/aero/`）均应通过本模块引用，
 //! 避免 `initAeroDwm` 与 `theme.DwmDefaults` 漂移。（对外 ABI 对齐目标为 NT 6.1 档公开行为描述。）
 //!
-//! 注意：`src/drivers/video/desktop/theme.zig` 的 `rgb()` 为 **低字节=B、中=G、高字节=R**（`b|(g<<8)|(r<<16)`），
+//! 注意：`src/desktop/kernel/theme/theme.zig` 的 `rgb()` 为 **低字节=B、中=G、高字节=R**（`b|(g<<8)|(r<<16)`），
 //! 与 Win32 `COLORREF`/本内核帧缓冲一致；`src/desktop/aero/src/theme.zig` 的 `rgb()` 为 `r|(g<<8)|(b<<16)`，二者字节序相反。
 //! `glass_tint_color` 此处为内核侧 **u32 字面值**（与 `dwm.zig` / `theme.rgb` 一致）；勿直接复制到 Aero 库主题常量而不换算。
 

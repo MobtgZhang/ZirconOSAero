@@ -1236,25 +1236,32 @@ pub fn handleLazyCommitFault(space: *AddressSpace, fault_va: u64, is_write: bool
 }
 
 /// 写故障 CoW：`pfn_share_count>0` 时复制到新帧并重映射可写叶项；**不**释放旧帧（其它别名或进程可能仍映射）。
+/// 文件后备页：当 `shareCount==0` 时，从文件重新加载内容到新分配的私有帧。
 pub fn tryCowWriteFault(space: *AddressSpace, fault_va: u64) bool {
     if (!@hasDecl(paging, "remapLeafPhysical")) return false;
     const frame_mod = @import("frame.zig");
     const ps: u64 = @intCast(paging.page_size);
     const page = fault_va & ~(ps - 1);
     const old_phys = space.getPhysical(page) orelse return false;
-    if (space.allocator.shareCount(old_phys) == 0) return false;
+    const old_share_count = space.allocator.shareCount(old_phys);
+
+    // 分配新帧
     const new_phys = space.allocator.alloc() orelse return false;
-    frame_mod.memcpyPhysicalPage(new_phys, old_phys);
-    const ve = space.vad.findContaining(page) orelse {
-        space.allocator.free(new_phys);
-        space.allocator.releaseShareCount(old_phys);
-        return false;
-    };
-    const pte_flags = ntProtectToPteFlags(ve.protect) orelse {
-        space.allocator.free(new_phys);
-        space.allocator.releaseShareCount(old_phys);
-        return false;
-    };
+    defer if (old_share_count == 0) space.allocator.free(new_phys);
+
+    if (old_share_count > 0) {
+        // 标准 CoW：复制物理页内容
+        frame_mod.memcpyPhysicalPage(new_phys, old_phys);
+        // 注意：旧帧可能仍被其它进程映射，不释放旧帧
+    } else {
+        // 文件后备 CoW：旧帧是文件后备只读映射，从文件重新加载
+        if (!cowReloadFromFileView(space, page, new_phys)) {
+            return false;
+        }
+    }
+
+    const ve = space.vad.findContaining(page) orelse return false;
+    const pte_flags = ntProtectToPteFlags(ve.protect) orelse return false;
     if (!paging.remapLeafPhysical(
         space.pml4_phys,
         page,
@@ -1263,12 +1270,20 @@ pub fn tryCowWriteFault(space: *AddressSpace, fault_va: u64) bool {
         allocFrameCb,
         @ptrCast(space.allocator),
     )) {
-        space.allocator.free(new_phys);
-        space.allocator.releaseShareCount(old_phys);
         return false;
     }
-    space.allocator.releaseShareCount(old_phys);
+    if (old_share_count > 0) {
+        space.allocator.releaseShareCount(old_phys);
+    }
     return true;
+}
+
+/// 文件后备 CoW：从文件视图重新读取当前页内容到新分配的帧。
+/// 使用延迟导入避免 vm.zig ↔ section.zig 循环依赖。
+fn cowReloadFromFileView(space: *AddressSpace, page: u64, new_phys: u64) bool {
+    // 延迟导入 section.zig 以避免循环依赖
+    const section = @import("section.zig");
+    return section.reloadPageFromFileBacking(space, page, new_phys);
 }
 
 /// #PF 用户态：`tryLazyCommitFault` → `tryCowWriteFault`。

@@ -207,8 +207,6 @@ pub fn mapViewIntoProcess(
     section_offset: u64,
     view_size: *u64,
 ) i32 {
-    // 文件后备 + 请求真 COW：尚未实现（须 #PF 路径或只读映射 + 写时复制）。
-    if (sec.file_backed and sec.cow_requested) return STATUS_NOT_IMPLEMENTED;
     if (section_offset >= sec.maximum_size) return STATUS_INVALID_PARAMETER;
     const ps: u64 = @intCast(paging.page_size);
     const vs: u64 = if (view_size.* == 0)
@@ -322,6 +320,46 @@ pub fn unmapViewInProcess(proc: *process.Process, base: u64) i32 {
     }
     vm.unmapRange(space, base, pages);
     return STATUS_SUCCESS;
+}
+
+/// 从文件后备重新读取指定页内容到目标物理地址（CoW 复制场景）。
+/// 由 `vm.tryCowWriteFault` 调用以支持文件后备 CoW。
+pub fn reloadPageFromFileBacking(space: *vm.AddressSpace, page: u64, new_phys: u64) bool {
+    const ps: u64 = @intCast(paging.page_size);
+    var vi: u8 = 0;
+    while (vi < space.section_view_count) : (vi += 1) {
+        const vb = space.section_view_base[vi];
+        const np = space.section_view_pages[vi];
+        if (np == 0) continue;
+        if (@as(u64, np) > std.math.maxInt(u64) / ps) continue;
+        const span = @as(u64, np) * ps;
+        if (page < vb or page >= vb + span) continue;
+
+        // 找到文件视图，获取 SectionObject
+        const sec = @as(*SectionObject, @ptrFromInt(space.section_view_obj[vi]));
+        if (!sec.file_backed) return false;
+        const fo = sec.backing_file orelse return false;
+
+        // 计算文件偏移并读取页内容
+        const page_idx = (page - vb) / ps;
+        const file_off = space.section_view_file_off[vi] + page_idx * ps;
+
+        var buf: [4096]u8 = undefined;
+        var written: u64 = 0;
+        while (written < ps) {
+            const to_read: usize = @intCast(@min(ps - written, @as(u64, buf.len)));
+            fo.position = file_off + written;
+            const rr = vfs.read(fo, buf[0..to_read]);
+            if (rr.status != .success) return false;
+            const got = rr.bytes_read;
+            const dst: [*]u8 = @ptrFromInt(new_phys + written);
+            if (got > 0) @memcpy(dst[0..got], buf[0..got]);
+            if (got < to_read) @memset(dst[got..to_read], 0);
+            written += to_read;
+        }
+        return true;
+    }
+    return false;
 }
 
 test "SectionObject is backed by object header type section" {

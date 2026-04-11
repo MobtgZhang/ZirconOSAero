@@ -82,6 +82,21 @@ fn initDesktopFramebufferFromHandoff(
                 klog.info("ramfb(rv): pointRamfbToGuestPhys skipped", .{});
             }
         }
+        // x86_64: 当 QEMU 同时启用 -device ramfb 和固件 GOP 时,将 ramfb 扫描输出指向 GOP 物理地址,
+        // 避免 QEMU GTK 窗口仍绑定到默认 ramfb 区域(0x0D000000)而 GOP 区域无像素更新导致黑屏.
+        if (builtin.target.cpu.arch == .x86_64) {
+            const ramfb_x86 = @import("../hal/x86_64/ramfb.zig");
+            if (ramfb_x86.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
+                klog.info("ramfb(x86_64): QEMU scanout → GOP phys 0x%x (%ux%u stride %u)", .{
+                    @as(usize, @truncate(use_fb.addr)),
+                    use_fb.width,
+                    use_fb.height,
+                    use_fb.pitch,
+                });
+            } else if (klog.DEBUG_MODE) {
+                klog.info("ramfb(x86_64): pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
+            }
+        }
     }
 
     if (!arch.impl.framebuffer.isReady()) {
@@ -112,12 +127,18 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
     var idle_streak: u32 = 0;
     var last_draw_cx: i32 = mouse.getX();
     var last_draw_cy: i32 = mouse.getY();
+    // x86_64 及其他架构默认 16 次额外轮询; LoongArch64 在 QEMU virtio-input 路径上
+    // 事件延迟可能更高,因此分配 32 次以确保输入不丢帧.
     const desktop_extra_input_polls: u32 = if (builtin.target.cpu.arch == .loongarch64) 32 else 16;
 
+    // 每帧调用 panic_ctx.setPhase 仅在 bisect 调试模式有意义; Release 构建下 Comptime 消除以降低开销.
     const panic_ctx = @import("../rtl/panic_context.zig");
     const user32_mod = @import("../subsystems/win32/user32.zig");
     while (true) {
-        panic_ctx.setPhase(0x0001_0001);
+        // panic_ctx.setPhase 仅在 bisect 调试模式有意义; Release 构建下完全消除此函数调用开销.
+        if (@import("build_options").desktop_bisect) {
+            panic_ctx.setPhase(0x0001_0001);
+        }
         input_hub.pollAll();
         // 阶段 D：有线程阻塞在 `GetMessage` 时额外轮询输入，降低「桌面空转、消息迟滞」概率（与 `display_flip_journal` idle 策略互补）。
         if (user32_mod.msgPumpThreadsBlockedApprox()) {
@@ -138,6 +159,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
             move_paint = display.MouseMovePaintHint.merge(move_paint, display.handleMouseMove(mouse.getX(), mouse.getY()));
 
             if (event.scroll != 0) {
+                display.handleDesktopScroll(event.scroll);
                 needs_ui_paint = true;
             }
 
@@ -307,6 +329,19 @@ pub fn enterDesktopSession(
             _ = a64r.pointRamfbToGuestPhys(@as(u64, @truncate(gaddr)), gw, gh, gp);
         }
     }
+    // x86_64: 首帧 ramfb 重指向 GOP 物理地址(与 LoongArch64/AArch64 相同的 extended_scanout 逻辑).
+    if (extended_scanout and builtin.target.cpu.arch == .x86_64) {
+        const fb_drv = drivers.video.framebuffer;
+        const gaddr = fb_drv.getAddress();
+        fb_drv.fenceScanoutVisibleWrites();
+        const ramfb_x86 = @import("../hal/x86_64/ramfb.zig");
+        const gw = fb_drv.getWidth();
+        const gh = fb_drv.getHeight();
+        const gp = fb_drv.getPitch();
+        if (gw > 0 and gh > 0 and gp > 0) {
+            _ = ramfb_x86.pointRamfbToGuestPhys(@as(u64, @truncate(gaddr)), gw, gh, gp);
+        }
+    }
     drivers.video.framebuffer.logFramebufferMemorySummary();
     klog.info("Desktop: first frame presented (taskbar+shell+cursor)", .{});
 
@@ -364,7 +399,7 @@ pub fn showZbmStyleBootMenu() void {
             klog.info("", .{});
             klog.info("  ENTER=Choose  |  ESC=Advanced Options  |  F1=Help                          ", .{});
             klog.info("", .{});
-            klog.info("    Architecture: loongarch64  |  Boot: kernel direct (-kernel)", .{});
+            klog.info("    Architecture: %s  |  Boot: kernel direct (-kernel)", .{@tagName(builtin.target.cpu.arch)});
             need_full_redraw = false;
         }
         if (countdown == 0) break;

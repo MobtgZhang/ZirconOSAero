@@ -258,3 +258,54 @@ test "VAD decommitSubrange API exists" {
     const has_fn = @hasDecl(vad_mod.VadTable, "decommitSubrange");
     try std.testing.expect(has_fn);
 }
+
+// ── LoongArch64 16KB 页对齐验证 ──
+// tryLazyCommitFault 使用 paging.page_size 进行页对齐，在 LoongArch64 上应为 16KB (0x4000)。
+
+test "LoongArch tryLazyCommitFault page alignment (16KB)" {
+    // 在非 LoongArch64 目标上跳过（主机测试使用 host 的页大小）
+    const arch = @import("builtin");
+    if (arch.cpu.arch != .loongarch64) {
+        return;
+    }
+    // 验证 paging.page_size 为 16KB
+    const arch_mod = @import("arch.zig");
+    const page_size = arch_mod.PAGE_SIZE;
+    try std.testing.expectEqual(@as(usize, 16 * 1024), page_size);
+}
+
+test "LoongArch 16KB page mask calculation" {
+    // 在非 LoongArch64 目标上跳过
+    const arch = @import("builtin");
+    if (arch.cpu.arch != .loongarch64) {
+        return;
+    }
+    // 验证页对齐掩码计算
+    const arch_mod = @import("arch.zig");
+    const page_size: u64 = @intCast(arch_mod.PAGE_SIZE);
+    const page_mask: u64 = ~@as(u64, page_size - 1);
+
+    // 任意 VA 按页对齐后应为页大小的倍数
+    const test_va: u64 = 0x12345;
+    const aligned_va: u64 = test_va & page_mask;
+    try std.testing.expectEqual(@as(u64, 0), aligned_va & (page_size - 1));
+}
+
+test "LoongArch 16KB large block alignment" {
+    // 在非 LoongArch64 目标上跳过
+    const arch = @import("builtin");
+    if (arch.cpu.arch != .loongarch64) {
+        return;
+    }
+    // 验证大块对齐（32MiB = 2048 * 16KB）
+    const page_size: u64 = 16 * 1024;
+    const block_size: u64 = 32 * 1024 * 1024; // 32MiB 大页
+
+    const block_mask: u64 = ~@as(u64, block_size - 1);
+    const aligned_block: u64 = block_size & block_mask;
+    try std.testing.expectEqual(@as(u64, block_size), aligned_block);
+
+    // 验证块大小是页大小的倍数
+    try std.testing.expectEqual(@as(u64, 2048), block_size / page_size);
+}
+

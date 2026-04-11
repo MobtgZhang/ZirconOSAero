@@ -93,7 +93,7 @@ $(error Invalid BOOTLOADER='$(BOOTLOADER)'. This project uses ZBM only: zbm)
 endif
 
 # LoongArch QEMU：勿与 x86 的 BOOT_METHOD 绑定。未在 build.conf 中设置时默认 kernel（-kernel 直启），
-# 规避 QEMU 8.2.x LoongArch TCG + UEFI 在 ExitBootServices 后宿主机断言；测 ZBM/固件用 LOONGARCH64_QEMU_MODE=uefi。
+# 规避 QEMU 10.2.x LoongArch TCG + UEFI 在 ExitBootServices 后宿主机断言；测 ZBM/固件用 LOONGARCH64_QEMU_MODE=uefi。
 ifeq ($(ARCH),loongarch64)
 ifeq ($(origin LOONGARCH64_QEMU_MODE),undefined)
 LOONGARCH64_QEMU_MODE := kernel
@@ -288,7 +288,9 @@ QEMU_LOONGARCH64_GTK_OPTS ?= $(QEMU_GTK_ZOOM),show-tabs=on
 QEMU_LOONGARCH64_DISPLAY ?= gtk,$(QEMU_LOONGARCH64_GTK_OPTS)
 # Zig/LLVM 在 Debug/ReleaseFast 下常把变址访存折叠为 `ldx.d`；QEMU LoongArch TCG 对部分 `ldx.d` 仍 #INE（菜单后、handoff 前）。LoongArch ZBM 对象在 build.zig 中固定为 ReleaseSafe 以生成 `ldx.d` 较少的访存序列。对照实验：make run-loongarch64 QEMU_LOONGARCH64_CPU=la464
 QEMU_LOONGARCH64_CPU ?= max
-QEMU_LOONGARCH64_BASE := -M virt,graphics=$(LOONGARCH64_VIRT_GRAPHICS) -cpu $(QEMU_LOONGARCH64_CPU) -m $(QEMU_MEM_LOONGARCH64) -serial stdio \
+# SMP 核心数：默认 1 核用于日常开发；多核用于 ASID 管理验证（make run-loongarch64 QEMU_LOONGARCH64_SMP=2）
+QEMU_LOONGARCH64_SMP ?= 1
+QEMU_LOONGARCH64_BASE := -M virt,graphics=$(LOONGARCH64_VIRT_GRAPHICS) -cpu $(QEMU_LOONGARCH64_CPU) -smp $(QEMU_LOONGARCH64_SMP) -m $(QEMU_MEM_LOONGARCH64) -serial stdio \
 	-no-reboot -no-shutdown -display $(QEMU_LOONGARCH64_DISPLAY)
 # virtio-blk bootindex：便于固件将磁盘列为启动候选（部分环境仍会因 BdsDxe Boot0001 失败而进 Shell）。
 # USB 键盘：LoongArch virt 机无默认键鼠，UEFI ConIn 需 usb-kbd 才能接收按键；内核可能无 USB HID 驱动，但不影响 ZBM 菜单。
@@ -377,7 +379,7 @@ show-config:
 		echo "║  LOONGARCH64_FIRMWARE_DIR = $(LOONGARCH64_FIRMWARE_DIR)"; \
 		echo "║  LOONGARCH64_EFI_CODE     = $(LOONGARCH64_EFI_CODE)"; \
 		echo "║  LOONGARCH64_BOOT_EFI     = $(LOONGARCH64_BOOT_EFI)"; \
-		echo "║  LOONGARCH64_QEMU_MODE     = $(LOONGARCH64_QEMU_MODE)  (kernel=默认稳; uefi=ZBM+固件，QEMU8.2 或断言)"; \
+		echo "║  LOONGARCH64_QEMU_MODE     = $(LOONGARCH64_QEMU_MODE)  (kernel=默认稳; uefi=ZBM+固件，QEMU10.2 或断言)"; \
 		echo "║  QEMU_LOONGARCH64_CPU      = $(QEMU_LOONGARCH64_CPU)  (默认 max，规避 la464 TCG 上 ldx.d #INE；对照实验可设 la464)"; \
 		echo "║  LOONGARCH64_QEMU_VIRTIO_GPU = $(LOONGARCH64_QEMU_VIRTIO_GPU)  (0=仅 ramfb 默认, 1=ramfb+virtio-gpu, 2=仅 virtio-gpu)"; \
 		echo "║  LOONGARCH64_VIRT_GRAPHICS   = $(LOONGARCH64_VIRT_GRAPHICS)  (Makefile 默认 on，利 GTK 与固件图形栈；可设 off)"; \
@@ -461,11 +463,14 @@ help:
 	@echo "  make run-aarch64            UEFI boot on QEMU AArch64 (EDK2 nightly; 默认 ramfb+REL 键鼠)"
 	@echo "  make run-riscv64            UEFI boot on QEMU RISC-V64 virt (VIRT.fd + ESP; 默认 ramfb+REL)"
 	@echo "  make run-loongarch64        QEMU LoongArch64（默认: -kernel；UEFI+ZBM 见 run-loongarch64-autozbm）"
-	@echo "  make run-loongarch64-autozbm  UEFI+ESP+startup.nsh → ZBM（QEMU8.2 或宿主机断言；日常开发用默认 kernel）"
+	@echo "  make run-loongarch64-autozbm  UEFI+ESP+startup.nsh → ZBM（QEMU10.2 或宿主机断言；日常开发用默认 kernel）"
 	@echo "  make run-aarch64-debug      AArch64 + GDB on :1234"
 	@echo "  make run-riscv64-debug      RISC-V64 UEFI + GDB on :1234"
 	@echo "  make run-loongarch64-debug  LoongArch64 + GDB on :1234"
 	@echo "  make run-loongarch64-serial-debug  同 run-loongarch64，串口 tee 到终端 + .cursor/debug-80cc1c.log"
+	@echo ""
+	@echo "LoongArch64 SMP override:"
+	@echo "  make run-loongarch64 QEMU_LOONGARCH64_SMP=2   # 2核用于 ASID 管理验证"
 	@echo ""
 	@echo "Override examples:"
 	@echo "  make DESKTOP=aero                        Aero desktop (default)"
@@ -934,13 +939,13 @@ run-riscv64-debug:
 #  LoongArch64 boot (EDK2 nightly firmware)
 # ══════════════════════════════════════════════════════
 
-# run-loongarch64：默认 -kernel（稳）；uefi 分支为 ESP+ZBM（部分 QEMU 8.2 LoongArch TCG 在 ExitBootServices 后会宿主机断言）。
+# run-loongarch64：默认 -kernel（稳）；uefi 分支为 ESP+ZBM（部分 QEMU 10.2 LoongArch TCG 在 ExitBootServices 后会宿主机断言）。
 run-loongarch64:
 ifeq ($(LOONGARCH64_QEMU_MODE),kernel)
 	@$(MAKE) build ARCH=loongarch64
 	@echo "[ZirconOSAero] LoongArch64 QEMU: -kernel + ramfb + virtio 键鼠（LOONGARCH64_QEMU_VIRTIO_GPU 控制 FB；与 uefi 显示/输入一致，无 ESP）"
 	@echo "[ZirconOSAero] 若 QEMU 窗口黑屏：View→Display 切换表面；Wayland 可试 GDK_BACKEND=x11；或 LOONGARCH64_QEMU_VIRTIO_GPU=1 / QEMU_LOONGARCH64_DISPLAY=sdl"
-	@echo "[ZirconOSAero] 若需测 UEFI/ZBM：make run-loongarch64 LOONGARCH64_QEMU_MODE=uefi 或 make run-loongarch64-autozbm（QEMU 8.2 或触发 cpus.c 断言则换 QEMU 版本）"
+	@echo "[ZirconOSAero] 若需测 UEFI/ZBM：make run-loongarch64 LOONGARCH64_QEMU_MODE=uefi 或 make run-loongarch64-autozbm（QEMU 10.2 或触发 cpus.c 断言则换 QEMU 版本）"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-kernel $(KERNEL_ELF) \
 		$(QEMU_LOONGARCH64_FB_DEVICE) $(QEMU_LOONGARCH64_VIRTIO_INPUT)
@@ -953,7 +958,7 @@ else ifeq ($(LOONGARCH64_QEMU_MODE),uefi)
 	fi
 	@echo "[ZirconOSAero] 等待内置 Shell 的 startup.nsh 倒计时结束（勿按 ESC）后将进入 ZBM 菜单；串口与 QEMU 窗口均可查看 ConOut。"
 	@echo "[ZirconOSAero] 键盘操作：请先点击 QEMU 窗口使其获得焦点，再用方向键/数字键选择启动项。"
-	@echo "[ZirconOSAero] 警告: QEMU 8.2.x LoongArch TCG 在部分环境下于 ExitBootServices 后宿主机断言 (cpus.c qemu_mutex_lock_iothread)；日常开发请用 LOONGARCH64_QEMU_MODE=kernel。"
+	@echo "[ZirconOSAero] 警告: QEMU 10.2.x LoongArch TCG 在部分环境下于 ExitBootServices 后宿主机断言 (cpus.c qemu_mutex_lock_iothread)；日常开发请用 LOONGARCH64_QEMU_MODE=kernel。"
 	qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
 		-bios $(LOONGARCH64_EFI_CODE) \
 		$(QEMU_LOONGARCH64_DEVICES) \

@@ -262,6 +262,22 @@ pub fn build(b: *std.Build) void {
         .optimize = kernel_optimize,
     });
 
+    const run_svg_embed = b.addSystemCommand(&.{
+        "python3",
+        "tools/svg_to_rgba.py",
+        "svg_embed_output",
+    });
+    run_svg_embed.setCwd(b.path("."));
+    run_svg_embed.step.dependOn(&run_wallpaper_embed.step);
+    run_svg_embed.has_side_effects = true;
+
+    const svg_manifest_lp = b.path("svg_embed_output/svg_embed_manifest.zig");
+    const svg_data_mod = b.createModule(.{
+        .root_source_file = svg_manifest_lp,
+        .target = target,
+        .optimize = kernel_optimize,
+    });
+
     const desktop_default = b.option(
         []const u8,
         "default_desktop",
@@ -371,6 +387,7 @@ pub fn build(b: *std.Build) void {
     });
     root_mod.addOptions("build_options", build_opts);
     root_mod.addImport("wallpaper_data", wallpaper_data_mod);
+    root_mod.addImport("svg_data", svg_data_mod);
 
     const config_defaults_mod = b.createModule(.{
         .root_source_file = b.path("src/config/defaults.zig"),
@@ -391,6 +408,7 @@ pub fn build(b: *std.Build) void {
         .root_module = root_mod,
     });
     kernel.step.dependOn(&run_wallpaper_embed.step);
+    kernel.step.dependOn(&run_svg_embed.step);
 
     const run_aero_sounds = b.addSystemCommand(&.{
         "python3",

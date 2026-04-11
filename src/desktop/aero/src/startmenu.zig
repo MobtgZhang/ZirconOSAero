@@ -170,33 +170,81 @@ fn addDefaultItems() void {
 }
 
 pub fn toggle() void {
-    if (visible or anim_state == .opening or anim_state == .open) {
-        hide();
-    } else {
-        show();
+    // 完整状态机：处理所有动画状态，防止任何混乱
+    switch (anim_state) {
+        .closing => {
+            // 正在关闭中，忽略此次 toggle（防止动画混乱）
+            return;
+        },
+        .opening => {
+            // 正在展开中，停止展开动画，开始反向关闭
+            hide();
+            return;
+        },
+        .open => {
+            // 已展开，关闭
+            hide();
+            return;
+        },
+        .hidden => {
+            // 隐藏状态，打开
+            show();
+            return;
+        },
     }
 }
 
 pub fn show() void {
+    // 如果正在关闭，立即停止关闭并反向展开
+    if (anim_state == .closing) {
+        // 反转动画方向：将关闭进度翻转为展开进度
+        anim_progress = 1.0 - anim_progress;
+        anim_state = .opening;
+        visible = true;
+        return;
+    }
+    // 正在展开中或已展开：忽略（防止参数被覆盖导致视觉抖动）
+    if (anim_state == .opening or anim_state == .open) {
+        return;
+    }
+    // hidden：从头开始展开
     visible = true;
     anim_state = .opening;
     anim_progress = 0.0;
 }
 
 pub fn hide() void {
-    if (anim_state != .hidden) {
+    // 如果正在展开，立即停止展开并反向关闭
+    if (anim_state == .opening) {
+        // 反转动画方向：将展开进度翻转为关闭进度
+        anim_progress = 1.0 - anim_progress;
         anim_state = .closing;
+        return;
     }
+    // 如果已展开：启动关闭
+    if (anim_state == .open) {
+        anim_state = .closing;
+        anim_progress = 1.0;
+        search_len = 0;
+        return;
+    }
+    // 正在关闭中或已隐藏：忽略
+    // 正在关闭中时不做任何操作（保持关闭进度继续）
+    // hidden 时不做任何操作
     search_len = 0;
 }
 
 pub fn isVisible() bool {
-    return visible or anim_state == .opening or anim_state == .closing;
+    // 关键修复：只在 hidden 状态返回 false，与内核 kernel/startmenu.zig 保持一致
+    // 原错误：使用 visible 变量判断，visible 可能在动画过程中为 false
+    // 现在：直接判断状态机状态，opening/closing/open 均视为可见
+    return anim_state != .hidden;
 }
 
 pub fn contains(screen_h: i32, x: i32, y: i32) bool {
-    // 如果菜单正在关闭，不响应点击
-    if (anim_state == .closing and anim_progress <= 0.1) return false;
+    // 关键修复：只在完全 hidden 时认为菜单不可交互
+    // 在 opening/closing/open 状态下，菜单都在视觉上存在，必须正确响应点击
+    if (anim_state == .hidden) return false;
     const menu_h = theme.Layout.startmenu_height;
     const menu_w = theme.Layout.startmenu_width;
     const taskbar_h = theme.Layout.taskbar_height;
@@ -223,4 +271,28 @@ pub fn getRightPanelColor() u32 {
 
 pub fn getGlassBorderColor() u32 {
     return theme.menu_glass_border;
+}
+
+pub fn getTextColor() u32 {
+    return theme.menu_text;
+}
+
+pub fn getHoverColor() u32 {
+    return theme.menu_hover_bg;
+}
+
+pub fn getSeparatorColor() u32 {
+    return theme.menu_separator;
+}
+
+pub fn getSearchPlaceholder() []const u8 {
+    return identity.search_placeholder;
+}
+
+pub fn getUserName() []const u8 {
+    return identity.user_name;
+}
+
+pub fn getUserSubtitle() []const u8 {
+    return identity.header_sub;
 }

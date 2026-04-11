@@ -1,0 +1,1 @@
+../../svg_embed_output/svg_embed_manifest.zig

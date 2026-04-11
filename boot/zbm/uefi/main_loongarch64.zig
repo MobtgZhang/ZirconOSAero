@@ -38,10 +38,12 @@ fn enableLoongArchExtendedUnitsEarly() void {
 const ZIRCON_LOONGARCH_EFI_MAGIC: u32 = 0x6372697A;
 /// 须落在 **已加载内核映像之前** 的 RAM 空洞内。`0x100000`（1MiB）在部分 EDK2/QEMU 路径上与固件保留区重叠，`AllocatePages(AtAddress)` 可长时间挂起；`0x1FF000` 为内核首段 PhysAddr `0x200000` 前一页。
 const HANDOFF_PHYS: usize = 0x1FF000;
-/// `EfiHandoff` 与 `mmap` 表（`MMAP_STORE_OFF`）之间的空洞；`ExitBootServices` 会回收 ZBM `.bss`，故跳转目标须存在此已分配页内而非 Loader 映像。
-const HANDOFF_KERNEL_ENTRY_SLOT: usize = HANDOFF_PHYS + 0x100;
+/// 内核入口点字段在 EfiHandoff 结构体中的偏移，通过 @offsetOf 动态获取。
+const HANDOFF_KERNEL_ENTRY_OFFSET: usize = @offsetOf(EfiHandoff, "kernel_entry");
+/// 入口点在 handoff 页面中的绝对物理地址
+const HANDOFF_KERNEL_ENTRY_SLOT: usize = HANDOFF_PHYS + HANDOFF_KERNEL_ENTRY_OFFSET;
 
-/// 与 `src/arch/loongarch64/boot.zig` 中 `EfiHandoff` 布局一致（v2 GOP / v3 mmap）
+/// 与 `src/arch/loongarch64/boot.zig` 中 `EfiHandoff` 布局一致（v2 GOP / v3 mmap / v4 kernel_entry）
 const EfiHandoff = extern struct {
     magic: u32,
     version: u32,
@@ -57,6 +59,8 @@ const EfiHandoff = extern struct {
     mmap_entry_size: u32 = 0,
     mmap_off_from_handoff: u32 = 0,
     _mmap_pad: u32 = 0,
+    /// v4: 内核入口点（由 ZBM 在 ExitBootServices 之前写入）
+    kernel_entry: u64 = 0,
 };
 
 /// 与内核 `boot.MmapEntry` 布局一致
@@ -202,9 +206,11 @@ noinline fn bumpHandoffVersionAtLeast3Abs(h: *EfiHandoff) void {
     la.storeU32Abs(hb + @offsetOf(EfiHandoff, "version"), v);
 }
 
-fn jumpToKernel(handoff_phys: usize) noreturn {
+/// 将内核入口点通过参数传递给跳转函数。
+/// kernel_entry 直接作为参数传入，asm 中用 "r" 约束。
+/// 相比从固定槽读取，避免了 LLVM 寄存器分配问题。
+fn jumpToKernel(handoff_phys: usize, kernel_entry: u64) noreturn {
     const mag: u64 = @as(u64, ZIRCON_LOONGARCH_EFI_MAGIC);
-    const ent = la.loadU64Abs(HANDOFF_KERNEL_ENTRY_SLOT);
     asm volatile (
         \\ move $a0, %[mag]
         \\ move $a1, %[hand]
@@ -213,8 +219,8 @@ fn jumpToKernel(handoff_phys: usize) noreturn {
         :
         : [mag] "r" (mag),
           [hand] "r" (handoff_phys),
-          [entry] "r" (ent),
-        : .{ .memory = true });
+          [entry] "r" (kernel_entry),
+        : .{});
     unreachable;
 }
 
@@ -818,12 +824,15 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices, selec
     if (mmap_count > 0) {
         bumpHandoffVersionAtLeast3Abs(&hand);
     }
+    // 入口点写入 EfiHandoff.kernel_entry（随结构体一起 copy 到 handoff 页面）
+    hand.kernel_entry = kernel_entry;
     if (builtin.cpu.arch == .loongarch64) {
         la.copyBytes(@ptrCast(ho_ptr), @ptrCast(@alignCast(&hand)), @sizeOf(EfiHandoff));
+        // 独立写入固定槽（确保入口点在固定偏移，jumpToKernel 读取 HANDOFF_KERNEL_ENTRY_SLOT）
+        la.storeU64Abs(HANDOFF_KERNEL_ENTRY_SLOT, kernel_entry);
     } else {
         hp.* = hand;
     }
-    la.storeU64Abs(HANDOFF_KERNEL_ENTRY_SLOT, kernel_entry);
 
     puts(out, "    [*] Exiting boot services...\r\n");
 
@@ -832,7 +841,7 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices, selec
         if (!zcall.exitBootServicesThin(bs, uefi.handle, mmap2.info.key)) return;
     }
 
-    jumpToKernel(HANDOFF_PHYS);
+    jumpToKernel(HANDOFF_PHYS, kernel_entry);
 }
 
 fn displayMemoryMap(out: anytype, bs: *uefi.tables.BootServices) void {

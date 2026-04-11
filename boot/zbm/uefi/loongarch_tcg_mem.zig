@@ -1,4 +1,4 @@
-//! QEMU 8.x `qemu-system-loongarch64` 的 TCG 对部分 LLVM 变址访存（`ldx.bu` / `ldx.d`）及少数位操作指令支持不完整，
+//! QEMU 10.x `qemu-system-loongarch64` 的 TCG 对部分 LLVM 变址访存（`ldx.bu` / `ldx.d`）及少数位操作指令支持不完整，
 //! UEFI 下 ZBM 会在菜单绘制或后续路径上 #INE。非 LoongArch 目标在编译期走普通 `[]` 访问，无额外开销。
 const builtin = @import("builtin");
 

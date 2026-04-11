@@ -15,7 +15,7 @@
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
-const aero_cursor_shape = @import("../desktop/aero_cursor_shape.zig");
+const cursor_root = @import("../../../desktop/kernel/cursor/root.zig");
 const virtio_gpu_pci = @import("../virtio/virtio_gpu_pci.zig");
 
 pub const CursorDrawFn = *const fn (i32, i32) void;
@@ -28,7 +28,7 @@ var sw_cursor_sy: i32 = 0;
 var sw_cursor_sw: i32 = 0;
 var sw_cursor_sh: i32 = 0;
 var sw_cursor_placed: bool = false;
-var sw_cursor_saved_kind: aero_cursor_shape.CursorKind = .arrow;
+var sw_cursor_saved_kind: cursor_root.CursorKind = .arrow;
 
 fn softwareCursorExtent(cx: i32, cy: i32) fb.Rect {
     const margin: i32 = 8;
@@ -87,7 +87,7 @@ pub fn markMotionDirty(ax: i32, ay: i32, bx: i32, by: i32) void {
 }
 
 /// 场景合成完成后调用：保存指针下像素并绘制指针（须在 `present` 之前）。
-pub fn composeAfterScene(cursor_visible: bool, cx: i32, cy: i32, kind: aero_cursor_shape.CursorKind, draw: CursorDrawFn) void {
+pub fn composeAfterScene(cursor_visible: bool, cx: i32, cy: i32, kind: cursor_root.CursorKind, draw: CursorDrawFn) void {
     if (!fb.isInitialized()) return;
     if (virtio_gpu_pci.hardwareCursorActive()) {
         invalidate();
@@ -112,7 +112,7 @@ pub fn composeAfterScene(cursor_visible: bool, cx: i32, cy: i32, kind: aero_curs
 /// 仅指针移动或 **光标形态变化**（箭头/I-beam 等）：先恢复 save-under，再在新位置按当前形态 copy+draw。
 /// 各形态位图同为 14×20，`softwareCursorExtent` 一致，故无需整场景重绘。
 /// 返回 false 时调用方应整场景重绘。
-pub fn moveOnly(cursor_visible: bool, cx: i32, cy: i32, prev_x: i32, prev_y: i32, kind: aero_cursor_shape.CursorKind, draw: CursorDrawFn) bool {
+pub fn moveOnly(cursor_visible: bool, cx: i32, cy: i32, prev_x: i32, prev_y: i32, kind: cursor_root.CursorKind, draw: CursorDrawFn) bool {
     if (!fb.isInitialized()) return false;
     if (virtio_gpu_pci.hardwareCursorActive()) return true;
     if (!cursor_visible) return false;

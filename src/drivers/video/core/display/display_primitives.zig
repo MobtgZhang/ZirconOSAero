@@ -2,7 +2,7 @@
 //! Shared geometry / clamp helpers for the desktop compositor (`display.zig`).
 
 const std = @import("std");
-const theme_mod = @import("../../desktop/theme.zig");
+const theme_mod = @import("../../../../desktop/kernel/theme/root.zig");
 
 pub fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme_mod.rgb(r, g, b);

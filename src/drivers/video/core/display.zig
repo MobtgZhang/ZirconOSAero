@@ -8,23 +8,29 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const io = @import("../../../io/io.zig");
+const desktop_root = @import("../../../desktop/root.zig");
 const klog = @import("../../../rtl/klog.zig");
 const vga_driver = @import("../legacy/vga.zig");
 const hdmi_driver = @import("../legacy/hdmi.zig");
 const fb = @import("framebuffer.zig");
-const icons = @import("../desktop/icons.zig");
-const startmenu = @import("../desktop/startmenu.zig");
+const desktop_drv = @import("../../../desktop/kernel/root.zig");
+const icons = desktop_root.icons.kernel_icons;
+const startmenu = desktop_drv.startmenu;
 const dwm_comp = @import("dwm_compositor.zig");
-const mat = @import("../desktop/material.zig");
-const shell_strings = @import("../desktop/shell_strings.zig");
-const shell_mui = @import("../desktop/shell_mui.zig");
+const mat = desktop_drv.material;
+const shell_strings = @import("../../../desktop/kernel/strings/shell_strings.zig");
+const shell_mui = @import("../../../desktop/kernel/strings/shell_mui.zig");
 const vfs = @import("../../../fs/vfs.zig");
 const explorer_vol_snap = @import("../../../fs/explorer_volume_snapshot.zig");
-const explorer_format = @import("../desktop/explorer_format.zig");
-const aero_tray = @import("../desktop/aero_tray.zig");
-const aero_cursor_shape = @import("../desktop/aero_cursor_shape.zig");
+const explorer_format = desktop_drv.explorer_format;
+const explorer_state = desktop_drv.explorer_state;
+const classic_shell = desktop_drv.classic_shell;
+const aero_tray = desktop_drv.aero_tray;
+const aero_cursor_shape = desktop_drv.aero_cursor_shape;
+const taskbar_ex = desktop_drv.taskbar_ex;
+const drag_state = desktop_drv.drag_state;
 const cursor_plane = @import("cursor_plane.zig");
-const builtin_apps = @import("../desktop/builtin_apps.zig");
+const builtin_apps = desktop_drv.builtin_apps;
 const config = @import("../../../config/config.zig");
 const process = @import("../../../ps/process.zig");
 const user32 = @import("../../../subsystems/win32/user32.zig");
@@ -32,10 +38,10 @@ const virtio_gpu_pci = @import("../virtio/virtio_gpu_pci.zig");
 const wddm_abs = @import("wddm_abstraction.zig");
 const color_nt61 = @import("../../../config/color_nt61.zig");
 
-pub const theme_mod = @import("../desktop/theme.zig");
+pub const theme_mod = desktop_drv.theme;
 pub const dwm_mod = @import("dwm.zig");
-pub const renderer_aero = @import("../desktop/renderer_aero.zig");
-const wallpaper_bitmap = @import("../desktop/wallpaper_bitmap.zig");
+const renderer_aero = desktop_drv.renderer_aero;
+const wallpaper_bitmap = desktop_drv.wallpaper_bitmap;
 const display_flip_journal = @import("display_flip_journal.zig");
 const display_backend = @import("display_backend.zig");
 const display_primitives = @import("display/display_primitives.zig");
@@ -256,7 +262,7 @@ pub fn aeroCaptionButtonLayout(win_x: i32, win_y: i32, win_w: i32, titlebar_h: i
     };
 }
 
-/// Aero 标题栏三键几何命中（关闭/最大/最小）。与 [PointerPolicy_NT61.md](../../../docs/cn/PointerPolicy_NT61.md) **D2**（NC 热区）及 `needs_caption_chrome_only` → `renderer_aero.redrawCaptionBandsOnly` 路径对齐。
+/// Aero 标题栏三键几何命中（关闭/最大/最小）。与 [PointerPolicy_NT61.md](../../../docs/cn/PointerPolicy_NT61.md) **D2**（NC 热区）及 `needs_caption_chrome_only` → `renderer_aero_mod.redrawCaptionBandsOnly` 路径对齐。
 pub fn hitTestAeroCaptionButtons(px: i32, py: i32, win_x: i32, win_y: i32, win_w: i32, titlebar_h: i32) AeroCaptionBtnHover {
     if (titlebar_h < 4 or win_w < 96) return .none;
     const pxi = @as(i64, px);
@@ -323,132 +329,87 @@ pub const AERO_EXPLORER_LIB_ADDR_FIELD_X: i32 = 54;
 pub const AERO_EXPLORER_LIB_SEARCH_W: i32 = 140;
 pub const AERO_EXPLORER_STATUS_H: i32 = 22;
 
-pub const ExplorerShellView = enum { computer, libraries };
-
-/// 资源管理器导航位置（与 `ExplorerShellView` 组合；路径语义 `X:\`）。
-pub const ExplorerLocation = union(enum) {
-    libraries_root,
-    computer_root,
-    drive_root: u8,
-};
-
-pub const EXPLORER_LIST_SEL_NONE: u32 = 0xFFFF_FFFF;
-
-var explorer_shell_view_state: ExplorerShellView = .libraries;
-var explorer_location: ExplorerLocation = .libraries_root;
-var explorer_list_selected: u32 = EXPLORER_LIST_SEL_NONE;
-
-var explorer_vol_snapshot_buf: [vfs.MAX_MOUNT_POINTS]explorer_vol_snap.ExplorerVolume = undefined;
-var explorer_vol_snapshot_count: usize = 0;
-/// `computer_root` 主区磁贴选中盘符；0 未选。
-var explorer_computer_drive_selected: u8 = 0;
+pub const ExplorerShellView = explorer_state.ExplorerShellView;
+pub const ExplorerLocation = explorer_state.ExplorerLocation;
+pub const EXPLORER_LIST_SEL_NONE = explorer_state.EXPLORER_LIST_SEL_NONE;
+pub const ExplorerSubdirectoryPath = explorer_state.ExplorerSubdirectoryPath;
 
 pub fn explorerEnsureVolumeSnapshot() void {
-    explorer_vol_snapshot_count = explorer_vol_snap.refreshVolumes(explorer_vol_snapshot_buf[0..]);
+    explorer_state.explorerEnsureVolumeSnapshot();
 }
 
 pub fn explorerVolumes() []const explorer_vol_snap.ExplorerVolume {
-    return explorer_vol_snapshot_buf[0..explorer_vol_snapshot_count];
+    return explorer_state.explorerVolumes();
 }
 
 pub fn explorerComputerDriveSelected() u8 {
-    return explorer_computer_drive_selected;
+    return explorer_state.getExplorerComputerDriveSelected();
 }
 
-fn explorerClearComputerDriveSelection() void {
-    explorer_computer_drive_selected = 0;
-}
+// ── Explorer State Delegation ──
 
 pub fn getExplorerShellView() ExplorerShellView {
-    return explorer_shell_view_state;
+    return explorer_state.getExplorerView();
 }
 
 pub fn getExplorerLocation() ExplorerLocation {
-    return explorer_location;
+    return explorer_state.getExplorerLocation();
 }
 
 pub fn getExplorerListSelectedRow() u32 {
-    return explorer_list_selected;
-}
-
-fn explorerInvalidateTaskbarThumb() void {
-    taskbar_explorer_thumb_valid = false;
+    return explorer_state.getExplorerListSelectedRow();
 }
 
 pub fn setExplorerShellView(v: ExplorerShellView) void {
-    explorer_shell_view_state = v;
-    switch (v) {
-        .libraries => {
-            explorer_location = .libraries_root;
-            explorer_list_selected = EXPLORER_LIST_SEL_NONE;
-        },
-        .computer => {
-            if (explorer_location == .libraries_root) {
-                explorer_location = .computer_root;
-            }
-            explorer_list_selected = EXPLORER_LIST_SEL_NONE;
-        },
-    }
-    explorerInvalidateTaskbarThumb();
+    explorer_state.setExplorerView(v);
 }
 
 pub fn getExplorerAddressBarKind() explorer_format.AddressBarKind {
-    switch (explorer_shell_view_state) {
-        .libraries => return .libraries,
-        .computer => switch (explorer_location) {
-            .drive_root => return .drive,
-            else => return .computer,
-        },
-    }
+    return explorer_state.getExplorerAddressBarKind();
 }
 
 pub fn getExplorerAddressDriveLetter() u8 {
-    return switch (explorer_location) {
-        .drive_root => |L| L,
-        else => 'C',
-    };
+    return explorer_state.getExplorerAddressDriveLetter();
 }
 
-/// 标题栏副行：`C:\` 或空。
 pub fn getExplorerTitleSubline(buf: []u8) []const u8 {
-    switch (explorer_shell_view_state) {
-        .libraries => return "",
-        .computer => switch (explorer_location) {
-            .drive_root => |L| return explorer_format.formatDriveRootPath(buf, L),
-            else => return "",
-        },
-    }
+    return explorer_state.getExplorerTitleSubline(buf);
 }
 
-fn navigateExplorerLibrariesRoot() void {
-    explorer_shell_view_state = .libraries;
-    explorer_location = .libraries_root;
-    explorer_list_selected = EXPLORER_LIST_SEL_NONE;
-    explorerClearComputerDriveSelection();
-    explorerInvalidateTaskbarThumb();
+pub fn explorerCanNavigateBack() bool {
+    return explorer_state.explorerCanNavigateBack();
 }
 
-fn navigateExplorerComputerRoot() void {
-    explorer_shell_view_state = .computer;
-    explorer_location = .computer_root;
-    explorer_list_selected = EXPLORER_LIST_SEL_NONE;
-    explorerClearComputerDriveSelection();
-    explorerInvalidateTaskbarThumb();
+pub fn explorerCanNavigateForward() bool {
+    return explorer_state.explorerCanNavigateForward();
 }
 
-fn navigateExplorerDriveRoot(letter: u8) void {
-    explorer_shell_view_state = .computer;
-    explorer_location = .{ .drive_root = letter };
-    explorer_list_selected = EXPLORER_LIST_SEL_NONE;
-    explorerClearComputerDriveSelection();
-    explorerInvalidateTaskbarThumb();
+pub fn explorerCanNavigateUp() bool {
+    return explorer_state.explorerCanNavigateUp();
 }
 
-fn selectExplorerComputerDriveTile(letter: u8) void {
-    var L = letter;
-    if (L >= 'a' and L <= 'z') L -= 32;
-    explorer_computer_drive_selected = L;
-    explorerInvalidateTaskbarThumb();
+pub fn getExplorerSubdirectoryPath() ?ExplorerSubdirectoryPath {
+    return explorer_state.getExplorerSubdirectoryPath();
+}
+
+pub fn explorerHasSubdirectory() bool {
+    return explorer_state.explorerHasSubdirectory();
+}
+
+pub fn readExplorerDriveRootSorted(letter: u8, out: []explorer_vol_snap.ExplorerListEntry) usize {
+    return explorer_state.readExplorerDriveRootSorted(letter, out);
+}
+
+pub fn readExplorerSubdirectorySorted(letter: u8, subpath: []const u8, out: []explorer_vol_snap.ExplorerListEntry) usize {
+    return explorer_state.readExplorerSubdirectorySorted(letter, subpath, out);
+}
+
+pub fn getExplorerSelectedEntry() ?explorer_vol_snap.ExplorerListEntry {
+    return explorer_state.getExplorerSelectedEntry();
+}
+
+pub fn getExplorerSelectedEntrySize(buf: []u8) []const u8 {
+    return explorer_state.getExplorerSelectedEntrySize(buf);
 }
 
 // ── Explorer 客户区布局（与 `renderer_aero` 同源，供命中测试）──
@@ -593,8 +554,8 @@ pub fn layoutExplorerComputerDriveTilesClient(nav_w: i32, body_y: i32, client_w:
 }
 
 fn explorerComputerDetailPaneRelHeight() i32 {
-    if (explorer_location != .computer_root) return 0;
-    if (explorer_computer_drive_selected == 0) return 0;
+    if (explorer_state.getExplorerLocation() != .computer_root) return 0;
+    if (explorer_state.getExplorerComputerDriveSelected() == 0) return 0;
     return 64;
 }
 
@@ -719,7 +680,7 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
     display_mode = .desktop;
 
     const app_cfg = @import("../../../config/config.zig");
-    @import("../desktop/shell_strings.zig").explorer_use_zh = app_cfg.isExplorerShellLangZh();
+    shell_strings.explorer_use_zh = app_cfg.isExplorerShellLangZh();
     shell_mui.setLangFromConfig();
 }
 
@@ -1163,7 +1124,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
 
     // Blur 策略（与 `syncAeroGlassFastPath` 矩阵，见 SOFTWARE_COMPOSITOR_WDDM.md）：此处按 **壳层 UI** 打开态启用轻量模糊；
     // `present`/其他路径上较晚调用的 `syncAeroGlassFastPath` 再按 **首帧跳过盒式模糊**、**拖窗** 覆盖。二者均为 dwm 帧内布尔开关，不重复扣 `blur_budget_pixel_passes`。
-    const shell_glass_lite = ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible;
+    const shell_glass_lite = ctx_menu_visible or taskbar_ctx_visible or startmenu.isVisible() or aero_tray_flyout_visible;
     dwm_mod.setGlassLiteBlurEnabled(shell_glass_lite);
     defer dwm_mod.setGlassLiteBlurEnabled(false);
 
@@ -1181,7 +1142,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
     const mouse = @import("../../../drivers/input/mouse.zig");
 
     // 开始菜单打开时仍保留适度插值步数，避免重绘帧后光标长时间「追赶」指针（原 2 步过苛）。
-    const interp_limit: u32 = if (isWindowDragging() or ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) 5 else 8;
+    const interp_limit: u32 = if (isWindowDragging() or ctx_menu_visible or taskbar_ctx_visible or startmenu.isVisible() or aero_tray_flyout_visible) 5 else 8;
     var interp_steps: u32 = 0;
     while (mouse.isInterpolating() and interp_steps < interp_limit) : (interp_steps += 1) {
         mouse.interpolateStep();
@@ -1294,7 +1255,7 @@ pub fn renderDesktopFrameEx(scene_dirty: bool, caption_chrome_only: bool, drag_r
         syncAeroGlassFastPath();
         blitRegisteredDwmThumbnailsBeforeCursor();
         // 壳层打开时：场景已在上一整帧写入缓冲（含菜单/托盘），仅指针移动可走 moveOnly，避免每帧全屏 DWM。
-        if (ctx_menu_visible or startmenu.isVisible() or aero_tray_flyout_visible) {
+        if (ctx_menu_visible or taskbar_ctx_visible or startmenu.isVisible() or aero_tray_flyout_visible) {
             panic_ctx.setPhase(0x0002_0050);
             if (!ptr_bisect and cursor_plane.moveOnly(desktop_ctx.cursor_visible, desktop_ctx.cursor_x, desktop_ctx.cursor_y, desktop_ctx.smooth_cursor.prev_x, desktop_ctx.smooth_cursor.prev_y, desktop_cursor_kind, renderCursor)) {
                 path_kind = .cursor_fast;
@@ -1377,6 +1338,9 @@ fn updateSmoothCursor(raw_x: i32, raw_y: i32) void {
 }
 
 pub fn toggleStartMenu() void {
+    if (@import("build_options").desktop_bisect) {
+        klog.debug("display: toggleStartMenu called", .{});
+    }
     startmenu.toggle(.aero);
     // 下一帧优先走整场景或 composeAfterScene，避免沿用仅指针路径下的旧 save-under。
     cursor_plane.invalidate();
@@ -1453,13 +1417,18 @@ fn isStartButtonClick(click_x: i32, click_y: i32, scr_w: i32, scr_h: i32) bool {
     if (click_y >= scr_h or click_y < tb_y) return false;
 
     const o = aeroTaskbarStartOrb(tb_y, tb_h);
+    // cx 是槽位中心的绝对坐标（槽位从 x=0 开始，slot_w=48，cx=24）
     const dx = click_x - o.cx;
     const dy = click_y - o.cy;
     const hit_r = o.r + 2;
     const dx64 = @as(i64, dx);
     const dy64 = @as(i64, dy);
     const hr = @as(i64, hit_r);
-    return dx64 * dx64 + dy64 * dy64 <= hr * hr;
+    const hit = dx64 * dx64 + dy64 * dy64 <= hr * hr;
+    if (@import("build_options").desktop_bisect) {
+        klog.debug("display: isStartButtonClick click=({},{}) orb=({},{}) r={} hit={}", .{ click_x, click_y, o.cx, o.cy, hit_r, hit });
+    }
+    return hit;
 }
 
 fn taskMgrWindowContains(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
@@ -1542,7 +1511,7 @@ fn explorerComputerListSelectFromPoint(lx: i32, ly: i32, client_w: i32, client_h
     if (ly >= Lc.body_y + Lc.body_h) return;
     const scroll_w: i32 = 16;
     if (lx >= Lc.list_x + Lc.list_w - scroll_w) return;
-    const letter: u8 = switch (explorer_location) {
+    const letter: u8 = switch (explorer_state.getExplorerLocation()) {
         .drive_root => |L| L,
         else => return,
     };
@@ -1554,8 +1523,7 @@ fn explorerComputerListSelectFromPoint(lx: i32, ly: i32, client_w: i32, client_h
     if (rel_y < 0) return;
     const row: u32 = @intCast(@divTrunc(rel_y, 20));
     if (row < n) {
-        explorer_list_selected = row;
-        explorerInvalidateTaskbarThumb();
+        explorer_state.setExplorerListSelectedRow(row);
     }
 }
 
@@ -1568,30 +1536,32 @@ fn aeroExplorerClientClick(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
     const status_h = AERO_EXPLORER_STATUS_H;
     if (ly >= cr.h - status_h) return true;
 
-    switch (explorer_shell_view_state) {
+    switch (explorer_state.getExplorerView()) {
         .computer => {
             const Lc = explorerComputerClientLayout(cr.w, cr.h);
             if (ly < Lc.body_y) return true;
             if (lx < Lc.nav_w) {
                 if (explorerComputerNavHitRow(lx, ly, Lc.body_y, Lc.body_h, Lc.nav_w)) |ri| {
                     if (ri == 3) {
-                        navigateExplorerLibrariesRoot();
+                        explorer_state.setExplorerView(.libraries);
                     } else if (ri == 7) {
-                        navigateExplorerComputerRoot();
+                        explorer_state.setExplorerView(.computer);
+                        // Stay on computer root
                     } else {
                         explorerEnsureVolumeSnapshot();
                         const vols = explorerVolumes();
                         if (ri >= 8 and ri < 8 + vols.len) {
-                            navigateExplorerDriveRoot(vols[ri - 8].letter);
+                            explorer_state.setExplorerView(.computer);
+                            explorer_state.setExplorerComputerDriveSelected(vols[ri - 8].letter);
                         }
                     }
                     return true;
                 }
             } else {
-                if (explorer_location == .computer_root and Lc.drive_sec_h > 0) {
+                if (explorer_state.getExplorerLocation() == .computer_root and Lc.drive_sec_h > 0) {
                     const tiles = layoutExplorerComputerDriveTilesClient(Lc.nav_w, Lc.body_y, cr.w);
                     if (tiles.hit(lx, ly)) |dl| {
-                        selectExplorerComputerDriveTile(dl);
+                        explorer_state.setExplorerComputerDriveSelected(dl);
                         return true;
                     }
                 }
@@ -1605,14 +1575,15 @@ fn aeroExplorerClientClick(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
             if (lx < Ll.nav_w) {
                 if (explorerLibrariesNavHitRow(lx, ly, Ll.body_y, Ll.body_h, Ll.nav_w)) |row| {
                     if (row == 4) {
-                        navigateExplorerLibrariesRoot();
+                        explorer_state.setExplorerView(.libraries);
                     } else if (row == 9) {
-                        navigateExplorerComputerRoot();
+                        explorer_state.setExplorerView(.computer);
                     } else {
                         explorerEnsureVolumeSnapshot();
                         const vols = explorerVolumes();
                         if (row >= 10 and row < 10 + vols.len) {
-                            navigateExplorerDriveRoot(vols[row - 10].letter);
+                            explorer_state.setExplorerView(.computer);
+                            explorer_state.setExplorerComputerDriveSelected(vols[row - 10].letter);
                         }
                     }
                     return true;
@@ -1630,6 +1601,16 @@ pub fn handleClick(x: i32, y: i32) bool {
     const h: i32 = @intCast(fb.getHeight());
     const w: i32 = @intCast(fb.getWidth());
 
+    if (taskbar_ctx_visible) {
+        if (handleTaskbarContextMenuClick(x, y)) {
+            return true;
+        }
+        if (!pointInRectI32(x, y, taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, taskbarCtxMenuHeight())) {
+            hideTaskbarContextMenu();
+        }
+        return true;
+    }
+
     if (ctx_menu_visible) {
         if (!isInsideContextMenu(x, y)) {
             hideContextMenu();
@@ -1638,17 +1619,22 @@ pub fn handleClick(x: i32, y: i32) bool {
         return handleContextMenuLeftClick(x, y);
     }
 
+    // 检测开始按钮点击
     if (isStartButtonClick(x, y, w, h)) {
+        taskbar_ex.setStartOrbPressed(true);
         toggleStartMenu();
         return true;
     }
 
+    // 如果菜单可见，检测是否点击在菜单外
     if (startmenu.isVisible()) {
-        const menu_r = startmenu.getInteractiveBounds(w, h);
+        const menu_r = startmenu.getMenuRect(w, h);
+        // 点击在菜单外，关闭菜单
         if (!menu_r.contains(x, y)) {
             startmenu.hide();
             return true;
         }
+        // 点击在菜单内，处理菜单点击
         const act = startmenu.handleMenuClick(x, y, w, h);
         switch (act) {
             .none => return true,
@@ -1876,10 +1862,18 @@ pub fn handleRightClick(x: i32, y: i32) bool {
         return true;
     }
 
+    // 桌面空白区域右键
     if (y < tb_y) {
         showContextMenu(x, y);
         return true;
     }
+
+    // 任务栏区域右键 - 显示任务栏右键菜单
+    if (y >= tb_y) {
+        showTaskbarContextMenu(x, y);
+        return true;
+    }
+
     return false;
 }
 
@@ -1926,30 +1920,7 @@ fn applyTaskMgrDrag(x: i32, y: i32, scr_w: i32, scr_h: i32) void {
 }
 
 /// 鼠标移动对桌面合成的提示：`needs_full_scene` 当前恒为 false（整场景由 UI 脏/插值/释放路径驱动）；**开始菜单行悬停**走 `needs_startmenu_repaint` → `renderDesktopFrameEx` 的 `startmenu_partial`（壁纸可 patch 时）；`needs_drag_repaint` 拖窗位移；`needs_caption_chrome_only` 仅标题栏带；`cursor_shape_changed` 光标快速路径。
-pub const MouseMovePaintHint = struct {
-    needs_full_scene: bool = false,
-    /// 开始菜单悬停行变化：仅重绘菜单脏区（避免整屏壁纸+毛玻璃）。
-    needs_startmenu_repaint: bool = false,
-    needs_drag_repaint: bool = false,
-    /// 边框拖拽改变 Explorer / 任务管理器几何：走 `renderer_aero.renderFrameEx` 非拖动态全壳层（非 `scene_dirty`）。
-    needs_shell_frame_repaint: bool = false,
-    /// 左键释放在标题栏拖放结束：同上壳层全帧，但不 `scene_dirty`（不 `cursor_plane.invalidate`）。
-    needs_post_drag_composite: bool = false,
-    needs_caption_chrome_only: bool = false,
-    cursor_shape_changed: bool = false,
-
-    pub fn merge(a: MouseMovePaintHint, b: MouseMovePaintHint) MouseMovePaintHint {
-        return .{
-            .needs_full_scene = a.needs_full_scene or b.needs_full_scene,
-            .needs_startmenu_repaint = a.needs_startmenu_repaint or b.needs_startmenu_repaint,
-            .needs_drag_repaint = a.needs_drag_repaint or b.needs_drag_repaint,
-            .needs_shell_frame_repaint = a.needs_shell_frame_repaint or b.needs_shell_frame_repaint,
-            .needs_post_drag_composite = a.needs_post_drag_composite or b.needs_post_drag_composite,
-            .needs_caption_chrome_only = a.needs_caption_chrome_only or b.needs_caption_chrome_only,
-            .cursor_shape_changed = a.cursor_shape_changed or b.cursor_shape_changed,
-        };
-    }
-};
+pub const MouseMovePaintHint = desktop_root.events.MouseMovePaintHint;
 
 /// 指针移动 → 壳层局部脏提示（开始菜单、拖窗、`caption_partial` 等）。合并 REL/插值见 **D1**；NC vs 客户区与标题栏带见 **D2**；光标形态见 **D3**；悬停/离开见 **D4**（与 `PointerPolicy_NT61.md` §2–3 对照表）。
 pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
@@ -1963,8 +1934,23 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
         startmenu_hover = startmenu.updatePointerHover(x, y, w, h);
     }
 
+    // 开始按钮 Orb 悬停跟踪
+    {
+        const scr_h_orb: i32 = @intCast(fb.getHeight());
+        const tb_h_orb = getTaskbarHeight();
+        const tb_y_orb = clampI32FromI64(@as(i64, scr_h_orb) - @as(i64, tb_h_orb));
+        const o = aeroTaskbarStartOrb(tb_y_orb, tb_h_orb);
+        const dx = x - o.cx;
+        const dy = y - o.cy;
+        const hit_r = o.r + 2;
+        const is_orb_hovered = dx * dx + dy * dy <= @as(i64, hit_r) * @as(i64, hit_r);
+        taskbar_ex.setStartOrbHovered(is_orb_hovered);
+    }
+
     // 右键菜单悬停跟踪
     _ = updateContextMenuHover(x, y);
+    // 任务栏右键菜单悬停跟踪
+    _ = updateTaskbarContextMenuHover(x, y);
 
     const scr_w: i32 = @intCast(fb.getWidth());
     const scr_h: i32 = @intCast(fb.getHeight());
@@ -2072,7 +2058,7 @@ fn pointInExplorerAddressBarEx(px: i32, py: i32, scr_w: i32, scr_h: i32, expand_
     const addr_y = cy + cmd_h + 1;
     const e = @as(i64, expand_each_side);
 
-    if (explorer_shell_view_state == .libraries) {
+    if (explorer_state.getExplorerView() == .libraries) {
         const search_w = @as(i64, AERO_EXPLORER_LIB_SEARCH_W);
         const search_x = cx + cw - 8 - search_w;
         const bread_left = cx + @as(i64, AERO_EXPLORER_LIB_ADDR_FIELD_X);
@@ -2144,10 +2130,7 @@ pub fn isWindowDragging() bool {
 }
 
 /// 左键释放：`needs_full_scene` 与 `MouseMovePaintHint.needs_full_scene` 合并后驱动 `scene_dirty`；`needs_post_drag_composite` 仅壳层全帧、不 invalidate。
-pub const MouseReleasePaintHint = struct {
-    needs_full_scene: bool = false,
-    needs_post_drag_composite: bool = false,
-};
+pub const MouseReleasePaintHint = desktop_root.events.MouseReleasePaintHint;
 
 /// 边框缩放结束须 `scene_dirty`（`invalidate`）；仅标题栏拖放结束用 `needs_post_drag_composite`，避免松手整屏 save-under 失效导致卡顿。
 pub fn handleMouseRelease() MouseReleasePaintHint {
@@ -2159,6 +2142,7 @@ pub fn handleMouseRelease() MouseReleasePaintHint {
     explorer_edge_resize = .none;
     taskmgr_edge_resize = .none;
     const was_builtin_drag = builtin_apps.onMouseRelease();
+    taskbar_ex.setStartOrbPressed(false);
     const drag_shell = was_explorer or was_taskmgr or was_builtin_drag;
     if (was_resize or drag_shell) {
         cursor_plane.invalidate();
@@ -2221,100 +2205,22 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     fb.drawHLine(0, tb_y_line2, scr_w, rgb(0x40, 0x5C, 0x78));
 
     const peek_w: i32 = aero_tray.TASKBAR_PEEK_STRIP_W;
-    const icon_s: u32 = 2;
-    const icon_px: i32 = icons.getIconTotalSize(icon_s);
-    const icon_s_apps: u32 = 1;
-    const app_icon_px: i32 = icons.getIconTotalSize(icon_s_apps);
-    const tile: i32 = 34;
-    const pill_h: i32 = tile;
 
     panic_ctx.setPhase(0x0002_0091);
     const orb = aeroTaskbarStartOrb(tb_y, tb_h);
-    // 阴影 + 球体 + 高光（Aero 玻璃球体感）
-    const orb_cy1 = clampI32FromI64(@as(i64, orb.cy) + 1);
-    const orb_r1 = clampI32FromI64(@as(i64, orb.r) + 1);
-    fb.fillCircle(orb.cx, orb_cy1, orb_r1, rgb(0x04, 0x12, 0x28));
-    fb.fillCircle(orb.cx, orb.cy, orb_r1, rgb(0x10, 0x2C, 0x50));
-    fb.fillCircle(orb.cx, orb.cy, orb.r, rgb(0x1C, 0x44, 0x78));
-    const orb_sheen_r = @max(0, orb.r - 1);
-    fb.aeroSheenDisk(orb.cx, orb.cy, orb_sheen_r, rgb(0xF4, 0xFA, 0xFF));
-    renderZirconLogo(clampI32FromI64(@as(i64, orb.cx) - 7), clampI32FromI64(@as(i64, orb.cy) - 7));
+
+    // 渲染 Aero 风格开始按钮（SVG orb + 悬停/按压动画）
+    taskbar_ex.updateStartOrbAnimation();
+    // 增大 orb 尺寸到 36，确保完整可见（任务栏高度 40，圆心在 y=880）
+    const orb_size: i32 = 36;
+    const orb_x = orb.cx - @divTrunc(orb_size, 2);
+    // orb_y 与圆心对齐：圆心在任务栏垂直居中，半径 16 时顶部在 864，底部在 896，都在 860-900 内
+    const orb_y = orb.cy - @divTrunc(orb_size, 2);
+    taskbar_ex.renderStartButtonAero(orb_x, orb_y, orb_size);
 
     panic_ctx.setPhase(0x0002_0092);
-    const ql_ids = [_]icons.IconId{ .browser, .terminal, .documents };
-    var qx: i32 = clampI32FromI64(@as(i64, orb.slot_w) + 6);
-    const ql_y = clampI32FromI64(@as(i64, tb_y) + @divTrunc(@as(i64, tb_h) - @as(i64, icon_px), 2));
-    const ql_pad: i32 = 3;
-    for (ql_ids) |iid| {
-        const bg_w = clampI32FromI64(@as(i64, icon_px) + 2 * @as(i64, ql_pad));
-        const bg_h = clampI32FromI64(@as(i64, icon_px) + 2 * @as(i64, ql_pad));
-        const bg_x = clampI32FromI64(@as(i64, qx) - @as(i64, ql_pad));
-        const bg_y = clampI32FromI64(@as(i64, ql_y) - @as(i64, ql_pad));
-        const bg_ix = clampI32FromI64(@as(i64, bg_x) + 1);
-        const bg_iy = clampI32FromI64(@as(i64, bg_y) + 1);
-        const bg_iw = @max(0, clampI32FromI64(@as(i64, bg_w) - 2));
-        const bg_ih_grad = @max(1, clampI32FromI64(@as(i64, bg_h) - 3));
-        fb.fillRoundedRect(bg_x, bg_y, bg_w, bg_h, 6, rgb(0x16, 0x2A, 0x42));
-        fb.drawGradientV(bg_ix, bg_iy, bg_iw, bg_ih_grad, rgb(0x42, 0x5E, 0x82), rgb(0x12, 0x22, 0x36));
-        const tint_h_ql: i32 = @max(0, @as(i32, @intCast(@divTrunc(@as(i64, bg_h) - 2, 2))));
-        fb.blendTintRect(bg_ix, bg_iy, bg_iw, tint_h_ql, rgb(0xA8, 0xD0, 0xF5), 45, 170);
-        fb.drawRect(bg_x, bg_y, bg_w, bg_h, rgb(0x58, 0x7C, 0xA0));
-        icons.drawThemedIcon(iid, qx, ql_y, icon_s, .aero);
-        qx = clampI32FromI64(@as(i64, qx) + @as(i64, icon_px) + 2 * @as(i64, ql_pad) + 6);
-    }
-    const vline_x = clampI32FromI64(@as(i64, qx) + 2);
-    const vline_y = clampI32FromI64(@as(i64, tb_y) + 6);
-    const vline_len = @max(0, clampI32FromI64(@as(i64, tb_h) - 12));
-    fb.drawVLine(vline_x, vline_y, vline_len, rgb(0x58, 0x78, 0x98));
-
-    panic_ctx.setPhase(0x0002_0093);
-    const app_items = [_]struct { id: icons.IconId, active: bool }{
-        .{ .id = .computer, .active = true },
-        .{ .id = .folder, .active = false },
-        .{ .id = .terminal, .active = false },
-    };
-    var ax = clampI32FromI64(@as(i64, qx) + 8);
-    const ay = clampI32FromI64(@as(i64, tb_y) + @divTrunc(@as(i64, tb_h) - @as(i64, pill_h), 2));
-    const pill_r: i32 = 8;
-    for (app_items) |app| {
-        const pill_inner_x = clampI32FromI64(@as(i64, ax) + 2);
-        const pill_inner_y = clampI32FromI64(@as(i64, ay) + 2);
-        const pill_inner_w = @max(0, clampI32FromI64(@as(i64, tile) - 4));
-        const pill_inner_h = @max(0, clampI32FromI64(@as(i64, pill_h) - 4));
-        if (app.active) {
-            fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x38, 0x5C, 0x88));
-            fb.drawGradientV(pill_inner_x, pill_inner_y, pill_inner_w, pill_inner_h, rgb(0x82, 0xB0, 0xE0), rgb(0x38, 0x5C, 0x88));
-            const tint_h_act: i32 = @max(0, @as(i32, @intCast(@divTrunc(@as(i64, pill_h) - 4, 2))));
-            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, tint_h_act, rgb(0xE0, 0xF2, 0xFF), 50, 200);
-            fb.drawRect(ax, ay, tile, pill_h, rgb(0xA0, 0xCC, 0xF0));
-        } else {
-            fb.fillRoundedRect(ax, ay, tile, pill_h, pill_r, rgb(0x1A, 0x2E, 0x46));
-            fb.drawGradientV(pill_inner_x, pill_inner_y, pill_inner_w, pill_inner_h, rgb(0x3A, 0x54, 0x72), rgb(0x12, 0x20, 0x34));
-            const tint_h_inact: i32 = @max(0, @as(i32, @intCast(@divTrunc(@as(i64, pill_h) - 4, 2))));
-            fb.blendTintRect(pill_inner_x, pill_inner_y, pill_inner_w, tint_h_inact, rgb(0x88, 0xB0, 0xD8), 38, 160);
-            fb.drawRect(ax, ay, tile, pill_h, rgb(0x46, 0x64, 0x84));
-        }
-        const ix = clampI32FromI64(@as(i64, ax) + @divTrunc(@as(i64, tile) - @as(i64, app_icon_px), 2));
-        const iy = clampI32FromI64(@as(i64, ay) + @divTrunc(@as(i64, pill_h) - @as(i64, app_icon_px), 2));
-        icons.drawThemedIcon(app.id, ix, iy, icon_s_apps, .aero);
-        ax = clampI32FromI64(@as(i64, ax) + @as(i64, tile) + 5);
-    }
-
-    if (taskmgr_shell_state == .minimized) {
-        const chip_x = clampI32FromI64(@as(i64, ax) + 6);
-        const chip_w: i32 = 78;
-        const chip_y = ay;
-        const chip_h = pill_h;
-        const chip_right = @as(i64, chip_x) + @as(i64, chip_w);
-        const chip_limit = @as(i64, scr_w) - @as(i64, peek_w) - 80;
-        if (chip_right < chip_limit) {
-            fb.fillRoundedRect(chip_x, chip_y, chip_w, chip_h, pill_r, rgb(0x30, 0x50, 0x78));
-            fb.drawRect(chip_x, chip_y, chip_w, chip_h, rgb(0xA0, 0xCC, 0xF0));
-            const chip_ty = clampI32FromI64(@as(i64, chip_y) + @divTrunc(@as(i64, pill_h) - 14, 2));
-            fb.drawTextTransparentUi(clampI32FromI64(@as(i64, chip_x) + 6), chip_ty, "TaskMgr", rgb(0xE8, 0xF0, 0xFF));
-            taskmgr_tray_chip_rect = .{ .x = chip_x, .y = chip_y, .w = chip_w, .h = chip_h };
-        }
-    }
+    // 开始按钮和窗口按钮区域结束，直接跳到系统托盘区域
+    // （窗口按钮已移除，开机时任务栏只显示开始按钮）
 
     panic_ctx.setPhase(0x0002_0094);
     const tray = aero_tray.layout(scr_w, scr_h, tb_h);
@@ -2323,9 +2229,9 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
         fb.blendTintRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x78, 0x98, 0xB8), 28, 120);
         fb.drawRect(tray.shelf_x, tray.shelf_y, tray.shelf_w, tray.shelf_h, rgb(0x50, 0x70, 0x90));
     }
-    icons.drawThemedIcon(.network, tray.net_x, tray.tray_icons_y, tray.icon_s, .aero);
-    icons.drawThemedIcon(.browser, tray.vol_x, tray.tray_icons_y, tray.icon_s, .aero);
-    icons.drawThemedIcon(.settings, tray.set_x, tray.tray_icons_y, tray.icon_s, .aero);
+    icons.drawThemedIcon(.network, tray.net_x, tray.tray_icons_y, tray.icon_s, .aero, false);
+    icons.drawThemedIcon(.browser, tray.vol_x, tray.tray_icons_y, tray.icon_s, .aero, false);
+    icons.drawThemedIcon(.settings, tray.set_x, tray.tray_icons_y, tray.icon_s, .aero, false);
     fb.drawTextTransparentUi(tray.chevron_x, tray.chevron_y, "^", rgb(0xC0, 0xD8, 0xF0));
 
     const line_time = "12:00 PM";
@@ -2583,7 +2489,7 @@ fn renderOneIcon(x: i32, y: i32, icon_def: IconDef, scale: u32, t: *const ThemeC
     const ix = x + @divTrunc(ICON_GRID_X - icon_drawn_size, 2);
     const iy = y;
 
-    icons.drawThemedIcon(icon_def.id, ix, iy, scale, style);
+    icons.drawThemedIcon(icon_def.id, ix, iy, scale, style, false);
 
     if (icon_def.shortcut) {
         const ax = ix + icon_drawn_size - 10;
@@ -2609,54 +2515,17 @@ fn renderTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
 
     if (dwm_initialized and dwm_config.glass_enabled) {
         renderGlassEffect(0, tb_y, scr_w, TASKBAR_H, dwm_config.glass_tint_color, .taskbar);
+        fb.drawHLine(0, tb_y, scr_w, t.tray_border);
     } else {
-        fb.drawGradientV(0, tb_y, scr_w, TASKBAR_H, t.taskbar_top, t.taskbar_bottom);
+        taskbar_ex.renderTaskbarClassicBackground(scr_w, tb_y, TASKBAR_H, t);
     }
-    fb.drawHLine(0, tb_y, scr_w, t.tray_border);
 
-    renderStartButton(0, tb_y, START_BTN_W, TASKBAR_H, t);
-    renderSystemTray(scr_w, tb_y, t);
-}
-
-fn renderStartButton(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColors) void {
-    fb.fillRoundedRect(x + 1, y + 1, w, h - 1, 6, t.start_btn_bottom);
-    fb.fillRoundedRect(x, y, w, h - 1, 6, t.start_btn_top);
-    fb.drawGradientV(x + 6, y + 2, w - 12, h - 4, t.start_btn_top, t.start_btn_bottom);
-
-    renderZirconLogo(x + 8, y + 7);
-
-    fb.drawTextTransparent(x + 28, y + 7, t.start_label, t.start_btn_text);
+    taskbar_ex.renderStartButtonClassic(0, tb_y, START_BTN_W, TASKBAR_H, t);
+    taskbar_ex.renderSystemTrayClassic(scr_w, tb_y, TRAY_CLOCK_W, TRAY_H, TASKBAR_H, t);
 }
 
 pub fn renderZirconLogo(x: i32, y: i32) void {
-    const blue = rgb(0x3F, 0xA3, 0xD8);
-    const dark = rgb(0x0A, 0x3A, 0x6A);
-    const white = rgb(0xFF, 0xFF, 0xFF);
-    fb.fillRect(x, y, 14, 14, blue);
-    fb.fillRect(clampI32FromI64(@as(i64, x) + 1), clampI32FromI64(@as(i64, y) + 1), 12, 12, dark);
-    fb.drawHLine(clampI32FromI64(@as(i64, x) + 3), clampI32FromI64(@as(i64, y) + 3), 8, white);
-    var i: i32 = 0;
-    while (i < 8) : (i += 1) {
-        const pxi = @as(i64, x) + 10 - @as(i64, i);
-        const pyi = @as(i64, y) + 4 + @as(i64, i);
-        const pxc = clampI32FromI64(pxi);
-        const pyc = clampI32FromI64(pyi);
-        if (pxc >= 0 and pyc >= 0) {
-            fb.putPixel32(@intCast(pxc), @intCast(pyc), white);
-        }
-    }
-    fb.drawHLine(clampI32FromI64(@as(i64, x) + 3), clampI32FromI64(@as(i64, y) + 11), 8, white);
-}
-
-fn renderSystemTray(scr_w: i32, tb_y: i32, t: *const ThemeColors) void {
-    const tray_w: i32 = TRAY_CLOCK_W + 40;
-    const tray_x = scr_w - tray_w;
-    const tray_y = tb_y + @divTrunc(TASKBAR_H - TRAY_H, 2);
-
-    fb.fillRect(tray_x, tray_y, tray_w, TRAY_H, t.tray_bg);
-    fb.drawVLine(tray_x, tray_y, TRAY_H, t.tray_border);
-
-    fb.drawTextTransparent(tray_x + 8, tray_y + 3, "12:00 PM", t.clock_text);
+    taskbar_ex.renderZirconLogo(x, y);
 }
 
 // ── Windows 2000 Classic: Explorer + Task Manager (kernel-rendered shell) ──
@@ -2667,7 +2536,7 @@ var taskmgr_placed: bool = false;
 var taskmgr_drag_active: bool = false;
 var taskmgr_drag_off_x: i32 = 0;
 var taskmgr_drag_off_y: i32 = 0;
-var taskmgr_shell_state: ShellWindowState = .normal;
+var taskmgr_shell_state: ShellWindowState = .minimized;
 var taskmgr_w: i32 = 320;
 var taskmgr_h: i32 = 260;
 var taskmgr_restore: struct { x: i32, y: i32, w: i32, h: i32 } = .{ .x = 0, .y = 0, .w = 320, .h = 260 };
@@ -2675,38 +2544,12 @@ var taskmgr_restore: struct { x: i32, y: i32, w: i32, h: i32 } = .{ .x = 0, .y =
 var taskmgr_tray_chip_rect: ShellRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
 /// 资源管理器导航：C: 根（大图标）、WINNT\\System32 详细列表、单文件浏览页。
-const W2kExLoc = enum { c_drive, c_winnt_system32, file_page };
+const W2kExLoc = classic_shell.W2kExLoc;
 var explorer_w2k_loc: W2kExLoc = .c_drive;
 var explorer_w2k_file_page_name: []const u8 = "";
 
-const W2kSysRow = struct { name: []const u8, size: []const u8, kind: []const u8 };
-
-const w2k_path_system32 = "C:\\WINNT\\System32";
-/// 仅含已编译的 NT 兼容二进制（示意），路径与 Windows 2000 一致（WINNT）。
-const w2k_system32_entries = [_]W2kSysRow{
-    .{ .name = "ntdll.dll", .size = "1,842 KB", .kind = "Application Extension" },
-    .{ .name = "kernel32.dll", .size = "1,128 KB", .kind = "Application Extension" },
-    .{ .name = "kernelbase.dll", .size = "2,312 KB", .kind = "Application Extension" },
-    .{ .name = "user32.dll", .size = "1,028 KB", .kind = "Application Extension" },
-    .{ .name = "gdi32.dll", .size = "412 KB", .kind = "Application Extension" },
-    .{ .name = "advapi32.dll", .size = "688 KB", .kind = "Application Extension" },
-    .{ .name = "shell32.dll", .size = "14,128 KB", .kind = "Application Extension" },
-    .{ .name = "ole32.dll", .size = "1,408 KB", .kind = "Application Extension" },
-    .{ .name = "comctl32.dll", .size = "612 KB", .kind = "Application Extension" },
-    .{ .name = "shlwapi.dll", .size = "456 KB", .kind = "Application Extension" },
-    .{ .name = "explorer.exe", .size = "412 KB", .kind = "Application" },
-    .{ .name = "winlogon.exe", .size = "532 KB", .kind = "Application" },
-    .{ .name = "csrss.exe", .size = "6 KB", .kind = "Application" },
-    .{ .name = "services.exe", .size = "108 KB", .kind = "Application" },
-    .{ .name = "lsass.exe", .size = "32 KB", .kind = "Application" },
-};
-
 fn explorerW2kWindowTitle() []const u8 {
-    return switch (explorer_w2k_loc) {
-        .c_drive => shell_strings.en.w2k_title_c_drive,
-        .c_winnt_system32 => w2k_path_system32,
-        .file_page => explorer_w2k_file_page_name,
-    };
+    return classic_shell.explorerW2kWindowTitle(explorer_w2k_loc, explorer_w2k_file_page_name);
 }
 
 pub fn initTaskMgrPosition(scr_w: i32, scr_h: i32) void {
@@ -2870,8 +2713,8 @@ fn renderExplorerW2kContent(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColor
 
     const addr_text: []const u8 = switch (explorer_w2k_loc) {
         .c_drive => shell_strings.en.w2k_addr_c_drive,
-        .c_winnt_system32 => w2k_path_system32,
-        .file_page => w2k_path_system32,
+        .c_winnt_system32 => classic_shell.w2k_path_system32,
+        .file_page => classic_shell.w2k_path_system32,
     };
     fb.drawTextTransparentClipped(x + 62, addr_y + 6, x + w - 76, addr_text, rgb(0x00, 0x00, 0x00));
     if (explorer_w2k_loc == .file_page) {
@@ -2897,7 +2740,7 @@ fn renderExplorerW2kContent(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColor
         fb.drawTextTransparent(x + 12, body_top + 30, shell_strings.en.file_label, rgb(0x00, 0x00, 0x00));
         fb.drawTextTransparent(x + 52, body_top + 30, explorer_w2k_file_page_name, rgb(0x00, 0x00, 0x00));
         fb.drawTextTransparent(x + 12, body_top + 52, shell_strings.en.location_label, rgb(0x00, 0x00, 0x00));
-        fb.drawTextTransparent(x + 52, body_top + 52, w2k_path_system32, rgb(0x00, 0x00, 0x00));
+        fb.drawTextTransparent(x + 52, body_top + 52, classic_shell.w2k_path_system32, rgb(0x00, 0x00, 0x00));
         fb.drawTextTransparent(x + 12, body_top + 80, shell_strings.en.file_page_note, rgb(0x40, 0x40, 0x40));
         fb.drawTextTransparent(x + 12, body_top + 98, shell_strings.en.file_page_hint, rgb(0x40, 0x40, 0x40));
         fb.drawTextTransparent(x + 12, body_top + 124, shell_strings.en.back_to_list, rgb(0x00, 0x00, 0x80));
@@ -2964,7 +2807,7 @@ fn renderExplorerW2kContent(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColor
         fb.drawHLine(split_x + 4, body_top + 20, w - 144, t.button_shadow);
 
         var ry: i32 = body_top + 26;
-        for (w2k_system32_entries) |row| {
+        for (classic_shell.w2k_system32_entries) |row| {
             fb.drawTextTransparent(split_x + 8, ry, row.name, rgb(0x00, 0x00, 0x00));
             fb.drawTextTransparent(split_x + 200, ry, row.size, rgb(0x00, 0x00, 0x00));
             fb.drawTextTransparent(split_x + 280, ry, row.kind, rgb(0x00, 0x00, 0x00));
@@ -2988,9 +2831,9 @@ fn renderExplorerW2kContent(x: i32, y: i32, w: i32, h: i32, t: *const ThemeColor
         fb.drawTextTransparent(div1 + 8, foot_y + 4, shell_strings.en.status_zero_bytes, rgb(0x00, 0x00, 0x00));
         fb.drawTextTransparent(div2 + 8, foot_y + 4, shell_strings.en.status_my_computer, rgb(0x00, 0x00, 0x00));
     } else if (explorer_w2k_loc == .c_winnt_system32) {
-        const n_obj: u32 = w2k_system32_entries.len;
+        const n_obj: u32 = classic_shell.w2k_system32_entries.len;
         var foot_buf: [96]u8 = undefined;
-        const foot_msg = shell_strings.formatFooterObjects(foot_buf[0..], n_obj, w2k_path_system32);
+        const foot_msg = shell_strings.formatFooterObjects(foot_buf[0..], n_obj, classic_shell.w2k_path_system32);
         fb.drawTextTransparent(x + 8, foot_y + 4, foot_msg, rgb(0x00, 0x00, 0x00));
         fb.drawTextTransparent(div1 + 8, foot_y + 4, shell_strings.en.status_zero_bytes, rgb(0x00, 0x00, 0x00));
         fb.drawTextTransparent(div2 + 8, foot_y + 4, shell_strings.en.status_my_computer, rgb(0x00, 0x00, 0x00));
@@ -3315,7 +3158,7 @@ var window_x: i32 = 0;
 var window_y: i32 = 0;
 var window_placed: bool = false;
 
-var explorer_shell_state: ShellWindowState = .normal;
+var explorer_shell_state: ShellWindowState = .minimized;
 var explorer_restore_snap: struct { x: i32, y: i32, w: i32, h: i32, custom: bool } = .{
     .x = 0,
     .y = 0,
@@ -3495,52 +3338,22 @@ pub fn getWindowRect(scr_w: i32, scr_h: i32) struct { x: i32, y: i32, w: i32, h:
 }
 
 fn hitTestFrameResizeEdge(px: i32, py: i32, rx: i32, ry: i32, rw: i32, rh: i32) FrameResizeEdge {
-    if (rw < frame_resize_hit_px * 3 or rh < frame_resize_hit_px * 3) return .none;
-    if (!pointInRectI32(px, py, rx, ry, rw, rh)) return .none;
-    const pxi = @as(i64, px);
-    const pyi = @as(i64, py);
-    const rx64 = @as(i64, rx);
-    const ry64 = @as(i64, ry);
-    const rw64 = @as(i64, rw);
-    const rh64 = @as(i64, rh);
-    const hit = @as(i64, frame_resize_hit_px);
-    const in_left = pxi < rx64 + hit;
-    const in_right = pxi >= rx64 + rw64 - hit;
-    const in_top = pyi < ry64 + hit;
-    const in_bottom = pyi >= ry64 + rh64 - hit;
-    if (!(in_left or in_right or in_top or in_bottom)) return .none;
-    if (in_top and in_left) return .nw;
-    if (in_top and in_right) return .ne;
-    if (in_bottom and in_left) return .sw;
-    if (in_bottom and in_right) return .se;
-    if (in_top) return .n;
-    if (in_bottom) return .s;
-    if (in_left) return .w;
-    if (in_right) return .e;
-    return .none;
+    const edge = drag_state.hitTestFrameResizeEdge(px, py, rx, ry, rw, rh, frame_resize_hit_px);
+    return switch (edge) {
+        .none => .none,
+        .n => .n,
+        .s => .s,
+        .e => .e,
+        .w => .w,
+        .ne => .ne,
+        .nw => .nw,
+        .se => .se,
+        .sw => .sw,
+    };
 }
 
 fn clampShellFrameToWorkArea(nx: *i32, ny: *i32, nw: *i32, nh: *i32, wa: ShellRect, min_w: i32, min_h: i32) void {
-    if (nw.* < min_w) nw.* = min_w;
-    if (nh.* < min_h) nh.* = min_h;
-    if (nx.* < wa.x) {
-        const d = wa.x - nx.*;
-        nx.* = wa.x;
-        nw.* -= d;
-    }
-    if (ny.* < wa.y) {
-        const d = wa.y - ny.*;
-        ny.* = wa.y;
-        nh.* -= d;
-    }
-    if (nx.* + nw.* > wa.x + wa.w) {
-        nw.* = wa.x + wa.w - nx.*;
-    }
-    if (ny.* + nh.* > wa.y + wa.h) {
-        nh.* = wa.y + wa.h - ny.*;
-    }
-    nw.* = @max(min_w, nw.*);
-    nh.* = @max(min_h, nh.*);
+    drag_state.clampShellFrameToWorkArea(nx, ny, nw, nh, wa.x, wa.y, wa.w, wa.h, min_w, min_h);
 }
 
 fn applyExplorerFrameResize(px: i32, py: i32, scr_w: i32, scr_h: i32) bool {
@@ -4050,7 +3863,7 @@ var ctx_menu_y: i32 = 0;
 var ctx_submenu_visible: bool = false;
 var ctx_submenu_x: i32 = 0;
 var ctx_submenu_y: i32 = 0;
-var ctx_submenu_items: [5][]const u8 = undefined;
+var ctx_submenu_items: [8][]const u8 = undefined;
 var ctx_menu_hover_index: i32 = -1;
 var ctx_menu_frames_since_open: u8 = 0;
 /// 关闭壳层弹出后若干帧内跳过盒式模糊。
@@ -4091,8 +3904,8 @@ const CtxMenuItem = struct {
 
 /// 桌面右键菜单项：图标参照 startmenu.zig Win7 布局。
 const ctx_menu_items = [_]CtxMenuItem{
-    .{ .label = "View",             .icon_id = .info,        .has_submenu = false },
-    .{ .label = "Sort By",          .icon_id = null,         .has_submenu = false },
+    .{ .label = "View",             .icon_id = .info,        .has_submenu = true  },
+    .{ .label = "Sort By",          .icon_id = null,         .has_submenu = true  },
     .{ .label = "Refresh",          .icon_id = null,         .has_submenu = false },
     .{ .label = "---",              .icon_id = null,         .has_submenu = false },
     .{ .label = "New",              .icon_id = .folder,      .has_submenu = true  },
@@ -4109,6 +3922,62 @@ const new_submenu_items = [_][]const u8{
     "---",
     "Bitmap Image",
 };
+
+/// 任务栏右键菜单项：Windows 7 风格。
+const taskbar_ctx_menu_items = [_]CtxMenuItem{
+    .{ .label = "Toolbars",              .icon_id = .folder,     .has_submenu = true  },
+    .{ .label = "Lock the Taskbar",      .icon_id = null,        .has_submenu = false },
+    .{ .label = "---",                   .icon_id = null,        .has_submenu = false },
+    .{ .label = "Cascade Windows",        .icon_id = .info,       .has_submenu = false },
+    .{ .label = "Show Windows Stacked",   .icon_id = null,        .has_submenu = false },
+    .{ .label = "Show Windows Side by Side", .icon_id = null,     .has_submenu = false },
+    .{ .label = "---",                   .icon_id = null,        .has_submenu = false },
+    .{ .label = "Start Task Manager",    .icon_id = .settings,   .has_submenu = false },
+    .{ .label = "---",                   .icon_id = null,        .has_submenu = false },
+    .{ .label = "Properties",             .icon_id = .settings,   .has_submenu = false },
+};
+
+/// 工具栏子菜单项。
+const toolbars_submenu_items = [_][]const u8{
+    "Desktop",
+    "Quick Launch",
+    "Address",
+    "Links",
+    "Windows Media Player",
+};
+
+/// 视图子菜单项。
+const view_submenu_items = [_][]const u8{
+    "Large Icons",
+    "Medium Icons",
+    "Small Icons",
+    "List",
+    "Details",
+};
+
+/// 排序方式子菜单项。
+const sort_submenu_items = [_][]const u8{
+    "Name",
+    "Size",
+    "Date Modified",
+};
+
+/// 任务栏右键菜单状态变量。
+var taskbar_ctx_visible: bool = false;
+var taskbar_ctx_x: i32 = 0;
+var taskbar_ctx_y: i32 = 0;
+var taskbar_ctx_hover_index: i32 = -1;
+var taskbar_ctx_hover_display_index: i32 = -1;
+var taskbar_ctx_hover_transition_progress: f32 = 1.0;
+var taskbar_ctx_submenu_visible: bool = false;
+var taskbar_ctx_submenu_x: i32 = 0;
+var taskbar_ctx_submenu_y: i32 = 0;
+var taskbar_ctx_submenu_items: [8][]const u8 = undefined;
+var taskbar_ctx_submenu_count: usize = 0;
+var taskbar_ctx_submenu_hover_index: i32 = -1;
+var taskbar_ctx_submenu_hover_display_index: i32 = -1;
+var taskbar_ctx_submenu_hover_transition_progress: f32 = 1.0;
+var taskbar_ctx_frames: u8 = 0;
 
 fn ctxMenuHeight() i32 {
     var h: i32 = CTX_MENU_PAD;
@@ -4172,6 +4041,388 @@ pub fn hideContextMenu() void {
 
 pub fn isContextMenuVisible() bool {
     return ctx_menu_visible;
+}
+
+fn taskbarCtxMenuHeight() i32 {
+    var h: i32 = CTX_MENU_PAD;
+    for (taskbar_ctx_menu_items) |item| {
+        if (std.mem.eql(u8, item.label, "---")) {
+            h += 8;
+        } else {
+            h += CTX_ITEM_H;
+        }
+    }
+    return h + CTX_MENU_PAD;
+}
+
+pub fn showTaskbarContextMenu(x: i32, y: i32) void {
+    const h: i32 = @intCast(fb.getHeight());
+    const w: i32 = @intCast(fb.getWidth());
+    const menu_h: i32 = taskbarCtxMenuHeight();
+    const tb_h: i32 = getTaskbarHeight();
+
+    taskbar_ctx_hover_index = -1;
+    taskbar_ctx_hover_display_index = -1;
+    taskbar_ctx_hover_transition_progress = 1.0;
+    taskbar_ctx_submenu_visible = false;
+    taskbar_ctx_submenu_hover_index = -1;
+    taskbar_ctx_submenu_hover_display_index = -1;
+    taskbar_ctx_submenu_hover_transition_progress = 1.0;
+    taskbar_ctx_frames = 0;
+
+    const wx = @as(i64, w);
+    const hx = @as(i64, h);
+    const xi = @as(i64, x);
+    const yi = @as(i64, y);
+    const mw = @as(i64, CTX_MENU_W);
+    const mh = @as(i64, menu_h);
+    const tb = @as(i64, tb_h);
+    var mx = xi;
+    if (mx + mw > wx) mx = wx - mw - 2;
+    const work_bottom = hx - tb;
+    var my = yi - mh;
+    if (my < 2) my = 2;
+    if (my + mh > work_bottom) my = work_bottom - mh - 2;
+
+    taskbar_ctx_x = clampI32FromI64(mx);
+    taskbar_ctx_y = clampI32FromI64(my);
+    taskbar_ctx_visible = true;
+    cursor_plane.invalidate();
+}
+
+pub fn hideTaskbarContextMenu() void {
+    taskbar_ctx_visible = false;
+    taskbar_ctx_submenu_visible = false;
+    taskbar_ctx_hover_index = -1;
+    taskbar_ctx_hover_display_index = -1;
+    taskbar_ctx_hover_transition_progress = 1.0;
+    taskbar_ctx_submenu_hover_index = -1;
+    taskbar_ctx_submenu_hover_display_index = -1;
+    taskbar_ctx_submenu_hover_transition_progress = 1.0;
+    cursor_plane.invalidate();
+}
+
+pub fn isTaskbarContextMenuVisible() bool {
+    return taskbar_ctx_visible;
+}
+
+fn taskbarCtxSubmenuHeight() i32 {
+    if (!taskbar_ctx_submenu_visible) return 0;
+    var h: i32 = CTX_MENU_PAD;
+    for (taskbar_ctx_submenu_items[0..taskbar_ctx_submenu_count]) |item| {
+        if (std.mem.eql(u8, item, "---")) {
+            h += 8;
+        } else {
+            h += CTX_ITEM_H;
+        }
+    }
+    return h + CTX_MENU_PAD;
+}
+
+/// 渲染任务栏右键菜单（复用桌面菜单样式）。
+pub fn renderTaskbarContextMenu() void {
+    if (!taskbar_ctx_visible) return;
+    const t = active_theme;
+    const menu_h = taskbarCtxMenuHeight();
+
+    taskbar_ctx_frames +%= 1;
+    const panel_open_lite = taskbar_ctx_frames <= 2;
+
+    if (dwm_initialized and dwm_config.shadow_enabled) {
+        renderShadow(taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, menu_h, 4);
+    } else {
+        fb.fillRect(taskbar_ctx_x + 2, taskbar_ctx_y + 2, CTX_MENU_W, menu_h, rgb(0x18, 0x18, 0x18));
+    }
+
+    fb.fillRoundedRect(taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, menu_h, CTX_CORNER_RADIUS, t.window_bg);
+
+    if (dwm_initialized and dwm_config.glass_enabled) {
+        if (panel_open_lite) {
+            renderGlassTintOnly(taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, menu_h, rgb(0x28, 0x40, 0x60), .caption);
+        } else {
+            renderGlassEffect(taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, menu_h, rgb(0x28, 0x40, 0x60), .caption);
+        }
+    } else {
+        fb.drawGradientH(taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, 2, rgb(0xC0, 0xD0, 0xE8), t.window_bg);
+    }
+
+    fb.drawRect(taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, menu_h, rgb(0x40, 0x58, 0x80));
+    fb.drawHLine(taskbar_ctx_x + 1, taskbar_ctx_y + 1, CTX_MENU_W - 2, rgb(0xD0, 0xE0, 0xF0));
+
+    var iy: i32 = taskbar_ctx_y + CTX_MENU_PAD;
+    var item_idx: i32 = 0;
+    const sep_color: u32 = rgb(0x60, 0x70, 0x88);
+    const icon_s: u32 = 1;
+
+    for (taskbar_ctx_menu_items) |item| {
+        if (std.mem.eql(u8, item.label, "---")) {
+            fb.drawHLine(taskbar_ctx_x + 6, iy + 4, CTX_MENU_W - 12, sep_color);
+            iy += 8;
+            continue;
+        }
+        const is_hov = (taskbar_ctx_hover_display_index == item_idx);
+        const hov_alpha: f32 = if (is_hov) taskbar_ctx_hover_transition_progress else 0.0;
+        if (hov_alpha > 0.0) {
+            const alpha_byte = @as(u8, @intFromFloat(hov_alpha * 55.0));
+            fb.blendTintRect(taskbar_ctx_x + 2, iy, CTX_MENU_W - 4, CTX_ITEM_H, rgb(0x70, 0x98, 0xC8), alpha_byte, 255);
+        }
+        if (item.icon_id) |iid| {
+            icons.drawThemedIcon(iid, taskbar_ctx_x + CTX_ICON_X, iy + 4, icon_s, .aero, false);
+        }
+        const text_r: u8 = @intFromFloat(@as(f32, 0x18) + (@as(f32, 0xFF) - @as(f32, 0x18)) * hov_alpha);
+        const text_g: u8 = @intFromFloat(@as(f32, 0x1C) + (@as(f32, 0xFF) - @as(f32, 0x1C)) * hov_alpha);
+        const text_b: u8 = @intFromFloat(@as(f32, 0x22) + (@as(f32, 0xFF) - @as(f32, 0x22)) * hov_alpha);
+        const cur_text_color: u32 = rgb(@as(u32, text_r), @as(u32, text_g), @as(u32, text_b));
+        fb.drawTextTransparent(taskbar_ctx_x + CTX_TEXT_X, iy + 5, item.label, cur_text_color);
+        if (item.has_submenu) {
+            fb.drawTextTransparent(taskbar_ctx_x + CTX_ARROW_X, iy + 5, ">", cur_text_color);
+        }
+        iy += CTX_ITEM_H;
+        item_idx += 1;
+    }
+}
+
+/// 渲染任务栏右键子菜单。
+pub fn renderTaskbarCtxSubmenu() void {
+    if (!taskbar_ctx_submenu_visible) return;
+    const t = active_theme;
+    const menu_h = taskbarCtxSubmenuHeight();
+    const submenu_w: i32 = 160;
+
+    if (dwm_initialized and dwm_config.shadow_enabled) {
+        renderShadow(taskbar_ctx_submenu_x, taskbar_ctx_submenu_y, submenu_w, menu_h, 3);
+    } else {
+        fb.fillRect(taskbar_ctx_submenu_x + 2, taskbar_ctx_submenu_y + 2, submenu_w, menu_h, rgb(0x18, 0x18, 0x18));
+    }
+
+    fb.fillRoundedRect(taskbar_ctx_submenu_x, taskbar_ctx_submenu_y, submenu_w, menu_h, CTX_CORNER_RADIUS, t.window_bg);
+    if (dwm_initialized and dwm_config.glass_enabled) {
+        renderGlassEffect(taskbar_ctx_submenu_x, taskbar_ctx_submenu_y, submenu_w, menu_h, rgb(0x28, 0x40, 0x60), .caption);
+    } else {
+        fb.drawGradientH(taskbar_ctx_submenu_x, taskbar_ctx_submenu_y, submenu_w, 2, rgb(0xC0, 0xD0, 0xE8), t.window_bg);
+    }
+    fb.drawRect(taskbar_ctx_submenu_x, taskbar_ctx_submenu_y, submenu_w, menu_h, rgb(0x40, 0x58, 0x80));
+
+    var iy: i32 = taskbar_ctx_submenu_y + CTX_MENU_PAD;
+    const sep_color: u32 = rgb(0x60, 0x70, 0x88);
+
+    for (taskbar_ctx_submenu_items[0..taskbar_ctx_submenu_count]) |item| {
+        if (std.mem.eql(u8, item, "---")) {
+            fb.drawHLine(taskbar_ctx_submenu_x + 6, iy + 4, submenu_w - 12, sep_color);
+            iy += 8;
+            continue;
+        }
+        const is_hov = (taskbar_ctx_submenu_hover_display_index >= 0);
+        const hov_alpha: f32 = if (is_hov) taskbar_ctx_submenu_hover_transition_progress else 0.0;
+        if (hov_alpha > 0.0) {
+            const alpha_byte = @as(u8, @intFromFloat(hov_alpha * 55.0));
+            fb.blendTintRect(taskbar_ctx_submenu_x + 2, iy, submenu_w - 4, CTX_ITEM_H, rgb(0x70, 0x98, 0xC8), alpha_byte, 255);
+        }
+        const text_r: u8 = @intFromFloat(@as(f32, 0x18) + (@as(f32, 0xFF) - @as(f32, 0x18)) * hov_alpha);
+        const text_g: u8 = @intFromFloat(@as(f32, 0x1C) + (@as(f32, 0xFF) - @as(f32, 0x1C)) * hov_alpha);
+        const text_b: u8 = @intFromFloat(@as(f32, 0x22) + (@as(f32, 0xFF) - @as(f32, 0x22)) * hov_alpha);
+        const cur_text_color: u32 = rgb(@as(u32, text_r), @as(u32, text_g), @as(u32, text_b));
+        fb.drawTextTransparent(taskbar_ctx_submenu_x + 8, iy + 5, item, cur_text_color);
+        iy += CTX_ITEM_H;
+    }
+}
+
+/// 更新任务栏右键菜单悬停状态。
+pub fn updateTaskbarContextMenuHover(px: i32, py: i32) void {
+    if (!taskbar_ctx_visible) return;
+
+    // 子菜单区域
+    if (taskbar_ctx_submenu_visible) {
+        const submenu_h = taskbarCtxSubmenuHeight();
+        const submenu_w: i32 = 160;
+        if (pointInRectI32(px, py, taskbar_ctx_submenu_x, taskbar_ctx_submenu_y, submenu_w, submenu_h)) {
+            var iy: i32 = taskbar_ctx_submenu_y + CTX_MENU_PAD;
+            var idx: i32 = -1;
+            for (taskbar_ctx_submenu_items[0..taskbar_ctx_submenu_count]) |item| {
+                if (std.mem.eql(u8, item, "---")) {
+                    iy += 8;
+                } else {
+                    if (py >= iy and py < iy + CTX_ITEM_H) {
+                        idx += 1;
+                        break;
+                    }
+                    iy += CTX_ITEM_H;
+                    idx += 1;
+                }
+            }
+            if (taskbar_ctx_submenu_hover_index != idx) {
+                taskbar_ctx_submenu_hover_index = idx;
+                taskbar_ctx_submenu_hover_display_index = idx;
+                taskbar_ctx_submenu_hover_transition_progress = 0.0;
+            }
+            return;
+        }
+    }
+
+    if (!pointInRectI32(px, py, taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, taskbarCtxMenuHeight())) {
+        if (taskbar_ctx_hover_index != -1) {
+            taskbar_ctx_hover_index = -1;
+            taskbar_ctx_hover_display_index = -1;
+            taskbar_ctx_hover_transition_progress = 1.0;
+        }
+        return;
+    }
+
+    var iy: i32 = taskbar_ctx_y + CTX_MENU_PAD;
+    var item_idx: i32 = -1;
+    for (taskbar_ctx_menu_items) |item| {
+        if (std.mem.eql(u8, item.label, "---")) {
+            iy += 8;
+        } else {
+            if (py >= iy and py < iy + CTX_ITEM_H) {
+                break;
+            }
+            iy += CTX_ITEM_H;
+            item_idx += 1;
+        }
+    }
+    if (taskbar_ctx_hover_index != item_idx) {
+        taskbar_ctx_hover_index = item_idx;
+        taskbar_ctx_hover_display_index = item_idx;
+        taskbar_ctx_hover_transition_progress = 0.0;
+    }
+}
+
+/// 处理任务栏右键菜单点击。
+pub fn handleTaskbarContextMenuClick(px: i32, py: i32) bool {
+    if (!taskbar_ctx_visible) return false;
+
+    // 检查子菜单区域
+    if (taskbar_ctx_submenu_visible) {
+        const submenu_h = taskbarCtxSubmenuHeight();
+        const submenu_w: i32 = 160;
+        if (pointInRectI32(px, py, taskbar_ctx_submenu_x, taskbar_ctx_submenu_y, submenu_w, submenu_h)) {
+            var iy: i32 = taskbar_ctx_submenu_y + CTX_MENU_PAD;
+            var idx: i32 = 0;
+            for (taskbar_ctx_submenu_items[0..taskbar_ctx_submenu_count]) |item| {
+                if (std.mem.eql(u8, item, "---")) {
+                    iy += 8;
+                } else {
+                    if (py >= iy and py < iy + CTX_ITEM_H) {
+                        handleTaskbarCtxSubmenuAction(@as(usize, @intCast(idx)));
+                        hideTaskbarContextMenu();
+                        return true;
+                    }
+                    iy += CTX_ITEM_H;
+                    idx += 1;
+                }
+            }
+            return true;
+        }
+    }
+
+    if (!pointInRectI32(px, py, taskbar_ctx_x, taskbar_ctx_y, CTX_MENU_W, taskbarCtxMenuHeight())) {
+        hideTaskbarContextMenu();
+        return false;
+    }
+
+    var iy: i32 = taskbar_ctx_y + CTX_MENU_PAD;
+    var item_idx: i32 = 0;
+    for (taskbar_ctx_menu_items) |item| {
+        if (std.mem.eql(u8, item.label, "---")) {
+            iy += 8;
+            continue;
+        }
+        if (py >= iy and py < iy + CTX_ITEM_H) {
+            if (item.has_submenu) {
+                showTaskbarCtxSubmenu(@as(usize, @intCast(item_idx)));
+            } else {
+                handleTaskbarCtxMenuAction(@as(usize, @intCast(item_idx)));
+                hideTaskbarContextMenu();
+            }
+            return true;
+        }
+        iy += CTX_ITEM_H;
+        item_idx += 1;
+    }
+    return false;
+}
+
+fn showTaskbarCtxSubmenu(parent_idx: usize) void {
+    if (parent_idx >= taskbar_ctx_menu_items.len) return;
+
+    const submenu_w: i32 = 160;
+    const pw: i32 = @intCast(fb.getWidth());
+
+    var iy: i32 = taskbar_ctx_y + CTX_MENU_PAD;
+    var idx: i32 = 0;
+    for (taskbar_ctx_menu_items) |item| {
+        if (idx == parent_idx) break;
+        if (!std.mem.eql(u8, item.label, "---")) {
+            iy += CTX_ITEM_H;
+        } else {
+            iy += 8;
+        }
+        idx += 1;
+    }
+
+    var sx: i64 = @as(i64, taskbar_ctx_x) + @as(i64, CTX_MENU_W);
+    if (sx + submenu_w > pw) {
+        sx = @as(i64, taskbar_ctx_x) - @as(i64, submenu_w);
+    }
+    if (sx < 2) sx = 2;
+
+    var sy_i: i64 = @as(i64, iy);
+    const sm_h: i64 = @as(i64, taskbarCtxSubmenuHeight());
+    const tb_h = @as(i64, @intCast(fb.getHeight())) - @as(i64, getTaskbarHeight());
+    if (sy_i + sm_h > tb_h) sy_i = tb_h - sm_h - 2;
+    if (sy_i < 2) sy_i = 2;
+
+    taskbar_ctx_submenu_x = clampI32FromI64(sx);
+    taskbar_ctx_submenu_y = clampI32FromI64(sy_i);
+    taskbar_ctx_submenu_visible = true;
+    taskbar_ctx_submenu_hover_index = -1;
+    taskbar_ctx_submenu_hover_display_index = -1;
+    taskbar_ctx_submenu_hover_transition_progress = 1.0;
+
+    const parent_item = taskbar_ctx_menu_items[parent_idx];
+    if (std.mem.eql(u8, parent_item.label, "Toolbars")) {
+        taskbar_ctx_submenu_count = toolbars_submenu_items.len;
+        for (toolbars_submenu_items, 0..) |item, i| {
+            taskbar_ctx_submenu_items[i] = item;
+        }
+    }
+}
+
+fn handleTaskbarCtxMenuAction(idx: usize) void {
+    switch (idx) {
+        1 => {
+            // Lock the Taskbar - 存根
+            klog.info("Taskbar context: Lock the Taskbar toggled", .{});
+        },
+        3 => {
+            // Cascade Windows - 存根
+            klog.info("Taskbar context: Cascade Windows", .{});
+        },
+        4 => {
+            // Show Windows Stacked - 存根
+            klog.info("Taskbar context: Show Windows Stacked", .{});
+        },
+        5 => {
+            // Show Windows Side by Side - 存根
+            klog.info("Taskbar context: Show Windows Side by Side", .{});
+        },
+        7 => {
+            // Start Task Manager
+            builtin_apps.launch(.taskmgr_focus);
+            klog.info("Taskbar context: Start Task Manager", .{});
+        },
+        9 => {
+            // Properties - 打开显示设置
+            builtin_apps.launch(.control_panel);
+            klog.info("Taskbar context: Properties -> Control Panel", .{});
+        },
+        else => {},
+    }
+}
+
+fn handleTaskbarCtxSubmenuAction(idx: usize) void {
+    klog.info("Taskbar context: toolbar submenu action {u}", .{idx});
 }
 
 pub fn getContextMenuPaintRect() ShellRect {
@@ -4287,7 +4538,11 @@ fn showContextSubmenu(parent_idx: usize) void {
     // 填充子菜单项内容
     const parent_item = ctx_menu_items[parent_idx];
     if (std.mem.eql(u8, parent_item.label, "New")) {
-        ctx_submenu_items = new_submenu_items;
+        for (new_submenu_items, 0..) |item, i| ctx_submenu_items[i] = item;
+    } else if (std.mem.eql(u8, parent_item.label, "View")) {
+        for (view_submenu_items, 0..) |item, i| ctx_submenu_items[i] = item;
+    } else if (std.mem.eql(u8, parent_item.label, "Sort By")) {
+        for (sort_submenu_items, 0..) |item, i| ctx_submenu_items[i] = item;
     }
     cursor_plane.invalidate();
 }
@@ -4352,7 +4607,7 @@ pub fn renderContextMenu() void {
         }
         // 图标
         if (item.icon_id) |iid| {
-            icons.drawThemedIcon(iid, ctx_menu_x + CTX_ICON_X, iy + 4, icon_s, .aero);
+            icons.drawThemedIcon(iid, ctx_menu_x + CTX_ICON_X, iy + 4, icon_s, .aero, false);
         }
         // 文字颜色插值：黑色 -> 白色
         const text_r: u8 = @intFromFloat(@as(f32, 0x18) + (@as(f32, 0xFF) - @as(f32, 0x18)) * hov_alpha);
@@ -4502,8 +4757,26 @@ fn handleContextMenuLeftClick(px: i32, py: i32) bool {
         const submenu_w: i32 = CTX_MENU_W;
         const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(submenu_w)) * (1.0 - ctx_submenu_anim_progress)));
         const anim_x = ctx_submenu_x + anim_offset;
+
+        // 检查是否点击在子菜单区域
         if (pointInRectI32(px, py, anim_x, ctx_submenu_y, CTX_MENU_W, submenu_h)) {
-            ctx_submenu_visible = false; // 触发关闭动画
+            var iy: i32 = ctx_submenu_y + CTX_MENU_PAD;
+            var idx: i32 = 0;
+            for (ctx_submenu_items) |item| {
+                if (std.mem.eql(u8, item, "---")) {
+                    iy += 8;
+                    continue;
+                }
+                if (py >= iy and py < iy + CTX_ITEM_H) {
+                    // 执行子菜单项动作
+                    handleDesktopSubmenuAction(item);
+                    hideContextMenu();
+                    return true;
+                }
+                iy += CTX_ITEM_H;
+                idx += 1;
+            }
+            ctx_submenu_visible = false;
             return true;
         }
     }
@@ -4536,6 +4809,42 @@ fn handleContextMenuLeftClick(px: i32, py: i32) bool {
     }
     hideContextMenu();
     return true;
+}
+
+fn handleDesktopSubmenuAction(item: []const u8) void {
+    if (std.mem.eql(u8, item, "Folder")) {
+        klog.info("Desktop context: New -> Folder (stub)", .{});
+    } else if (std.mem.eql(u8, item, "Shortcut")) {
+        klog.info("Desktop context: New -> Shortcut (stub)", .{});
+    } else if (std.mem.eql(u8, item, "Text Document")) {
+        klog.info("Desktop context: New -> Text Document (stub)", .{});
+    } else if (std.mem.eql(u8, item, "Bitmap Image")) {
+        klog.info("Desktop context: New -> Bitmap Image (stub)", .{});
+    } else if (std.mem.eql(u8, item, "Large Icons")) {
+        explorer_state.setExplorerViewMode(.large_icon);
+        klog.info("Desktop context: View -> Large Icons", .{});
+    } else if (std.mem.eql(u8, item, "Medium Icons")) {
+        explorer_state.setExplorerViewMode(.medium_icon);
+        klog.info("Desktop context: View -> Medium Icons", .{});
+    } else if (std.mem.eql(u8, item, "Small Icons")) {
+        explorer_state.setExplorerViewMode(.small_icon);
+        klog.info("Desktop context: View -> Small Icons", .{});
+    } else if (std.mem.eql(u8, item, "List")) {
+        explorer_state.setExplorerViewMode(.list);
+        klog.info("Desktop context: View -> List", .{});
+    } else if (std.mem.eql(u8, item, "Details")) {
+        explorer_state.setExplorerViewMode(.details);
+        klog.info("Desktop context: View -> Details", .{});
+    } else if (std.mem.eql(u8, item, "Name")) {
+        explorer_state.setExplorerSortField(.name);
+        klog.info("Desktop context: Sort By -> Name", .{});
+    } else if (std.mem.eql(u8, item, "Size")) {
+        explorer_state.setExplorerSortField(.size);
+        klog.info("Desktop context: Sort By -> Size", .{});
+    } else if (std.mem.eql(u8, item, "Date Modified")) {
+        explorer_state.setExplorerSortField(.date);
+        klog.info("Desktop context: Sort By -> Date Modified", .{});
+    }
 }
 
 /// 更新右键菜单悬停状态，返回是否发生了变化。
@@ -4730,6 +5039,27 @@ pub fn renderStartMenu(x: i32, y: i32, w: i32, h: i32, bg_color: u32, header_col
     fb.fillRect(x, y, w, h, bg_color);
     fb.fillRect(x, y, w, header_height, header_color);
     fb.drawRect(x, y, w, h, rgb(0x80, 0x80, 0x80));
+}
+
+/// 渲染桌面图标右键菜单（存根实现）
+pub fn renderIconContextMenu() void {
+    // TODO: 实现图标右键菜单渲染
+}
+
+/// 检查图标右键菜单是否可见
+pub fn isIconContextMenuVisible() bool {
+    return false; // TODO: 实现
+}
+
+/// 渲染 Explorer 列表右键菜单
+pub fn renderExplorerListContextMenu() void {
+    // TODO: 实现 Explorer 列表右键菜单渲染
+}
+
+/// 处理桌面滚动事件
+pub fn handleDesktopScroll(delta: i32) void {
+    _ = delta;
+    // TODO: 实现桌面滚动处理
 }
 
 pub fn renderLoginScreen(width: u32, height: u32, top_color: u32, bottom_color: u32, panel_color: u32) void {

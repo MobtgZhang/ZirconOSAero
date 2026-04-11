@@ -29,7 +29,7 @@
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
-const theme = @import("../desktop/theme.zig");
+const theme = @import("../../../desktop/kernel/theme/root.zig");
 const nt61_aero = @import("nt61_aero_defaults");
 const color_nt61 = @import("../../../config/color_nt61.zig");
 const dwm_blur_budget = @import("../../../config/dwm_blur_budget.zig");

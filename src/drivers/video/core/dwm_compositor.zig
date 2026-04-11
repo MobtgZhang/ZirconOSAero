@@ -7,7 +7,7 @@ const nt61_aero = @import("nt61_aero_defaults");
 const dwm_surface_spec = @import("../../../config/dwm_surface_spec.zig");
 const dwm_nt61_abi = @import("../../../config/dwm_nt61_api_contract.zig");
 const fb = @import("framebuffer.zig");
-const material = @import("../desktop/material.zig");
+const material = @import("../../../desktop/kernel/material/root.zig");
 const compositor_sync_nt61 = @import("../../../config/compositor_sync_nt61.zig");
 
 pub const CompositorBackend = enum(u8) {

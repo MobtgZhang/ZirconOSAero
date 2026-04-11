@@ -6,7 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const io = @import("../../../io/io.zig");
 const klog = @import("../../../rtl/klog.zig");
-const cjk_font = @import("../desktop/cjk_font.zig");
+const cjk_font = @import("../../../desktop/kernel/font/cjk_font.zig");
 const virtio_gpu_spec = @import("../virtio/virtio_gpu_spec.zig");
 const config_mod = @import("../../../config/config.zig");
 const frame_mod = @import("../../../mm/frame.zig");
@@ -507,6 +507,254 @@ pub fn blendPixel(x: u32, y: u32, color: u32, alpha: u8) void {
     putPixel32(x, y, nr | (ng << 8) | (nb << 16));
 }
 
+/// 批量混合单行像素: 逐像素 alpha 混合(原地写回).
+/// 比逐个调用 `blendPixel` 减少函数调用开销(外层循环由调用方管理).
+/// @param y: 目标行 Y 坐标
+/// @param x0/x1: 水平范围 [x0, x1)
+/// @param color: 源颜色(仅 RGB 分量有效,alpha 由 alpha 参数提供)
+/// @param alpha: 源透明度 [0-255]
+pub fn blendPixelRow(y: u32, x0: u32, x1: u32, color: u32, alpha: u8) void {
+    if (alpha == 0 or x0 >= x1 or y >= fb_config.height) return;
+    const cx = @min(x0, fb_config.width);
+    const cx1 = @min(x1, fb_config.width);
+    if (cx >= cx1) return;
+
+    const bytes_pp = @as(u32, fb_config.bpp) / 8;
+    const ptr = getDrawBuffer();
+    const row_offset = pixelByteOffset(cx, y, bytes_pp);
+    const count = cx1 - cx;
+
+    if (bytes_pp == 4) {
+        const cr: u8 = @truncate(color);
+        const cg: u8 = @truncate(color >> 8);
+        const cb: u8 = @truncate(color >> 16);
+        const a = @as(u32, alpha);
+        const inv = 255 - a;
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            const px_off = row_offset + @as(usize, i) * 4;
+            const b = ptr[px_off];
+            const g = ptr[px_off + 1];
+            const r = ptr[px_off + 2];
+            const nr = @as(u32, r) * inv + cr * a;
+            const ng = @as(u32, g) * inv + cg * a;
+            const nb = @as(u32, b) * inv + cb * a;
+            ptr[px_off] = @truncate((nr) / 255);
+            ptr[px_off + 1] = @truncate((ng) / 255);
+            ptr[px_off + 2] = @truncate((nb) / 255);
+        }
+    } else {
+        // 回退到逐像素
+        var x: u32 = cx;
+        while (x < cx1) : (x += 1) {
+            blendPixel(x, y, color, alpha);
+        }
+    }
+}
+
+/// 批量写入单行像素(无 alpha 混合,直接覆盖).
+/// 比逐个调用 `putPixel32` 减少函数调用开销.
+/// @param y: 目标行 Y 坐标
+/// @param x0/x1: 水平范围 [x0, x1)
+/// @param color: ARGB 颜色
+pub fn putPixelRow(y: u32, x0: u32, x1: u32, color: u32) void {
+    if (x0 >= x1 or y >= fb_config.height) return;
+    const cx = @min(x0, fb_config.width);
+    const cx1 = @min(x1, fb_config.width);
+    if (cx >= cx1) return;
+
+    const bytes_pp = @as(u32, fb_config.bpp) / 8;
+    const ptr = getDrawBuffer();
+    const row_offset = pixelByteOffset(cx, y, bytes_pp);
+    const count = cx1 - cx;
+
+    if (bytes_pp == 4) {
+        const pxval = packPixel32(color);
+        const base = @intFromPtr(ptr) + row_offset;
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            const word_ptr: *align(1) volatile u32 = @ptrFromInt(base + @as(usize, i) * 4);
+            word_ptr.* = pxval;
+        }
+    } else if (bytes_pp == 3) {
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            writePixel3(ptr, row_offset + @as(usize, i) * 3, color);
+        }
+    } else {
+        var x: u32 = cx;
+        while (x < cx1) : (x += 1) {
+            putPixel32(x, y, color);
+        }
+    }
+}
+
+/// 直接写入一行像素(span): 接收已计算好的行首偏移,避免重复调用 `pixelByteOffset`.
+/// @param ptr_base: 帧缓冲基址指针(来自 getDrawBuffer)
+/// @param row_byte_offset: 该行像素数据的字节偏移量
+/// @param x0/x1: 水平范围 [x0, x1)
+/// @param color: ARGB 颜色
+/// @param bytes_per_pixel: 每像素字节数(必须为 4)
+pub fn putSpanDirect(ptr_base: [*]volatile u8, row_byte_offset: usize, x0: u32, x1: u32, color: u32, bytes_per_pixel: u32) void {
+    if (x0 >= x1) return;
+    const count = x1 - x0;
+    if (bytes_per_pixel == 4) {
+        var pxval: u32 = color;
+        if (!fb_config.pixel_bgr) {
+            // packPixel32: RGB -> XRGB
+            pxval = color | 0xFF000000;
+        } else {
+            // BGR 顺序: 交换 R 和 B
+            const b = color & 0xFF;
+            const g = (color >> 8) & 0xFF;
+            const r = (color >> 16) & 0xFF;
+            pxval = (r) | (g << 8) | (b << 16) | 0xFF000000;
+        }
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            const word_ptr: *align(1) volatile u32 = @ptrFromInt(@intFromPtr(ptr_base) + row_byte_offset + @as(usize, i) * 4);
+            word_ptr.* = pxval;
+        }
+    }
+}
+
+/// Blit a RGBA bitmap to the framebuffer at (screen_x, screen_y).
+/// This function handles alpha blending (premultiplied alpha) for smooth icon/logo rendering.
+/// @param rgba: pointer to RGBA pixel data (each pixel is 4 bytes: R, G, B, A in that order)
+/// @param src_w: width of the source bitmap
+/// @param src_h: height of the source bitmap
+/// @param screen_x: X coordinate on screen (top-left corner)
+/// @param screen_y: Y coordinate on screen (top-left corner)
+/// @param scale: scale factor (1 = no scaling, 2 = 2x scale, etc.)
+pub fn blitRgba(
+    rgba: [*]const u8,
+    src_w: u32,
+    src_h: u32,
+    screen_x: i32,
+    screen_y: i32,
+    scale: u32,
+) void {
+    if (src_w == 0 or src_h == 0) return;
+    const s: u32 = if (scale < 1) 1 else scale;
+    const dst_w: u32 = src_w * s;
+    const dst_h: u32 = src_h * s;
+
+    if (dst_w == 0 or dst_h == 0) return;
+
+    // 处理负坐标（源图像裁剪）
+    const sx0: u32 = if (screen_x < 0) @intCast(-screen_x) else 0;
+    const sy0: u32 = if (screen_y < 0) @intCast(-screen_y) else 0;
+    if (sx0 >= src_w or sy0 >= src_h) return;
+
+    const x0: u32 = if (screen_x < 0) 0 else @intCast(screen_x);
+    const y0: u32 = if (screen_y < 0) 0 else @intCast(screen_y);
+    if (x0 >= fb_config.width or y0 >= fb_config.height) return;
+
+    const x1: u32 = @min(x0 + dst_w, fb_config.width);
+    const y1: u32 = @min(y0 + dst_h, fb_config.height);
+    if (x0 >= x1 or y0 >= y1) return;
+
+    // 最近邻缩放：从目标像素反推源像素坐标
+    const inv_scale_x: f64 = @as(f64, @floatFromInt(src_w)) / @as(f64, @floatFromInt(dst_w));
+    const inv_scale_y: f64 = @as(f64, @floatFromInt(src_h)) / @as(f64, @floatFromInt(dst_h));
+
+    var dy: u32 = y0;
+    var sy_float: f64 = @as(f64, @floatFromInt(sy0)) * inv_scale_y;
+    while (dy < y1) : (dy += 1) {
+        const src_y: u32 = @min(@as(u32, @intFromFloat(sy_float)), src_h - 1);
+        const src_row_base = src_y * src_w * 4;
+        sy_float += inv_scale_y;
+
+        var dx: u32 = x0;
+        var sx_float: f64 = @as(f64, @floatFromInt(sx0)) * inv_scale_x;
+        while (dx < x1) : (dx += 1) {
+            const src_x: u32 = @min(@as(u32, @intFromFloat(sx_float)), src_w - 1);
+            sx_float += inv_scale_x;
+
+            const src_idx = src_row_base + src_x * 4;
+            const pr: u8 = rgba[src_idx + 0];
+            const pg: u8 = rgba[src_idx + 1];
+            const pb: u8 = rgba[src_idx + 2];
+            const pa: u8 = rgba[src_idx + 3];
+
+            if (pa == 0) continue;
+            if (pa == 255) {
+                putPixel32(dx, dy, @as(u32, pb) | (@as(u32, pg) << 8) | (@as(u32, pr) << 16));
+            } else {
+                blendPixel(dx, dy, @as(u32, pb) | (@as(u32, pg) << 8) | (@as(u32, pr) << 16), pa);
+            }
+        }
+    }
+}
+
+/// Blit a RGBA bitmap to the framebuffer with explicit destination size (nearest-neighbor scaling).
+/// @param rgba: pointer to RGBA pixel data (each pixel is 4 bytes: R, G, B, A in that order)
+/// @param src_w: width of the source bitmap
+/// @param src_h: height of the source bitmap
+/// @param dest_x: X coordinate on screen (top-left corner)
+/// @param dest_y: Y coordinate on screen (top-left corner)
+/// @param dest_w: width on screen (after scaling)
+/// @param dest_h: height on screen (after scaling)
+pub fn blitRgbaScaled(
+    rgba: [*]const u8,
+    src_w: u32,
+    src_h: u32,
+    dest_x: i32,
+    dest_y: i32,
+    dest_w: i32,
+    dest_h: i32,
+) void {
+    if (src_w == 0 or src_h == 0 or dest_w <= 0 or dest_h <= 0) return;
+
+    // 处理负坐标裁剪
+    const src_clip_x: u32 = if (dest_x < 0) @intCast(-dest_x) else 0;
+    const src_clip_y: u32 = if (dest_y < 0) @intCast(-dest_y) else 0;
+    const screen_x0: u32 = if (dest_x < 0) 0 else @intCast(dest_x);
+    const screen_y0: u32 = if (dest_y < 0) 0 else @intCast(dest_y);
+
+    if (screen_x0 >= fb_config.width or screen_y0 >= fb_config.height) return;
+
+    const dw: u32 = @intCast(dest_w);
+    const dh: u32 = @intCast(dest_h);
+
+    const x1: u32 = @min(screen_x0 + dw, fb_config.width);
+    const y1: u32 = @min(screen_y0 + dh, fb_config.height);
+    if (screen_x0 >= x1 or screen_y0 >= y1) return;
+
+    // 最近邻缩放：inverse scale = source pixels per destination pixel
+    const inv_scale_x: f64 = @as(f64, @floatFromInt(src_w)) / @as(f64, @floatFromInt(dw));
+    const inv_scale_y: f64 = @as(f64, @floatFromInt(src_h)) / @as(f64, @floatFromInt(dh));
+
+    var dy: u32 = screen_y0;
+    var sy_float: f64 = @as(f64, @floatFromInt(src_clip_y)) * inv_scale_y;
+    while (dy < y1) : (dy += 1) {
+        const src_y: u32 = @min(@as(u32, @intFromFloat(sy_float)), src_h - 1);
+        const src_row_base = src_y * src_w * 4;
+        sy_float += inv_scale_y;
+
+        var dx: u32 = screen_x0;
+        var sx_float: f64 = @as(f64, @floatFromInt(src_clip_x)) * inv_scale_x;
+        while (dx < x1) : (dx += 1) {
+            const src_x: u32 = @min(@as(u32, @intFromFloat(sx_float)), src_w - 1);
+            sx_float += inv_scale_x;
+
+            const src_idx = src_row_base + src_x * 4;
+            const pa: u8 = rgba[src_idx + 3];
+            if (pa == 0) continue;
+
+            const pr: u8 = rgba[src_idx + 0];
+            const pg: u8 = rgba[src_idx + 1];
+            const pb: u8 = rgba[src_idx + 2];
+
+            if (pa == 255) {
+                putPixel32(dx, dy, @as(u32, pb) | (@as(u32, pg) << 8) | (@as(u32, pr) << 16));
+            } else {
+                blendPixel(dx, dy, @as(u32, pb) | (@as(u32, pg) << 8) | (@as(u32, pr) << 16), pa);
+            }
+        }
+    }
+}
+
 // ── Optimized Drawing Primitives ──
 
 fn fillRowDirect(py: u32, x0: u32, x1: u32, color: u32) void {
@@ -674,11 +922,10 @@ pub fn drawRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
 /// 使用符号距离场算法实现边缘平滑过渡
 pub fn drawRoundedRectAA(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32) void {
     if (w <= 0 or h <= 0 or radius <= 0) return;
-    if (radius > @divTrunc(w, 2)) radius = @divTrunc(w, 2);
-    if (radius > @divTrunc(h, 2)) radius = @divTrunc(h, 2);
-    if (radius <= 0) return;
+    const effective_r = @min(radius, @min(@divTrunc(w, 2), @divTrunc(h, 2)));
+    if (effective_r <= 0) return;
 
-    const r = radius;
+    const r = effective_r;
     const aa_scale: f32 = 1.5;
 
     // 提取颜色分量
@@ -716,10 +963,10 @@ pub fn drawRoundedRectAA(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32
         while (dy <= r) : (dy += 1) {
             var dx: i32 = 0;
             while (dx <= r) : (dx += 1) {
-                const cdx = @as(f32, @intCast(dx));
-                const cdy = @as(f32, @intCast(dy));
+                const cdx = @as(f32, @floatFromInt(dx));
+                const cdy = @as(f32, @floatFromInt(dy));
                 const dist_sq = cdx * cdx + cdy * cdy;
-                const r_f = @as(f32, @intCast(r));
+                const r_f = @as(f32, @floatFromInt(r));
 
                 // 仅在边界附近绘制
                 if (dist_sq > r_f * r_f + r_f * 2.0) continue;
@@ -2210,6 +2457,11 @@ pub fn getPitch() u32 {
 }
 
 pub fn getAddress() usize {
+    return fb_config.address;
+}
+
+/// 主帧缓冲地址（与 `getAddress()` 等价,语义更明确,推荐在新代码中使用）.
+pub fn getFrontbufferAddress() usize {
     return fb_config.address;
 }
 

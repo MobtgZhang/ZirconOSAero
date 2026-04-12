@@ -63,12 +63,16 @@ fn invtlbAll() void {
     asm volatile ("invtlb 0x0, $zero, $zero" ::: .{ .memory = true });
 }
 
-/// `INVTLB_ADDR_GTRUE_OR_ASID`（op=0x6），ASID=`$zero`；与 Linux `invtlb_addr(..., 0, addr)` 用法一致。
+/// `INVTLB_ADDR_GTRUE_OR_ASID`（op=0x6），使用当前 ASID 失效指定 VA 的 TLB 条目。
+/// 注意：当 ASID=0 时会失效所有 TLB 条目（全局失效），所以必须使用真实 ASID。
+/// ASID 从 KPCR PerCpu.current_asid 获取（由 tlb_flush.zig 通过 CSR 0x5 维护）。
 fn invtlbAddrVa(virt: u64) void {
     if (builtin.os.tag != .freestanding) return;
-    asm volatile ("invtlb 0x6, $zero, %[va]"
+    // 从 KPCR PerCpu.current_asid 获取当前 ASID，避免 ASID=0 导致全局 TLB 失效
+    const asid = @import("../../hal/loongarch64/tlb_flush.zig").getCurrentAsid();
+    asm volatile ("invtlb 0x6, %[asid], %[va]"
         :
-        : [va] "r" (virt),
+        : [va] "r" (virt), [asid] "r" (asid)
         : .{ .memory = true });
 }
 
@@ -76,14 +80,15 @@ fn invtlbAddrVa(virt: u64) void {
 var last_loaded_pgdl_phys: u64 = 0;
 
 /// 当前已装载根表上的 **任意** 叶/中间项变更后须调用，以免 `activateCr3ForProcessId` 误判「根未变」而省略 `INVTLB_ALL`。
-/// LoongArch64：读取当前 ASID（CSR 0x18）并执行 invtlbAllAsid，仅刷新当前进程的 TLB 条目，
-/// 避免全量 INVTLB_ALL，提升 TLB 命中率。
+/// LoongArch64：从 KPCR PerCpu.current_asid 获取当前 ASID（由 tlb_flush.zig 维护），执行 invtlbAllAsid，
+/// 仅刷新当前进程的 TLB 条目，避免全量 INVTLB_ALL，提升 TLB 命中率。
+/// 注意：CSR 0x18 是 PGDL（页表根地址），不是 ASID！ASID 存储在 CSR 0x5，由 KPCR PerCpu.current_asid 维护。
 /// 只有当 `pgd_phys` 与 `last_loaded_pgdl_phys` 不同时才更新（真正切换页表时才修改跟踪值）。
 pub fn noteCurrentPageTablePossiblyMutated(pgd_phys: u64) void {
     if (builtin.cpu.arch == .loongarch64 and builtin.os.tag == .freestanding) {
-        const asid: u8 = @truncate(asm volatile ("csrrd %[o], 0x18"
-            : [o] "=r" (-> u64),
-        ));
+        // 从 KPCR PerCpu.current_asid 获取当前 ASID（由 tlb_flush.zig 通过 CSR 0x5 维护）
+        // 重要：CSR 0x18 是 PGDL（页表根地址），不是 ASID！
+        const asid = @import("../../hal/loongarch64/tlb_flush.zig").getCurrentAsid();
         @import("../../hal/loongarch64/tlb_flush.zig").invtlbAllAsid(asid);
         // 只有当页表物理地址真正改变时才更新跟踪值，避免被设为 ~0 导致每次全刷新
         if (pgd_phys != last_loaded_pgdl_phys) {

@@ -42,12 +42,13 @@ pub const requestGlobalSmpCoherentFlushBestEffort = requestGlobalFlushStub;
 
 // =============================================================================
 // ASID（Address Space ID）管理
-// LoongArch CSR 0x18 保存当前 ASID；invtlb 指令以 ASID 作为过滤键。
+// LoongArch CSR 0x5 保存当前 ASID；invtlb 指令以 ASID 作为过滤键。
 // ASID 将页表根从 TLB 标记解耦：进程切换不必全量 INVTLB_ALL，提升 TLB 命中率。
-// 最大 256 个 ASID（CSR 0x18 bits[7:0]）；ASID 0 保留（表示全局/无 ASID）。
+// 最大 255 个可用 ASID（CSR 0x5 bits[7:0]，0 保留为全局/无 ASID）。
+// 注意：CSR 0x18 是 PGDL（页表根地址），不是 ASID！
 // =============================================================================
 
-/// ASID 最大数量（CSR 0x18[7:0]）
+/// ASID 最大数量（可用范围 1-255）
 const MAX_ASID: usize = 255;
 /// 第一个可用 ASID（0 保留为全局）
 const FIRST_ASID: u8 = 1;
@@ -136,21 +137,25 @@ pub fn allocateProcessAsid() u8 {
     return allocateAsid();
 }
 
-/// 保存当前 ASID（CSR 0x18）到变量，返回保存的值
+/// 保存当前 ASID（从 CSR 0x5 读取）到变量，返回保存的值
+/// 注意：LoongArch64 中 ASID 存储在 CSR 0x5，不是 CSR 0x18（PGDL）
 pub fn saveCurrentAsid() u8 {
     if (builtin.os.tag != .freestanding) return 0;
-    const val: u64 = asm volatile ("csrrd %[o], 0x18"
+    // CSR 0x5 = ASID（Address Space ID）寄存器
+    const val: u64 = asm volatile ("csrrd %[o], 0x5"
         : [o] "=r" (-> u64),
     );
     return @as(u8, @truncate(val));
 }
 
-/// 切换到新 ASID 并激活（写入 CSR 0x18），同时更新 KPCR per-CPU ASID 表。
+/// 切换到新 ASID 并激活（写入 CSR 0x5），同时更新 KPCR per-CPU ASID 表。
+/// 注意：LoongArch64 中 ASID 存储在 CSR 0x5，不是 CSR 0x18（PGDL）
 pub fn activateAsid(asid: u8) void {
     if (builtin.os.tag != .freestanding) return;
     const prev = saveCurrentAsid();
     if (prev != asid) {
-        asm volatile ("csrwr %[val], 0x18"
+        // CSR 0x5 = ASID（Address Space ID）寄存器
+        asm volatile ("csrwr %[val], 0x5"
             :
             : [val] "r" (@as(u64, asid)),
         );
@@ -164,7 +169,8 @@ pub fn restoreAsid(asid: u8) void {
     if (builtin.os.tag != .freestanding) return;
     const kpcr = @import("../../ke/kpcr.zig");
     if (asid != kpcr.getCurrentAsid()) {
-        asm volatile ("csrwr %[val], 0x18"
+        // CSR 0x5 = ASID（Address Space ID）寄存器
+        asm volatile ("csrwr %[val], 0x5"
             :
             : [val] "r" (@as(u64, asid)),
         );
@@ -180,7 +186,11 @@ pub fn invtlbAsidVa(asid: u8, va: u64) void {
         invtlbAll();
         return;
     }
-    asm volatile ("csrwr %[asid_val], 0x18\ninvtlb 0x1, %[asid_val], %[va]"
+    // invtlb 指令的 ASID 参数使用 $zero 引用 CSR 0x5
+    // 先将 ASID 写入 CSR 0x5，然后 invtlb 使用 $zero 读取
+    asm volatile (
+        \\ csrwr %[asid_val], 0x5
+        \\ invtlb 0x1, $zero, %[va]
         :
         : [asid_val] "r" (@as(u64, asid)),
           [va] "r" (va),
@@ -194,7 +204,11 @@ pub fn invtlbAllAsid(asid: u8) void {
         invtlbAll();
         return;
     }
-    asm volatile ("csrwr %[asid_val], 0x18\ninvtlb 0x2, %[asid_val], $zero"
+    // invtlb 指令的 ASID 参数使用 $zero 引用 CSR 0x5
+    // 先将 ASID 写入 CSR 0x5，然后 invtlb 使用 $zero 读取
+    asm volatile (
+        \\ csrwr %[asid_val], 0x5
+        \\ invtlb 0x2, $zero, $zero
         :
         : [asid_val] "r" (@as(u64, asid)),
         : .{ .memory = true });

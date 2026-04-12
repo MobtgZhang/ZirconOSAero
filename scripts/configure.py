@@ -56,8 +56,8 @@ SETTINGS = [
     {
         "key": "QEMU_MEM",
         "prompt": "QEMU memory",
-        "options": ["256M", "512M", "1G", "2G"],
-        "default": "512M",
+        "options": ["256M", "512M", "1G", "2G", "4G", "8G"],
+        "default": "8G",
     },
 ]
 

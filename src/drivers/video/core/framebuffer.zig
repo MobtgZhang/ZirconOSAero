@@ -1655,9 +1655,11 @@ fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: 
     const sw = @max(w / factor, 1);
     const sh = @max(h / factor, 1);
     const sr = @max(radius / factor, 1);
-
-    var small_buf: [BLUR_MAX_LINE]u32 = undefined;
-    var small_tmp: [BLUR_MAX_LINE]u32 = undefined;
+    // 精确分配下采样图像尺寸（w×h 的 1/factor²），避免使用静态 [4096]u32 缓冲区
+    // 导致上采样插值阶段索引越界（sw*sh 在大屏（如 1440×900）下可达 202500）。
+    const small_len = @as(usize, sw) * @as(usize, sh);
+    var small_buf: []u32 = @import("../../../mm/heap.zig").allocSlice(u32, small_len) orelse return;
+    var small_tmp: []u32 = @import("../../../mm/heap.zig").allocSlice(u32, small_len) orelse return;
 
     const buf = getDrawBuffer();
     const pitch = fb_config.pitch;
@@ -1706,27 +1708,67 @@ fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: 
             @memcpy(small_buf[0..sh], small_tmp[0..sh]);
         }
 
-        // 上采样阶段：将模糊后的像素写回原区域（每个小像素覆盖 2×2 区块）
+        // 上采样阶段：将模糊后的像素写回原区域，使用双线性插值提升质量
         var sy2: u32 = 0;
         while (sy2 < sh) : (sy2 += 1) {
             const dst_y0 = y0 + sy2 * factor;
             const dst_y1 = @min(dst_y0 + factor, y0 + h);
             var sx2b: u32 = 0;
             while (sx2b < sw) : (sx2b += 1) {
-                const p = small_buf[sx2b];
-                const r: u8 = @intCast((p >> 16) & 0xFF);
-                const g: u8 = @intCast((p >> 8) & 0xFF);
-                const b: u8 = @intCast(p & 0xFF);
+                // 双线性插值：采样周围 2×2 像素进行混合
+                const tl = small_buf[sy2 * sw + sx2b];
+                const tr: u32 = if (sx2b + 1 < sw) small_buf[sy2 * sw + sx2b + 1] else tl;
+                const bl: u32 = if (sy2 + 1 < sh) small_buf[(sy2 + 1) * sw + sx2b] else tl;
+                const br: u32 = if (sx2b + 1 < sw and sy2 + 1 < sh)
+                    small_buf[(sy2 + 1) * sw + sx2b + 1]
+                else if (sx2b + 1 < sw) tr
+                else if (sy2 + 1 < sh) bl
+                else tl;
+
                 const dst_x0 = x0 + sx2b * factor;
                 const dst_x1 = @min(dst_x0 + factor, x0 + w);
+
+                // 对每个目标像素计算双线性权重
                 var cy: u32 = dst_y0;
                 while (cy < dst_y1) : (cy += 1) {
                     var cx: u32 = dst_x0;
                     while (cx < dst_x1) : (cx += 1) {
+                        // 计算相对于小块边界的分数偏移
+                        const fx = @as(f32, @floatFromInt(cx - dst_x0)) / @as(f32, @floatFromInt(factor));
+                        const fy = @as(f32, @floatFromInt(cy - dst_y0)) / @as(f32, @floatFromInt(factor));
+
+                        // 提取四角的 RGB 分量
+                        const tl_r: u32 = (tl >> 16) & 0xFF;
+                        const tl_g: u32 = (tl >> 8) & 0xFF;
+                        const tl_b: u32 = tl & 0xFF;
+                        const tr_r: u32 = (tr >> 16) & 0xFF;
+                        const tr_g: u32 = (tr >> 8) & 0xFF;
+                        const tr_b: u32 = tr & 0xFF;
+                        const bl_r: u32 = (bl >> 16) & 0xFF;
+                        const bl_g: u32 = (bl >> 8) & 0xFF;
+                        const bl_b: u32 = bl & 0xFF;
+                        const br_r: u32 = (br >> 16) & 0xFF;
+                        const br_g: u32 = (br >> 8) & 0xFF;
+                        const br_b: u32 = br & 0xFF;
+
+                        // 双线性插值
+                        const r = (@as(f32, @floatFromInt(tl_r)) * (1.0 - fx) * (1.0 - fy) +
+                            @as(f32, @floatFromInt(tr_r)) * fx * (1.0 - fy) +
+                            @as(f32, @floatFromInt(bl_r)) * (1.0 - fx) * fy +
+                            @as(f32, @floatFromInt(br_r)) * fx * fy);
+                        const g = (@as(f32, @floatFromInt(tl_g)) * (1.0 - fx) * (1.0 - fy) +
+                            @as(f32, @floatFromInt(tr_g)) * fx * (1.0 - fy) +
+                            @as(f32, @floatFromInt(bl_g)) * (1.0 - fx) * fy +
+                            @as(f32, @floatFromInt(br_g)) * fx * fy);
+                        const b = (@as(f32, @floatFromInt(tl_b)) * (1.0 - fx) * (1.0 - fy) +
+                            @as(f32, @floatFromInt(tr_b)) * fx * (1.0 - fy) +
+                            @as(f32, @floatFromInt(bl_b)) * (1.0 - fx) * fy +
+                            @as(f32, @floatFromInt(br_b)) * fx * fy);
+
                         const off = cy * pitch + cx * bpp;
-                        buf[off + 2] = r;
-                        buf[off + 1] = g;
-                        buf[off] = b;
+                        buf[off + 2] = @as(u8, @intFromFloat(r));
+                        buf[off + 1] = @as(u8, @intFromFloat(g));
+                        buf[off] = @as(u8, @intFromFloat(b));
                     }
                 }
             }

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const klog = @import("../../../rtl/klog.zig");
+const sync = @import("../../../ke/sync.zig");
 const nt61_aero = @import("nt61_aero_defaults");
 const dwm_surface_spec = @import("../../../config/dwm_surface_spec.zig");
 const dwm_nt61_abi = @import("../../../config/dwm_nt61_api_contract.zig");
@@ -120,6 +121,8 @@ pub fn getAuthorityTreeSyncGenerationApplied() u32 {
 /// 阶段 C：用户态（user32 窗口 Z 序）经 csrss `compositor_tree_sync` 下推的 **权威** Z 补丁；内核不再单独 `setSurfaceZOrder` 维护并行真相。
 /// `cursor_surface_id` 与壁纸占位由内核 bring-up 固定，忽略补丁中的对应 id（若有）。
 pub fn applyAuthorityTreeSyncV1(generation: u32, entries: []const compositor_sync_nt61.TreeSurfaceEntryV1) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (generation == 0) return;
     authority_tree_sync_generation_applied = generation;
     for (entries) |e| {
@@ -159,6 +162,8 @@ pub fn initAero(cfg: AeroConfig) void {
 }
 
 pub fn createSurface(x: i32, y: i32, width: u32, height: u32, owner_pid: u32) ?u16 {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (surface_count >= MAX_SURFACES) return null;
     const id = surface_count;
     surfaces[id] = .{
@@ -177,6 +182,8 @@ pub fn createSurface(x: i32, y: i32, width: u32, height: u32, owner_pid: u32) ?u
 }
 
 pub fn destroySurface(id: u16) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].visible = false;
     surfaces[id].owner_pid = 0;
@@ -191,16 +198,22 @@ fn syncDwmPolicyToKernelFlags(id: u16) void {
 }
 
 pub fn getSurfaceDwmState(id: u16) ?SurfaceDwmState {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return null;
     return surface_dwm[id];
 }
 
 pub fn setSurfaceExtendMargins(id: u16, m: dwm_nt61_abi.MARGINS) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].extend_margins = m;
 }
 
 pub fn setSurfaceBlurBehind(id: u16, bb: dwm_nt61_abi.DWM_BLURBEHIND) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     const st = &surface_dwm[id];
     st.blur_dw_flags = bb.dwFlags;
@@ -214,17 +227,23 @@ pub fn setSurfaceBlurBehind(id: u16, bb: dwm_nt61_abi.DWM_BLURBEHIND) void {
 }
 
 pub fn setSurfaceNcRenderingPolicy(id: u16, policy: u32) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].nc_rendering_policy = policy;
     syncDwmPolicyToKernelFlags(id);
 }
 
 pub fn setSurfaceFlip3dPolicy(id: u16, policy: u32) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].flip3d_policy = policy & 0xFF;
 }
 
 pub fn getSurfaceFlip3dPolicy(id: u16) u32 {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return dwm_nt61_abi.DWMFLIP3D_DEFAULT;
     return surface_dwm[id].flip3d_policy;
 }
@@ -235,47 +254,65 @@ pub fn surfaceOmittedFromFlip3dSwitcher(id: u16) bool {
 }
 
 pub fn setSurfacePeekFlags(id: u16, disallow: bool, excluded: bool) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].disallow_peek = disallow;
     surface_dwm[id].excluded_from_peek = excluded;
 }
 
 pub fn surfaceDisallowsPeek(id: u16) bool {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return false;
     return surface_dwm[id].disallow_peek;
 }
 
 pub fn surfaceExcludedFromPeek(id: u16) bool {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return false;
     return surface_dwm[id].excluded_from_peek;
 }
 
 pub fn surfaceDwmSetTransitionsForceDisabled(id: u16, v: bool) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].transitions_force_disabled = v;
 }
 
 pub fn surfaceDwmSetAllowNcPaint(id: u16, v: bool) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].allow_ncpaint = v;
 }
 
 pub fn surfaceDwmSetNonClientRtl(id: u16, v: bool) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].nonclient_rtl = v;
 }
 
 pub fn surfaceDwmSetForceIconic(id: u16, v: bool) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].force_iconic_representation = v;
 }
 
 pub fn surfaceDwmSetFreezeRepresentation(id: u16, v: bool) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].freeze_representation = v;
 }
 
 pub fn setSurfaceCloak(id: u16, cloak: bool) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surface_dwm[id].cloak = cloak;
     if (cloak) {
@@ -286,11 +323,15 @@ pub fn setSurfaceCloak(id: u16, cloak: bool) void {
 }
 
 pub fn surfaceIsCloaked(id: u16) bool {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return false;
     return surface_dwm[id].cloak;
 }
 
 pub fn moveSurface(id: u16, x: i32, y: i32) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].x = x;
     surfaces[id].y = y;
@@ -298,6 +339,8 @@ pub fn moveSurface(id: u16, x: i32, y: i32) void {
 }
 
 pub fn resizeSurface(id: u16, width: u32, height: u32) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].width = width;
     surfaces[id].height = height;
@@ -305,28 +348,38 @@ pub fn resizeSurface(id: u16, width: u32, height: u32) void {
 }
 
 pub fn setSurfaceZOrder(id: u16, z: i16) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].z_order = z;
 }
 
 pub fn setSurfaceMaterial(id: u16, mat: material.MaterialType) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].material_type = mat;
 }
 
 pub fn setSurfaceOpacity(id: u16, opacity: u8) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].opacity = opacity;
     surfaces[id].dirty = true;
 }
 
 pub fn markSurfaceDirty(id: u16) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].dirty = true;
 }
 
 /// 单点写入 `RedirectedSurface.flags`（光标层等特例经 `cursorOverlayKernelSurfaceFlags`）。
 pub fn setSurfaceKernelFlags(id: u16, flags: SurfaceFlags) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].flags = flags;
 }
@@ -340,8 +393,13 @@ fn cursorOverlayKernelSurfaceFlags() SurfaceFlags {
 }
 
 pub fn compose() void {
-    if (state != .ready) return;
-    state = .composing;
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+
+    var expected = CompositorState.ready;
+    if (!@cmpxchgWeak(CompositorState, &state, &expected, .composing, .seq_cst, .seq_cst)) {
+        return;
+    }
 
     if (backend == .aero_d3d9) {
         var i: u16 = 0;
@@ -388,6 +446,8 @@ pub fn getState() CompositorState {
 }
 
 pub fn getSurfaceCount() u16 {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     return surface_count;
 }
 
@@ -398,13 +458,164 @@ pub fn getFrameNumber() u64 {
 pub fn notifyFramePresented() void {
     if (!compositor_initialized) return;
     frame_number += 1;
+
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+
     const sched = @import("../../../ke/scheduler.zig");
     const now = sched.getTicks();
     var i: u16 = 0;
     while (i < surface_count) : (i += 1) {
         if (!surfaces[i].visible or surfaces[i].owner_pid == 0) continue;
         if (!surfaces[i].dirty) continue;
-        refreshSurfaceThumbFromFramebuffer(i, now);
+        // 刷新缩略图（在锁内执行，避免竞争条件）
+        // 注意：不再释放锁，因为缩略图刷新不需要外部调用
+        refreshSurfaceThumbFromFramebufferInner(i, now, surfaces[i].x, surfaces[i].y, surfaces[i].width, surfaces[i].height, surfaces[i].visible);
+    }
+}
+
+/// 表面刷新信息（在锁外刷新时使用，避免竞争条件）
+const SurfaceRefreshInfo = struct {
+    id: u16,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    visible: bool,
+    now_tick: u64,
+};
+
+/// 在锁外刷新表面缩略图的版本（如果需要在锁外刷新时使用）
+/// 注意：此函数会在锁外访问 surfaces 数组，存在竞争条件风险
+/// 仅在确定不会有其他线程访问 surfaces 时使用
+pub fn notifyFramePresentedExternal() void {
+    if (!compositor_initialized) return;
+    frame_number += 1;
+
+    // 收集需要刷新的表面信息（在锁内）
+    var surfaces_to_refresh: [MAX_SURFACES]SurfaceRefreshInfo = undefined;
+    var count: usize = 0;
+
+    {
+        compositor_lock.acquire();
+        defer compositor_lock.release();
+
+        const sched = @import("../../../ke/scheduler.zig");
+        const now = sched.getTicks();
+        var i: u16 = 0;
+        while (i < surface_count) : (i += 1) {
+            if (!surfaces[i].visible or surfaces[i].owner_pid == 0) continue;
+            if (!surfaces[i].dirty) continue;
+
+            if (count < MAX_SURFACES) {
+                surfaces_to_refresh[count] = .{
+                    .id = i,
+                    .x = surfaces[i].x,
+                    .y = surfaces[i].y,
+                    .width = surfaces[i].width,
+                    .height = surfaces[i].height,
+                    .visible = surfaces[i].visible,
+                    .now_tick = now,
+                };
+                count += 1;
+            }
+        }
+    }
+
+    // 在锁外刷新缩略图（使用收集的信息）
+    for (surfaces_to_refresh[0..count]) |info| {
+        refreshSurfaceThumbFromFramebufferLocked(info.id, info.now_tick, info.x, info.y, info.width, info.height, info.visible);
+    }
+}
+
+fn refreshSurfaceThumbFromFramebufferInner(id: u16, now_tick: u64, _: i32, _: i32, _: u32, _: u32, _: bool) void {
+    if (id >= surface_count or !surfaces[id].visible) return;
+    const s = surfaces[id];
+    if (s.width == 0 or s.height == 0) return;
+    const prev = surface_thumb_last_tick[id];
+    if (prev != 0 and now_tick -% prev < thumb_refresh_min_ticks) return;
+    surface_thumb_last_tick[id] = now_tick;
+
+    const fw: i64 = @intCast(fb.getWidth());
+    const fh: i64 = @intCast(fb.getHeight());
+    if (fw <= 0 or fh <= 0) return;
+    const sw64: i64 = @max(1, @as(i64, @intCast(s.width)));
+    const sh64: i64 = @max(1, @as(i64, @intCast(s.height)));
+    const x0: i64 = @intCast(s.x);
+    const y0: i64 = @intCast(s.y);
+
+    var ty: u32 = 0;
+    while (ty < surface_thumb_h) : (ty += 1) {
+        var tx: u32 = 0;
+        while (tx < surface_thumb_w) : (tx += 1) {
+            const u_tx: i64 = @intCast(tx);
+            const u_ty: i64 = @intCast(ty);
+            const sx64 = x0 + @divTrunc(u_tx * sw64, @as(i64, @intCast(surface_thumb_w)));
+            const sy64 = y0 + @divTrunc(u_ty * sh64, @as(i64, @intCast(surface_thumb_h)));
+            const cl_sx = std.math.clamp(sx64, 0, fw - 1);
+            const cl_sy = std.math.clamp(sy64, 0, fh - 1);
+            const sx1 = @min(cl_sx + 1, fw - 1);
+            const sy1 = @min(cl_sy + 1, fh - 1);
+            var rr: u32 = 0;
+            var gg: u32 = 0;
+            var bb: u32 = 0;
+            for ([_]i64{ 0, 1 }) |ox| {
+                for ([_]i64{ 0, 1 }) |oy| {
+                    const px = if (ox == 0) cl_sx else sx1;
+                    const py = if (oy == 0) cl_sy else sy1;
+                    const c = fb.getPixel32(@intCast(px), @intCast(py));
+                    rr += c & 0xFF;
+                    gg += (c >> 8) & 0xFF;
+                    bb += (c >> 16) & 0xFF;
+                }
+            }
+            surface_thumb_buf[id][ty * surface_thumb_w + tx] = (rr / 4) | ((gg / 4) << 8) | ((bb / 4) << 16) | 0xFF000000;
+        }
+    }
+}
+
+/// 在锁外刷新表面缩略图（使用预验证的信息，避免重复访问 surfaces）
+fn refreshSurfaceThumbFromFramebufferLocked(id: u16, now_tick: u64, x: i32, y: i32, width: u32, height: u32, visible: bool) void {
+    if (id >= MAX_SURFACES) return;
+    if (!visible or width == 0 or height == 0) return;
+    if (surface_thumb_last_tick[id] != 0 and now_tick -% surface_thumb_last_tick[id] < thumb_refresh_min_ticks) return;
+    surface_thumb_last_tick[id] = now_tick;
+
+    const fw: i64 = @intCast(fb.getWidth());
+    const fh: i64 = @intCast(fb.getHeight());
+    if (fw <= 0 or fh <= 0) return;
+    const sw64: i64 = @max(1, @as(i64, @intCast(width)));
+    const sh64: i64 = @max(1, @as(i64, @intCast(height)));
+    const x0: i64 = @intCast(x);
+    const y0: i64 = @intCast(y);
+
+    var ty: u32 = 0;
+    while (ty < surface_thumb_h) : (ty += 1) {
+        var tx: u32 = 0;
+        while (tx < surface_thumb_w) : (tx += 1) {
+            const u_tx: i64 = @intCast(tx);
+            const u_ty: i64 = @intCast(ty);
+            const sx64 = x0 + @divTrunc(u_tx * sw64, @as(i64, @intCast(surface_thumb_w)));
+            const sy64 = y0 + @divTrunc(u_ty * sh64, @as(i64, @intCast(surface_thumb_h)));
+            const cl_sx = std.math.clamp(sx64, 0, fw - 1);
+            const cl_sy = std.math.clamp(sy64, 0, fh - 1);
+            const sx1 = @min(cl_sx + 1, fw - 1);
+            const sy1 = @min(cl_sy + 1, fh - 1);
+            var rr: u32 = 0;
+            var gg: u32 = 0;
+            var bb: u32 = 0;
+            for ([_]i64{ 0, 1 }) |ox| {
+                for ([_]i64{ 0, 1 }) |oy| {
+                    const px = if (ox == 0) cl_sx else sx1;
+                    const py = if (oy == 0) cl_sy else sy1;
+                    const c = fb.getPixel32(@intCast(px), @intCast(py));
+                    rr += c & 0xFF;
+                    gg += (c >> 8) & 0xFF;
+                    bb += (c >> 16) & 0xFF;
+                }
+            }
+            surface_thumb_buf[id][ty * surface_thumb_w + tx] = (rr / 4) | ((gg / 4) << 8) | ((bb / 4) << 16) | 0xFF000000;
+        }
     }
 }
 
@@ -422,11 +633,15 @@ var surface_thumb_last_tick: [MAX_SURFACES]u64 = @splat(0);
 pub var thumb_refresh_min_ticks: u64 = 20;
 
 pub fn getSurfaceZOrder(id: u16) ?i16 {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return null;
     return surfaces[id].z_order;
 }
 
 pub fn isSurfaceVisible(id: u16) bool {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
     if (id >= surface_count) return false;
     return surfaces[id].visible;
 }
@@ -435,53 +650,6 @@ pub fn isSurfaceVisible(id: u16) bool {
 pub fn getSurfaceThumbPixels(id: u16) ?[]const u32 {
     if (id >= surface_count) return null;
     return surface_thumb_buf[id][0..surface_thumb_pixels];
-}
-
-fn refreshSurfaceThumbFromFramebuffer(id: u16, now_tick: u64) void {
-    if (id >= surface_count or !surfaces[id].visible) return;
-    const s0 = surfaces[id];
-    if (s0.width == 0 or s0.height == 0) return;
-    const prev = surface_thumb_last_tick[id];
-    if (prev != 0 and now_tick -% prev < thumb_refresh_min_ticks) return;
-    surface_thumb_last_tick[id] = now_tick;
-
-    const s = surfaces[id];
-    const fw: i64 = @intCast(fb.getWidth());
-    const fh: i64 = @intCast(fb.getHeight());
-    if (fw <= 0 or fh <= 0) return;
-    const sw: i64 = @max(1, @as(i64, @intCast(s.width)));
-    const sh: i64 = @max(1, @as(i64, @intCast(s.height)));
-    const x0 = @as(i64, s.x);
-    const y0 = @as(i64, s.y);
-
-    var ty: u32 = 0;
-    while (ty < surface_thumb_h) : (ty += 1) {
-        var tx: u32 = 0;
-        while (tx < surface_thumb_w) : (tx += 1) {
-            const u_tx: i64 = @intCast(tx);
-            const u_ty: i64 = @intCast(ty);
-            const sx64 = x0 + @divTrunc(u_tx * sw, @as(i64, @intCast(surface_thumb_w)));
-            const sy64 = y0 + @divTrunc(u_ty * sh, @as(i64, @intCast(surface_thumb_h)));
-            const sx = std.math.clamp(sx64, 0, fw - 1);
-            const sy = std.math.clamp(sy64, 0, fh - 1);
-            const sx1 = @min(sx + 1, fw - 1);
-            const sy1 = @min(sy + 1, fh - 1);
-            var rr: u32 = 0;
-            var gg: u32 = 0;
-            var bb: u32 = 0;
-            for ([_]i64{ 0, 1 }) |ox| {
-                for ([_]i64{ 0, 1 }) |oy| {
-                    const px = if (ox == 0) sx else sx1;
-                    const py = if (oy == 0) sy else sy1;
-                    const c = fb.getPixel32(@intCast(px), @intCast(py));
-                    rr += c & 0xFF;
-                    gg += (c >> 8) & 0xFF;
-                    bb += (c >> 16) & 0xFF;
-                }
-            }
-            surface_thumb_buf[id][ty * surface_thumb_w + tx] = (rr / 4) | ((gg / 4) << 8) | ((bb / 4) << 16) | 0xFF000000;
-        }
-    }
 }
 
 pub const flip3d_shell_sid_buffer_cap = dwm_nt61_abi.flip3d_shell_sid_buffer_cap;
@@ -510,11 +678,54 @@ pub fn collectShellWindowSurfaceIds(buf: []u16) usize {
 pub fn enqueueIconicThumbnailRequest(surface_id: u16) void {
     if (!compositor_initialized or surface_id >= surface_count) return;
     iconic_thumbnail_serial +%= 1;
+
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+
     const sched = @import("../../../ke/scheduler.zig");
     const now = sched.getTicks();
     const prev = surface_thumb_last_tick[surface_id];
     if (prev != 0 and now -% prev < thumb_refresh_min_ticks) return;
-    refreshSurfaceThumbFromFramebuffer(surface_id, now);
+    const s = surfaces[surface_id];
+    if (s.width == 0 or s.height == 0) return;
+    surface_thumb_last_tick[surface_id] = now;
+
+    const fw: i64 = @intCast(fb.getWidth());
+    const fh: i64 = @intCast(fb.getHeight());
+    if (fw <= 0 or fh <= 0) return;
+    const sw64: i64 = @max(1, @as(i64, @intCast(s.width)));
+    const sh64: i64 = @max(1, @as(i64, @intCast(s.height)));
+    const x0: i64 = @intCast(s.x);
+    const y0: i64 = @intCast(s.y);
+
+    var ty: u32 = 0;
+    while (ty < surface_thumb_h) : (ty += 1) {
+        var tx: u32 = 0;
+        while (tx < surface_thumb_w) : (tx += 1) {
+            const u_tx: i64 = @intCast(tx);
+            const u_ty: i64 = @intCast(ty);
+            const sx64 = x0 + @divTrunc(u_tx * sw64, @as(i64, @intCast(surface_thumb_w)));
+            const sy64 = y0 + @divTrunc(u_ty * sh64, @as(i64, @intCast(surface_thumb_h)));
+            const sx = std.math.clamp(sx64, 0, fw - 1);
+            const sy = std.math.clamp(sy64, 0, fh - 1);
+            const sx1 = @min(sx + 1, fw - 1);
+            const sy1 = @min(sy + 1, fh - 1);
+            var rr: u32 = 0;
+            var gg: u32 = 0;
+            var bb: u32 = 0;
+            for ([_]i64{ 0, 1 }) |ox| {
+                for ([_]i64{ 0, 1 }) |oy| {
+                    const px = if (ox == 0) sx else sx1;
+                    const py = if (oy == 0) sy else sy1;
+                    const c = fb.getPixel32(@intCast(px), @intCast(py));
+                    rr += c & 0xFF;
+                    gg += (c >> 8) & 0xFF;
+                    bb += (c >> 16) & 0xFF;
+                }
+            }
+            surface_thumb_buf[surface_id][ty * surface_thumb_w + tx] = (rr / 4) | ((gg / 4) << 8) | ((bb / 4) << 16) | 0xFF000000;
+        }
+    }
 }
 
 pub fn iconicThumbnailSerial() u64 {
@@ -614,6 +825,8 @@ pub fn dwmThumbnailResetForTest() void {
 // ── Flip3D 覆盖层（内核）↔ 用户态 `flip3d_preview_enabled` 诊断桥 ──
 
 var flip3d_overlay_kernel_active: bool = false;
+
+var compositor_lock: sync.SpinLock = .{ .locked = false, .owner_tid = 0 };
 
 pub fn notifyFlip3dOverlayKernelActive(active: bool) void {
     flip3d_overlay_kernel_active = active;

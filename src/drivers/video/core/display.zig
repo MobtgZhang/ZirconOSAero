@@ -121,6 +121,8 @@ pub const DesktopContext = struct {
     present_count: u64 = 0,
     smooth_cursor: CursorState = .{},
     dwm_active: bool = false,
+    /// 桌面图标需要重绘
+    needs_desktop_icons_repaint: bool = false,
 };
 
 // ── Global State ──
@@ -158,7 +160,7 @@ fn aeroTaskbarStartOrb(tb_y: i32, tb_h: i32) struct { cx: i32, cy: i32, r: i32, 
         .slot_w = slot_w,
     };
 }
-const TITLEBAR_H: i32 = 26;
+const TITLEBAR_H: i32 = AERO_TITLEBAR_H;
 const START_BTN_W: i32 = 108;
 const ICON_GRID_X: i32 = 75;
 const ICON_GRID_Y: i32 = 75;
@@ -176,12 +178,8 @@ pub const AERO_CLIENT_INSET: i32 = 2;
 /// NT 6.1 Aero 标题栏三键悬停（DWM 风格绘制 + 命中测试）。
 pub const AeroCaptionBtnHover = enum { none, minimize, maximize, close };
 
-/// Explorer / 任务管理器壳窗口的显示状态（与 Win32 SW_* 概念对齐，实现为内核壳层）。
-pub const ShellWindowState = enum(u8) {
-    normal,
-    minimized,
-    maximized,
-};
+/// 与 `builtin_apps.WinState` 保持一致引用。
+pub const ShellWindowState = @import("../../../desktop/kernel/shell/builtin_apps.zig").WinState;
 
 /// 边框拖拽缩放时激活的边或角（`none` 表示未在缩放）。
 pub const FrameResizeEdge = enum(u8) {
@@ -1799,7 +1797,9 @@ pub fn handleClick(x: i32, y: i32) bool {
         setShellKeyboardFocus(.explorer);
         switch (hitTestAeroCaptionButtons(x, y, wr.x, wr.y, wr.w, cap_h)) {
             .close => {
-                klog.info("Explorer: close (stub)", .{});
+                explorer_shell_state = .minimized;
+                explorer_edge_resize = .none;
+                klog.info("Explorer: minimized via close button", .{});
                 return true;
             },
             .minimize => {
@@ -1844,6 +1844,42 @@ pub fn handleClick(x: i32, y: i32) bool {
         setShellKeyboardFocus(.explorer);
         if (aeroExplorerClientClick(x, y, w, h)) return true;
     }
+
+    // 桌面图标区域（任务栏上方空白区域）
+    const desktop_tb_h = getTaskbarHeight();
+    if (y < h - desktop_tb_h) {
+        // 遍历桌面图标进行命中测试
+        const base_x: i32 = 20;
+        var base_y: i32 = 16;
+        for (desktop_icon_list_aero, 0..) |_, icon_idx| {
+            const avail_h = h - desktop_tb_h - 16;
+            if (base_y + ICON_GRID_Y > avail_h) break;
+
+            const icon_drawn_size = icons.getIconTotalSize(2);
+            const ix = base_x + @divTrunc(ICON_GRID_X - icon_drawn_size, 2);
+            const iy = base_y;
+
+            // 图标命中区域
+            if (x >= ix - 2 and x < ix + icon_drawn_size + 2 and
+                y >= iy - 2 and y < iy + icon_drawn_size + 20) {
+                // 更新悬停状态
+                const prev_hover = desktop_icon_hover_idx;
+                desktop_icon_hover_idx = @as(i32, @intCast(icon_idx));
+                _ = prev_hover; // 悬停变化时需要重绘
+
+                // 单击选中图标
+                desktop_icon_selected_idx = @as(i32, @intCast(icon_idx));
+
+                // 打开对应的应用（双击处理）
+                openDesktopIcon(icon_idx);
+
+                return true;
+            }
+
+            base_y += ICON_GRID_Y;
+        }
+    }
+
     return false;
 }
 
@@ -1932,6 +1968,44 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
         const w: i32 = @intCast(fb.getWidth());
         const h: i32 = @intCast(fb.getHeight());
         startmenu_hover = startmenu.updatePointerHover(x, y, w, h);
+    }
+
+    // 桌面图标悬停跟踪
+    {
+        const tb_h = getTaskbarHeight();
+        const h: i32 = @intCast(fb.getHeight());
+        if (y < h - tb_h) {
+            const base_x: i32 = 20;
+            var base_y: i32 = 16;
+            var found_hover = false;
+            for (desktop_icon_list_aero, 0..) |_, icon_idx| {
+                const avail_h = h - tb_h - 16;
+                if (base_y + ICON_GRID_Y > avail_h) break;
+
+                const icon_drawn_size = icons.getIconTotalSize(2);
+                const ix = base_x + @divTrunc(ICON_GRID_X - icon_drawn_size, 2);
+                const iy = base_y;
+
+                if (x >= ix - 2 and x < ix + icon_drawn_size + 2 and
+                    y >= iy - 2 and y < iy + icon_drawn_size + 20) {
+                    const prev_hover = desktop_icon_hover_idx;
+                    desktop_icon_hover_idx = @as(i32, @intCast(icon_idx));
+                    if (prev_hover != desktop_icon_hover_idx) {
+                        desktop_ctx.needs_desktop_icons_repaint = true;
+                    }
+                    found_hover = true;
+                    break;
+                }
+                base_y += ICON_GRID_Y;
+            }
+            if (!found_hover and desktop_icon_hover_idx >= 0) {
+                desktop_icon_hover_idx = -1;
+                desktop_ctx.needs_desktop_icons_repaint = true;
+            }
+        } else if (desktop_icon_hover_idx >= 0) {
+            desktop_icon_hover_idx = -1;
+            desktop_ctx.needs_desktop_icons_repaint = true;
+        }
     }
 
     // 开始按钮 Orb 悬停跟踪
@@ -2439,6 +2513,42 @@ pub fn renderDesktopBackground(color: u32) void {
     fb.clearScreen(color);
 }
 
+// ── Desktop Icon State ──
+
+var desktop_icon_hover_idx: i32 = -1;
+var desktop_icon_selected_idx: i32 = -1;
+
+/// 根据桌面图标索引打开对应的应用
+fn openDesktopIcon(index: usize) void {
+    switch (index) {
+        0, 3, 8 => { // Computer, Network, User - 打开 C 盘视图
+            explorer_shell_state = .normal;
+            explorer_w2k_loc = .c_drive;
+            initWindowPosition(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
+        },
+        1 => { // Recycle Bin - 暂时不实现
+        },
+        2 => { // Documents - 打开 C 盘视图
+            explorer_shell_state = .normal;
+            explorer_w2k_loc = .c_drive;
+            initWindowPosition(@intCast(fb.getWidth()), @intCast(fb.getHeight()));
+        },
+        4 => { // Control Panel - 打开控制面板
+            builtin_apps.launch(.control_panel);
+        },
+        5 => { // Browser - 打开 IE 浏览器
+            builtin_apps.launch(.ie8);
+        },
+        6 => { // Terminal - 打开终端
+            builtin_apps.launch(.cmd_shell);
+        },
+        7 => { // Calculator - 打开计算器
+            builtin_apps.launch(.calculator);
+        },
+        else => {},
+    }
+}
+
 // ── Desktop Icons (with pixel art) ──
 
 const IconDef = struct {
@@ -2469,9 +2579,11 @@ pub fn renderDesktopIcons(scr_w: i32, scr_h: i32, t: *const ThemeColors) void {
     const icon_style: icons.ThemeStyle = .aero;
     const icon_defs: []const IconDef = desktop_icon_list_aero[0..];
 
-    for (icon_defs) |icon_def| {
+    for (icon_defs, 0..) |icon_def, icon_idx| {
         if (base_y + ICON_GRID_Y > avail_h) break;
-        renderOneIcon(base_x, base_y, icon_def, icon_scale, t, icon_style);
+        const is_hover = (@as(i32, @intCast(icon_idx)) == desktop_icon_hover_idx);
+        const is_selected = (@as(i32, @intCast(icon_idx)) == desktop_icon_selected_idx);
+        renderOneIcon(base_x, base_y, icon_def, icon_scale, t, icon_style, is_hover, is_selected);
         base_y += ICON_GRID_Y;
     }
 }
@@ -2484,12 +2596,20 @@ pub fn drawThemedIconForActiveTheme(id: icons.IconId, x: i32, y: i32, scale: u32
     icons.drawThemedIcon(id, x, y, scale, getActiveIconStyle());
 }
 
-fn renderOneIcon(x: i32, y: i32, icon_def: IconDef, scale: u32, t: *const ThemeColors, style: icons.ThemeStyle) void {
+fn renderOneIcon(x: i32, y: i32, icon_def: IconDef, scale: u32, t: *const ThemeColors, style: icons.ThemeStyle, is_hover: bool, is_selected: bool) void {
     const icon_drawn_size = icons.getIconTotalSize(scale);
     const ix = x + @divTrunc(ICON_GRID_X - icon_drawn_size, 2);
     const iy = y;
 
-    icons.drawThemedIcon(icon_def.id, ix, iy, scale, style, false);
+    // 悬停或选中状态背景
+    if (is_selected) {
+        fb.fillRect(x - 2, y - 2, ICON_GRID_X, icon_drawn_size + 20, rgb(0xC8, 0xE0, 0xF0));
+        fb.drawRect(x - 2, y - 2, ICON_GRID_X, icon_drawn_size + 20, rgb(0xA0, 0xC0, 0xE0));
+    } else if (is_hover) {
+        fb.fillRect(x - 2, y - 2, ICON_GRID_X, icon_drawn_size + 20, rgb(0xE8, 0xF0, 0xF8));
+    }
+
+    icons.drawThemedIcon(icon_def.id, ix, iy, scale, style, is_selected);
 
     if (icon_def.shortcut) {
         const ax = ix + icon_drawn_size - 10;
@@ -2504,8 +2624,13 @@ fn renderOneIcon(x: i32, y: i32, icon_def: IconDef, scale: u32, t: *const ThemeC
     const tx = x + @divTrunc(ICON_GRID_X - label_w, 2);
     const ty = iy + icon_drawn_size + 4;
 
+    // 标签背景（半透明）
+    fb.fillRect(x - 2, iy + icon_drawn_size, ICON_GRID_X, 20, rgb(0xF0, 0xF0, 0xF0));
+
+    // 选中时深蓝色文字，否则白色文字带阴影
+    const label_color: u32 = if (is_selected) rgb(0x00, 0x3C, 0x80) else t.icon_text;
     fb.drawTextTransparent(tx + 1, ty + 1, label, t.icon_text_shadow);
-    fb.drawTextTransparent(tx, ty, label, t.icon_text);
+    fb.drawTextTransparent(tx, ty, label, label_color);
 }
 
 // ── Taskbar ──
@@ -3672,47 +3797,110 @@ fn flip3dPaintSurfaceThumb(dst_x: i32, dst_y: i32, scale: i32, sid_opt: ?u16) vo
 /// Flip3D 覆盖层：**专用合成模式** — 激活时 `renderSceneWithoutSoftwareCursorFlip3dAware` 在 `flip3d_needs_scene_refresh==false` 下冻结壁纸采样，仅叠本层 + 光标；首帧打开或需刷新背景时置 `flip3d_needs_scene_refresh`。
 /// **性能模型**：仍走桌面主合成节拍（非独立 Win7 级帧预算）；冻结壁纸主要为减采样而非停调度。
 /// CPU 预算：本函数内多卡片为 O(缩略像素×scale)；勿在此调用全屏 `boxBlur`。
+/// 透视投影：使用简单的 Y 轴旋转近似（缩放+偏移），从 Z 序底部向上堆叠。
 fn renderFlip3dOverlay(scr_w: i32, scr_h: i32) void {
     const nt61_aero = @import("nt61_aero_defaults");
     if (!nt61_aero.KernelCompositor.flip3d_enabled) return;
-    const t = theme_mod.getActiveTheme();
+    _ = theme_mod.getActiveTheme(); // 确保 theme 模块被引用
+
+    // 全屏暗化背景
     fb.blendTintRect(0, 0, scr_w, scr_h, rgb(0x08, 0x10, 0x20), 165, 220);
-    const wr = getWindowRect(scr_w, scr_h);
-    const cx = @divTrunc(scr_w, 2) - 120;
-    const cy = @divTrunc(scr_h, 2) - 100;
-    fb.fillRoundedRect(cx + 28, cy + 24, 220, 160, 10, rgb(0x20, 0x30, 0x48));
-    fb.fillRoundedRect(cx, cy, 220, 160, 10, t.window_bg);
-    fb.drawRect(cx, cy, 220, 160, rgb(0xA8, 0xC8, 0xE8));
-    fb.drawTextTransparentUi(cx + 10, cy + 8, "Explorer", t.titlebar_text);
-    flip3dPaintSurfaceThumb(cx + 14, cy + 40, 3, explorer_dwm_surface_id);
-    _ = wr;
-    initTaskMgrPosition(scr_w, scr_h);
-    if (taskmgr_shell_state != .minimized) {
-        const w2 = @divTrunc(taskmgr_w * 2, 3);
-        const h2 = @divTrunc(taskmgr_h * 2, 3);
-        fb.fillRoundedRect(cx + 40, cy + 40, w2, h2, 8, t.window_bg);
-        fb.drawRect(cx + 40, cy + 40, w2, h2, rgb(0x88, 0xA8, 0xC8));
-        fb.drawTextTransparentUi(cx + 48, cy + 48, "TaskMgr", t.titlebar_text);
-        flip3dPaintSurfaceThumb(cx + 48, cy + 56, 2, taskmgr_dwm_surface_id);
-    }
-    // `collectShellWindowSurfaceIds`：多表面缩略条（与 user32 窗体表面并存；降级为 0 张时仅保留上方面孔卡片）。
+
+    // 从 DWM compositor 获取窗口表面，按 Z 序排序（低 Z 在底部）
     var shell_sids: [dwm_comp.flip3d_shell_sid_buffer_cap]u16 = undefined;
-    const n_shell = dwm_comp.collectShellWindowSurfaceIds(&shell_sids);
-    var si: usize = 0;
-    const max_preview = @min(dwm_comp.flip3d_shell_thumb_paint_max, n_shell);
-    const focus_si: usize = if (n_shell > 0) @as(usize, @intCast(flip3d_shell_tab_index % n_shell)) else 0;
-    const th_scale: i32 = 2;
-    const tw_px: i32 = @intCast(dwm_comp.surface_thumb_w);
-    const th_px: i32 = @intCast(dwm_comp.surface_thumb_h);
-    while (si < max_preview) : (si += 1) {
-        const x0 = cx - 70 + @as(i32, @intCast(si * 52));
-        const y0 = cy + 118;
-        flip3dPaintSurfaceThumb(x0, y0, th_scale, shell_sids[si]);
-        if (n_shell > 0 and si == focus_si) {
-            fb.drawRect(x0 - 2, y0 - 2, tw_px * th_scale + 4, th_px * th_scale + 4, rgb(0xFF, 0xCC, 0x40));
+    const n_windows = dwm_comp.collectShellWindowSurfaceIds(&shell_sids);
+
+    // 卡片几何参数
+    const base_card_w: i32 = 240;
+    const base_card_h: i32 = 180;
+    const card_count: i32 = @intCast(@max(n_windows, 1));
+    const cx = @divTrunc(scr_w, 2);
+    const base_y = @divTrunc(scr_h, 2) - 50;
+    const stack_spacing: f32 = 0.18; // Y 轴旋转角度步进（弧度）
+    const tab_bar_h: i32 = 40;
+    const tab_bar_y = scr_h - tab_bar_h;
+
+    // 底部 Tab 栏背景
+    fb.fillRect(0, tab_bar_y, scr_w, tab_bar_h, rgb(0x18, 0x20, 0x30));
+    fb.blendTintRect(0, tab_bar_y, scr_w, 1, rgb(0x40, 0x50, 0x70), 180, 200);
+
+    // 聚焦索引（高亮）
+    const n_w32: u32 = @as(u32, @intCast(@as(i32, @intCast(n_windows))));
+    const focus_idx: usize = if (n_windows > 0) @as(usize, @intCast(flip3d_shell_tab_index % n_w32)) else 0;
+
+    // 从后向前渲染卡片（索引大的在后，索引小的在前）
+    // flip3d_tab_index 在 tab 栏中循环，每次 +1 表示选择下一个窗口
+    var rendered_cards: usize = 0;
+    var si: i32 = card_count - 1;
+    while (si >= 0) : (si -= 1) {
+        // 该表面在 shell_sids 中的实际索引
+        const sid_idx = if (n_windows > 0) @as(usize, @intCast(si)) else 0;
+        const sid = if (sid_idx < n_windows) shell_sids[sid_idx] else 0;
+
+        // Y 轴旋转角度（从 -stack_angle 到 +stack_angle）
+        const angle: f32 = @as(f32, @floatFromInt(si)) * stack_spacing - @as(f32, @floatFromInt(card_count - 1)) * stack_spacing * 0.5;
+        const cos_a: f32 = @cos(angle);
+
+        // 透视缩放：角度越大（越靠边）缩放越小
+        const scale = 0.5 + 0.5 * @abs(cos_a);
+        const card_w: i32 = @intFromFloat(@as(f32, @floatFromInt(base_card_w)) * scale);
+        const card_h: i32 = @intFromFloat(@as(f32, @floatFromInt(base_card_h)) * scale);
+
+        // 水平偏移（旋转效果）
+        const x_offset: i32 = @intFromFloat(180.0 * @sin(angle));
+        const card_x = cx - @divTrunc(card_w, 2) + x_offset;
+
+        // 垂直偏移（卡片深度位置）
+        const y_offset: i32 = @intFromFloat(40.0 * (1.0 - scale));
+        const card_y = base_y - @divTrunc(card_h, 2) - y_offset;
+
+        // 阴影（越在后面的卡片阴影越淡）
+        if (scale > 0.6) {
+            const shadow_alpha: u8 = @intFromFloat(80.0 * (scale - 0.5) * 2.0);
+            const shadow_x: i32 = card_x + 4 + @divTrunc(x_offset, 4);
+            const shadow_y: i32 = card_y + 4;
+            fb.fillRoundedRect(shadow_x, shadow_y, card_w, card_h, 8, rgb(0x08, 0x10, 0x20));
+            fb.blendTintRect(shadow_x, shadow_y, card_w, card_h, rgb(0x00, 0x00, 0x00), shadow_alpha, 180);
         }
+
+        // 卡片背景
+        const card_bg = if (sid_idx == focus_idx) rgb(0x30, 0x40, 0x60) else rgb(0x20, 0x28, 0x40);
+        fb.fillRoundedRect(card_x, card_y, card_w, card_h, 6, card_bg);
+        fb.drawRect(card_x, card_y, card_w, card_h, rgb(0x70, 0x90, 0xC0));
+
+        // 标题栏
+        const titlebar_h: i32 = @max(16, @divTrunc(card_h, 8));
+        const title_bg = if (sid_idx == focus_idx) rgb(0x40, 0x58, 0x80) else rgb(0x30, 0x40, 0x58);
+        fb.fillRect(card_x, card_y, card_w, titlebar_h, title_bg);
+
+        // 窗口内容预览（缩略图）
+        const preview_scale: i32 = @max(1, @divTrunc(card_w, 20));
+        flip3dPaintSurfaceThumb(card_x + 4, card_y + titlebar_h + 4, preview_scale, sid);
+
+        // Tab 栏缩略图标
+        const thumb_w: i32 = 32;
+        const thumb_h: i32 = 24;
+        const thumb_spacing: i32 = 8;
+        const n_thumbs: i32 = @as(i32, @intCast(n_windows));
+        const total_thumb_w: i32 = n_thumbs * thumb_w + (n_thumbs - 1) * thumb_spacing;
+        var thumb_start_x: i32 = cx - @divTrunc(total_thumb_w, 2);
+        var ti: usize = 0;
+        while (ti < n_windows) : (ti += 1) {
+            const tx: i32 = thumb_start_x + @as(i32, @intCast(ti)) * (thumb_w + thumb_spacing);
+            const ty: i32 = tab_bar_y + @divTrunc(tab_bar_h - thumb_h, 2);
+            if (ti == focus_idx) {
+                fb.fillRect(tx - 2, ty - 2, thumb_w + 4, thumb_h + 4, rgb(0xFF, 0xCC, 0x40));
+            }
+            flip3dPaintSurfaceThumb(tx, ty, 2, shell_sids[ti]);
+            thumb_start_x += thumb_spacing;
+        }
+
+        rendered_cards += 1;
+        if (rendered_cards >= 8) break; // 最多渲染 8 个卡片
     }
-    fb.drawTextTransparentUi(@divTrunc(scr_w, 2) - 60, 24, "Flip3D (Alt+Tab) — Esc close — CPU preview", rgb(0xE8, 0xF0, 0xFF));
+
+    // 说明文字
+    fb.drawTextTransparentUi(@divTrunc(scr_w, 2) - 80, 16, "Flip3D — Alt+Tab — Esc close", rgb(0xD0, 0xE0, 0xFF));
 }
 
 fn hitTestTaskMgrTrayChip(px: i32, py: i32) bool {

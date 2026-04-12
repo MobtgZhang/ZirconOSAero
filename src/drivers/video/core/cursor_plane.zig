@@ -94,9 +94,13 @@ pub fn composeAfterScene(cursor_visible: bool, cx: i32, cy: i32, kind: cursor_ro
         return;
     }
     if (!cursor_visible) {
+        // 旧位置也需要加入脏区，避免残留
+        markMotionDirty(sw_cursor_sx, sw_cursor_sy, cx, cy);
         invalidate();
         return;
     }
+    // 旧位置与新位置都加入脏区（快速移动时防止残留）
+    markMotionDirty(sw_cursor_sx, sw_cursor_sy, cx, cy);
     const ext = softwareCursorExtent(cx, cy);
     sw_cursor_saved_len = fb.copyDrawBufferRectBytes(ext.x, ext.y, ext.w, ext.h, &sw_cursor_saved);
     sw_cursor_sx = ext.x;

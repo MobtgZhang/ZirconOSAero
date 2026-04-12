@@ -11,7 +11,9 @@ const la = @import("loongarch_tcg_mem.zig");
 const zto = @import("zbm_text_out.zig");
 const zcall = @import("zbm_uefi_calls.zig");
 
-const KeyInput = uefi.protocol.SimpleTextInput.Key.Input;
+/// 统一的按键输入结构：适配 SimpleTextInput（普通键）和 SimpleTextInputEx（方向键/扩展键）
+/// SimpleTextInputEx.Key 包含 .input (unicode+scan_code) 和 .state (shift/toggle 状态)
+pub const KeyInput = uefi.protocol.SimpleTextInputEx.Key;
 
 pub const ZBM_VERSION = "6.1";
 pub const DEFAULT_TIMEOUT: u32 = 10;
@@ -34,18 +36,18 @@ pub const BootEntry = struct {
 pub const KERNEL_PATH = "\\boot\\kernel.elf";
 
 /// UEFI Simple Text Input scan codes (see UEFI spec / EDK2 SimpleTextIn.h).
-const SCAN_UP = 0x01;
-const SCAN_DOWN = 0x02;
-const SCAN_HOME = 0x05;
-const SCAN_END = 0x06;
-const SCAN_PAGE_UP = 0x09;
-const SCAN_PAGE_DOWN = 0x0A;
-const SCAN_F8 = 0x12;
-const SCAN_ESC = 0x17;
-const SCAN_UP_EXT = 0x48;
-const SCAN_DOWN_EXT = 0x50;
-const UNICODE_UP: u21 = 0x2191;
-const UNICODE_DOWN: u21 = 0x2193;
+pub const SCAN_UP = 0x01;
+pub const SCAN_DOWN = 0x02;
+pub const SCAN_HOME = 0x05;
+pub const SCAN_END = 0x06;
+pub const SCAN_PAGE_UP = 0x09;
+pub const SCAN_PAGE_DOWN = 0x0A;
+pub const SCAN_F8 = 0x12;
+pub const SCAN_ESC = 0x17;
+pub const SCAN_UP_EXT = 0x48;
+pub const SCAN_DOWN_EXT = 0x50;
+pub const UNICODE_UP: u21 = 0x2191;
+pub const UNICODE_DOWN: u21 = 0x2193;
 
 pub const MenuFocus = enum { os_list, tools_list };
 
@@ -181,43 +183,43 @@ pub fn runMenuLoop(
                 zto.outputString(out, @as([*:0]const u16, @ptrCast(&SPACES_79_U16)));
                 zto.setCursorPosition(out, 0, dbg_row);
                 puts(out, "    [dbg] scan=");
-                printDecimal(out, key.scan_code);
+                printDecimal(out, key.input.scan_code);
                 puts(out, " unicode=");
-                printDecimal(out, @as(u32, key.unicode_char));
+                printDecimal(out, @as(u32, key.input.unicode_char));
                 if (g_text_in_ex == null) {
                     puts(out, " [NoSimpleTextInputEx]");
                 }
                 puts(out, "            ");
                 zto.setCursorPosition(out, 0, 3);
 
-                if (key.unicode_char == '\t') {
+                if (key.input.unicode_char == '\t') {
                     menu_focus = if (menu_focus == .os_list) .tools_list else .os_list;
                     need_full_redraw = true;
                     continue;
                 }
 
-                if (key.scan_code == SCAN_ESC) {
+                if (key.input.scan_code == SCAN_ESC) {
                     return .{ .cancel = {} };
                 }
 
-                if (key.scan_code == SCAN_F8) {
+                if (key.input.scan_code == SCAN_F8) {
                     return .{ .show_advanced = {} };
                 }
 
-                const is_up = key.scan_code == SCAN_UP or key.scan_code == SCAN_UP_EXT or
-                    key.scan_code == SCAN_PAGE_UP or key.scan_code == SCAN_HOME or
-                    key.unicode_char == UNICODE_UP or key.unicode_char == 'k' or key.unicode_char == 'w';
-                const is_down = key.scan_code == SCAN_DOWN or key.scan_code == SCAN_DOWN_EXT or
-                    key.scan_code == SCAN_PAGE_DOWN or key.scan_code == SCAN_END or
-                    key.unicode_char == UNICODE_DOWN or key.unicode_char == 'j' or key.unicode_char == 's';
+                const is_up = key.input.scan_code == SCAN_UP or key.input.scan_code == SCAN_UP_EXT or
+                    key.input.scan_code == SCAN_PAGE_UP or key.input.scan_code == SCAN_HOME or
+                    key.input.unicode_char == UNICODE_UP or key.input.unicode_char == 'k' or key.input.unicode_char == 'w';
+                const is_down = key.input.scan_code == SCAN_DOWN or key.input.scan_code == SCAN_DOWN_EXT or
+                    key.input.scan_code == SCAN_PAGE_DOWN or key.input.scan_code == SCAN_END or
+                    key.input.unicode_char == UNICODE_DOWN or key.input.unicode_char == 'j' or key.input.unicode_char == 's';
 
                 if (menu_focus == .tools_list) {
-                    if (key.scan_code == SCAN_HOME) {
+                    if (key.input.scan_code == SCAN_HOME) {
                         tool_selected = 0;
                         redrawToolRows(out);
                         continue;
                     }
-                    if (key.scan_code == SCAN_END and tool_descriptions.len > 0) {
+                    if (key.input.scan_code == SCAN_END and tool_descriptions.len > 0) {
                         tool_selected = tool_descriptions.len - 1;
                         redrawToolRows(out);
                         continue;
@@ -232,7 +234,7 @@ pub fn runMenuLoop(
                         redrawToolRows(out);
                         continue;
                     }
-                    if (key.unicode_char == '\r' or key.unicode_char == '\n') {
+                    if (key.input.unicode_char == '\r' or key.input.unicode_char == '\n') {
                         showToolPlaceholderScreen(out, cin);
                         need_full_redraw = true;
                         continue;
@@ -241,12 +243,12 @@ pub fn runMenuLoop(
                 }
 
                 // OS 列表焦点：每次移动只重绘条目行（与 Win7 高亮一致）
-                if (key.scan_code == SCAN_HOME) {
+                if (key.input.scan_code == SCAN_HOME) {
                     selected = 0;
                     redrawOsEntryRows(out);
                     continue;
                 }
-                if (key.scan_code == SCAN_END and entry_count > 0) {
+                if (key.input.scan_code == SCAN_END and entry_count > 0) {
                     selected = entry_count - 1;
                     redrawOsEntryRows(out);
                     continue;
@@ -261,11 +263,12 @@ pub fn runMenuLoop(
                     redrawOsEntryRows(out);
                     continue;
                 }
-                if (key.unicode_char == '\r' or key.unicode_char == '\n') {
+                if (key.input.unicode_char == '\r' or key.input.unicode_char == '\n') {
                     break;
                 }
-                if (key.unicode_char >= '1' and key.unicode_char <= '0' + MAX_ENTRIES) {
-                    const idx: usize = @intCast(key.unicode_char - '1');
+                // 数字键 '1' 到 '8' 选择对应的引导条目
+                if (key.input.unicode_char >= '1' and key.input.unicode_char <= '8') {
+                    const idx: usize = @intCast(key.input.unicode_char - '1');
                     if (idx < entry_count) {
                         selected = idx;
                         break;
@@ -298,7 +301,36 @@ pub fn runMenuLoop(
 }
 
 fn readKeyStrokeSimple(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
-    return zcall.readKeyStrokeSimple(cin);
+    if (zcall.readKeyStrokeSimple(cin)) |simple_key| {
+        // 将 SimpleTextInput.Key 转换为 SimpleTextInputEx.Key
+        // 填充默认值，这样普通字符键也能被正确处理
+        return .{
+            .input = simple_key,
+            .state = .{
+                .shift = .{
+                    .right_shift_pressed = false,
+                    .left_shift_pressed = false,
+                    .right_control_pressed = false,
+                    .left_control_pressed = false,
+                    .right_alt_pressed = false,
+                    .left_alt_pressed = false,
+                    .right_logo_pressed = false,
+                    .left_logo_pressed = false,
+                    .menu_key_pressed = false,
+                    .sys_req_pressed = false,
+                    .shift_state_valid = false,
+                },
+                .toggle = .{
+                    .scroll_lock_active = false,
+                    .num_lock_active = false,
+                    .caps_lock_active = false,
+                    .key_state_exposed = false,
+                    .toggle_state_valid = false,
+                },
+            },
+        };
+    }
+    return null;
 }
 
 fn tryReadKeyUnified(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
@@ -307,9 +339,9 @@ fn tryReadKeyUnified(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
     if (builtin.cpu.arch == .loongarch64 or builtin.cpu.arch == .x86_64) {
         // 关键修复：先尝试 SimpleTextInputEx（方向键必须从这获取）
         if (g_text_in_ex) |ex| {
-            if (zcall.readKeyStrokeEx(ex)) |full| return full.input;
+            if (zcall.readKeyStrokeEx(ex)) |full| return full;
             if (zcall.checkEventSignaled(bs, ex.wait_for_key_ex)) {
-                if (zcall.readKeyStrokeEx(ex)) |full| return full.input;
+                if (zcall.readKeyStrokeEx(ex)) |full| return full;
             }
         }
         // 普通读取兜底：Enter/ESC/数字键/TAB 等字符键
@@ -322,10 +354,10 @@ fn tryReadKeyUnified(cin: *uefi.protocol.SimpleTextInput) ?KeyInput {
     // 其他架构：原逻辑
     if (g_text_in_ex) |ex| {
         if (zcall.readKeyStrokeEx(ex)) |full| {
-            return full.input;
+            return full;
         }
         if (zcall.checkEventSignaled(bs, ex.wait_for_key_ex)) {
-            if (zcall.readKeyStrokeEx(ex)) |full| return full.input;
+            if (zcall.readKeyStrokeEx(ex)) |full| return full;
         }
     }
     if (readKeyStrokeSimple(cin)) |k| return k;
@@ -471,7 +503,7 @@ fn drawFooterBar(out: anytype) void {
     putsRuntime(out, right);
 }
 
-fn redrawOsEntryRows(out: anytype) void {
+pub fn redrawOsEntryRows(out: anytype) void {
     var i: usize = 0;
     while (i < entry_count) : (i += 1) {
         const row = rowEntryFirst() + i;
@@ -499,7 +531,7 @@ fn redrawOsEntryRows(out: anytype) void {
     }
 }
 
-fn redrawToolRows(out: anytype) void {
+pub fn redrawToolRows(out: anytype) void {
     const base = rowToolsFirst();
     var t: usize = 0;
     while (t < tool_descriptions.len) : (t += 1) {
@@ -599,7 +631,7 @@ pub fn displayBootManagerMenu(out: anytype, arch_name: []const u8, debug_mode: b
     zto.enableCursor(out, false);
 }
 
-fn showToolPlaceholderScreen(out: anytype, cin: ?*const anyopaque) void {
+pub fn showToolPlaceholderScreen(out: anytype, cin: ?*const anyopaque) void {
     zto.reset(out, false);
     zto.setAttribute(out, Attr.normal);
     puts(out, "\r\n");

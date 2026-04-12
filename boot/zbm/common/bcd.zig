@@ -186,8 +186,33 @@ pub const BcdStore = struct {
             .default_index = 0,
             .timeout_seconds = 10,
         };
+        // 默认情况下使用内置默认条目
         store.populateDefaultEntries();
         return store;
+    }
+
+    /// 初始化并尝试从文件加载配置（UEFI 路径使用）
+    /// 如果文件加载失败，使用默认配置
+    pub fn initWithFileLoad(comptime RootType: type) fn (root: *RootType) BcdStore {
+        return struct {
+            fn initFn(root: *RootType) BcdStore {
+                var store = BcdStore{
+                    .magic = BCD_MAGIC,
+                    .version = BCD_VERSION,
+                    .object_count = 0,
+                    .objects = undefined,
+                    .default_index = 0,
+                    .timeout_seconds = 10,
+                };
+                // 默认配置
+                store.populateDefaultEntries();
+                // 尝试从文件加载
+                if (loadFromFile(&store, root)) {
+                    // 成功从文件加载
+                }
+                return store;
+            }
+        }.initFn;
     }
 
     fn populateDefaultEntries(self: *BcdStore) void {
@@ -325,3 +350,268 @@ pub const BcdStore = struct {
         return "console=serial,vga debug=0";
     }
 };
+
+// ── BCD 持久化存储 ──
+
+/// BCD 文件头（用于持久化存储）
+const BcdFileHeader = packed struct {
+    magic: u32,
+    version: u16,
+    reserved: u16,
+    checksum: u32,
+    object_count: u16,
+    data_size: u32,
+};
+
+/// BCD 持久化签名（用于验证）
+const BCD_PERSIST_MAGIC: u32 = 0x42434450; // 'BCDP'
+
+/// 计算 BCD 数据的简单校验和
+fn calculateBcdChecksum(data: []const u8) u32 {
+    var sum: u32 = 0;
+    for (data) |byte| {
+        sum = sum +% @as(u32, byte);
+    }
+    return sum;
+}
+
+/// 从 UEFI 文件系统加载 BCD 配置
+/// 返回 true 表示成功加载，false 表示使用默认配置
+pub fn loadFromFile(
+    store: *BcdStore,
+    root: anytype,
+) bool {
+    const BCD_FILE_PATH = "/EFI/ZirconOS/bcd.dat";
+
+    const file = root.open(
+        BCD_FILE_PATH,
+        .read,
+        .{},
+    ) catch return false;
+    defer { _ = file.close(); }
+
+    // 读取文件头
+    var header_buf: [@sizeOf(BcdFileHeader)]u8 align(8) = undefined;
+    const header_bytes = file.read(&header_buf) catch return false;
+    if (header_bytes < @sizeOf(BcdFileHeader)) return false;
+
+    const header = @as(*const BcdFileHeader, @ptrCast(&header_buf)).*;
+
+    // 验证文件头
+    if (header.magic != BCD_PERSIST_MAGIC) return false;
+    if (header.version != BCD_VERSION) return false;
+
+    // 读取数据
+    const data_size: usize = @intCast(header.data_size);
+    const data = file.readAlloc(.loader_data, data_size) catch return false;
+
+    // 验证校验和
+    const checksum = calculateBcdChecksum(data);
+    if (checksum != header.checksum) return false;
+
+    // 解析数据
+    if (!parseBcdData(store, data)) return false;
+
+    return true;
+}
+
+/// 解析 BCD 数据
+fn parseBcdData(store: *BcdStore, data: []const u8) bool {
+    var offset: usize = 0;
+
+    // 解析对象计数
+    if (offset + 2 > data.len) return false;
+    const obj_count = @as(u16, @bitCast(std.mem.readInt(u16, data[offset..][0..2], .little)));
+    offset += 2;
+
+    store.object_count = @min(obj_count, MAX_OBJECTS);
+
+    // 解析每个对象
+    var i: usize = 0;
+    while (i < store.object_count) : (i += 1) {
+        if (offset + 16 > data.len) return false;
+
+        var obj = &store.objects[i];
+        obj.* = .{};
+
+        // 解析对象类型
+        obj.object_type = @as(ObjectType, @bitCast(std.mem.readInt(u32, data[offset..][0..4], .little)));
+        offset += 4;
+
+        // 跳过 GUID
+        offset += 16;
+
+        // 解析描述
+        const desc_len = @min(64, data.len - offset);
+        @memcpy(obj.description[0..desc_len], data[offset..][0..desc_len]);
+        offset += desc_len;
+
+        // 解析元素计数
+        if (offset + 1 > data.len) return false;
+        obj.element_count = @as(u8, data[offset]);
+        offset += 1;
+        obj.element_count = @min(obj.element_count, MAX_ELEMENTS);
+
+        // 解析元素
+        var j: usize = 0;
+        while (j < obj.element_count) : (j += 1) {
+            if (offset + 8 > data.len) break;
+
+            var elem = &obj.elements[j];
+            elem.element_type = @as(ElementType, @bitCast(std.mem.readInt(u32, data[offset..][0..4], .little)));
+            offset += 4;
+
+            elem.data_type = @as(BcdElement.DataType, @bitCast(data[offset]));
+            offset += 1;
+
+            // 跳过填充
+            offset += 3;
+
+            // 解析数据
+            switch (elem.data_type) {
+                .integer => {
+                    if (offset + 8 > data.len) break;
+                    elem.data = .{ .integer = std.mem.readInt(u64, data[offset..][0..8], .little) };
+                    offset += 8;
+                },
+                .boolean => {
+                    if (offset + 1 > data.len) break;
+                    elem.data = .{ .boolean = data[offset] != 0 };
+                    offset += 1;
+                },
+                .string => {
+                    const str_len = @min(128, data.len - offset);
+                    @memcpy(elem.data.string[0..str_len], data[offset..][0..str_len]);
+                    offset += str_len;
+                },
+                else => break,
+            }
+        }
+        obj.element_count = j;
+    }
+
+    store.object_count = i;
+    return true;
+}
+
+/// 将 BCD 配置保存到 UEFI 文件系统
+/// 返回 true 表示成功保存
+pub fn saveToFile(
+    store: *const BcdStore,
+    root: anytype,
+) bool {
+    const BCD_FILE_PATH = "/EFI/ZirconOS/bcd.dat";
+    const BCD_BACKUP_PATH = "/EFI/ZirconOS/bcd.bak";
+
+    // 先备份旧文件
+    _ = root.delete(BCD_BACKUP_PATH);
+    _ = root.rename(
+        BCD_FILE_PATH,
+        BCD_BACKUP_PATH,
+    );
+
+    // 序列化 BCD 数据
+    var data_buf: [4096]u8 = undefined;
+    const data_len = serializeBcdData(store, &data_buf);
+
+    // 写入文件
+    const file = root.open(
+        BCD_FILE_PATH,
+        .write,
+        .{ .create = true, .truncate = true },
+    ) catch return false;
+    defer { _ = file.close(); }
+
+    // 写入文件头
+    var header: BcdFileHeader = .{
+        .magic = BCD_PERSIST_MAGIC,
+        .version = BCD_VERSION,
+        .reserved = 0,
+        .checksum = calculateBcdChecksum(data_buf[0..data_len]),
+        .object_count = @as(u16, @intCast(store.object_count)),
+        .data_size = @as(u32, @intCast(data_len)),
+    };
+
+    var header_buf: [@sizeOf(BcdFileHeader)]u8 align(8) = undefined;
+    @memcpy(header_buf[0..@sizeOf(BcdFileHeader)], @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BcdFileHeader)]);
+    file.write(&header_buf) catch return false;
+
+    // 写入数据
+    file.write(data_buf[0..data_len]) catch return false;
+
+    return true;
+}
+
+/// 序列化 BCD 数据
+fn serializeBcdData(store: *const BcdStore, dest: []u8) usize {
+    var offset: usize = 0;
+
+    // 写入对象计数
+    std.mem.writeInt(u16, dest[offset..][0..2], @as(u16, @intCast(store.object_count)), .little);
+    offset += 2;
+
+    // 写入每个对象
+    var i: usize = 0;
+    while (i < store.object_count) : (i += 1) {
+        const obj = &store.objects[i];
+
+        // 写入对象类型
+        std.mem.writeInt(u32, dest[offset..][0..4], @intFromEnum(obj.object_type), .little);
+        offset += 4;
+
+        // 写入 GUID（全零）
+        @memset(dest[offset..][0..16], 0);
+        offset += 16;
+
+        // 写入描述
+        const desc_len = @min(64, dest.len - offset);
+        @memcpy(dest[offset..][0..desc_len], obj.description[0..desc_len]);
+        offset += desc_len;
+
+        // 写入元素计数
+        if (offset < dest.len) dest[offset] = @as(u8, @intCast(obj.element_count));
+        offset += 1;
+
+        // 写入元素
+        var j: usize = 0;
+        while (j < obj.element_count) : (j += 1) {
+            const elem = &obj.elements[j];
+
+            // 检查空间
+            if (offset + 8 > dest.len) break;
+
+            std.mem.writeInt(u32, dest[offset..][0..4], @intFromEnum(elem.element_type), .little);
+            offset += 4;
+
+            dest[offset] = @intFromEnum(elem.data_type);
+            offset += 1;
+
+            // 填充
+            dest[offset] = 0;
+            dest[offset + 1] = 0;
+            dest[offset + 2] = 0;
+            offset += 3;
+
+            switch (elem.data_type) {
+                .integer => {
+                    if (offset + 8 > dest.len) break;
+                    std.mem.writeInt(u64, dest[offset..][0..8], elem.data.integer, .little);
+                    offset += 8;
+                },
+                .boolean => {
+                    if (offset + 1 > dest.len) break;
+                    dest[offset] = if (elem.data.boolean) 1 else 0;
+                    offset += 1;
+                },
+                .string => {
+                    const str_len = @min(128, dest.len - offset);
+                    @memcpy(dest[offset..][0..str_len], elem.data.string[0..str_len]);
+                    offset += str_len;
+                },
+                else => break,
+            }
+        }
+    }
+
+    return offset;
+}

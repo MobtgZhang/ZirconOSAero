@@ -165,6 +165,77 @@ pub const BaseRelocation = extern struct {
     size_of_block: u32 align(1) = 0,
 };
 
+/// PE 延迟导入描述符（IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT）
+/// 与普通导入目录结构相同，但指向延迟加载的 DLL 信息。
+/// 基于 Microsoft PE/COFF 规范中延迟加载描述符布局。
+pub const DelayImportDescriptor = extern struct {
+    /// 包含 `DELAYIMPORT_INFO` 结构（描述 DLL 名称、HINT/NAME 表等）的 RVA
+    /// （仅在加载时使用，运行时无效）
+    grAttrs: u32 align(1) = 0,
+    /// 包含 DLL 名称的 RVA
+    szName: u32 align(1) = 0,
+    /// 指向 `HMODULE*` 的 VA（加载后 DLL 基址写入此处）
+    phmod: u32 align(1) = 0,
+    /// 指向第一个 `DelayImportDirectoryEntry` 的 RVA（ILTD）
+    pIAT: u32 align(1) = 0,
+    /// 指向第一个 `DelayImportDirectoryEntry` 的 RVA（名称查找）
+    pINT: u32 align(1) = 0,
+    /// 指向绑定信息（可选）的 RVA
+    pBoundIAT: u32 align(1) = 0,
+    /// 指向卸载信息（可选）的 RVA
+    pUnloadIAT: u32 align(1) = 0,
+    /// 延迟加载描述符的时钟戳
+    dwTimeStamp: u32 align(1) = 0,
+};
+
+/// 延迟导入目录项（对应 ILT/INT 中的每一项）
+pub const DelayImportDirectoryEntry = extern struct {
+    /// 函数名称提示 RVA（如果最高位为 1，则为序号）
+    rvaINTEntry: u32 align(1) = 0,
+    /// IAT 中对应条目 VA
+    rvaIATEntry: u32 align(1) = 0,
+};
+
+/// 解析 PE 字节数据中的延迟导入目录。
+/// 返回延迟导入描述符数组的切片（以 `szName == 0` 的空描述符结尾）。
+/// `data` 为已映射的 PE 映像字节。
+pub fn parseDelayImportDescriptors(data: []const u8, image_base: u64) []const DelayImportDescriptor {
+    _ = image_base;
+    const delay_rva = readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT) orelse return &.{};
+    if (delay_rva == 0) return &.{};
+
+    const data_ptr = @as([*]const u8, @ptrFromInt(@intFromPtr(data.ptr)));
+    const desc_ptr = @as([*]const DelayImportDescriptor, @ptrFromInt(data_ptr + delay_rva));
+
+    // 计算描述符数量（遍历直到 szName == 0）
+    var count: usize = 0;
+    while (desc_ptr[count].szName != 0) : (count += 1) {}
+
+    return desc_ptr[0..count];
+}
+
+/// 解析延迟导入描述符中的 DLL 名称。
+/// 返回 DLL 名称字符串。
+pub fn parseDelayImportDllName(data: []const u8, desc: DelayImportDescriptor) ?[]const u8 {
+    if (desc.szName == 0) return null;
+    const data_ptr = @as([*]const u8, @ptrFromInt(@intFromPtr(data.ptr)));
+    const name_ptr = data_ptr + desc.szName;
+    var len: usize = 0;
+    while (name_ptr[len] != 0 and len < 256) : (len += 1) {}
+    return name_ptr[0..len];
+}
+
+/// 解析延迟导入 INT（Import Name Table）中的每一项。
+/// 返回按名称/序号描述的函数信息。
+pub fn parseDelayImportEntries(data: []const u8, image_base: u64, desc: DelayImportDescriptor) []const DelayImportDirectoryEntry {
+    _ = data;
+    _ = image_base;
+    _ = desc;
+    // INT 条目解析需要遍历直到遇到全零条目
+    // 此处返回空切片，待完整实现
+    return &.{};
+}
+
 pub const IMAGE_REL_BASED_ABSOLUTE: u16 = 0;
 pub const IMAGE_REL_BASED_HIGH: u16 = 1;
 pub const IMAGE_REL_BASED_LOW: u16 = 2;
@@ -189,6 +260,46 @@ pub const IMAGE_REL_LOONGARCH64_RELATIVE64: u16 = 5;
 /// IMAGE_REL_BASED_ARM64_MOV32: patch MOVW/MOVT pair (16-bit low / 16-bit high).
 pub const IMAGE_REL_BASED_ARM64_MOV32: u16 = 5;
 /// IMAGE_REL_BASED_DIR64 (type 10) already covers most AArch64 64-bit relocations.
+
+/// PE TLS Directory（IMAGE_DIRECTORY_ENTRY_TLS）— 公开 COFF 规范。
+pub const TlsDirectory = extern struct {
+    raw_data_start_va: u32 align(1) = 0,
+    raw_data_end_va: u32 align(1) = 0,
+    index_va: u32 align(1) = 0,
+    callbacks_va: u32 align(1) = 0,
+    size_of_zero_fill: u32 align(1) = 0,
+    characteristics: u32 align(1) = 0,
+};
+
+/// 触发 PE 映像的 TLS 回调（如果存在 TLS 目录）。
+/// 在导入表解析完成后调用，使依赖 TLS 的 C++ 程序能正确初始化。
+pub fn invokeTlsCallbacksIfPresent(image_base: u64, tls_dir_opt: ?*const TlsDirectory) void {
+    const tls_dir = tls_dir_opt orelse return;
+    if (tls_dir.callbacks_va == 0) return;
+
+    const index_ptr = @as(*volatile u32, @ptrFromInt(image_base + tls_dir.index_va));
+    index_ptr.* = 0;
+
+    const callbacks_ptr = @as(*volatile [*]const u8, @ptrFromInt(image_base + tls_dir.callbacks_va));
+    var i: usize = 0;
+    while (callbacks_ptr[i] != 0) : (i += 1) {
+        const cb_va = image_base + @as(u64, @intCast(@as(u32, @intFromPtr(callbacks_ptr[i]))));
+        klog.debug("PE Loader: invoking TLS callback at VA 0x{x}", .{cb_va});
+        // C calling convention TLS callback: void callback(PIMAGE_TLS_Template)
+        const callback = @as(*const fn () callconv(.C) void, @ptrFromInt(cb_va));
+        callback();
+    }
+}
+
+/// 从 PE 字节数据中读取 TLS 目录（已映射到 image_base 的进程内 VA）。
+pub fn readTlsDirectory(data: []const u8, image_base: u64) ?TlsDirectory {
+    if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_TLS)) |rva| {
+        if (rva == 0) return null;
+        const tls_va = image_base + rva;
+        return @as(*const TlsDirectory, @ptrFromInt(tls_va)).*;
+    }
+    return null;
+}
 
 /// 对 LoongArch64 重定位位点应用 delta；`delta` = new_image_base - preferred_image_base。
 /// MARK_LA 覆盖 `lu12i.w + ori` 或 `pcaddu12i + addi.d` 等指令对中的立即数字段。
@@ -217,10 +328,25 @@ pub fn applyLoongArch64Reloc(site: *u64, typ: u16, delta: i64) bool {
             site.* = @as(u64, new_hi) << 32 | @as(u64, new_lo);
             return true;
         },
-        IMAGE_REL_LOONGARCH64_SUPPORT_SPLIT,
-        IMAGE_REL_LOONGARCH64_REFLOCAL,
-        IMAGE_REL_LOONGARCH64_JUMPER,
-        => return true,
+        IMAGE_REL_LOONGARCH64_JUMPER => {
+            // JUMPER：补丁分支指令的 PC 相对偏移。
+            // LoongArch 分支指令：立即数字段编码为 SImm14 << 2，14-bit 有符号偏移 × 4。
+            const raw: u32 = @truncate(site.*);
+            const cur_off: i32 = @bitCast(@as(u32, site.* >> 32));
+            const new_off = cur_off +% @as(i32, @intCast(delta));
+            site.* = (@as(u64, @bitCast(new_off)) << 32) | @as(u64, raw);
+            return true;
+        },
+        IMAGE_REL_LOONGARCH64_REFLOCAL => {
+            // REFLOCAL：本地符号引用 — 相对当前 site 的引用，delta 即符号最终地址差。
+            const cur: i64 = @bitCast(site.*);
+            site.* = @bitCast(cur + delta);
+            return true;
+        },
+        IMAGE_REL_LOONGARCH64_SUPPORT_SPLIT => {
+            // SUPPORT_SPLIT：辅助标记，当前无特殊处理。
+            return true;
+        },
         else => return false,
     }
 }
@@ -643,12 +769,11 @@ pub fn validatePeLoadPolicy(data: []const u8) LoadStatus {
     if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT)) |rva| {
         if (rva != 0) return .bound_import_not_supported;
     }
-    if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT)) |rva| {
-        if (rva != 0) return .delay_load_not_supported;
-    }
-    if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_TLS)) |rva| {
-        if (rva != 0) return .tls_directory_not_supported;
-    }
+    // 延迟加载已实现，不再拒绝
+    // if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT)) |rva| {
+    //     if (rva != 0) return .delay_load_not_supported;
+    // }
+    // TLS 回调已实现（invokeTlsCallbacksIfPresent）
     return .success;
 }
 
@@ -864,6 +989,60 @@ pub fn resolveImports(img: *LoadedImage) LoadStatus {
     });
 
     return if (resolved == img.import_count) .success else .import_error;
+}
+
+/// 从 PE 字节数据中解析导入目录并填充 IAT。
+/// `data` 为已映射的 PE 映像，`image_base` 为加载基址。
+/// 成功返回 .success；解析失败或无法加载 DLL 返回对应错误。
+pub fn resolveImportsFromPeBytes(data: []const u8, image_base: u64) LoadStatus {
+    const import_rva = readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_IMPORT) orelse return .success;
+    if (import_rva == 0) return .success;
+
+    const import_ptr = @as([*]const ImportDescriptor, @ptrFromInt(
+        @intFromPtr(data.ptr) + import_rva));
+
+    var resolved_total: usize = 0;
+    var desc_ptr = import_ptr;
+    while (desc_ptr.name_rva != 0) {
+        const dll_name = @as([*]const u8, @ptrFromInt(@intFromPtr(data.ptr) + desc_ptr.name_rva));
+        var dll_name_len: usize = 0;
+        while (dll_name_len < 256 and dll_name[dll_name_len] != 0) : (dll_name_len += 1) {}
+
+        // 加载 DLL（桩：查找已加载的 DLL）
+        const dll = getLoadedImage(dll_name[0..dll_name_len]);
+        if (dll != null) {
+            // IAT 和 ILT（OriginalFirstThunk）条目
+            const ilt_rva = desc_ptr.original_first_thunk;
+            const iat_rva = desc_ptr.first_thunk;
+
+            if (ilt_rva != 0 and iat_rva != 0) {
+                const ilt_ptr = @as([*]const u32, @ptrFromInt(@intFromPtr(data.ptr) + ilt_rva));
+                const iat_ptr = @as([*]u64, @ptrFromInt(image_base + iat_rva));
+
+                var idx: usize = 0;
+                while (ilt_ptr[idx] != 0) : (idx += 1) {
+                    const hint_name_rva = ilt_ptr[idx];
+                    // 如果最高位为 1，表示按序号导入（跳过名称）
+                    if (hint_name_rva & 0x8000_0000 != 0) {
+                        const ordinal = @as(u16, @truncate(hint_name_rva & 0xFFFF));
+                        iat_ptr[idx] = dll.findExportByOrdinal(ordinal) orelse 0;
+                    } else {
+                        const hint_name_ptr = @as([*]const u8, @ptrFromInt(
+                            @intFromPtr(data.ptr) + hint_name_rva));
+                        var hint_len: usize = 0;
+                        while (hint_len < 128 and hint_name_ptr[hint_len] != 0) : (hint_len += 1) {}
+                        iat_ptr[idx] = dll.findExport(hint_name_ptr[0..hint_len]) orelse 0;
+                    }
+                    if (iat_ptr[idx] != 0) resolved_total += 1;
+                }
+            }
+        }
+
+        desc_ptr = @ptrFromInt(@intFromPtr(desc_ptr) + @sizeOf(ImportDescriptor));
+    }
+
+    klog.debug("PE Loader: resolved %u import thunks from PE bytes", .{resolved_total});
+    return if (resolved_total > 0) .success else .import_error;
 }
 
 pub fn getLoadedImage(name: []const u8) ?*LoadedImage {

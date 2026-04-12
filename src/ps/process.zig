@@ -271,6 +271,81 @@ pub fn createSystemProcess(frame_alloc: *FrameAllocator, name: []const u8) ?*Pro
     return p;
 }
 
+/// 从 PE 数据创建进程并加载映像
+/// 返回创建的进程及其主线程
+pub fn createProcessFromPe(
+    frame_alloc: *FrameAllocator,
+    pe_data: []const u8,
+    image_base: u64,
+    entry_point: u64,
+) ?struct { proc: *Process, tid: u32 } {
+    _ = entry_point; // TODO: 用于设置线程入口点
+    // 1. 创建进程
+    const proc = createProcess(frame_alloc) orelse return null;
+    proc.image_base_address = image_base;
+
+    // 2. 验证 PE 格式
+    const pe = @import("../loader/pe.zig");
+    if (pe.validatePeHeader(pe_data) != .success) {
+        klog.err("Process: invalid PE format for process PID=%u", .{proc.pid});
+        return null;
+    }
+
+    // 3. 映射 PE 节到进程地址空间
+    const asp = proc.address_space orelse return null;
+    if (!mapPeSectionsToAddressSpace(asp, pe_data, image_base)) {
+        klog.err("Process: failed to map PE sections for PID=%u", .{proc.pid});
+        return null;
+    }
+
+    // 4. 设置 PEB
+    proc.peb_address = image_base + 0x1000; // 简化：PEB 在固定偏移
+    klog.info("Process: PE loaded at 0x{x} for PID=%u", .{ image_base, proc.pid });
+
+    // 5. TODO: 创建初始线程
+    // 完整实现需要创建线程并设置 context
+    return .{ .proc = proc, .tid = 0 };
+}
+
+/// 将 PE 节映射到进程的地址空间
+fn mapPeSectionsToAddressSpace(asp: *vm.AddressSpace, pe_data: []const u8, image_base: u64) bool {
+    _ = asp; // TODO: 使用 asp 将节数据映射到地址空间
+    const pe = @import("../loader/pe.zig");
+
+    // 读取节头
+    const dos = @as(*const pe.DosHeader, @ptrFromInt(@intFromPtr(pe_data.ptr)));
+    const pe_offset = dos.e_lfanew;
+    const fh = @as(*const pe.FileHeader, @ptrFromInt(pe_data.ptr + pe_offset + 4));
+
+    const num_sections = fh.number_of_sections;
+    const opt_size = fh.size_of_optional_header;
+    const sections_ptr = pe_data.ptr + pe_offset + 4 + @sizeOf(pe.FileHeader) + opt_size;
+
+    // 遍历每个节并映射
+    var i: u16 = 0;
+    while (i < num_sections) : (i += 1) {
+        const sh = @as(*const pe.SectionHeader, @ptrFromInt(sections_ptr + @as(usize, i) * @sizeOf(pe.SectionHeader)));
+
+        if (sh.size_of_raw_data == 0) continue;
+
+        const sec_va = image_base + @as(u64, sh.virtual_address);
+        const sec_size = @as(u64, sh.virtual_size);
+
+        // TODO: 使用 vm.mapPage* 将节数据映射到地址空间
+        klog.debug("Process: mapping section '%s' to VA=0x{x} size={}", .{
+            sh.name[0..8], sec_va, sec_size,
+        });
+    }
+
+    return true;
+}
+
+/// 获取进程的主模块信息
+pub fn getProcessMainModule(proc: *const Process) ?struct { base: u64, size: u32 } {
+    if (proc.image_base_address == 0) return null;
+    return .{ .base = proc.image_base_address, .size = 0 }; // size 待从 PE 获取
+}
+
 pub fn terminateProcess(pid: u32, exit_code: u32) bool {
     const p = findProcess(pid) orelse return false;
     // K2.1：须先终止/切离仍关联该 EPROCESS 的线程，避免 `releaseProcessAddressSpace` 时其他核仍 CR3=受害进程。

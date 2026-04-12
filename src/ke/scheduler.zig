@@ -971,8 +971,10 @@ fn performX86_64ContextSwitch(from_idx: usize, to_idx: usize) void {
         const x86_ts = @import("../arch/x86_64/thread_switch.zig");
         const from_ctx: *x86_ts.X86ThreadContext = @ptrFromInt(@intFromPtr(&threads[from_idx].x86_context_raw));
         const to_ctx: *x86_ts.X86ThreadContext = @ptrFromInt(@intFromPtr(&threads[to_idx].x86_context_raw));
+        // x86_64_switch_context 是 noreturn 函数，会直接跳转到目标线程
+        // 调用者不会再执行到这里
         x86_ts.x86_64_switch_context(from_ctx, to_ctx);
-        unreachable;
+        unreachable; // noreturn 函数不会返回到这里
     }
     // 在 native/test 目标下不执行上下文切换（因为汇编代码未链接）
 }

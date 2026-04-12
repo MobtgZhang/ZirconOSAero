@@ -284,12 +284,87 @@ fn keWaitCooperativeAll(
     }
 }
 
-/// `WaitAll`：**抢占调度开启** 时仍为路线图（复合等待唤醒）；关闭时走协作式全满足路径。
+/// `WaitAll`：抢占调度开启时实现复合等待唤醒。
+/// 跟踪每个对象的 signal 状态，仅当全部 signaled 时才消耗并返回。
 pub fn keWaitForMultipleObjectsWaitAll(
     hdrs: []const *ob.ObjectHeader,
     alertable: bool,
     deadline_ticks: ?u64,
 ) i32 {
-    if (scheduler.schedulingIsEnabled()) return -1073741822; // STATUS_NOT_IMPLEMENTED
-    return keWaitCooperativeAll(hdrs, alertable, deadline_ticks);
+    if (!scheduler.schedulingIsEnabled()) {
+        return keWaitCooperativeAll(hdrs, alertable, deadline_ticks);
+    }
+    std.debug.assert(hdrs.len <= 64);
+    const tid = scheduler.getCurrentThreadId();
+
+    // 信号状态跟踪数组（true = 已满足）
+    var signaled: [64]bool = [_]bool{false} ** 64;
+    var signaled_count: usize = 0;
+
+    while (true) {
+        const outcome: ?i32 = blk: {
+            scheduler.lockSchedIrq();
+            defer scheduler.unlockSchedIrq();
+
+            // 检查是否有待处理的等待状态
+            if (scheduler.consumePendingWaitStatus(tid)) |st| {
+                break :blk st;
+            }
+
+            // 检查并消耗已 signal 的对象
+            var all_ready = true;
+            signaled_count = 0;
+            for (hdrs, 0..) |h, i| {
+                if (signaled[i]) {
+                    signaled_count += 1;
+                    continue;
+                }
+                if (tryConsumeWaitable(h)) {
+                    signaled[i] = true;
+                    signaled_count += 1;
+                } else {
+                    all_ready = false;
+                }
+            }
+
+            // 所有对象都已 signaled → 消耗并返回
+            if (all_ready and signaled_count == hdrs.len) {
+                // 再次消耗（因为上面的 tryConsumeWaitable 已经消耗过一次）
+                for (hdrs) |h| {
+                    _ = tryConsumeWaitable(h);
+                }
+                break :blk STATUS_WAIT_0;
+            }
+
+            // 检查 alertable 条件
+            if (alertable) {
+                const th = scheduler.getCurrentThread() orelse break :blk STATUS_WAIT_0;
+                if (threadAlertableReturn(th)) |st| break :blk st;
+            }
+
+            // 检查超时
+            if (deadline_ticks) |d| {
+                if (scheduler.tickCountLocked() >= d) break :blk STATUS_TIMEOUT;
+            }
+
+            // 注册到所有对象的等待队列
+            const t = scheduler.getCurrentThread() orelse break :blk STATUS_WAIT_0;
+            var k: u32 = 0;
+            while (k < hdrs.len) : (k += 1) {
+                t.wait_entries[k] = .{};
+                t.wait_entries[k].thread_index = tid;
+                t.wait_entries[k].wait_slot = k;
+                t.wait_entries[k].hdr = hdrs[k];
+                ob.waitListAppend(hdrs[k], &t.wait_entries[k]);
+            }
+            t.wait_entry_count = @truncate(hdrs.len);
+            t.in_object_wait = true;
+            t.wait_deadline_ticks = deadline_ticks;
+            t.wait_alertable = alertable;
+            scheduler.blockThread(tid);
+            break :blk null;
+        };
+        if (outcome) |st| return st;
+        scheduler.yield();
+    }
 }

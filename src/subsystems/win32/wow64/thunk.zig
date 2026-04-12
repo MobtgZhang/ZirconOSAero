@@ -12,24 +12,26 @@ const ntdll = @import("../../../libs/ntdll.zig");
 const x86 = @import("ssdt_x86_win7_sp1.zig");
 const x64_alias = @import("x64_semantic_alias.zig");
 const marshal = @import("marshal.zig");
+const win32k = @import("win32k_thunk.zig");
 
 pub var total_syscall_translations: u64 = 0;
 pub var total_ptr_conversions: u64 = 0;
 
 pub const userVaFromWow64Ptr32 = marshal.userVaFromWow64Ptr32;
 
-pub fn translateSyscall32to64(wow_proc: *types.Wow64Process, syscall_num: u32) ntdll.NTSTATUS {
+pub fn translateSyscall32to64(wow_proc: *types .Wow64Process, syscall_num: u32) ntdll.NTSTATUS {
     return translateSyscall32to64WithArgs(wow_proc, syscall_num, &[_]u32{});
 }
 
 /// 带 stdcall 实参（u32 槽，按形参从左到右对应 `args[0]..`）的 32→64 翻译；供 `marshal` 与演示路径使用。
-pub fn translateSyscall32to64WithArgs(wow_proc: *types.Wow64Process, syscall_num: u32, args: []const u32) ntdll.NTSTATUS {
+pub fn translateSyscall32to64WithArgs(wow_proc: *types .Wow64Process, syscall_num: u32, args: []const u32) ntdll.NTSTATUS {
     wow_proc.syscall_count += 1;
     total_syscall_translations += 1;
 
-    if (x86.isX86Win32kServiceIndex(syscall_num)) {
+    // 检查是否为 Win32k 服务，如果是则分派到 win32k thunk
+    if (win32k.isWin32kServiceIndex(syscall_num)) {
         wow_proc.last_x64_ssdt_alias = null;
-        return ntdll.STATUS_NOT_IMPLEMENTED;
+        return win32k.dispatchWin32kSyscall(wow_proc, syscall_num, args);
     }
 
     wow_proc.last_x64_ssdt_alias = x64_alias.x64SsdtIndexForWin7Sp1X86(syscall_num);

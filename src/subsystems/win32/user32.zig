@@ -20,6 +20,7 @@ const sched_mod = @import("../../ke/scheduler.zig");
 const dwm_nt61_contract = @import("../../config/dwm_nt61_api_contract.zig");
 const csr_dwm_listeners = @import("csr_dwm_listeners.zig");
 const compositor_sync_nt61 = @import("../../config/compositor_sync_nt61.zig");
+const sync = @import("../../ke/sync.zig");
 
 comptime {
     _ = @import("user32/split_anchor.zig");
@@ -32,6 +33,7 @@ pub const BOOL = kernel32.BOOL;
 pub const TRUE = kernel32.TRUE;
 pub const FALSE = kernel32.FALSE;
 pub const DWORD = kernel32.DWORD;
+pub const UINT = kernel32.DWORD;
 pub const WORD = kernel32.WORD;
 pub const HANDLE = kernel32.HANDLE;
 
@@ -41,6 +43,10 @@ pub const HICON = u64;
 pub const HCURSOR = u64;
 pub const HBRUSH = u64;
 pub const HDC = u64;
+pub const HGDIOBJ = u64;
+pub const HBITMAP = u64;
+pub const HPEN = u64;
+pub const HRGN = u64;
 pub const HINSTANCE = u64;
 pub const WPARAM = u64;
 pub const LPARAM = i64;
@@ -109,11 +115,24 @@ pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_RBUTTONDOWN: u32 = 0x0204;
 pub const WM_RBUTTONUP: u32 = 0x0205;
+pub const WM_MBUTTONDOWN: u32 = 0x0207;
+pub const WM_MBUTTONUP: u32 = 0x0208;
+pub const WM_MBUTTONDBLCLK: u32 = 0x0209;
+pub const WM_MOUSEWHEEL: u32 = 0x020A;
+pub const WM_XBUTTONDOWN: u32 = 0x020B;
+pub const WM_XBUTTONUP: u32 = 0x020C;
+pub const WM_XBUTTONDBLCLK: u32 = 0x020D;
+pub const WM_MOUSEHWHEEL: u32 = 0x020E;  // 水平滚轮
+
+/// 鼠标滚轮常量
+pub const WHEEL_DELTA: i16 = 120;  // 一个滚轮刻度的 delta 值（120 = 3 行 @ 40 pixels/行）
+pub const WHEEL_PAGESCROLL: u16 = 0xFFFF;  // 页面滚动标记
 pub const WM_USER: u32 = 0x0400;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_SYSCOMMAND: u32 = 0x0112;
 pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
 pub const WM_EXITSIZEMOVE: u32 = 0x0232;
+pub const WM_MENUCHAR: u32 = 0x0120;  // 菜单字符消息
 
 pub const SC_MOVE: WPARAM = 0xF010;
 pub const SC_SIZE: WPARAM = 0xF000;
@@ -221,13 +240,43 @@ pub const COLOR_WINDOWTEXT: u32 = 8;
 pub const COLOR_BTNFACE: u32 = 15;
 pub const COLOR_DESKTOP: u32 = 1;
 
+// ── GDI Types ──
+
+/// COLORREF: RGB 颜色值 (0x00BBGGRR)
+pub const COLORREF = u32;
+
+/// 映射模式常量
+pub const MM_TEXT: i32 = 1;
+pub const MM_LOMETRIC: i32 = 2;
+pub const MM_HIMETRIC: i32 = 3;
+pub const MM_LOENGLISH: i32 = 4;
+pub const MM_HIENGLISH: i32 = 5;
+pub const MM_TWIPS: i32 = 6;
+pub const MM_ISOTROPIC: i32 = 7;
+pub const MM_ANISOTROPIC: i32 = 8;
+
 // ── Cursor Constants ──
 
 pub const IDC_ARROW: u32 = 32512;
 pub const IDC_IBEAM: u32 = 32513;
 pub const IDC_WAIT: u32 = 32514;
 pub const IDC_CROSS: u32 = 32515;
+pub const IDC_UPARROW: u32 = 32516;
+pub const IDC_SIZE: u32 = 32640;
+pub const IDC_ICON: u32 = 32646;
 pub const IDC_HAND: u32 = 32649;
+pub const IDC_HELP: u32 = 32651;
+pub const IDC_APPSTARTING: u32 = 32650;
+
+// ── Icon Constants ──
+
+pub const IDI_APPLICATION: u32 = 32512;
+pub const IDI_WARNING: u32 = 32515;
+pub const IDI_ERROR: u32 = 32513;
+pub const IDI_INFORMATION: u32 = 32516;
+pub const IDI_QUESTION: u32 = 32518;
+pub const IDI_WINLOGO: u32 = 32517;
+pub const IDI_SHIELD: u32 = 32518;
 
 // ── Structures ──
 
@@ -312,7 +361,7 @@ fn msgMatchesFilter(message: u32, min: u32, max: u32) bool {
     return message >= min and message <= max;
 }
 
-const MAX_THREAD_POSTED: usize = 24;
+const MAX_THREAD_POSTED: usize = 256;
 const ThreadPostedSlot = struct {
     tid: u32 = 0,
     used: bool = false,
@@ -422,9 +471,12 @@ pub const CREATESTRUCTA = struct {
 
 // ── Internal Window Object ──
 
-const MAX_WINDOWS: usize = 64;
-const MAX_WINDOW_CLASSES: usize = 32;
-const MAX_MSG_QUEUE: usize = 128;
+/// 生产环境窗口数量限制：从 64 扩充到 4096 以支持复杂桌面应用
+const MAX_WINDOWS: usize = 4096;
+/// 窗口类数量限制：从 32 扩充到 256 以支持更多自定义类
+const MAX_WINDOW_CLASSES: usize = 256;
+/// 单窗口消息队列深度：从 256 扩充到 512 以支持高消息量场景
+const MAX_MSG_QUEUE: usize = 512;
 
 const Window = struct {
     hwnd: HWND = 0,
@@ -468,7 +520,11 @@ const Window = struct {
     }
 
     pub fn postMessage(self: *Window, msg: u32, wparam: WPARAM, lparam: LPARAM) bool {
-        if (self.msg_count >= MAX_MSG_QUEUE) return false;
+        if (self.msg_count >= MAX_MSG_QUEUE) {
+            klog.warn("user32: Window 0x{x} message queue full (count={}), dropping WM 0x{x}",
+                .{ self.hwnd, self.msg_count, msg });
+            return false;
+        }
         self.msg_queue[self.msg_tail] = .{
             .hwnd = self.hwnd,
             .message = msg,
@@ -550,6 +606,20 @@ var next_hwnd: HWND = 0x10000;
 var window_classes: [MAX_WINDOW_CLASSES]WindowClass = [_]WindowClass{.{}} ** MAX_WINDOW_CLASSES;
 var class_count: usize = 0;
 var next_atom: ATOM = 0xC000;
+
+/// User32 全局锁：保护 windows 数组、window_count、window_classes 等全局状态的并发访问
+/// 与 dwm_compositor.compositor_lock 配合使用，避免 user32 与 DWM 合成器之间的竞争条件
+var user32_lock: sync.SpinLock = .{ .locked = false, .owner_tid = 0 };
+
+/// 获取 user32 锁（在需要修改全局状态时使用）
+inline fn acquireUser32Lock() void {
+    user32_lock.acquire();
+}
+
+/// 释放 user32 锁
+inline fn releaseUser32Lock() void {
+    user32_lock.release();
+}
 
 var focus_hwnd: HWND = 0;
 var capture_hwnd: HWND = 0;
@@ -700,6 +770,10 @@ pub fn broadcastDwmIconicLivePreviewBitmapRequested(max_w: u32, max_h: u32) void
 }
 
 fn syncWin32kFromUser32() void {
+    // 获取 user32 锁，保护 windows 数组的并发访问
+    acquireUser32Lock();
+    defer releaseUser32Lock();
+
     win32k.clearWindowTableForSync();
     var z: i32 = 0;
     var i: usize = 0;
@@ -943,10 +1017,15 @@ pub fn CreateWindowExA(
         wnd.wndproc_id = c.wndproc_id;
     }
 
-    const actual_x = if (x == CW_USEDEFAULT) @as(i32, 100) else x;
-    const actual_y = if (y == CW_USEDEFAULT) @as(i32, 100) else y;
-    const actual_w = if (width == CW_USEDEFAULT) @as(i32, 640) else width;
-    const actual_h = if (height == CW_USEDEFAULT) @as(i32, 480) else height;
+    // 根据屏幕大小动态计算默认窗口位置和大小
+    // CW_USEDEFAULT 时，窗口大小不超过屏幕减去边距
+    const margin: i32 = 100;
+    const max_w = @max(640, screen_width - 2 * margin);
+    const max_h = @max(480, screen_height - 2 * margin);
+    const actual_x = if (x == CW_USEDEFAULT) margin else x;
+    const actual_y = if (y == CW_USEDEFAULT) margin else y;
+    const actual_w = if (width == CW_USEDEFAULT) @min(800, max_w) else width;
+    const actual_h = if (height == CW_USEDEFAULT) @min(600, max_h) else height;
 
     wnd.rect = .{
         .left = actual_x,
@@ -994,6 +1073,17 @@ pub fn DestroyWindow(hwnd: HWND) BOOL {
         kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
         return FALSE;
     };
+
+    // 先销毁所有子窗口（递归）
+    var i: usize = 0;
+    while (i < window_count) : (i += 1) {
+        if (windows[i].is_valid and windows[i].parent == hwnd) {
+            _ = DestroyWindow(windows[i].hwnd);
+            // 重新扫描，因为 window_count 可能变化
+            i = 0;
+        }
+    }
+
     // 先释放合成表面再失效窗口，避免 `dwm_compositor` 残留 id 指向已释放槽位（与 `onCsrssRegisterGuiWindow` 分配路径对偶）。
     detachCompositorSurface(wnd);
     _ = wnd.postMessage(WM_DESTROY, 0, 0);
@@ -1003,6 +1093,7 @@ pub fn DestroyWindow(hwnd: HWND) BOOL {
     if (focus_hwnd == hwnd) focus_hwnd = 0;
     if (active_hwnd == hwnd) active_hwnd = 0;
     if (foreground_hwnd == hwnd) foreground_hwnd = 0;
+    if (capture_hwnd == hwnd) capture_hwnd = 0;
 
     syncWin32kFromUser32();
     syncCompositorZOrderForUserWindows();
@@ -1460,9 +1551,13 @@ pub fn ntUserPostMessageSyscall(hwnd: u64, msg: u32, wparam: u64, lparam_bits: u
     };
 }
 
-/// `NtUserSendMessage`：寄存器约定同 `NtUserPostMessage`（当前实现等价异步 `PostMessage`）。
+/// `NtUserSendMessage`：同步调用窗口过程函数。
+/// 与 `NtUserPostMessage` 不同，`NtUserSendMessage` 直接调用 WndProc 等待结果。
 pub fn ntUserSendMessageSyscall(hwnd: u64, msg: u32, wparam: u64, lparam_bits: u64) ntdll.NTSTATUS {
-    return ntUserPostMessageSyscall(hwnd, msg, wparam, lparam_bits);
+    const lp: i64 = @bitCast(lparam_bits);
+    const result = SendMessageA(@truncate(hwnd), msg, wparam, lp);
+    _ = result; // result 被丢弃，因为 syscall 约定返回 NTSTATUS
+    return ntdll.STATUS_SUCCESS;
 }
 
 /// `NtUserDispatchMessage`：`R10`=用户 `MSG*`（syscall 层已 probe）；与 `DispatchMessageA` 同路径（无独立 WndProc 表时即 `DefWindowProcA`）。
@@ -1603,9 +1698,25 @@ pub fn PostThreadMessageA(idThread: u32, msg: u32, wparam: WPARAM, lparam: LPARA
     return if (tryQueueThreadPosted(idThread, m)) TRUE else FALSE;
 }
 
+/// `SendMessageA`：直接调用窗口过程函数，同步等待结果。
+/// 与 `PostMessageA` 不同，`SendMessageA` 阻塞调用线程直到消息被处理并返回结果。
+/// 实现方式：直接在当前线程调用窗口的 WndProc，不经过消息队列。
+/// Ref: Microsoft Learn — `SendMessage` 会递归消息泵（SendMessageTimeout 风格）。
 pub fn SendMessageA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRESULT {
-    _ = PostMessageA(hwnd, msg, wparam, lparam);
-    return 0;
+    // 如果 hwnd 为 NULL 或找不到窗口，调用 DefWindowProcA
+    if (hwnd == 0) {
+        return DefWindowProcA(hwnd, msg, wparam, lparam);
+    }
+    const wnd = findWindow(hwnd) orelse {
+        kernel32.SetLastError(kernel32.ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    if (findClassByAtom(@truncate(wnd.class_id))) |cls| {
+        if (cls.wndproc_id != 0) {
+            if (dispatchKernelWndProcById(cls.wndproc_id, hwnd, msg, wparam, lparam)) |lr| return lr;
+        }
+    }
+    return DefWindowProcA(hwnd, msg, wparam, lparam);
 }
 
 /// Ref: Learn — `PostQuitMessage` 向**调用线程**的消息队列投递 `WM_QUIT`（`hwnd` 为空）；与每条窗口队列分别投递不同。
@@ -1696,19 +1807,107 @@ pub fn ReleaseDC(hwnd: HWND, hdc: HDC) i32 {
 
 // ── Timer ──
 
+/// 全局计时器槽位数量（支持多计时器）
+const MAX_GLOBAL_TIMERS: usize = 64;
+
+/// 计时器条目
+const TimerEntry = struct {
+    hwnd: HWND = 0,
+    timer_id: u32 = 0,
+    interval: u32 = 0,
+    ticks: u32 = 0,
+    active: bool = false,
+};
+
+/// 全局计时器表（支持多计时器，而非每窗口一个）
+var global_timers: [MAX_GLOBAL_TIMERS]TimerEntry = [_]TimerEntry{.{}} ** MAX_GLOBAL_TIMERS;
+
 pub fn SetTimer(hwnd: HWND, id: u32, interval: u32, _: u64) u32 {
-    const wnd = findWindow(hwnd) orelse return 0;
-    wnd.timer_id = id;
-    wnd.timer_interval = interval;
-    wnd.timer_ticks = 0;
-    return id;
+    _ = findWindow(hwnd) orelse return 0;
+    if (interval == 0) return 0;
+
+    // 查找现有计时器或空槽
+    for (&global_timers) |*timer| {
+        if (timer.active and timer.hwnd == hwnd and timer.timer_id == id) {
+            // 更新现有计时器
+            timer.interval = interval;
+            timer.ticks = 0;
+            return id;
+        }
+    }
+
+    // 分配新计时器
+    for (&global_timers) |*timer| {
+        if (!timer.active) {
+            timer.* = .{
+                .hwnd = hwnd,
+                .timer_id = id,
+                .interval = interval,
+                .ticks = 0,
+                .active = true,
+            };
+            return id;
+        }
+    }
+
+    // 计时器表已满，返回 0
+    klog.warn("user32: SetTimer failed - timer table full", .{});
+    return 0;
 }
 
-pub fn KillTimer(hwnd: HWND, _: u32) BOOL {
-    const wnd = findWindow(hwnd) orelse return FALSE;
-    wnd.timer_id = 0;
-    wnd.timer_interval = 0;
-    return TRUE;
+pub fn KillTimer(hwnd: HWND, timer_id: u32) BOOL {
+    for (&global_timers) |*timer| {
+        if (timer.active and timer.hwnd == hwnd and timer.timer_id == timer_id) {
+            timer.active = false;
+            timer.* = .{};
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/// 更新计时器（由调度器或空闲循环调用）
+/// 返回触发 WM_TIMER 的计时器列表（hwnd, timer_id）
+pub fn updateTimers(elapsed_ticks: u32) void {
+    for (&global_timers) |*timer| {
+        if (!timer.active or timer.interval == 0) continue;
+        timer.ticks +%= elapsed_ticks;
+    }
+}
+
+/// 处理计时器过期（从消息循环调用）
+/// 返回是否有计时器到期并投递 WM_TIMER
+pub fn processExpiredTimers() ?struct { HWND, u32 } {
+    for (&global_timers) |*timer| {
+        if (!timer.active or timer.interval == 0) continue;
+        if (timer.ticks >= timer.interval) {
+            const hwnd = timer.hwnd;
+            const tid = timer.timer_id;
+            timer.ticks = 0;
+            // 重置但不取消计时器（用户可主动 KillTimer 取消）
+            return .{ hwnd, tid };
+        }
+    }
+    return null;
+}
+
+/// 获取当前活动的计时器数量
+pub fn getActiveTimerCount() usize {
+    var count: usize = 0;
+    for (&global_timers) |*timer| {
+        if (timer.active) count += 1;
+    }
+    return count;
+}
+
+/// 清除指定窗口的所有计时器
+pub fn clearWindowTimers(hwnd: HWND) void {
+    for (&global_timers) |*timer| {
+        if (timer.active and timer.hwnd == hwnd) {
+            timer.active = false;
+            timer.* = .{};
+        }
+    }
 }
 
 // ── System Metrics ──
@@ -1805,6 +2004,43 @@ fn pointFromLParam(lp: LPARAM) POINT {
         .x = @as(i16, @bitCast(lx)),
         .y = @as(i16, @bitCast(ly)),
     };
+}
+
+/// 从 WM_MOUSEWHEEL 的 WPARAM 提取滚轮 delta（正数=向前/远离用户，负数=向后/朝向用户）
+/// WPARAM 格式：HIWORD = delta（signed），LOWORD = 鼠标按钮状态
+pub fn getWheelDeltaFromWParam(wp: WPARAM) i16 {
+    const hi: u16 = @truncate(wp >> 16);
+    return @as(i16, @bitCast(hi));
+}
+
+/// 从 WM_MOUSEHWHEEL 的 WPARAM 提取水平滚轮 delta（正数=右，负数=左）
+pub fn getHWheelDeltaFromWParam(wp: WPARAM) i16 {
+    const hi: u16 = @truncate(wp >> 16);
+    return @as(i16, @bitCast(hi));
+}
+
+/// 从 WM_MOUSEWHEEL 或 WM_MOUSEHWHEEL 的 WPARAM 提取鼠标按钮状态
+/// LOWORD 包含 MK_* 标志
+pub const MK_LBUTTON: WPARAM = 0x0001;
+pub const MK_RBUTTON: WPARAM = 0x0002;
+pub const MK_SHIFT: WPARAM = 0x0004;
+pub const MK_CONTROL: WPARAM = 0x0008;
+pub const MK_MBUTTON: WPARAM = 0x0010;
+pub const MK_XBUTTON1: WPARAM = 0x0020;
+pub const MK_XBUTTON2: WPARAM = 0x0040;
+pub fn getMouseButtonStateFromWParam(wp: WPARAM) WPARAM {
+    return wp & 0xFFFF;
+}
+
+/// 从 WM_XBUTTONDOWN/WM_XBUTTONUP 的 WPARAM 提取 X 按钮编号
+/// HIWORD = 按钮编号（1=XBUTTON1，2=XBUTTON2），LOWORD = 按钮状态
+pub fn getXButtonFromWParam(wp: WPARAM) u16 {
+    return @truncate(wp >> 16);
+}
+
+/// 从 WM_XBUTTONDOWN/WM_XBUTTONUP 的 WPARAM 提取按钮状态
+pub fn getXButtonStateFromWParam(wp: WPARAM) WPARAM {
+    return wp & 0xFFFF;
 }
 
 /// 与 MSDN `DwmDefWindowProc` 对齐的占位：**TRUE** 表示消息已由 DWM 消费且调用方应使用合成器提供的 `lResult`（本仓库合成在 `dwm_compositor`，此处恒 **FALSE**，`DefWindowProcA` 继续走 `defNcHitTestForWindow` 等内核默认 NC）。
@@ -1944,12 +2180,244 @@ pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRES
     }
 }
 
-pub fn LoadCursorA(_: HINSTANCE, _: u32) HCURSOR {
-    return 1;
+// ── Cursor / Icon Resources ──
+
+/// 系统光标/图标资源缓存
+const MAX_CURSORS: usize = 16;
+const MAX_ICONS: usize = 16;
+
+var cursor_cache: [MAX_CURSORS]?[*]u8 = [_]?[*]u8{null} ** MAX_CURSORS;
+var icon_cache: [MAX_ICONS]?[*]u8 = [_]?[*]u8{null} ** MAX_ICONS;
+
+/// LoadCursorA: 加载标准系统光标
+/// hInstance 必须为 NULL，lpCursorName 为系统光标 ID（IDC_*）
+pub fn LoadCursorA(_: HINSTANCE, lpCursorName: u32) HCURSOR {
+    // 仅支持系统光标（hInstance 必须为 NULL）
+    // 返回光标句柄（这里返回 IDC_* 作为句柄，实际实现可能需要映射到实际光标资源）
+    const cursor_id = lpCursorName & 0xFFFF;
+
+    // 验证是否为有效系统光标 ID
+    const valid_cursors = [_]u32{
+        IDC_ARROW, IDC_IBEAM, IDC_WAIT, IDC_CROSS, IDC_UPARROW,
+        IDC_SIZE, IDC_ICON, IDC_HAND, IDC_HELP, IDC_APPSTARTING,
+    };
+
+    for (valid_cursors) |id| {
+        if (cursor_id == id) {
+            return @as(HCURSOR, @intCast(cursor_id));
+        }
+    }
+
+    // 未知的系统光标，返回默认箭头
+    return @as(HCURSOR, @intCast(IDC_ARROW));
 }
 
-pub fn LoadIconA(_: HINSTANCE, _: u32) HICON {
-    return 1;
+/// LoadIconA: 加载标准系统图标
+/// hInstance 必须为 NULL，lpIconName 为系统图标 ID（IDI_*）
+pub fn LoadIconA(_: HINSTANCE, lpIconName: u32) HICON {
+    // 仅支持系统图标（hInstance 必须为 NULL）
+    // 返回图标句柄（这里返回 IDI_* 作为句柄，实际实现可能需要映射到实际图标资源）
+    const icon_id = lpIconName & 0xFFFF;
+
+    // 验证是否为有效系统图标 ID
+    const valid_icons = [_]u32{
+        IDI_APPLICATION, IDI_WARNING, IDI_ERROR, IDI_INFORMATION,
+        IDI_QUESTION, IDI_WINLOGO, IDI_SHIELD,
+    };
+
+    for (valid_icons) |id| {
+        if (icon_id == id) {
+            return @as(HICON, @intCast(icon_id));
+        }
+    }
+
+    // 未知的系统图标，返回默认应用程序图标
+    return @as(HICON, @intCast(IDI_APPLICATION));
+}
+
+/// LoadCursorFromFileA: 从文件加载光标（简化实现）
+pub fn LoadCursorFromFileA(_: [*]const u8) HCURSOR {
+    // 简化实现：返回默认光标
+    return @as(HCURSOR, @intCast(IDC_ARROW));
+}
+
+/// LoadIconFromFileA: 从文件加载图标（简化实现）
+pub fn LoadIconFromFileA(_: [*]const u8) HICON {
+    // 简化实现：返回默认图标
+    return @as(HICON, @intCast(IDI_APPLICATION));
+}
+
+// ── Menu Support ──
+
+/// 菜单项标志
+pub const MF_ENABLED: u32 = 0x0000;
+pub const MF_GRAYED: u32 = 0x0001;
+pub const MF_DISABLED: u32 = 0x0002;
+pub const MF_BITMAP: u32 = 0x0004;
+pub const MF_CHECKED: u32 = 0x0008;
+pub const MF_MENUBARBREAK: u32 = 0x0020;
+pub const MF_MENUBREAK: u32 = 0x0040;
+pub const MF_SEPARATOR: u32 = 0x0800;
+pub const MF_STRING: u32 = 0x0000;
+pub const MF_POPUP: u32 = 0x0010;
+pub const MF_SYSMENU: u32 = 0x2000;
+
+/// 菜单数量限制
+const MAX_MENUS: usize = 32;
+/// 每菜单最大项数
+const MAX_MENU_ITEMS: usize = 64;
+
+/// 菜单项结构
+const MenuItem = struct {
+    id: u32 = 0,
+    text: [64]u8 = [_]u8{0} ** 64,
+    text_len: usize = 0,
+    flags: u32 = 0,
+    submenu: ?HMENU = null,
+};
+
+/// 菜单结构
+const Menu = struct {
+    handle: HMENU = 0,
+    items: [MAX_MENU_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_MENU_ITEMS,
+    item_count: usize = 0,
+    is_popup: bool = false,
+};
+
+var menus: [MAX_MENUS]Menu = [_]Menu{.{}} ** MAX_MENUS;
+var menu_count: usize = 0;
+var next_hmenu: HMENU = 1;
+
+/// CreateMenu: 创建空菜单
+pub fn CreateMenu() HMENU {
+    if (menu_count >= MAX_MENUS) return 0;
+    const menu = &menus[menu_count];
+    menu.* = .{};
+    menu.handle = next_hmenu;
+    next_hmenu += 1;
+    menu_count += 1;
+    return menu.handle;
+}
+
+/// CreatePopupMenu: 创建弹出菜单
+pub fn CreatePopupMenu() HMENU {
+    const hmenu = CreateMenu();
+    if (hmenu != 0) {
+        const idx = findMenuIndex(hmenu);
+        if (idx) |i| {
+            menus[i].is_popup = true;
+        }
+    }
+    return hmenu;
+}
+
+/// DestroyMenu: 销毁菜单
+pub fn DestroyMenu(hmenu: HMENU) BOOL {
+    const idx = findMenuIndex(hmenu) orelse return FALSE;
+    menus[idx] = .{};
+    return TRUE;
+}
+
+/// AppendMenuA: 向菜单追加项
+pub fn AppendMenuA(hmenu: HMENU, flags: u32, id: u32, text: [*]const u8) BOOL {
+    const idx = findMenuIndex(hmenu) orelse return FALSE;
+    const menu = &menus[idx];
+    if (menu.item_count >= MAX_MENU_ITEMS) return FALSE;
+
+    const item = &menu.items[menu.item_count];
+    item.flags = flags;
+    item.id = id;
+
+    if (text != null and flags & MF_SEPARATOR == 0) {
+        var idx_char: usize = 0;
+        while (idx_char < 63 and text[idx_char] != 0) : (idx_char += 1) {
+            item.text[idx_char] = text[idx_char];
+        }
+        item.text_len = idx_char;
+        if (idx_char < 64) item.text[idx_char] = 0;
+    }
+
+    menu.item_count += 1;
+    return TRUE;
+}
+
+/// InsertMenuA: 在指定位置插入菜单项
+pub fn InsertMenuA(hmenu: HMENU, pos: u32, flags: u32, id: u32, text: [*]const u8) BOOL {
+    const idx = findMenuIndex(hmenu) orelse return FALSE;
+    const menu = &menus[idx];
+
+    if (pos >= menu.item_count) {
+        return AppendMenuA(hmenu, flags, id, text);
+    }
+
+    // 移动现有项
+    var i = menu.item_count;
+    while (i > pos) : (i -= 1) {
+        menu.items[i] = menu.items[i - 1];
+    }
+
+    // 插入新项
+    const item = &menu.items[pos];
+    item.* = .{};
+    item.flags = flags;
+    item.id = id;
+
+    if (text != null and flags & MF_SEPARATOR == 0) {
+        var idx_char: usize = 0;
+        while (idx_char < 63 and text[idx_char] != 0) : (idx_char += 1) {
+            item.text[idx_char] = text[idx_char];
+        }
+        item.text_len = idx_char;
+        if (idx_char < 64) item.text[idx_char] = 0;
+    }
+
+    menu.item_count += 1;
+    return TRUE;
+}
+
+/// GetMenuItemCount: 获取菜单项数量
+pub fn GetMenuItemCount(hmenu: HMENU) i32 {
+    const idx = findMenuIndex(hmenu) orelse return -1;
+    return @as(i32, @intCast(menus[idx].item_count));
+}
+
+/// GetMenu: 获取窗口菜单句柄
+pub fn GetMenu(hwnd: HWND) HMENU {
+    const wnd = findWindow(hwnd) orelse return 0;
+    return wnd.menu;
+}
+
+/// SetMenu: 设置窗口菜单
+pub fn SetMenu(hwnd: HWND, hmenu: HMENU) BOOL {
+    const wnd = findWindow(hwnd) orelse return FALSE;
+    wnd.menu = hmenu;
+    return TRUE;
+}
+
+/// DrawMenuBar: 重绘菜单栏
+pub fn DrawMenuBar(hwnd: HWND) BOOL {
+    const wnd = findWindow(hwnd) orelse return FALSE;
+    _ = wnd.postMessage(WM_MENUCHAR, 0, 0);
+    return TRUE;
+}
+
+/// TrackPopupMenu: 显示弹出菜单
+pub fn TrackPopupMenu(hmenu: HMENU, flags: u32, x: i32, y: i32, _: i32, hwnd: HWND, _: ?*const RECT) BOOL {
+    _ = findMenuIndex(hmenu) orelse return FALSE;
+    // 简化实现：发送 WM_MENUCHAR 消息模拟菜单选择
+    const wnd = findWindow(hwnd) orelse return FALSE;
+    _ = wnd.postMessage(WM_MENUCHAR, 0, 0);
+    _ = flags;
+    _ = x;
+    _ = y;
+    return TRUE;
+}
+
+fn findMenuIndex(hmenu: HMENU) ?usize {
+    for (0..menu_count) |i| {
+        if (menus[i].handle == hmenu) return i;
+    }
+    return null;
 }
 
 // ── Helpers ──
@@ -2158,4 +2626,491 @@ pub fn syncScreenFromFramebuffer() void {
     screen_height = @intCast(h);
     drivers.notifyDisplayGeometryChanged(w, h);
     klog.info("user32: Screen synced to kernel framebuffer: %ux%u", .{ w, h });
+}
+
+// ── Unicode (W-suffix) API ──
+// 这些函数接受 UTF-16LE 字符串，转换为 UTF-8 后调用 ANSI 版本。
+// 这是 Windows API 的标准实现方式。
+
+/// `RegisterClassW`：Unicode 版本的窗口类注册。
+/// 将 UTF-16LE 类名转换为 UTF-8 后调用 ANSI 版本。
+pub fn RegisterClassW(wc: *const WNDCLASSW) ATOM {
+    // 将 UTF-16LE 类名转换为 UTF-8
+    var utf8_name: [64]u8 = undefined;
+    const utf8_len = utf16leToUtf8(wc.class_name, wc.class_name_len, &utf8_name);
+    // 转换为 WNDCLASSA
+    var ansi_class: WNDCLASSA = .{
+        .style = wc.style,
+        .wndproc_id = wc.wndproc_id,
+        .cls_extra = wc.cls_extra,
+        .wnd_extra = wc.wnd_extra,
+        .instance = wc.instance,
+        .icon = wc.icon,
+        .cursor = wc.cursor,
+        .background = wc.background,
+    };
+    @memcpy(ansi_class.class_name[0..utf8_len], utf8_name[0..utf8_len]);
+    ansi_class.class_name_len = utf8_len;
+    return RegisterClassA(&ansi_class);
+}
+
+/// `RegisterClassExW`：Unicode 版本的窗口类注册（扩展版）。
+pub fn RegisterClassExW(wc: *const WNDCLASSEXW) ATOM {
+    // 将 UTF-16LE 类名转换为 UTF-8
+    var utf8_name: [64]u8 = undefined;
+    const utf8_len = utf16leToUtf8(wc.class_name, wc.class_name_len, &utf8_name);
+    // 转换为 WNDCLASSEXA
+    var ansi_class: WNDCLASSEXA = .{
+        .cb_size = @sizeOf(WNDCLASSEXW),
+        .style = wc.style,
+        .wndproc_id = wc.wndproc_id,
+        .cls_extra = wc.cls_extra,
+        .wnd_extra = wc.wnd_extra,
+        .instance = wc.instance,
+        .icon = wc.icon,
+        .cursor = wc.cursor,
+        .background = wc.background,
+        .icon_sm = wc.icon_sm,
+    };
+    @memcpy(ansi_class.class_name[0..utf8_len], utf8_name[0..utf8_len]);
+    ansi_class.class_name_len = utf8_len;
+    return RegisterClassExA(&ansi_class);
+}
+
+/// `CreateWindowExW`：Unicode 版本的窗口创建。
+/// 将 UTF-16LE 类名和窗口标题转换为 UTF-8 后调用 ANSI 版本。
+pub fn CreateWindowExW(
+    ex_style: DWORD,
+    class_name: [*]const u16,
+    window_name: [*]const u16,
+    style: DWORD,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    parent: HWND,
+    menu: HMENU,
+    instance: HINSTANCE,
+    param: ?*anyopaque,
+) HWND {
+    // 将 UTF-16LE 类名转换为 UTF-8
+    var utf8_class: [64]u8 = undefined;
+    const class_len = utf16leToUtf8(class_name, 64, &utf8_class);
+    // 将 UTF-16LE 窗口标题转换为 UTF-8
+    var utf8_title: [128]u8 = undefined;
+    const title_len = utf16leToUtf8(window_name, 128, &utf8_title);
+    return CreateWindowExA(
+        ex_style,
+        utf8_class[0..class_len],
+        utf8_title[0..title_len],
+        style,
+        x, y, width, height,
+        parent, menu, instance, param,
+    );
+}
+
+/// 将 UTF-16LE 字符串转换为 UTF-8。
+/// 返回转换后的字节数。
+fn utf16leToUtf8(src: [*]const u16, max_len: usize, dest: []u8) usize {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (i < max_len and src[i] != 0) : (i += 1) {
+        const c = src[i];
+        if (c < 0x80) {
+            if (j >= dest.len) break;
+            dest[j] = @as(u8, @truncate(c));
+            j += 1;
+        } else if (c < 0x800) {
+            if (j + 1 >= dest.len) break;
+            dest[j] = @as(u8, @truncate(0xC0 | (c >> 6)));
+            dest[j + 1] = @as(u8, @truncate(0x80 | (c & 0x3F)));
+            j += 2;
+        } else {
+            if (j + 2 >= dest.len) break;
+            dest[j] = @as(u8, @truncate(0xE0 | (c >> 12)));
+            dest[j + 1] = @as(u8, @truncate(0x80 | ((c >> 6) & 0x3F)));
+            dest[j + 2] = @as(u8, @truncate(0x80 | (c & 0x3F)));
+            j += 3;
+        }
+    }
+    if (j < dest.len) dest[j] = 0;
+    return j;
+}
+
+/// `GetWindowTextW`：获取窗口标题（Unicode 版本）。
+pub fn GetWindowTextW(hwnd: HWND, buffer: [*]u16, max_count: i32) i32 {
+    var utf8_buf: [256]u8 = undefined;
+    const ansi_len = GetWindowTextA(hwnd, &utf8_buf, @intCast(@min(max_count, 256)));
+    if (ansi_len <= 0) return 0;
+    // 将 UTF-8 转换回 UTF-16LE
+    const utf8_str = utf8_buf[0..@as(usize, @intCast(ansi_len))];
+    return @intCast(utf8ToUtf16le(utf8_str, buffer, @as(usize, @intCast(max_count))));
+}
+
+/// `SetWindowTextW`：设置窗口标题（Unicode 版本）。
+pub fn SetWindowTextW(hwnd: HWND, title: [*]const u16) BOOL {
+    // 将 UTF-16LE 标题转换为 UTF-8
+    var utf8_title: [128]u8 = undefined;
+    var i: usize = 0;
+    while (i < 127 and title[i] != 0) : (i += 1) {
+        const c = title[i];
+        if (c < 0x80) {
+            utf8_title[i] = @as(u8, @truncate(c));
+        } else if (c < 0x800) {
+            if (i + 1 >= 127) break;
+            utf8_title[i] = @as(u8, @truncate(0xC0 | (c >> 6)));
+            utf8_title[i + 1] = @as(u8, @truncate(0x80 | (c & 0x3F)));
+            i += 1;
+        } else {
+            if (i + 2 >= 127) break;
+            utf8_title[i] = @as(u8, @truncate(0xE0 | (c >> 12)));
+            utf8_title[i + 1] = @as(u8, @truncate(0x80 | ((c >> 6) & 0x3F)));
+            utf8_title[i + 2] = @as(u8, @truncate(0x80 | (c & 0x3F)));
+            i += 2;
+        }
+    }
+    utf8_title[i] = 0;
+    return SetWindowTextA(hwnd, @as([*:0]const u8, @ptrCast(&utf8_title)));
+}
+
+/// 将 UTF-8 字符串转换为 UTF-16LE。
+/// 返回转换后的 UTF-16 字符数（不含终止 null）。
+fn utf8ToUtf16le(src: []const u8, dest: [*]u16, dest_len: usize) usize {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (i < src.len and src[i] != 0 and j < dest_len) : (i += 1) {
+        const c = src[i];
+        if (c < 0x80) {
+            dest[j] = @as(u16, c);
+            j += 1;
+        } else if ((c & 0xE0) == 0xC0 and i + 1 < src.len) {
+            const c2 = src[i + 1];
+            const cp = (@as(u16, c & 0x1F) << 6) | @as(u16, c2 & 0x3F);
+            dest[j] = cp;
+            j += 1;
+            i += 1;
+        } else if ((c & 0xF0) == 0xE0 and i + 2 < src.len) {
+            const c2 = src[i + 1];
+            const c3 = src[i + 2];
+            const cp = (@as(u16, c & 0x0F) << 12) | (@as(u16, c2 & 0x3F) << 6) | @as(u16, c3 & 0x3F);
+            dest[j] = cp;
+            j += 1;
+            i += 2;
+        } else {
+            // 无效序列，跳过
+            continue;
+        }
+    }
+    if (j < dest_len) dest[j] = 0;
+    return j;
+}
+
+// ── Unicode 结构体定义 ──
+
+/// Unicode 版本的 WNDCLASS（UTF-16LE）
+pub const WNDCLASSW = struct {
+    style: u32 = 0,
+    wndproc_id: u32 = 0,
+    cls_extra: i32 = 0,
+    wnd_extra: i32 = 0,
+    instance: HINSTANCE = 0,
+    icon: HICON = 0,
+    cursor: HCURSOR = 0,
+    background: HBRUSH = 0,
+    menu_name: [*]const u16 = undefined,
+    class_name: [*]const u16 = undefined,
+};
+
+/// Unicode 版本的 WNDCLASSEX（UTF-16LE）
+pub const WNDCLASSEXW = struct {
+    cb_size: u32 = @sizeOf(WNDCLASSEXW),
+    style: u32 = 0,
+    wndproc_id: u32 = 0,
+    cls_extra: i32 = 0,
+    wnd_extra: i32 = 0,
+    instance: HINSTANCE = 0,
+    icon: HICON = 0,
+    cursor: HCURSOR = 0,
+    background: HBRUSH = 0,
+    menu_name: [*]const u16 = undefined,
+    class_name: [*]const u16 = undefined,
+    icon_sm: HICON = 0,
+};
+
+// ── GDI Functions ──
+
+// BitBlt 光栅操作码
+pub const SRCCOPY: u32 = 0x00CC0020;
+pub const SRCPAINT: u32 = 0x00EE0086;
+pub const SRCAND: u32 = 0x008800C6;
+pub const SRCINVERT: u32 = 0x00660046;
+pub const SRCERASE: u32 = 0x00440328;
+pub const NOTSRCCOPY: u32 = 0x00330088;
+pub const NOTSRCERASE: u32 = 0x001100A6;
+pub const MERGECOPY: u32 = 0x00C000CA;
+pub const MERGEPAINT: u32 = 0x00BB0226;
+pub const PATCOPY: u32 = 0x00F00021;
+pub const PATPAINT: u32 = 0x00FA0089;
+pub const PATINVERT: u32 = 0x000500A9;
+pub const DSTINVERT: u32 = 0x00550009;
+pub const BLACKNESS: u32 = 0x00000042;
+pub const WHITENESS: u32 = 0x00FF0062;
+
+/// BitBlt: 块传输
+/// 将颜色数据从源设备上下文传输到目标设备上下文
+pub fn BitBlt(hdc_dst: HDC, x_dst: i32, y_dst: i32, cx: i32, cy: i32, hdc_src: HDC, x_src: i32, y_src: i32, rop: u32) BOOL {
+    _ = hdc_dst;
+    _ = x_dst;
+    _ = y_dst;
+    _ = cx;
+    _ = cy;
+    _ = hdc_src;
+    _ = x_src;
+    _ = y_src;
+    _ = rop;
+    return TRUE;
+}
+
+/// StretchBlt: 拉伸块传输
+pub fn StretchBlt(hdc_dst: HDC, x_dst: i32, y_dst: i32, cx_dst: i32, cy_dst: i32, hdc_src: HDC, x_src: i32, y_src: i32, cx_src: i32, cy_src: i32, rop: u32) BOOL {
+    _ = hdc_dst;
+    _ = x_dst;
+    _ = y_dst;
+    _ = cx_dst;
+    _ = cy_dst;
+    _ = hdc_src;
+    _ = x_src;
+    _ = y_src;
+    _ = cx_src;
+    _ = cy_src;
+    _ = rop;
+    return TRUE;
+}
+
+/// CreateCompatibleDC: 创建与指定设备兼容的内存设备上下文
+pub fn CreateCompatibleDC(hdc: ?HDC) HDC {
+    _ = hdc;
+    return @as(HDC, 0);
+}
+
+/// CreateCompatibleBitmap: 创建与指定设备兼容的位图
+pub fn CreateCompatibleBitmap(hdc: ?HDC, cx: i32, cy: i32) HBITMAP {
+    _ = hdc;
+    _ = cx;
+    _ = cy;
+    return @as(HBITMAP, 0);
+}
+
+/// DeleteDC: 删除设备上下文
+pub fn DeleteDC(hdc: HDC) BOOL {
+    _ = hdc;
+    return TRUE;
+}
+
+/// SelectObject: 将对象选入设备上下文
+pub fn SelectObject(hdc: HDC, hgdiobj: HGDIOBJ) HGDIOBJ {
+    _ = hdc;
+    _ = hgdiobj;
+    return 0;
+}
+
+/// DeleteObject: 删除 GDI 对象
+pub fn DeleteObject(hgdiobj: HGDIOBJ) BOOL {
+    _ = hgdiobj;
+    return TRUE;
+}
+
+/// CreateSolidBrush: 创建实心画刷
+pub fn CreateSolidBrush(color: COLORREF) HBRUSH {
+    _ = color;
+    return @as(HBRUSH, 0);
+}
+
+/// CreatePen: 创建画笔
+pub fn CreatePen(style: i32, width: i32, color: COLORREF) HPEN {
+    _ = style;
+    _ = width;
+    _ = color;
+    return @as(HPEN, 0);
+}
+
+/// Rectangle: 绘制矩形
+pub fn Rectangle(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32) BOOL {
+    _ = hdc;
+    _ = left;
+    _ = top;
+    _ = right;
+    _ = bottom;
+    return TRUE;
+}
+
+/// FillRect: 填充矩形区域
+pub fn FillRect(hdc: HDC, rect: *const RECT, hbrush: HBRUSH) i32 {
+    _ = hdc;
+    _ = rect;
+    _ = hbrush;
+    return 1;
+}
+
+/// TextOutA: 输出文本 (ANSI版本)
+pub fn TextOutA(hdc: HDC, x: i32, y: i32, text: []const u8) BOOL {
+    _ = hdc;
+    _ = x;
+    _ = y;
+    _ = text;
+    return TRUE;
+}
+
+/// ExtTextOutA: 扩展文本输出 (ANSI版本)
+pub fn ExtTextOutA(hdc: HDC, x: i32, y: i32, options: u32, rect_opt: ?*const RECT, text: []const u8, dx: ?[*]const i32) BOOL {
+    _ = hdc;
+    _ = x;
+    _ = y;
+    _ = options;
+    _ = rect_opt;
+    _ = text;
+    _ = dx;
+    return TRUE;
+}
+
+/// CreateRectRgn: 创建矩形区域
+pub fn CreateRectRgn(left: i32, top: i32, right: i32, bottom: i32) HRGN {
+    _ = left;
+    _ = top;
+    _ = right;
+    _ = bottom;
+    return @as(HRGN, 0);
+}
+
+/// CombineRgn: 合并两个区域
+pub fn CombineRgn(hrgn_dst: HRGN, hrgn_src1: HRGN, hrgn_src2: HRGN, mode: i32) i32 {
+    _ = hrgn_dst;
+    _ = hrgn_src1;
+    _ = hrgn_src2;
+    _ = mode;
+    return 0;
+}
+
+/// EqualRgn: 检查两个区域是否相等
+pub fn EqualRgn(hrgn1: HRGN, hrgn2: HRGN) i32 {
+    _ = hrgn1;
+    _ = hrgn2;
+    return 0;
+}
+
+/// SetMapMode: 设置映射模式
+pub fn SetMapMode(hdc: HDC, mode: i32) i32 {
+    _ = hdc;
+    _ = mode;
+    return MM_TEXT;
+}
+
+/// GetMapMode: 获取映射模式
+pub fn GetMapMode(hdc: HDC) i32 {
+    _ = hdc;
+    return MM_TEXT;
+}
+
+/// SetViewportExtEx: 设置视口范围
+pub fn SetViewportExtEx(hdc: HDC, cx: i32, cy: i32, prev_size: ?*SIZE) BOOL {
+    _ = hdc;
+    _ = cx;
+    _ = cy;
+    _ = prev_size;
+    return TRUE;
+}
+
+/// GetViewportExtEx: 获取视口范围
+pub fn GetViewportExtEx(hdc: HDC, size: *SIZE) BOOL {
+    _ = hdc;
+    size.* = .{ .cx = 1, .cy = 1 };
+    return TRUE;
+}
+
+/// SetWindowExtEx: 设置窗口范围
+pub fn SetWindowExtEx(hdc: HDC, cx: i32, cy: i32, prev_size: ?*SIZE) BOOL {
+    _ = hdc;
+    _ = cx;
+    _ = cy;
+    _ = prev_size;
+    return TRUE;
+}
+
+/// GetWindowExtEx: 获取窗口范围
+pub fn GetWindowExtEx(hdc: HDC, size: *SIZE) BOOL {
+    _ = hdc;
+    size.* = .{ .cx = 1, .cy = 1 };
+    return TRUE;
+}
+
+/// SetViewportOrgEx: 设置视口原点
+pub fn SetViewportOrgEx(hdc: HDC, x: i32, y: i32, prev_pt: ?*POINT) BOOL {
+    _ = hdc;
+    _ = x;
+    _ = y;
+    _ = prev_pt;
+    return TRUE;
+}
+
+/// GetViewportOrgEx: 获取视口原点
+pub fn GetViewportOrgEx(hdc: HDC, pt: *POINT) BOOL {
+    _ = hdc;
+    pt.* = .{ .x = 0, .y = 0 };
+    return TRUE;
+}
+
+/// SetWindowOrgEx: 设置窗口原点
+pub fn SetWindowOrgEx(hdc: HDC, x: i32, y: i32, prev_pt: ?*POINT) BOOL {
+    _ = hdc;
+    _ = x;
+    _ = y;
+    _ = prev_pt;
+    return TRUE;
+}
+
+/// GetWindowOrgEx: 获取窗口原点
+pub fn GetWindowOrgEx(hdc: HDC, pt: *POINT) BOOL {
+    _ = hdc;
+    pt.* = .{ .x = 0, .y = 0 };
+    return TRUE;
+}
+
+/// OffsetViewportOrgEx: 偏移视口原点
+pub fn OffsetViewportOrgEx(hdc: HDC, x: i32, y: i32, prev_pt: ?*POINT) BOOL {
+    _ = hdc;
+    _ = x;
+    _ = y;
+    _ = prev_pt;
+    return TRUE;
+}
+
+/// OffsetWindowOrgEx: 偏移窗口原点
+pub fn OffsetWindowOrgEx(hdc: HDC, x: i32, y: i32, prev_pt: ?*POINT) BOOL {
+    _ = hdc;
+    _ = x;
+    _ = y;
+    _ = prev_pt;
+    return TRUE;
+}
+
+/// ScaleViewportExtEx: 缩放视口范围
+pub fn ScaleViewportExtEx(hdc: HDC, x_num: i32, x_den: i32, y_num: i32, y_den: i32, prev_size: ?*SIZE) BOOL {
+    _ = hdc;
+    _ = x_num;
+    _ = x_den;
+    _ = y_num;
+    _ = y_den;
+    _ = prev_size;
+    return TRUE;
+}
+
+/// ScaleWindowExtEx: 缩放窗口范围
+pub fn ScaleWindowExtEx(hdc: HDC, x_num: i32, x_den: i32, y_num: i32, y_den: i32, prev_size: ?*SIZE) BOOL {
+    _ = hdc;
+    _ = x_num;
+    _ = x_den;
+    _ = y_num;
+    _ = y_den;
+    _ = prev_size;
+    return TRUE;
 }

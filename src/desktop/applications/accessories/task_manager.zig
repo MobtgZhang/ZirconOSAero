@@ -10,6 +10,7 @@ const std = @import("std");
 const fb = @import("../../../drivers/video/core/framebuffer.zig");
 const theme_mod = @import("../../kernel/theme/root.zig");
 const dwm_mod = @import("../../../drivers/video/core/dwm.zig");
+const process_table = @import("../../kernel/shell/process_table.zig");
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme_mod.rgb(r, g, b);
@@ -36,9 +37,6 @@ pub const TaskManager = struct {
     hover_app: i32,
     hover_process: i32,
     caption_hover: CaptionButtonType,
-    cpu_usage: f32,
-    mem_usage: f32,
-    process_count: u32,
 
     const CaptionButtonType = enum { none, minimize, maximize, close };
 
@@ -54,14 +52,131 @@ pub const TaskManager = struct {
             .hover_app = -1,
             .hover_process = -1,
             .caption_hover = .none,
-            .cpu_usage = 15.0,
-            .mem_usage = 2048.0,
-            .process_count = 42,
         };
     }
 
     pub fn setTab(tm: *TaskManager, tab: TaskManagerTab) void {
         tm.current_tab = tab;
+    }
+
+    /// 键盘导航：在应用列表中向上移动
+    pub fn navigateAppsUp(tm: *TaskManager) void {
+        const taskbar_apps = process_table.getTaskbarAppList();
+        const app_count = @as(i32, @intCast(@min(taskbar_apps.len, 16)));
+
+        if (app_count == 0) return;
+
+        if (tm.selected_app <= 0) {
+            tm.selected_app = app_count - 1;
+        } else {
+            tm.selected_app -= 1;
+        }
+    }
+
+    /// 键盘导航：在应用列表中向下移动
+    pub fn navigateAppsDown(tm: *TaskManager) void {
+        const taskbar_apps = process_table.getTaskbarAppList();
+        const app_count = @as(i32, @intCast(@min(taskbar_apps.len, 16)));
+
+        if (app_count == 0) return;
+
+        if (tm.selected_app >= app_count - 1) {
+            tm.selected_app = 0;
+        } else {
+            tm.selected_app += 1;
+        }
+    }
+
+    /// 键盘导航：在进程列表中向上移动
+    pub fn navigateProcessesUp(tm: *TaskManager) void {
+        const processes = process_table.getVisibleProcessList();
+        const proc_count = @as(i32, @intCast(@min(processes.len, 20)));
+
+        if (proc_count == 0) return;
+
+        if (tm.selected_process <= 0) {
+            tm.selected_process = proc_count - 1;
+        } else {
+            tm.selected_process -= 1;
+        }
+    }
+
+    /// 键盘导航：在进程列表中向下移动
+    pub fn navigateProcessesDown(tm: *TaskManager) void {
+        const processes = process_table.getVisibleProcessList();
+        const proc_count = @as(i32, @intCast(@min(processes.len, 20)));
+
+        if (proc_count == 0) return;
+
+        if (tm.selected_process >= proc_count - 1) {
+            tm.selected_process = 0;
+        } else {
+            tm.selected_process += 1;
+        }
+    }
+
+    /// 键盘导航：Tab 键切换标签页
+    pub fn navigateTabNext(tm: *TaskManager) void {
+        tm.current_tab = switch (tm.current_tab) {
+            .applications => .processes,
+            .processes => .performance,
+            .performance => .networking,
+            .networking => .users,
+            .users => .applications,
+        };
+    }
+
+    /// 键盘导航：Shift+Tab 切换到上一个标签页
+    pub fn navigateTabPrev(tm: *TaskManager) void {
+        tm.current_tab = switch (tm.current_tab) {
+            .applications => .users,
+            .processes => .applications,
+            .performance => .processes,
+            .networking => .performance,
+            .users => .networking,
+        };
+    }
+
+    /// 处理键盘导航（根据当前标签页）
+    pub fn handleNavigate(tm: *TaskManager, direction: NavigationDirection) void {
+        switch (tm.current_tab) {
+            .applications, .processes => {
+                // 应用和进程列表使用上下键导航
+                switch (direction) {
+                    .up => {
+                        if (tm.current_tab == .applications) {
+                            tm.navigateAppsUp();
+                        } else {
+                            tm.navigateProcessesUp();
+                        }
+                    },
+                    .down => {
+                        if (tm.current_tab == .applications) {
+                            tm.navigateAppsDown();
+                        } else {
+                            tm.navigateProcessesDown();
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+
+    pub const NavigationDirection = enum {
+        up,
+        down,
+        left,
+        right,
+    };
+
+    /// 刷新任务管理器数据
+    pub fn refresh(tm: *TaskManager) void {
+        // 同步进程表
+        process_table.syncFromKernelProcessTable();
+        // 更新任务栏应用列表
+        _ = tm;
     }
 
     pub fn render(tm: *TaskManager, t: *const theme_mod.ThemeColors) void {
@@ -173,25 +288,37 @@ pub const TaskManager = struct {
         fb.drawTextTransparent(x + 8, y + 5, "Task Name", rgb(0x20, 0x20, 0x30));
         fb.drawTextTransparent(x + w - 80, y + 5, "Status", rgb(0x20, 0x20, 0x30));
 
-        const apps = [_]struct { name: []const u8, status: []const u8 }{
-            .{ .name = "ZirconOSAero Desktop", .status = "Running" },
-            .{ .name = "Explorer", .status = "Running" },
-            .{ .name = "Task Manager", .status = "Running" },
-        };
+        // 从任务栏应用列表获取数据
+        const taskbar_apps = process_table.getTaskbarAppList();
+        const app_count = @min(taskbar_apps.len, 16); // 最多显示16个
 
         var app_y = y + 28;
-        for (apps, 0..) |app, idx| {
-            const is_selected = @as(i32, @intCast(idx)) == tm.selected_app;
-            const is_hover = @as(i32, @intCast(idx)) == tm.hover_app;
+        var idx: i32 = 0;
+        while (idx < app_count) : (idx += 1) {
+            const app = taskbar_apps[@intCast(idx)];
+            const is_selected = idx == tm.selected_app;
+            const is_hover = idx == tm.hover_app;
 
             if (is_selected) {
                 fb.fillRect(x + 2, app_y, w - 4, 20, rgb(0xC8, 0xDC, 0xF0));
             } else if (is_hover) {
                 fb.fillRect(x + 2, app_y, w - 4, 20, rgb(0xE8, 0xF0, 0xF8));
             }
-            fb.drawTextTransparent(x + 8, app_y + 4, app.name, rgb(0x10, 0x10, 0x18));
-            fb.drawTextTransparent(x + w - 80, app_y + 4, app.status, rgb(0x20, 0x80, 0x20));
+
+            // 绘制应用名称
+            const name_slice = app.title[0..app.title_len];
+            fb.drawTextTransparent(x + 8, app_y + 4, name_slice, rgb(0x10, 0x10, 0x18));
+
+            // 绘制状态
+            const status: []const u8 = if (app.is_minimized) "Minimized" else "Running";
+            fb.drawTextTransparent(x + w - 80, app_y + 4, status, rgb(0x20, 0x80, 0x20));
+
             app_y += 22;
+        }
+
+        // 如果没有应用，显示默认信息
+        if (app_count == 0) {
+            fb.drawTextTransparent(x + 8, app_y, "(No running applications)", rgb(0x80, 0x80, 0x80));
         }
     }
 
@@ -203,19 +330,16 @@ pub const TaskManager = struct {
         fb.drawTextTransparent(x + 260, y + 5, "CPU", rgb(0x20, 0x20, 0x30));
         fb.drawTextTransparent(x + 320, y + 5, "Memory", rgb(0x20, 0x20, 0x30));
 
-        const processes = [_]struct { name: []const u8, pid: u32, cpu: f32, mem: u32 }{
-            .{ .name = "System", .pid = 4, .cpu = 2.0, .mem = 51200 },
-            .{ .name = "smss.exe", .pid = 248, .cpu = 0.1, .mem = 2048 },
-            .{ .name = "csrss.exe", .pid = 376, .cpu = 0.5, .mem = 8192 },
-            .{ .name = "wininit.exe", .pid = 328, .cpu = 0.2, .mem = 6144 },
-            .{ .name = "services.exe", .pid = 456, .cpu = 1.0, .mem = 16384 },
-            .{ .name = "explorer.exe", .pid = 1024, .cpu = 1.5, .mem = 32768 },
-        };
+        // 从桌面进程表获取数据
+        const processes = process_table.getVisibleProcessList();
+        const proc_count = @min(processes.len, 20); // 最多显示20个
 
         var proc_y = y + 28;
-        for (processes, 0..) |proc, idx| {
-            const is_selected = @as(i32, @intCast(idx)) == tm.selected_process;
-            const is_hover = @as(i32, @intCast(idx)) == tm.hover_process;
+        var idx: i32 = 0;
+        while (idx < proc_count) : (idx += 1) {
+            const proc = processes[@intCast(idx)];
+            const is_selected = idx == tm.selected_process;
+            const is_hover = idx == tm.hover_process;
 
             if (is_selected) {
                 fb.fillRect(x + 2, proc_y, w - 4, 18, rgb(0xC8, 0xDC, 0xF0));
@@ -223,25 +347,36 @@ pub const TaskManager = struct {
                 fb.fillRect(x + 2, proc_y, w - 4, 18, rgb(0xE8, 0xF0, 0xF8));
             }
 
-            fb.drawTextTransparent(x + 8, proc_y + 2, proc.name, rgb(0x10, 0x10, 0x18));
+            // 绘制进程名称
+            const name_slice = proc.name[0..proc.name_len];
+            fb.drawTextTransparent(x + 8, proc_y + 2, name_slice, rgb(0x10, 0x10, 0x18));
 
+            // 绘制PID
             var pid_buf: [16]u8 = undefined;
             const pid_str = std.fmt.bufPrint(&pid_buf, "{d}", .{proc.pid}) catch "";
             fb.drawTextTransparent(x + 200, proc_y + 2, pid_str, rgb(0x10, 0x10, 0x18));
 
+            // 绘制CPU使用率
             var cpu_buf: [16]u8 = undefined;
-            const cpu_str = std.fmt.bufPrint(&cpu_buf, "{d:.1}%", .{proc.cpu}) catch "";
+            const cpu_str = std.fmt.bufPrint(&cpu_buf, "{d:.1}%", .{proc.cpu_percent}) catch "";
             fb.drawTextTransparent(x + 260, proc_y + 2, cpu_str, rgb(0x10, 0x10, 0x18));
 
+            // 绘制内存使用
             var mem_buf: [16]u8 = undefined;
-            const mem_str = std.fmt.bufPrint(&mem_buf, "{d}K", .{proc.mem}) catch "";
+            const mem_str = std.fmt.bufPrint(&mem_buf, "{d}K", .{proc.mem_kb}) catch "";
             fb.drawTextTransparent(x + 320, proc_y + 2, mem_str, rgb(0x10, 0x10, 0x18));
 
             proc_y += 20;
         }
+
+        // 如果没有进程，显示默认信息
+        if (proc_count == 0) {
+            fb.drawTextTransparent(x + 8, proc_y, "(No processes)", rgb(0x80, 0x80, 0x80));
+        }
     }
 
     fn renderPerformanceTab(tm: *TaskManager, x: i32, y: i32, w: i32, h: i32) void {
+        _ = tm;
         const graph_w = @divTrunc(w, 2) - 20;
         const graph_h = @as(i32, @intCast(@as(f32, @floatFromInt(h)) * 0.6));
 
@@ -249,9 +384,13 @@ pub const TaskManager = struct {
         fb.fillRect(x + 8, y + 28, graph_w, graph_h, rgb(0xFF, 0xFF, 0xFF));
         fb.draw3DRect(x + 8, y + 28, graph_w, graph_h, rgb(0xC0, 0xC8, 0xD0), rgb(0xFF, 0xFF, 0xFF));
 
+        // 获取进程数量
+        const proc_count = process_table.getVisibleProcessCount();
+
+        // 模拟CPU使用率（实际需要从内核采样）
         var graph_x = x + 12;
         const graph_y = y + 30;
-        var cpu_val: f32 = tm.cpu_usage;
+        var cpu_val: f32 = @as(f32, @floatFromInt(proc_count)) * 3.0; // 基于进程数估算
         while (graph_x < x + 8 + graph_w - 2) : (graph_x += 3) {
             cpu_val += (std.mem.readIntLittle(u32, &[_]u8{0}) % 10) - 5;
             if (cpu_val < 5) cpu_val = 5;
@@ -264,8 +403,9 @@ pub const TaskManager = struct {
         fb.fillRect(x + graph_w + 30, y + 28, graph_w, graph_h, rgb(0xFF, 0xFF, 0xFF));
         fb.draw3DRect(x + graph_w + 30, y + 28, graph_w, graph_h, rgb(0xC0, 0xC8, 0xD0), rgb(0xFF, 0xFF, 0xFF));
 
+        // 显示内存信息
         var mem_buf: [64]u8 = undefined;
-        const mem_str = std.fmt.bufPrint(&mem_buf, "Physical Memory: {d:.0} MB used of 4096 MB", .{tm.mem_usage}) catch "";
+        const mem_str = std.fmt.bufPrint(&mem_buf, "Processes: {d}", .{proc_count}) catch "";
         fb.drawTextTransparent(x + graph_w + 40, y + graph_h + 40, mem_str, rgb(0x20, 0x20, 0x30));
     }
 
@@ -301,8 +441,11 @@ pub const TaskManager = struct {
         fb.fillRect(sx, sy, sw, 20, rgb(0xE8, 0xEC, 0xF0));
         fb.drawHLine(sx, sy, sw, rgb(0xFF, 0xFF, 0xFF));
 
+        // 使用真实的进程数量
+        const proc_count = process_table.getVisibleProcessCount();
+
         var proc_buf: [32]u8 = undefined;
-        const proc_str = std.fmt.bufPrint(&proc_buf, "{d} processes", .{tm.process_count}) catch "";
+        const proc_str = std.fmt.bufPrint(&proc_buf, "{d} processes", .{proc_count}) catch "";
         fb.drawTextTransparent(sx + 8, sy + 4, proc_str, rgb(0x30, 0x30, 0x40));
         fb.drawTextTransparent(sx + sw - 100, sy + 4, "Performance: Normal", rgb(0x30, 0x30, 0x40));
     }

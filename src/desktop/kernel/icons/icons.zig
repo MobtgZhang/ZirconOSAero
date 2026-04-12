@@ -161,6 +161,11 @@ fn drawSvgIcon(id: IconId, dest_x: i32, dest_y: i32, dest_w: i32, dest_h: i32) v
     fb.blitRgbaScaled(icon.rgba, icon.w, icon.h, final_x, final_y, scaled_w, scaled_h);
 }
 
+/// 公共接口：按像素尺寸绘制 SVG 图标（用于开始菜单等需要精确尺寸的场景）
+pub fn drawSvgIconBySize(id: IconId, dest_x: i32, dest_y: i32, dest_w: u32, dest_h: u32) void {
+    drawSvgIcon(id, dest_x, dest_y, @as(i32, @intCast(dest_w)), @as(i32, @intCast(dest_h)));
+}
+
 /// 绘制 Aero 图标：透明背景 + SVG 图标内容 + 悬停高亮边框
 fn drawAeroIcon(id: IconId, screen_x: i32, screen_y: i32, scale: u32) void {
     const s: i32 = if (scale < 1) 1 else @intCast(scale);

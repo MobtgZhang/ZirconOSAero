@@ -19,6 +19,7 @@ const desktop_icons_mod = @import("desktop_icons.zig");
 const drag_state_mod = @import("drag_state.zig");
 const classic_shell_mod = @import("classic_shell.zig");
 const taskbar_mod = @import("../taskbar/root.zig");
+const process_table_mod = @import("process_table.zig");
 
 pub const builtin_apps = builtin_apps_mod;
 pub const explorer_format = explorer_format_mod;
@@ -29,9 +30,51 @@ pub const explorer_nav_pane = explorer_nav_pane_mod;
 pub const explorer_details_view = explorer_details_view_mod;
 pub const explorer_view_modes = explorer_view_modes_mod;
 pub const explorer_selection = explorer_selection_mod;
+pub const explorer_search = explorer_search_mod;
+pub const explorer_status_bar = explorer_status_bar_mod;
+pub const explorer_file_ops = explorer_file_ops_mod;
+pub const explorer_panes = explorer_panes_mod;
+pub const explorer_shortcuts = explorer_shortcuts_mod;
+pub const explorer_fs = explorer_fs_mod;
+pub const explorer_fs_integration = explorer_fs_mod;
+pub const desktop_icons = desktop_icons_mod;
 pub const drag_state = drag_state_mod;
 pub const classic_shell = classic_shell_mod;
 pub const taskbar = taskbar_mod;
+pub const process_table = process_table_mod;
+
+// Re-export process table functions
+pub const initDesktopProcessTable = process_table_mod.initDesktopProcessTable;
+pub const registerDesktopProcess = process_table_mod.registerDesktopProcess;
+pub const unregisterDesktopProcess = process_table_mod.unregisterDesktopProcess;
+pub const findDesktopProcessByPid = process_table_mod.findDesktopProcessByPid;
+pub const updateProcessCpu = process_table_mod.updateProcessCpu;
+pub const updateProcessMem = process_table_mod.updateProcessMem;
+pub const updateProcessState = process_table_mod.updateProcessState;
+pub const updateProcessWindowTitle = process_table_mod.updateProcessWindowTitle;
+pub const getVisibleProcessCount = process_table_mod.getVisibleProcessCount;
+pub const getVisibleProcessList = process_table_mod.getVisibleProcessList;
+pub const syncFromKernelProcessTable = process_table_mod.syncFromKernelProcessTable;
+pub const addTaskbarApp = process_table_mod.addTaskbarApp;
+pub const removeTaskbarApp = process_table_mod.removeTaskbarApp;
+pub const setTaskbarAppMinimized = process_table_mod.setTaskbarAppMinimized;
+pub const activateTaskbarApp = process_table_mod.activateTaskbarApp;
+pub const getActiveTaskbarApp = process_table_mod.getActiveTaskbarApp;
+pub const getTaskbarAppCount = process_table_mod.getTaskbarAppCount;
+pub const getTaskbarAppList = process_table_mod.getTaskbarAppList;
+pub const DesktopProcessEntry = process_table_mod.DesktopProcessEntry;
+pub const TaskbarAppEntry = process_table_mod.TaskbarAppEntry;
+
+// Re-export builtin_apps window management
+pub const minimizeWindow = builtin_apps_mod.minimizeWindow;
+pub const maximizeWindow = builtin_apps_mod.maximizeWindow;
+pub const closeWindow = builtin_apps_mod.closeWindow;
+pub const isWindowMinimized = builtin_apps_mod.isWindowMinimized;
+pub const getWindowState = builtin_apps_mod.getWindowState;
+pub const getOpenWindowCount = builtin_apps_mod.getOpenWindowCount;
+pub const getWindowList = builtin_apps_mod.getWindowList;
+pub const getFocusedSlotIndex = builtin_apps_mod.getFocusedSlotIndex;
+pub const WinState = builtin_apps_mod.WinState;
 
 // Re-export explorer state functions
 pub const explorerCanNavigateBack = explorer_state_mod.explorerCanNavigateBack;
@@ -70,6 +113,12 @@ pub const getExplorerSortOrder = explorer_state_mod.getExplorerSortOrder;
 pub const setExplorerSortField = explorer_state_mod.setExplorerSortField;
 pub const getExplorerViewMode = explorer_state_mod.getExplorerViewMode;
 pub const setExplorerViewMode = explorer_state_mod.setExplorerViewMode;
+pub const getExplorerScrollOffset = explorer_state_mod.getExplorerScrollOffset;
+pub const setExplorerScrollOffset = explorer_state_mod.setExplorerScrollOffset;
+pub const explorerScrollBy = explorer_state_mod.explorerScrollBy;
+pub const explorerScrollToItem = explorer_state_mod.explorerScrollToItem;
+pub const explorerResetScroll = explorer_state_mod.explorerResetScroll;
+pub const explorerClampScroll = explorer_state_mod.explorerClampScroll;
 pub const getExplorerContextMenuKind = explorer_state_mod.getExplorerContextMenuKind;
 pub const setExplorerContextMenuKind = explorer_state_mod.setExplorerContextMenuKind;
 pub const clearExplorerContextMenu = explorer_state_mod.clearExplorerContextMenu;
@@ -251,3 +300,45 @@ pub const commitDesktopRename = desktop_icons_mod.commitDesktopRename;
 pub const cancelDesktopRename = desktop_icons_mod.cancelDesktopRename;
 pub const renderDesktopRenameOverlay = desktop_icons_mod.renderDesktopRenameOverlay;
 pub const renderDesktopIcon = desktop_icons_mod.renderDesktopIcon;
+pub const updateDesktopHover = desktop_icons_mod.updateDesktopHover;
+pub const isHoverEffective = desktop_icons_mod.isHoverEffective;
+pub const getHoverAnimProgress = desktop_icons_mod.getHoverAnimProgress;
+pub const getDesktopHoverIndex = desktop_icons_mod.getDesktopHoverIndex;
+pub const setDesktopHoverIndex = desktop_icons_mod.setDesktopHoverIndex;
+pub const getDesktopSelectedIndex = desktop_icons_mod.getDesktopSelectedIndex;
+pub const setDesktopSelectedIndex = desktop_icons_mod.setDesktopSelectedIndex;
+
+// Re-export desktop icons keyboard navigation
+pub const navigateDesktopUp = desktop_icons_mod.navigateUp;
+pub const navigateDesktopDown = desktop_icons_mod.navigateDown;
+pub const navigateDesktopLeft = desktop_icons_mod.navigateLeft;
+pub const navigateDesktopRight = desktop_icons_mod.navigateRight;
+pub const openSelectedDesktopIcon = desktop_icons_mod.openSelected;
+pub const clearDesktopSelection = desktop_icons_mod.clearSelection;
+pub const isDesktopFocused = desktop_icons_mod.isDesktopFocused;
+pub const setDesktopFocused = desktop_icons_mod.setDesktopFocused;
+
+// Re-export taskbar navigation
+pub const navigateTaskbarUp = process_table_mod.navigateTaskbarUp;
+pub const navigateTaskbarDown = process_table_mod.navigateTaskbarDown;
+pub const navigateTaskbarLeft = process_table_mod.navigateTaskbarLeft;
+pub const navigateTaskbarRight = process_table_mod.navigateTaskbarRight;
+pub const activateSelectedTaskbarApp = process_table_mod.activateSelectedTaskbarApp;
+pub const isTaskbarNavigationActive = process_table_mod.isTaskbarNavigationActive;
+pub const activateTaskbarNavigation = process_table_mod.activateTaskbarNavigation;
+pub const getTaskbarSelectedIndex = process_table_mod.getTaskbarSelectedIndex;
+
+// Re-export startmenu navigation
+pub const startmenuNavigateUp = @import("../startmenu/startmenu.zig").navigateUp;
+pub const startmenuNavigateDown = @import("../startmenu/startmenu.zig").navigateDown;
+pub const startmenuNavigateLeft = @import("../startmenu/startmenu.zig").navigateLeft;
+pub const startmenuNavigateRight = @import("../startmenu/startmenu.zig").navigateRight;
+pub const isStartmenuVisible = @import("../startmenu/startmenu.zig").isVisible;
+pub const toggleStartmenu = @import("../startmenu/startmenu.zig").toggle;
+
+// Re-export explorer navigation scroll联动
+pub const scrollToSelectedItem = explorer_state_mod.scrollToSelectedItem;
+pub const scrollToGridItem = explorer_state_mod.scrollToGridItem;
+pub const getIconHeightForViewMode = explorer_state_mod.getIconHeightForViewMode;
+pub const getIconWidthForViewMode = explorer_state_mod.getIconWidthForViewMode;
+pub const calculateGridColumnCount = explorer_state_mod.calculateGridColumnCount;

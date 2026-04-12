@@ -20,8 +20,12 @@ const app_cfg = @import("../../../config/config.zig");
 const builtin_apps = @import("../shell/builtin_apps.zig");
 const kernel32 = @import("../../../libs/kernel32.zig");
 
-fn drawMenuIcon(id: icons.IconId, x: i32, y: i32, scale: u32) void {
-    icons.drawThemedIcon(id, x, y, scale, .aero, false);
+fn drawMenuIcon(id: icons.IconId, x: i32, y: i32, size_or_scale: i32) void {
+    if (size_or_scale <= 0) {
+        icons.drawThemedIcon(id, x, y, 0, .aero, false);
+    } else {
+        icons.drawSvgIconBySize(id, x, y, @as(u32, @intCast(size_or_scale)), @as(u32, @intCast(size_or_scale)));
+    }
 }
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
@@ -55,23 +59,15 @@ const aero7_left = [_]MenuItem{
     .{ .label = "Calculator", .icon_id = .calculator },
     .{ .label = "Snipping Tool", .icon_id = .pictures },
 };
-/// Win7 右列：库 → 游戏 → 计算机/网络 → 控制面板与程序 → 帮助与运行。
+/// Win7 右列：库 → 游戏 → 计算机/控制面板/帮助。
 const aero7_right = [_]MenuItem{
     .{ .label = "Documents", .icon_id = .documents, .bold = true },
     .{ .label = "Pictures", .icon_id = .pictures, .bold = true },
     .{ .label = "Music", .icon_id = .music, .bold = true },
-    .{ .label = "Videos", .icon_id = .folder, .bold = true },
-    .{ .label = "Downloads", .icon_id = .folder, .bold = true },
     .{ .label = "Games", .icon_id = .folder, .separator_after = true },
     .{ .label = "Computer", .icon_id = .computer, .bold = true },
-    .{ .label = "Network", .icon_id = .network },
     .{ .label = "Control Panel", .icon_id = .control_panel },
-    .{ .label = "Devices and Printers", .icon_id = .printer },
-    .{ .label = "Default Programs", .icon_id = .settings },
-    .{ .label = "System Information", .icon_id = .info },
-    .{ .label = "Disk Cleanup", .icon_id = .settings },
     .{ .label = "Help and Support", .icon_id = .settings, .separator_after = true },
-    .{ .label = "Run...", .icon_id = .terminal },
 };
 
 pub fn getLeftMenuItems() []const MenuItem {
@@ -85,7 +81,7 @@ pub fn getRightMenuItems() []const MenuItem {
 /// Win7 开始菜单布局常量（两栏设计）
 /// ┌─────────────────────────┬───────────────────┐
 /// │ 左侧程序列表 (228px)     │ 右侧用户/链接 (200px)│
-/// │ - 大图标程序列表          │ - 用户头像 (超出边框) │
+/// │ - 小图标程序列表          │ - 用户头像 (右上角方块)│
 /// │ - All Programs          │ - 用户名            │
 /// │ - 搜索框 (底部)         │ - 库链接            │
 /// │                         │ - 系统链接          │
@@ -94,13 +90,12 @@ pub fn getRightMenuItems() []const MenuItem {
 const MENU_W: i32 = 428; // 总宽度
 const LEFT_COL_W: i32 = 228; // 左侧程序列表宽度
 const RIGHT_COL_W: i32 = 200; // 右侧用户/链接宽度
-const ROW_H: i32 = 44; // 程序行高度（大图标模式）
-const ICON_SIZE: i32 = 48; // 程序图标尺寸
-const HEADER_H: i32 = 76; // 用户头像区域高度（包含溢出部分）
-const AVATAR_OVERFLOW: i32 = 24; // 头像向上超出边框的高度
+const ROW_H: i32 = 28; // 程序行高度（小图标模式，与 Win7 一致）
+const ICON_SIZE: i32 = 24; // 程序图标尺寸（16-24px）
 const AVATAR_SIZE: i32 = 48; // 头像尺寸（椭圆形）
-const SEARCH_H: i32 = 36; // 搜索框高度
-const BOTTOM_H: i32 = 44; // 底部区域高度
+const AVATAR_BOX_SIZE: i32 = 52; // 头像方块尺寸
+const SEARCH_H: i32 = 26; // 搜索框高度
+const BOTTOM_H: i32 = 40; // 底部区域高度
 const CORNER_R: i32 = 8; // 圆角半径
 
 /// 大屏下 Win7 风格主面板目标高度（固定常量，用于边界检测）
@@ -298,24 +293,26 @@ pub fn hide() void {
 
 /// 每帧调用以推进动画状态
 pub fn updateAnimation() void {
-    // 简化动画：直接跳到目标状态，避免动画导致的视觉不一致
-    // 问题根源：动画过程中的视觉变化导致用户体验混乱
     switch (anim_state) {
         .hidden => {},
         .opening => {
-            // 直接完成展开动画
-            anim_progress = 1.0;
-            anim_state = .open;
+            anim_progress += 1.0 / @as(f32, @floatFromInt(ANIM_FRAMES));
+            if (anim_progress >= 1.0) {
+                anim_progress = 1.0;
+                anim_state = .open;
+            }
             menu_visible = true;
         },
         .open => {
             menu_visible = true;
         },
         .closing => {
-            // 直接完成关闭动画
-            anim_progress = 0.0;
-            anim_state = .hidden;
-            menu_visible = false;
+            anim_progress -= 1.0 / @as(f32, @floatFromInt(ANIM_FRAMES));
+            if (anim_progress <= 0.0) {
+                anim_progress = 0.0;
+                anim_state = .hidden;
+                menu_visible = false;
+            }
         },
     }
 
@@ -332,16 +329,19 @@ pub fn updateAnimation() void {
         }
     }
 
-    // 更新悬停平滑过渡
+    // 更新悬停平滑过渡：只在当前过渡已完成时才接受新目标
+    // 防止快速悬停变化导致立即跳变
     if (hover_index != hover_display_index) {
         if (hover_transition_progress >= 1.0) {
             hover_display_index = hover_index;
             hover_transition_progress = 0.0;
         }
+        // 目标改变时不要立即跳变，等待过渡完成
     }
+    // 过渡进度始终推进（使用 ease-out 缓动）
     if (hover_transition_progress < 1.0) {
         hover_transition_progress += 1.0 / @as(f32, @floatFromInt(HOVER_TRANSITION_FRAMES));
-        if (hover_transition_progress > 1.0) {
+        if (hover_transition_progress >= 1.0) {
             hover_transition_progress = 1.0;
             hover_display_index = hover_index;
         }
@@ -485,9 +485,10 @@ pub fn getAnimState() AnimState {
 }
 
 pub fn toggle(_: MenuStyle) void {
-    // 节流：防止快速连击（100ms 最小间隔）
+    // 节流：快速连击时播放 Orb 按压动画，但不切换菜单
     const now = kernel32.GetTickCount();
     if (now -% last_toggle_tick < TOGGLE_THROTTLE_MS) {
+        setOrbPressed(true);
         return;
     }
     last_toggle_tick = now;
@@ -513,27 +514,43 @@ pub fn toggle(_: MenuStyle) void {
 pub fn navigateUp() void {
     if (anim_state == .hidden) return;
     const current = hover_index;
+    const left_len = @as(i32, @intCast(aero7_left.len));
+    const right_len = @as(i32, @intCast(aero7_right.len));
 
     if (current < 0) {
         hover_index = 0;
     } else if (left_pane_view == .all_programs) {
         // all_programs 视图：程序行 ↔ 返回行。
         if (current >= IDX_ALLPROG_BASE and current < IDX_ALLPROG_BASE + ALL_PROG_COUNT) {
-            if (current > IDX_ALLPROG_BASE) hover_index = current - 1;
+            if (current > IDX_ALLPROG_BASE) {
+                hover_index = current - 1;
+            } else {
+                // 循环到最后一个程序项
+                hover_index = IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1;
+            }
         } else if (current == IDX_BACK) {
+            hover_index = IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1;
+        } else if (current == IDX_ALL) {
             hover_index = IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1;
         }
     } else {
         // pinned 视图。
-        if (current < aero7_left.len) {
-            if (current > 0) hover_index = current - 1;
-        } else if (current == IDX_ALL) {
-            hover_index = @as(i32, @intCast(aero7_left.len)) - 1;
-        } else if (current >= 100 and current < IDX_FLYOUT_BASE) {
-            if (current > 100) {
+        if (current >= 0 and current < left_len) {
+            if (current > 0) {
                 hover_index = current - 1;
             } else {
-                hover_index = 100 + @as(i32, @intCast(aero7_right.len)) - 1;
+                // 已在左列第一项，循环到右列最后一项
+                hover_index = 100 + right_len - 1;
+            }
+        } else if (current == IDX_ALL) {
+            hover_index = left_len - 1;
+        } else if (current >= 100 and current < IDX_FLYOUT_BASE) {
+            const ri = current - 100;
+            if (ri > 0) {
+                hover_index = current - 1;
+            } else {
+                // 已在右列第一项，循环到左列最后一项
+                hover_index = left_len - 1;
             }
         }
     }
@@ -544,6 +561,8 @@ pub fn navigateUp() void {
 pub fn navigateDown() void {
     if (anim_state == .hidden) return;
     const current = hover_index;
+    const left_len = @as(i32, @intCast(aero7_left.len));
+    const right_len = @as(i32, @intCast(aero7_right.len));
 
     if (current < 0) {
         hover_index = 0;
@@ -551,21 +570,32 @@ pub fn navigateDown() void {
         // all_programs 视图：程序行 ↔ 返回行。
         if (current >= IDX_ALLPROG_BASE and current < IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1) {
             hover_index = current + 1;
-        } else if (current == IDX_BACK or current < IDX_ALLPROG_BASE) {
-            hover_index = IDX_ALLPROG_BASE;
         } else if (current == IDX_ALLPROG_BASE + ALL_PROG_COUNT - 1) {
-            hover_index = IDX_BACK;
+            // 循环到第一项
+            hover_index = IDX_ALLPROG_BASE;
+        } else if (current == IDX_BACK) {
+            hover_index = IDX_ALLPROG_BASE;
+        } else if (current == IDX_ALL) {
+            hover_index = IDX_ALLPROG_BASE;
+        } else if (current < IDX_ALLPROG_BASE) {
+            hover_index = IDX_ALLPROG_BASE;
         }
     } else {
         // pinned 视图。
-        if (current < aero7_left.len - 1) {
+        if (current >= 0 and current < left_len - 1) {
             hover_index = current + 1;
-        } else if (current == aero7_left.len - 1) {
+        } else if (current == left_len - 1) {
+            // 左列最后一项，移动到 IDX_ALL
             hover_index = IDX_ALL;
         } else if (current == IDX_ALL) {
             hover_index = 100;
-        } else if (current >= 100 and current < IDX_FLYOUT_BASE - 1) {
+        } else if (current >= 100 and current < 100 + right_len - 1) {
             hover_index = current + 1;
+        } else if (current == 100 + right_len - 1) {
+            // 右列最后一项，循环到左列第一项
+            hover_index = 0;
+        } else if (current == IDX_FOOT_SHUTDOWN_BTN) {
+            hover_index = 100;
         }
     }
     updateHoverTransition();
@@ -615,11 +645,11 @@ pub fn executeSelectedItem(scr_w: i32, scr_h: i32) MenuAction {
     return handleAero7MenuClick(0, 0, scr_w, scr_h);
 }
 
-/// 更新悬停过渡状态
+/// 更新悬停过渡状态：只在当前过渡已完成时才接受新目标
 fn updateHoverTransition() void {
-    if (hover_index != hover_display_index) {
-        hover_display_index = hover_index;
+    if (hover_index != hover_display_index and hover_transition_progress >= 1.0) {
         hover_transition_progress = 0.0;
+        hover_display_index = hover_index;
     }
 }
 
@@ -746,7 +776,8 @@ fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
     const split_x = L.split_x;
     const all_prog_y = L.all_prog_y;
     const left_col_end_y = leftColumnBottomY(content_y, all_prog_y);
-    const right_content_start_y = content_y + AVATAR_SIZE + 6 + 16;
+    // 右侧栏项目起始 Y = 用户名下方
+    const right_content_start_y = content_y + 4 + 14 + 8;
 
     // 固定索引（pinned/all_programs 视图均存在）。
     if (idx >= 0 and idx < aero7_left.len) {
@@ -760,22 +791,23 @@ fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
     if (idx == IDX_BACK) {
         // 「返回」行：左列底部。
         return .{
-            .x = main_x + 6,
-            .y = left_col_end_y - ROW_H,
-            .w = LEFT_COL_W - 12,
+            .x = main_x + 4,
+            .y = left_col_end_y - ROW_H - 2,
+            .w = LEFT_COL_W - 8,
             .h = ROW_H,
         };
     }
     if (idx == IDX_ALL) {
         return .{
-            .x = main_x + 6,
+            .x = main_x + 4,
             .y = all_prog_y - 1,
-            .w = LEFT_COL_W - 12,
+            .w = LEFT_COL_W - 8,
             .h = ROW_H,
         };
     }
-    if (idx == IDX_FOOT_SHUTDOWN_BTN or idx == IDX_FOOT_SHUTDOWN_CHEVRON) {
-        const sd_x = main_x + main_w - 116;
+    if (idx == IDX_FOOT_SHUTDOWN_BTN) {
+        // 关机按钮（Win7 风格按钮）
+        const sd_x = main_x + main_w - 106;
         const sd_y = bottom_y + @divTrunc(BOTTOM_H - 28, 2);
         return .{ .x = sd_x, .y = sd_y, .w = 106, .h = 28 };
     }
@@ -789,15 +821,15 @@ fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
     // all_programs 视图下的程序行：在左列内渲染，使用左列几何。
     if (idx >= IDX_ALLPROG_BASE and idx < IDX_ALLPROG_BASE + ALL_PROG_COUNT) {
         const row_i = idx - IDX_ALLPROG_BASE;
-        var iy: i32 = content_y + 6;
+        var iy: i32 = content_y + 8;
         var i: i32 = 0;
         while (i < ALL_PROG_COUNT) : (i += 1) {
             if (!menuItemMatchesSearch(allProgEntryLabel(i))) continue;
             if (i == row_i) {
                 return .{
-                    .x = main_x + 6,
-                    .y = iy - 1,
-                    .w = LEFT_COL_W - 12,
+                    .x = main_x + 4,
+                    .y = iy,
+                    .w = LEFT_COL_W - 8,
                     .h = ROW_H,
                 };
             }
@@ -809,42 +841,42 @@ fn hoverIndexRowBounds(scr_w: i32, scr_h: i32, idx: i32) ?MenuRect {
 }
 
 fn hoverIndexRowBoundsLeft(_: i32, li_target: i32, content_y: i32, all_prog_y: i32, main_x: i32, _: i32) ?MenuRect {
-    var iy: i32 = content_y + 6;
+    var iy: i32 = content_y + 8;
     for (aero7_left, 0..) |item, li| {
         if (!menuItemMatchesSearch(item.label)) continue;
         if (iy + ROW_H > all_prog_y - 2) break;
         if (@as(i32, @intCast(li)) == li_target) {
             return .{
-                .x = main_x + 6,
-                .y = iy - 1,
-                .w = LEFT_COL_W - 12,
+                .x = main_x + 4,
+                .y = iy,
+                .w = LEFT_COL_W - 8,
                 .h = ROW_H,
             };
         }
         iy += ROW_H;
         if (search_len == 0 and item.separator_after) {
-            iy += 4;
-            if (li + 1 == pinned_left_count) iy += 5;
+            iy += 6;
+            if (li + 1 == pinned_left_count) iy += 4;
         }
     }
     return null;
 }
 
 fn hoverIndexRowBoundsRight(_: i32, ri: usize, bottom_y: i32, split_x: i32, _: i32, main_w: i32, right_start_y: i32) ?MenuRect {
-    var iy: i32 = right_start_y + 6;
+    var iy: i32 = right_start_y;
     for (aero7_right, 0..) |item, rj| {
         if (!menuItemMatchesSearch(item.label)) continue;
         if (iy + ROW_H > bottom_y - 6) break;
         if (rj == ri) {
             return .{
-                .x = split_x + 4,
-                .y = iy - 1,
-                .w = main_w - LEFT_COL_W - 12,
+                .x = split_x + 2,
+                .y = iy,
+                .w = main_w - LEFT_COL_W - 4,
                 .h = ROW_H,
             };
         }
         iy += ROW_H;
-        if (search_len == 0 and item.separator_after) iy += 4;
+        if (search_len == 0 and item.separator_after) iy += 6;
     }
     return null;
 }
@@ -898,13 +930,15 @@ fn innerLayout(scr_h: i32) struct {
     const rail: i64 = 0; // No left rail in Win7 two-column layout
     const main_x = clampMenuI32(@as(i64, inner_x) + rail);
     const main_w = @max(0, clampMenuI32(@as(i64, inner_w) - rail));
-    const content_y = clampMenuI32(@as(i64, inner_y) + @as(i64, HEADER_H) + 2);
-    const mid_raw = @as(i64, inner_h) - @as(i64, HEADER_H) - @as(i64, BOTTOM_H) - 6;
+    // 左列内容从顶部开始（无 header 区）
+    const content_y = inner_y;
+    const mid_raw = @as(i64, inner_h) - @as(i64, BOTTOM_H);
     const mid_h = @max(0, clampMenuI32(mid_raw));
     const bottom_y = clampMenuI32(@as(i64, inner_y) + @as(i64, inner_h) - @as(i64, BOTTOM_H));
     const foot_y = bottom_y;
     const search_y = bottom_y;
     const split_x = clampMenuI32(@as(i64, main_x) + @as(i64, LEFT_COL_W));
+    // All Programs 行在内容区底部
     const all_prog_y = clampMenuI32(@as(i64, content_y) + @as(i64, mid_h) - @as(i64, ROW_H) - 6);
     return .{
         .inner_x = inner_x,
@@ -926,17 +960,17 @@ fn innerLayout(scr_h: i32) struct {
 fn leftColumnHoverIndex(px: i32, py: i32, content_y: i32, all_prog_y: i32, main_x: i32, split_x: i32) i32 {
     const pxi = @as(i64, px);
     const pyi = @as(i64, py);
-    if (pxi < @as(i64, main_x) + 8 or pxi >= @as(i64, split_x) or
+    if (pxi < @as(i64, main_x) + 4 or pxi >= @as(i64, split_x) or
         pyi < @as(i64, content_y) + 6 or pyi >= @as(i64, all_prog_y)) return -1;
-    var iy = @as(i64, content_y) + 6;
+    var iy = @as(i64, content_y) + 8;
     const row = @as(i64, ROW_H);
     for (aero7_left, 0..) |item, li| {
         if (!menuItemMatchesSearch(item.label)) continue;
         if (pyi >= iy and pyi < iy + row) return @intCast(li);
         iy += row;
         if (search_len == 0 and item.separator_after) {
-            iy += 4;
-            if (li + 1 == pinned_left_count) iy += 5;
+            iy += 6;
+            if (li + 1 == pinned_left_count) iy += 4;
         }
     }
     return -1;
@@ -945,22 +979,22 @@ fn leftColumnHoverIndex(px: i32, py: i32, content_y: i32, all_prog_y: i32, main_
 fn rightColumnHoverIndex(px: i32, py: i32, bottom_y: i32, split_x: i32, main_x: i32, main_w: i32, right_start_y: i32) i32 {
     const pxi = @as(i64, px);
     const pyi = @as(i64, py);
-    if (pxi < @as(i64, split_x) + 6 or pxi >= @as(i64, main_x) + @as(i64, main_w) - 8 or
-        pyi < @as(i64, right_start_y) + 6 or pyi >= @as(i64, bottom_y) - 4) return -1;
-    var iy = @as(i64, right_start_y) + 6;
+    if (pxi < @as(i64, split_x) + 2 or pxi >= @as(i64, main_x) + @as(i64, main_w) - 2 or
+        pyi < @as(i64, right_start_y) or pyi >= @as(i64, bottom_y) - 4) return -1;
+    var iy = @as(i64, right_start_y);
     const row = @as(i64, ROW_H);
     for (aero7_right, 0..) |item, ri| {
         if (!menuItemMatchesSearch(item.label)) continue;
         if (pyi >= iy and pyi < iy + row) return 100 + @as(i32, @intCast(ri));
         iy += row;
-        if (search_len == 0 and item.separator_after) iy += 4;
+        if (search_len == 0 and item.separator_after) iy += 6;
     }
     return -1;
 }
 
 /// 计算 pinned 视图下左列内容底部 Y 坐标（含「所有程序」行高度）。
 fn leftColumnBottomY(_: i32, all_prog_y: i32) i32 {
-    return all_prog_y + ROW_H;
+    return all_prog_y + ROW_H + 2;
 }
 
 /// 在 all_programs 视图下计算左列底部 Y（含「返回」行）。
@@ -972,9 +1006,9 @@ fn allProgramsLeftBottomY(_: i32, all_prog_y: i32) i32 {
 fn allProgramsLeftHoverIndex(px: i32, py: i32, content_y: i32, left_end_y: i32, main_x: i32, split_x: i32) i32 {
     const pxi = @as(i64, px);
     const pyi = @as(i64, py);
-    if (pxi < @as(i64, main_x) + 8 or pxi >= @as(i64, split_x) or
+    if (pxi < @as(i64, main_x) + 4 or pxi >= @as(i64, split_x) or
         pyi < @as(i64, content_y) + 6 or pyi >= @as(i64, left_end_y) - @as(i64, ROW_H) - 2) return -1;
-    var iy = @as(i64, content_y) + 6;
+    var iy = @as(i64, content_y) + 8;
     var i: i32 = 0;
     while (i < ALL_PROG_COUNT) : (i += 1) {
         if (!menuItemMatchesSearch(allProgEntryLabel(i))) continue;
@@ -1060,22 +1094,22 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
     const bottom_y = L.bottom_y;
     const split_x = L.split_x;
     const all_prog_y = L.all_prog_y;
-    const inner_y = L.inner_y;
-    const inner_h = L.inner_h;
     const left_col_end_y = leftColumnBottomY(content_y, all_prog_y);
-    // 右侧栏项目起始 Y = 头像底部 + 用户名 + 间距
-    const right_content_start_y = content_y + AVATAR_SIZE + 6 + 16;
+    // 右侧栏项目起始 Y = 用户名下方
+    const right_content_start_y = content_y + 4 + 14 + 8;
 
     const pyi = @as(i64, py);
     const pxi = @as(i64, px);
 
-    // 底栏：关机按钮 + 右箭头。
-    if (pyi >= @as(i64, bottom_y) and pyi < @as(i64, inner_y) + @as(i64, inner_h)) {
+    // 底栏：关机按钮。
+    if (pyi >= @as(i64, bottom_y) and pyi < @as(i64, L.inner_y) + @as(i64, L.inner_h)) {
+        // 关机按钮（Win7 风格按钮）
         const sd_y = @as(i64, bottom_y) + @divTrunc(BOTTOM_H - 28, 2);
         if (pyi >= sd_y and pyi < sd_y + 28) {
-            const sd_x = @as(i64, main_x) + @as(i64, main_w) - 116;
-            if (pxi >= sd_x and pxi < sd_x + 80) return IDX_FOOT_SHUTDOWN_BTN;
-            if (pxi >= sd_x + 80 and pxi < sd_x + 106) return IDX_FOOT_SHUTDOWN_CHEVRON;
+            const sd_x = @as(i64, main_x) + @as(i64, main_w) - 106;
+            if (pxi >= sd_x and pxi < sd_x + 106) {
+                return IDX_FOOT_SHUTDOWN_BTN;
+            }
         }
         return -1;
     }
@@ -1083,9 +1117,9 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
     // all_programs 视图：左列渲染程序列表 + 底部「返回」。
     if (left_pane_view == .all_programs) {
         // 底部「返回」行。
-        if (pyi >= @as(i64, left_col_end_y) - @as(i64, ROW_H) and
+        if (pyi >= @as(i64, left_col_end_y) - @as(i64, ROW_H) - 2 and
             pyi < @as(i64, left_col_end_y) and
-            pxi >= @as(i64, main_x) + 8 and pxi < @as(i64, split_x))
+            pxi >= @as(i64, main_x) + 4 and pxi < @as(i64, split_x))
             return IDX_BACK;
 
         // 程序列表行（左列内，带滚动偏移计算）。
@@ -1098,7 +1132,7 @@ fn aero7HoverIndex(px: i32, py: i32, scr_w: i32, scr_h: i32) i32 {
     // pinned 视图或 all_programs 视图的右列：底部「所有程序」行（pinned 专用）。
     if (left_pane_view == .pinned and
         pyi >= @as(i64, all_prog_y) and pyi < @as(i64, all_prog_y) + @as(i64, ROW_H) and
-        pxi >= @as(i64, main_x) + 8 and pxi < @as(i64, split_x))
+        pxi >= @as(i64, main_x) + 4 and pxi < @as(i64, split_x))
         return IDX_ALL;
 
     // pinned 视图：左列固定列表。
@@ -1143,10 +1177,6 @@ fn handleAero7MenuClick(px: i32, py: i32, scr_w: i32, scr_h: i32) MenuAction {
     const h = aero7HoverIndex(px, py, scr_w, scr_h);
     if (power_flyout_open and h >= IDX_FLYOUT_BASE + 1 and h <= IDX_FLYOUT_BASE + 7) {
         return handlePowerFlyoutSelection(h);
-    }
-    if (h == IDX_FOOT_SHUTDOWN_CHEVRON) {
-        power_flyout_open = !power_flyout_open;
-        return .none;
     }
     if (h == IDX_FOOT_SHUTDOWN_BTN) return .shutdown;
 
@@ -1288,12 +1318,11 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     // 注意：透明度现在由动画状态（anim_progress）决定，不再依赖帧计数器
 
     // 使用固定高度进行渲染，确保与边界检测一致
-    const r = getMenuRect(scr_w, scr_h);
+    _ = getMenuRect(scr_w, scr_h);
     const L = innerLayout(scr_h);
 
     const text_dark = rgb(0x18, 0x1C, 0x22);
     const text_dim = rgb(0x50, 0x58, 0x62);
-    const text_white = rgb(0xFF, 0xFF, 0xFF);
     const sep = rgb(0xB8, 0xC4, 0xD4);
     const cr = menuCornerRadius();
 
@@ -1302,20 +1331,17 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const inner_w = L.inner_w;
     const inner_h = L.inner_h;
 
-    // Win7 Aero 玻璃效果：外发光边框 + 渐变高光
-    // 外发光（淡蓝色光晕，模拟玻璃边缘反射）
-    const glow_color = rgb(0xB8, 0xD8, 0xF0);
-    fb.blendTintRect(r.x, r.y, r.w, r.h, glow_color, 55, 140);
-    // 内层玻璃：顶部高光渐变（模拟 Aero 玻璃顶部反光）
-    const hi_line_color = rgb(0xF0, 0xF8, 0xFF);
-    fb.blendTintRect(r.x, r.y, r.w, 3, hi_line_color, 80, 200);
-    // 底部微弱阴影
-    fb.blendTintRect(r.x, r.y + r.h - 2, r.w, 2, rgb(0x28, 0x40, 0x60), 40, 180);
-    // 左侧微弱高光
-    fb.blendTintRect(r.x, r.y, 2, r.h, rgb(0xD8, 0xEC, 0xFF), 60, 160);
-    // 玻璃内容区（Aero 蓝灰底色）
-    fb.fillRoundedRect(inner_x, inner_y, inner_w, inner_h, cr, rgb(0xE0, 0xEC, 0xF4));
-    fb.blendTintRect(inner_x, inner_y, inner_w, inner_h, rgb(0x88, 0xA8, 0xC8), 20, 180);
+    // ========== Win7 Aero 玻璃效果 ==========
+    // 使用 DWM 玻璃模糊效果（如果启用）
+    const glass_bg_color = rgb(0xE8, 0xF0, 0xF8);
+    if (dwm.isGlassEnabled()) {
+        dwm.renderGlassEffect(inner_x, inner_y, inner_w, inner_h, glass_bg_color, .panel);
+    } else {
+        fb.fillRoundedRect(inner_x, inner_y, inner_w, inner_h, cr, glass_bg_color);
+    }
+    // Aero 高光边框（顶部和左侧）
+    fb.blendTintRect(inner_x, inner_y, inner_w, 2, rgb(0xFF, 0xFF, 0xFF), 60, 200);
+    fb.blendTintRect(inner_x, inner_y, 2, inner_h, rgb(0xFF, 0xFF, 0xFF), 40, 180);
 
     const main_x = L.main_x;
     const main_w = L.main_w;
@@ -1323,28 +1349,51 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const content_y = L.content_y;
     const bottom_y = L.bottom_y;
 
-    // ========== 头像区域（右侧栏顶部，向上溢出边框）==========
-    // 头像正方形底部与左列内容顶部对齐，头像向上延伸超出边框
-    const av_center_x = split_x + @divTrunc(RIGHT_COL_W, 2);
-    const av_bg_x = av_center_x - @divTrunc(AVATAR_SIZE, 2);
-    const av_bottom_y = content_y; // 头像底部对齐左列内容顶部
-    const av_bg_y = av_bottom_y - AVATAR_SIZE; // 头像向上延伸到边框外
-    const av_icon_r = @divTrunc(AVATAR_SIZE, 2);
+    // ========== 左列：白色背景程序列表 ==========
+    const left_bg_color = rgb(0xF8, 0xF9, 0xFC);
+    fb.fillRect(main_x, content_y, LEFT_COL_W, bottom_y - content_y, left_bg_color);
+    // 左列顶部高光线
+    fb.blendTintRect(main_x, content_y, LEFT_COL_W, 1, rgb(0xFF, 0xFF, 0xFF), 80, 200);
 
-    // 头像正方形背景（淡蓝边框 + 浅色填充）
-    fb.fillRect(av_bg_x, av_bg_y, AVATAR_SIZE, AVATAR_SIZE, rgb(0xA0, 0xB8, 0xD0));
-    fb.fillRect(av_bg_x + 1, av_bg_y + 1, AVATAR_SIZE - 2, AVATAR_SIZE - 2, rgb(0xD8, 0xE8, 0xF4));
+    // ========== 右列：深色用户区 ==========
+    const right_col_w = main_w - LEFT_COL_W;
+    const right_bg = rgb(0xDC, 0xEC, 0xF8);
+    fb.fillRect(split_x, content_y, right_col_w, bottom_y - content_y, right_bg);
+    // 右列左侧分隔线
+    fb.drawVLine(split_x, content_y, bottom_y - content_y, rgb(0xB8, 0xC4, 0xD4));
 
-    // 内圆（图标区）：像素级圆形裁剪
+    // ========== 头像区域（正方形，一半在菜单外，一半在菜单内，右侧居中）==========
+    // 头像尺寸：64x64 正方形
+    const av_sq_size: i32 = 64;
+    // 头像在右列内水平居中
+    const av_x = split_x + @divTrunc(right_col_w - av_sq_size, 2);
+    // 头像底部与菜单顶部对齐，头像向上延伸超出菜单
+    const av_bottom_y = content_y;
+    const av_top_y = av_bottom_y - av_sq_size;
+    const av_icon_r = @divTrunc(av_sq_size, 2);
+
+    // 头像正方形背景（灰色边框 + 浅色填充）
+    // 正方形一半在菜单内（底部），一半在菜单外（顶部）
+    fb.fillRect(av_x, av_top_y, av_sq_size, av_sq_size, rgb(0xA0, 0xA8, 0xB0));
+    fb.fillRect(av_x + 1, av_top_y + 1, av_sq_size - 2, av_sq_size - 2, rgb(0xF8, 0xF8, 0xF8));
+
+    // 圆形头像：圆心在 av_bottom_y（菜单顶部），半径为 32
+    // 圆形的下半部分在菜单内，上半部分在菜单外
     const r_sq = av_icon_r * av_icon_r;
     var cy2: i32 = 0;
-    while (cy2 < AVATAR_SIZE) : (cy2 += 1) {
+    while (cy2 < av_sq_size) : (cy2 += 1) {
         const dx_sq = (cy2 - av_icon_r) * (cy2 - av_icon_r);
         var cx2: i32 = 0;
-        while (cx2 < AVATAR_SIZE) : (cx2 += 1) {
+        while (cx2 < av_sq_size) : (cx2 += 1) {
             const dy_sq = (cx2 - av_icon_r) * (cx2 - av_icon_r);
             if (dx_sq + dy_sq <= r_sq) {
-                fb.putPixel32(@intCast(av_bg_x + cx2), @intCast(av_bg_y + cy2), rgb(0xD0, 0xE8, 0xF8));
+                const px = av_x + cx2;
+                const py = av_top_y + cy2;
+                // 圆形的下半部分（py >= inner_y）在菜单内可见
+                // 圆形的上半部分（py < inner_y）超出菜单边界，不可见
+                if (py >= L.inner_y) {
+                    fb.putPixel32(@intCast(px), @intCast(py), rgb(0xD8, 0xE8, 0xF8));
+                }
             }
         }
     }
@@ -1352,97 +1401,76 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const r_inner_sq = (av_icon_r - 1) * (av_icon_r - 1);
     const r_outer_sq = (av_icon_r - 2) * (av_icon_r - 2);
     var cy3: i32 = 0;
-    while (cy3 < AVATAR_SIZE) : (cy3 += 1) {
+    while (cy3 < av_sq_size) : (cy3 += 1) {
         const dx_sq = (cy3 - av_icon_r) * (cy3 - av_icon_r);
         var cx3: i32 = 0;
-        while (cx3 < AVATAR_SIZE) : (cx3 += 1) {
+        while (cx3 < av_sq_size) : (cx3 += 1) {
             const dy_sq = (cx3 - av_icon_r) * (cx3 - av_icon_r);
             const d2 = dx_sq + dy_sq;
             if (d2 <= r_inner_sq and d2 > r_outer_sq) {
-                fb.putPixel32(@intCast(av_bg_x + cx3), @intCast(av_bg_y + cy3), rgb(0xB8, 0xD0, 0xE8));
+                const px = av_x + cx3;
+                const py = av_top_y + cy3;
+                if (py >= L.inner_y) {
+                    fb.putPixel32(@intCast(px), @intCast(py), rgb(0xB8, 0xD0, 0xE8));
+                }
             }
         }
     }
 
     // 用户图标在圆形头像内（居中）
-    const av_icon_x = av_bg_x + av_icon_r - 12;
-    const av_icon_y = av_bg_y + av_icon_r - 12;
+    const av_icon_x = av_x + av_icon_r - 12;
+    const av_icon_y = av_top_y + av_icon_r - 12;
     drawMenuIcon(.user, av_icon_x, av_icon_y, 2);
 
-    // 用户名（在头像下方）
+    // 用户名（在头像下方，菜单内）
     const disp_name = app_cfg.getStartMenuUserDisplayName();
+    const name_y = av_bottom_y + 4;
     const name_w = fb.textWidth(disp_name);
-    var name_x = av_center_x - @divTrunc(name_w, 2);
-    const name_min_x = split_x + 8;
-    if (name_x < name_min_x) name_x = name_min_x;
-    fb.drawTextTransparentUi(name_x, av_bottom_y + 6, disp_name, text_white);
+    const name_x = av_x + @divTrunc(av_sq_size - name_w, 2);
+    fb.drawTextTransparentUi(name_x, name_y, disp_name, text_dark);
 
-    // ========== 左侧：程序列表（Aero 毛玻璃白色底，从顶部开始）==========
-    const col_h = bottom_y - content_y;
-    // 左列：纯白 Aero 底色，带淡蓝渐变，从顶部到底部栏
-    fb.fillRect(main_x, content_y, LEFT_COL_W, col_h, rgb(0xE8, 0xF0, 0xF8));
-    fb.blendTintRect(main_x, content_y, LEFT_COL_W, col_h, rgb(0xF8, 0xFC, 0xFF), 35, 200);
-    // 左列顶部 Aero 高光条
-    fb.blendTintRect(main_x, content_y, LEFT_COL_W, 2, rgb(0xFF, 0xFF, 0xFF), 60, 180);
-
-    // ========== 右侧：库链接（头像下方区域）==========
-    const right_col_w = main_w - LEFT_COL_W;
-    // 右栏内容区高度（从用户名下方到底部栏）
-    const right_content_start_y = av_bottom_y + 6 + 16; // 头像 + 用户名 + 间距
-    const right_col_content_h = bottom_y - right_content_start_y;
-    const right_bg = rgb(0x18, 0x30, 0x48);
-    const right_bg_hi = rgb(0x2C, 0x50, 0x78);
-    fb.fillRect(split_x, right_content_start_y, right_col_w, right_col_content_h, right_bg);
-    fb.drawGradientV(split_x, right_content_start_y, right_col_w, @min(80, right_col_content_h), right_bg_hi, right_bg);
-    // 右列顶部 Aero 高光条
-    fb.blendTintRect(split_x, right_content_start_y, right_col_w, 2, rgb(0x70, 0xA0, 0xD8), 80, 200);
-    // 淡蓝色调叠加（Aero 玻璃反光）
-    fb.blendTintRect(split_x, right_content_start_y, right_col_w, right_col_content_h, rgb(0x60, 0x90, 0xC0), 22, 100);
-    // 分隔线：浅蓝高光线
-    fb.drawVLine(split_x, right_content_start_y, right_col_content_h, rgb(0xA8, 0xC8, 0xE8));
-    fb.drawVLine(split_x + 1, right_content_start_y, right_col_content_h, rgb(0xD0, 0xE8, 0xF4));
-
-    // All Programs 行在左列底部
+    // ========== 左列：程序列表 ==========
     const all_prog_y = L.all_prog_y;
+    const icon_cell: i32 = 14; // 图标尺寸（缩小到14px，与Win7比例协调）
 
     // 左列：根据视图状态渲染 pinned 程序列表 或 all_programs 程序列表。
     if (left_pane_view == .pinned) {
-        var iy: i32 = content_y + 6;
+        var iy: i32 = content_y + 8;
         for (aero7_left, 0..) |item, li| {
             if (!menuItemMatchesSearch(item.label)) continue;
             if (iy + ROW_H > all_prog_y - 2) break;
             const row_r = hover_display_index == @as(i32, @intCast(li));
             if (row_r) {
-                fb.blendTintRect(main_x + 6, iy - 1, LEFT_COL_W - 12, ROW_H, rgb(0x70, 0x98, 0xC8), 55, 255);
-                if (item.icon_id) |iid| {
-                    drawMenuIcon(iid, main_x + 10, iy + 3, 1);
-                }
-                fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, text_white);
-            } else {
-                if (item.icon_id) |iid| {
-                    drawMenuIcon(iid, main_x + 10, iy + 3, 1);
-                }
-                const tc = if (item.bold) text_dark else text_dim;
-                fb.drawTextTransparentUi(main_x + 36, iy + 5, item.label, tc);
+                fb.fillRect(main_x + 4, iy, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
             }
+            // 图标（14px，与行高协调）
+            const icon_x = main_x + 8;
+            const icon_y = iy + @divTrunc(ROW_H - icon_cell, 2);
+            if (item.icon_id) |iid| {
+                drawMenuIcon(iid, icon_x, icon_y, icon_cell);
+            }
+            // 文字
+            const text_x = main_x + 8 + icon_cell + 6;
+            const tc = if (row_r) text_dark else if (item.bold) text_dark else text_dim;
+            fb.drawTextTransparentUi(text_x, iy + @divTrunc(ROW_H - 14, 2), item.label, tc);
             iy += ROW_H;
             if (search_len == 0 and item.separator_after) {
-                fb.drawHLine(main_x + 8, iy, LEFT_COL_W - 14, sep);
-                iy += 4;
-                if (li + 1 == pinned_left_count) iy += 5;
+                fb.drawHLine(main_x + 8, iy + 2, LEFT_COL_W - 16, sep);
+                iy += 6;
+                if (li + 1 == pinned_left_count) iy += 4;
             }
         }
 
-        fb.drawHLine(main_x + 8, all_prog_y - 2, LEFT_COL_W - 14, sep);
+        fb.drawHLine(main_x + 8, all_prog_y - 2, LEFT_COL_W - 16, sep);
         const ap_hov = hover_display_index == IDX_ALL;
         const all_prog_lbl = shell_strings.startmenuLine("all_programs");
         if (ap_hov) {
-            fb.blendTintRect(main_x + 6, all_prog_y - 1, LEFT_COL_W - 12, ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
-            fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, all_prog_lbl, text_white);
-            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 22, all_prog_y + 5, ">", rgb(0xE8, 0xF4, 0xFF));
+            fb.fillRect(main_x + 4, all_prog_y - 1, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+            fb.drawTextTransparentUi(main_x + 36, all_prog_y + @divTrunc(ROW_H - 14, 2), all_prog_lbl, text_dark);
+            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 24, all_prog_y + @divTrunc(ROW_H - 14, 2), ">", text_dim);
         } else {
-            fb.drawTextTransparentUi(main_x + 36, all_prog_y + 5, all_prog_lbl, rgb(0x20, 0x50, 0x88));
-            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 22, all_prog_y + 5, ">", text_dim);
+            fb.drawTextTransparentUi(main_x + 36, all_prog_y + @divTrunc(ROW_H - 14, 2), all_prog_lbl, rgb(0x20, 0x50, 0x88));
+            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 24, all_prog_y + @divTrunc(ROW_H - 14, 2), ">", text_dim);
         }
     } else {
         // all_programs 视图：在左列内渲染程序列表，底部「返回」行。
@@ -1455,10 +1483,10 @@ pub fn render(scr_w: i32, scr_h: i32) void {
             const idx = IDX_ALLPROG_BASE + i;
             const row_r = hover_display_index == idx;
             if (row_r) {
-                fb.blendTintRect(main_x + 6, iy - 1, LEFT_COL_W - 12, ROW_H, rgb(0x70, 0x98, 0xC8), 55, 255);
-                fb.drawTextTransparentUi(main_x + 36, iy + 5, lab, text_white);
+                fb.fillRect(main_x + 4, iy, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+                fb.drawTextTransparentUi(main_x + 36, iy + @divTrunc(ROW_H - 14, 2), lab, text_dark);
             } else {
-                fb.drawTextTransparentUi(main_x + 36, iy + 5, lab, text_dim);
+                fb.drawTextTransparentUi(main_x + 36, iy + @divTrunc(ROW_H - 14, 2), lab, text_dim);
             }
             iy += ROW_H;
         }
@@ -1468,82 +1496,85 @@ pub fn render(scr_w: i32, scr_h: i32) void {
         const back_hov = hover_display_index == IDX_BACK;
         const back_lbl = shell_strings.startmenuLine("back");
         if (back_hov) {
-            fb.blendTintRect(main_x + 6, back_bottom_y - ROW_H - 1, LEFT_COL_W - 12, ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
-            fb.drawTextTransparentUi(main_x + 36, back_bottom_y - ROW_H + 5, back_lbl, text_white);
-            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 22, back_bottom_y - ROW_H + 5, "<", rgb(0xE8, 0xF4, 0xFF));
+            fb.fillRect(main_x + 4, back_bottom_y - ROW_H - 2, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+            fb.drawTextTransparentUi(main_x + 36, back_bottom_y - ROW_H + @divTrunc(ROW_H - 14, 2), back_lbl, text_dark);
+            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 24, back_bottom_y - ROW_H + @divTrunc(ROW_H - 14, 2), "<", text_dim);
         } else {
-            fb.drawTextTransparentUi(main_x + 36, back_bottom_y - ROW_H + 5, back_lbl, rgb(0x20, 0x50, 0x88));
-            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 22, back_bottom_y - ROW_H + 5, "<", text_dim);
+            fb.drawTextTransparentUi(main_x + 36, back_bottom_y - ROW_H + @divTrunc(ROW_H - 14, 2), back_lbl, rgb(0x20, 0x50, 0x88));
+            fb.drawTextTransparentUi(main_x + LEFT_COL_W - 24, back_bottom_y - ROW_H + @divTrunc(ROW_H - 14, 2), "<", text_dim);
         }
     }
 
-    const icon_cell: i32 = icons.getIconTotalSize(1);
+    // ========== 右列：库链接 ==========
+    // 右列内容从用户名下方开始（头像下方）
+    const right_content_start_y = av_bottom_y + 4 + 14 + 8;
+    const right_icon_cell: i32 = 14; // 与左列图标尺寸一致
     const icon_col_x = split_x + 10;
-    const text_cell_x = icon_col_x + icon_cell + 6;
-    const right_bold = rgb(0xF2, 0xF6, 0xFC);
-    const right_norm = rgb(0xC8, 0xD8, 0xEC);
+    const text_cell_x = icon_col_x + right_icon_cell + 6;
+    const right_bold = rgb(0x10, 0x38, 0x78);
+    const right_norm = rgb(0x40, 0x40, 0x40);
 
-    // 右侧栏项目从头像/用户名下方开始
-    var iy: i32 = right_content_start_y + 6;
+    // 右侧栏项目
+    var iy: i32 = right_content_start_y;
     for (aero7_right, 0..) |item, ri| {
         if (!menuItemMatchesSearch(item.label)) continue;
         if (iy + ROW_H > bottom_y - 6) break;
         const row_r = hover_display_index == 100 + @as(i32, @intCast(ri));
-        const icon_y = iy + @divTrunc(ROW_H - icon_cell, 2);
+        const icon_y = iy + @divTrunc(ROW_H - right_icon_cell, 2);
         if (row_r) {
-            fb.blendTintRect(split_x + 4, iy - 1, main_w - LEFT_COL_W - 12, ROW_H, rgb(0x70, 0x98, 0xC8), 50, 255);
+            fb.fillRect(split_x + 2, iy, RIGHT_COL_W - 4, ROW_H, rgb(0xCC, 0xDD, 0xF0));
             if (item.icon_id) |iid| {
-                drawMenuIcon(iid, icon_col_x, icon_y, 1);
+                drawMenuIcon(iid, icon_col_x, icon_y, right_icon_cell);
             }
-            fb.drawTextTransparentUi(text_cell_x, iy + 5, item.label, text_white);
+            const tc = if (item.bold) rgb(0x00, 0x30, 0x70) else rgb(0x00, 0x00, 0x00);
+            fb.drawTextTransparentUi(text_cell_x, iy + @divTrunc(ROW_H - 14, 2), item.label, tc);
         } else {
             if (item.icon_id) |iid| {
-                drawMenuIcon(iid, icon_col_x, icon_y, 1);
+                drawMenuIcon(iid, icon_col_x, icon_y, right_icon_cell);
             }
             const tc = if (item.bold) right_bold else right_norm;
-            fb.drawTextTransparentUi(text_cell_x, iy + 5, item.label, tc);
+            fb.drawTextTransparentUi(text_cell_x, iy + @divTrunc(ROW_H - 14, 2), item.label, tc);
         }
         iy += ROW_H;
         if (search_len == 0 and item.separator_after) {
-            fb.drawHLine(split_x + 6, iy, main_w - LEFT_COL_W - 14, sep);
-            iy += 4;
+            fb.drawHLine(split_x + 6, iy + 2, RIGHT_COL_W - 12, sep);
+            iy += 6;
         }
     }
 
     fb.drawHLine(main_x, bottom_y, main_w, sep);
+
+    // ========== 搜索框 ==========
     const search_pad_x: i32 = 8;
-    const search_y0 = bottom_y + @divTrunc(BOTTOM_H - (SEARCH_H + 8), 2);
+    const search_y0 = bottom_y + @divTrunc(BOTTOM_H - SEARCH_H, 2);
     const mag_w: i32 = 20;
     const search_inner_w = LEFT_COL_W - search_pad_x * 2 - mag_w;
     fb.drawRect(main_x + search_pad_x, search_y0, search_inner_w + mag_w, SEARCH_H, rgb(0x98, 0xA8, 0xB8));
     fb.fillRect(main_x + search_pad_x + 1, search_y0 + 1, search_inner_w + mag_w - 2, SEARCH_H - 2, rgb(0xFF, 0xFF, 0xFF));
     const ph = shell_strings.startmenuLine("search_placeholder");
     if (search_len > 0) {
-        fb.drawTextTransparentClipped(main_x + search_pad_x + 6, search_y0 + 5, main_x + search_pad_x + search_inner_w + 2, search_buf[0..search_len], rgb(0x20, 0x24, 0x2C));
+        fb.drawTextTransparentClipped(main_x + search_pad_x + 6, search_y0 + @divTrunc(SEARCH_H - 14, 2), main_x + search_pad_x + search_inner_w + 2, search_buf[0..search_len], rgb(0x20, 0x24, 0x2C));
     } else {
-        fb.drawTextTransparentClipped(main_x + search_pad_x + 6, search_y0 + 5, main_x + search_pad_x + search_inner_w + 2, ph, rgb(0x98, 0xA0, 0xA8));
+        fb.drawTextTransparentClipped(main_x + search_pad_x + 6, search_y0 + @divTrunc(SEARCH_H - 14, 2), main_x + search_pad_x + search_inner_w + 2, ph, rgb(0x98, 0xA0, 0xA8));
     }
-    drawSearchMagnifier(main_x + search_pad_x + search_inner_w + 4, search_y0 + 6, rgb(0x70, 0x80, 0x90));
+    drawSearchMagnifier(main_x + search_pad_x + search_inner_w + 4, search_y0 + @divTrunc(SEARCH_H - 16, 2), rgb(0x70, 0x80, 0x90));
 
-    const sd_x = main_x + main_w - 116;
+    // ========== 关机按钮（Win7 风格）==========
+    const sd_x = main_x + main_w - 106;
     const sd_y = bottom_y + @divTrunc(BOTTOM_H - 28, 2);
     const sd_body_hov = hover_display_index == IDX_FOOT_SHUTDOWN_BTN;
-    const sd_ch_hov = hover_display_index == IDX_FOOT_SHUTDOWN_CHEVRON;
-    const sd_hov = sd_body_hov or sd_ch_hov;
     const sd_cr = @max(3, cr - 3);
-    // Aero 透明凸起：冷色玻璃 + 顶缘高光，非实心红色关机块。
-    const sd_top = if (sd_hov) rgb(0xA8, 0xC8, 0xF0) else rgb(0x88, 0xA8, 0xD0);
-    const sd_bot = if (sd_hov) rgb(0x58, 0x78, 0xA8) else rgb(0x48, 0x64, 0x90);
+    // Win7 Aero 透明凸起按钮：冷色玻璃 + 顶缘高光
+    const sd_top = if (sd_body_hov) rgb(0xA8, 0xC8, 0xF0) else rgb(0x88, 0xA8, 0xD0);
+    const sd_bot = if (sd_body_hov) rgb(0x58, 0x78, 0xA8) else rgb(0x48, 0x64, 0x90);
     fb.fillRoundedRect(sd_x, sd_y, 106, 28, sd_cr, sd_bot);
     fb.drawGradientV(sd_x + 1, sd_y + 1, 104, 26, sd_top, sd_bot);
-    fb.blendTintRect(sd_x + 1, sd_y + 1, 104, 10, rgb(0xFF, 0xFF, 0xFF), if (sd_hov) 52 else 38, 200);
+    fb.blendTintRect(sd_x + 1, sd_y + 1, 104, 10, rgb(0xFF, 0xFF, 0xFF), if (sd_body_hov) 52 else 38, 200);
     fb.drawHLine(sd_x + 2, sd_y + 1, 102, rgb(0xF0, 0xF8, 0xFF));
-    fb.blendTintRect(sd_x, sd_y, 106, 28, rgb(0x28, 0x40, 0x60), if (sd_hov) 18 else 12, 255);
+    fb.blendTintRect(sd_x, sd_y, 106, 28, rgb(0x28, 0x40, 0x60), if (sd_body_hov) 18 else 12, 255);
     fb.drawRect(sd_x, sd_y, 106, 28, rgb(0xB8, 0xD0, 0xE8));
     fb.drawRect(sd_x + 1, sd_y + 1, 104, 26, rgb(0x40, 0x58, 0x70));
-    fb.drawVLine(sd_x + 80, sd_y + 4, 20, rgb(0x68, 0x88, 0xA8));
-    fb.drawTextTransparentUiCenteredInRect(sd_x + 2, sd_y, 76, 28, shell_strings.startmenuLine("foot_shut_down"), text_white);
-    fb.drawTextTransparentUi(sd_x + 88, sd_y + @divTrunc(28 - 16, 2), ">", if (sd_ch_hov) rgb(0xFF, 0xFF, 0xFF) else rgb(0xE8, 0xF2, 0xFC));
+    fb.drawTextTransparentUiCenteredInRect(sd_x + 2, sd_y, 106, 28, shell_strings.startmenuLine("foot_shut_down"), rgb(0xFF, 0xFF, 0xFF));
 
     // 电源弹出菜单：即使未打开，只要有动画进度就渲染
     if (power_flyout_open or flyout_anim_progress > 0.0) {

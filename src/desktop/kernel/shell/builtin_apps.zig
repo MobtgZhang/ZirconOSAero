@@ -17,13 +17,14 @@ const klog = @import("../../../rtl/klog.zig");
 const vfs = @import("../../../fs/vfs.zig");
 const hdmi = @import("../../../drivers/video/legacy/hdmi.zig");
 const mouse = @import("../../../drivers/input/mouse.zig");
+const process_table = @import("process_table.zig");
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme.rgb(r, g, b);
 }
 
 /// 与 `display.AERO_TITLEBAR_H` 对齐（标题栏高度）。
-const CAPTION_H: i32 = 32;
+const CAPTION_H: i32 = @import("../../../drivers/video/core/display.zig").AERO_TITLEBAR_H;
 const DEF_W: i32 = 380;
 const DEF_H: i32 = 300;
 
@@ -42,18 +43,113 @@ pub const AeroCaptionBtnHover = enum { none, minimize, maximize, close };
 pub const clip_dib_cap_bytes: usize = 320 * 200 * 4;
 var g_clip_dib: [clip_dib_cap_bytes]u8 = [_]u8{0} ** clip_dib_cap_bytes;
 
-pub const ClipboardPrimary = enum { none, text, dib_bgr32 };
+/// 剪贴板格式常量（与 Windows 格式 ID 对齐）
+pub const CF_TEXT: u32 = 1;      // ANSI 文本
+pub const CF_BITMAP: u32 = 2;    // 位图
+pub const CF_METAFILEPICT: u32 = 3;
+pub const CF_SYLK: u32 = 4;
+pub const CF_DIF: u32 = 5;
+pub const CF_TIFF: u32 = 6;
+pub const CF_OEMTEXT: u32 = 7;   // OEM 文本
+pub const CF_DIB: u32 = 8;      // DIB (BMP)
+pub const CF_PALETTE: u32 = 9;
+pub const CF_PENDATA: u32 = 10;
+pub const CF_RIFF: u32 = 11;
+pub const CF_WAVE: u32 = 12;
+pub const CF_UNICODETEXT: u32 = 13; // UTF-16LE Unicode 文本
+pub const CF_ENHMETAFILE: u32 = 14;
+pub const CF_HDROP: u32 = 15;    // 文件列表
+pub const CF_LOCALE: u32 = 16;
+pub const CF_DIBV5: u32 = 17;
+pub const CF_OWNERDISPLAY: u32 = 0x0080;
+pub const CF_DSPTEXT: u32 = 0x0081;
+pub const CF_DSPBITMAP: u32 = 0x0082;
+pub const CF_DSPMETAFILEPICT: u32 = 0x0083;
+pub const CF_DSPENHMETAFILE: u32 = 0x008E;
 
+/// 剪贴板主格式枚举
+pub const ClipboardPrimary = enum { none, text, unicode_text, dib_bgr32, oem_text };
+
+/// 剪贴板格式项结构
+pub const ClipboardFormat = struct {
+    format: u32 = 0,           // CF_* 格式 ID
+    data_offset: usize = 0,    // 相对于全局缓冲区的偏移
+    data_len: usize = 0,       // 数据长度
+    width: u32 = 0,           // 位图宽度（如果有）
+    height: u32 = 0,          // 位图高度（如果有）
+};
+
+/// 最大支持的剪贴板格式数量
+const MAX_CLIPBOARD_FORMATS: usize = 8;
+/// 剪贴板全局数据缓冲区大小
+pub const clip_global_cap_bytes: usize = 64 * 1024; // 64KB 全局缓冲区
+var g_clip_global_buf: [clip_global_cap_bytes]u8 = [_]u8{0} ** clip_global_cap_bytes;
+
+/// 增强的剪贴板结构：支持多格式
 pub const Clipboard = struct {
     primary: ClipboardPrimary = .none,
+    primary_format: u32 = 0,   // 主格式的 CF_* ID
+    formats: [MAX_CLIPBOARD_FORMATS]ClipboardFormat = [_]ClipboardFormat{.{}} ** MAX_CLIPBOARD_FORMATS,
+    format_count: usize = 0,
+
+    // 快速访问缓冲区（用于小数据）
     text_buf: [2048]u8 = undefined,
     text_len: usize = 0,
+    unicode_buf: [2048]u8 = undefined, // UTF-16LE
+    unicode_len: usize = 0, // 字符数
     dib_w: u32 = 0,
     dib_h: u32 = 0,
     dib_byte_len: usize = 0,
 
+    /// 添加一个格式到剪贴板
+    pub fn addFormat(c: *Clipboard, format: u32, data: []const u8, width: u32, height: u32) bool {
+        if (c.format_count >= MAX_CLIPBOARD_FORMATS) return false;
+
+        // 计算需要的空间
+        const need = data.len;
+        var offset: usize = 0;
+        var i: usize = 0;
+        while (i < c.format_count) : (i += 1) {
+            offset += c.formats[i].data_len;
+        }
+
+        // 检查全局缓冲区空间
+        if (offset + need > clip_global_cap_bytes) return false;
+
+        c.formats[c.format_count] = .{
+            .format = format,
+            .data_offset = offset,
+            .data_len = need,
+            .width = width,
+            .height = height,
+        };
+        c.format_count += 1;
+
+        // 复制数据到全局缓冲区
+        @memcpy(g_clip_global_buf[offset..][0..need], data[0..need]);
+        return true;
+    }
+
+    /// 获取指定格式的数据
+    pub fn getFormat(c: *const Clipboard, format: u32) ?[]const u8 {
+        for (c.formats[0..c.format_count]) |f| {
+            if (f.format == format) {
+                return g_clip_global_buf[f.data_offset..][0..f.data_len];
+            }
+        }
+        return null;
+    }
+
+    /// 检查是否包含指定格式
+    pub fn hasFormat(c: *const Clipboard, format: u32) bool {
+        return c.getFormat(format) != null;
+    }
+
+    /// 从 Unicode 文本自动生成 ANSI 文本
     pub fn setText(c: *Clipboard, s: []const u8) void {
         c.primary = .text;
+        c.primary_format = CF_TEXT;
+        c.unicode_len = 0;
         c.dib_w = 0;
         c.dib_h = 0;
         c.dib_byte_len = 0;
@@ -70,32 +166,99 @@ pub const Clipboard = struct {
         c.text_len = n;
     }
 
-    /// 占位位图（截图工具写入；与 `text` 互斥主格式）。
+    /// 设置 Unicode 文本（UTF-16LE），同时添加 ANSI 版本
+    pub fn setUnicodeText(c: *Clipboard, utf16le: []const u8) void {
+        c.primary = .unicode_text;
+        c.primary_format = CF_UNICODETEXT;
+        c.text_len = 0;
+        c.dib_w = 0;
+        c.dib_h = 0;
+        c.dib_byte_len = 0;
+        const n = @min(utf16le.len, c.unicode_buf.len);
+        @memcpy(c.unicode_buf[0..n], utf16le[0..n]);
+        c.unicode_len = n / 2; // UTF-16LE: 每字符 2 字节
+
+        // 添加到全局格式缓冲区
+        _ = c.addFormat(CF_UNICODETEXT, utf16le, 0, 0);
+
+        // 自动生成 ANSI 版本
+        if (utf16le.len > 0) {
+            var ansi_buf: [2048]u8 = undefined;
+            var ansi_len: usize = 0;
+            var i: usize = 0;
+            while (i < utf16le.len and ansi_len < ansi_buf.len - 1) : (i += 2) {
+                if (i + 1 < utf16le.len) {
+                    const wc = std.mem.readInt(u16, utf16le[i..][0..2], .little);
+                    // 简单转换：直接截断到低字节
+                    ansi_buf[ansi_len] = @truncate(wc);
+                    ansi_len += 1;
+                }
+            }
+            c.text_len = ansi_len;
+            @memcpy(c.text_buf[0..ansi_len], ansi_buf[0..ansi_len]);
+            _ = c.addFormat(CF_TEXT, ansi_buf[0..ansi_len], 0, 0);
+        }
+    }
+
+    /// 设置位图（DIB 格式，BGR 紧密行）
     pub fn setDibBgr32(c: *Clipboard, w: u32, h: u32, src: []const u8) void {
         const need = @as(usize, w) * @as(usize, h) * 4;
         if (need > g_clip_dib.len or need != src.len) return;
         @memcpy(g_clip_dib[0..need], src);
         c.primary = .dib_bgr32;
+        c.primary_format = CF_DIB;
         c.dib_w = w;
         c.dib_h = h;
         c.dib_byte_len = need;
         c.text_len = 0;
+        c.unicode_len = 0;
+
+        // 添加到位图格式缓冲区
+        _ = c.addFormat(CF_DIB, src, w, h);
+    }
+
+    /// 设置 OEM 文本
+    pub fn setOemText(c: *Clipboard, oem_data: []const u8) void {
+        c.primary = .oem_text;
+        c.primary_format = CF_OEMTEXT;
+        const n = @min(oem_data.len, c.text_buf.len);
+        @memcpy(c.text_buf[0..n], oem_data[0..n]);
+        c.text_len = n;
+        _ = c.addFormat(CF_OEMTEXT, oem_data[0..n], 0, 0);
     }
 
     pub fn text(c: *const Clipboard) []const u8 {
         return c.text_buf[0..c.text_len];
     }
 
+    /// 返回 Unicode 文本（UTF-16LE）
+    pub fn unicodeText(c: *const Clipboard) []const u8 {
+        return c.unicode_buf[0..c.unicode_len * 2];
+    }
+
     pub fn dibBytes(c: *const Clipboard) []const u8 {
         return g_clip_dib[0..c.dib_byte_len];
     }
 
+    /// 获取剪贴板尺寸信息
+    pub fn getDibSize(c: *const Clipboard) ?struct { w: u32, h: u32 } {
+        if (c.dib_byte_len == 0) return null;
+        return .{ .w = c.dib_w, .h = c.dib_h };
+    }
+
     pub fn clear(c: *Clipboard) void {
         c.text_len = 0;
+        c.unicode_len = 0;
         c.primary = .none;
+        c.primary_format = 0;
         c.dib_w = 0;
         c.dib_h = 0;
         c.dib_byte_len = 0;
+        c.format_count = 0;
+        // 清零全局格式数组
+        for (&c.formats) |*f| {
+            f.* = .{};
+        }
     }
 };
 
@@ -645,7 +808,25 @@ const WinSlot = struct {
     app: BuiltinAppId = .generic_stub,
     x: i32 = 40,
     y: i32 = 48,
+    w: i32 = DEF_W,
+    h: i32 = DEF_H,
     cap_hover: AeroCaptionBtnHover = .none,
+    /// 关联的进程ID (0表示无内核进程关联)
+    pid: u32 = 0,
+    /// 窗口状态
+    state: WinState = .normal,
+    /// 最大化前的位置和大小
+    prev_x: i32 = 40,
+    prev_y: i32 = 48,
+    prev_w: i32 = DEF_W,
+    prev_h: i32 = DEF_H,
+};
+
+/// 内置窗口状态
+pub const WinState = enum(u8) {
+    normal = 0,
+    minimized = 1,
+    maximized = 2,
 };
 
 var slots: [MAX_SLOTS]WinSlot = [_]WinSlot{.{}} ** MAX_SLOTS;
@@ -757,6 +938,66 @@ pub fn captionHoverForTopmost(px: i32, py: i32) AeroCaptionBtnHover {
     return .none;
 }
 
+/// 最小化窗口
+pub fn minimizeWindow(slot_idx: usize) void {
+    if (slot_idx >= slots.len or !slots[slot_idx].open) return;
+    slots[slot_idx].state = .minimized;
+    process_table.setTaskbarAppMinimized(@intFromEnum(slots[slot_idx].app), slots[slot_idx].pid, true);
+    klog.info("builtin: minimize %s", .{titleOf(slots[slot_idx].app)});
+}
+
+/// 最大化窗口
+pub fn maximizeWindow(slot_idx: usize) void {
+    if (slot_idx >= slots.len or !slots[slot_idx].open) return;
+    const w = &slots[slot_idx];
+    if (w.state == .maximized) {
+        // 恢复窗口
+        w.state = .normal;
+        w.x = w.prev_x;
+        w.y = w.prev_y;
+        w.w = w.prev_w;
+        w.h = w.prev_h;
+    } else {
+        // 保存当前位置并最大化
+        w.prev_x = w.x;
+        w.prev_y = w.y;
+        w.prev_w = w.w;
+        w.prev_h = w.h;
+        w.state = .maximized;
+        w.x = 0;
+        w.y = 0;
+        w.w = 800;  // 默认屏幕宽度
+        w.h = 600;  // 默认屏幕高度
+    }
+    klog.info("builtin: maximize/minimize %s state=%s", .{ titleOf(w.app), @tagName(w.state) });
+}
+
+/// 关闭窗口
+pub fn closeWindow(slot_idx: usize) void {
+    if (slot_idx >= slots.len or !slots[slot_idx].open) return;
+    const app = slots[slot_idx].app;
+    const pid = slots[slot_idx].pid;
+    slots[slot_idx].open = false;
+    if (pid != 0) {
+        process_table.unregisterDesktopProcess(pid);
+        process_table.removeTaskbarApp(@intFromEnum(app), pid);
+    }
+    refocusAfterClosedSlot(slot_idx);
+    klog.info("builtin: close %s", .{titleOf(app)});
+}
+
+/// 获取窗口是否最小化
+pub fn isWindowMinimized(slot_idx: usize) bool {
+    if (slot_idx >= slots.len) return false;
+    return slots[slot_idx].state == .minimized;
+}
+
+/// 获取窗口状态
+pub fn getWindowState(slot_idx: usize) WinState {
+    if (slot_idx >= slots.len) return .normal;
+    return slots[slot_idx].state;
+}
+
 /// 返回 true 表示已消费点击（含标题栏）。
 pub fn handleClick(px: i32, py: i32, scr_w: i32, scr_h: i32, tb_h: i32) bool {
     _ = scr_w;
@@ -767,24 +1008,34 @@ pub fn handleClick(px: i32, py: i32, scr_w: i32, scr_h: i32, tb_h: i32) bool {
         const si: usize = @intCast(s);
         if (!slots[si].open) continue;
         const w = slots[si];
+
+        // 跳过最小化的窗口
+        if (w.state == .minimized) continue;
+
         if (!pointInSlotClient(px, py, w.x, w.y)) continue;
 
         focused_slot = si;
         narrOnFocus(slots[si].app);
+        // 更新任务栏活动状态
+        process_table.activateTaskbarApp(@intFromEnum(slots[si].app), slots[si].pid);
+
         if (@as(i64, py) < @as(i64, w.y) + @as(i64, CAPTION_H)) {
-            const h = hitTestCaption(px, py, w.x, w.y, DEF_W, CAPTION_H);
+            const h = hitTestCaption(px, py, w.x, w.y, w.w, CAPTION_H);
             switch (h) {
                 .close => {
-                    slots[si].open = false;
-                    refocusAfterClosedSlot(si);
-                    klog.info("builtin: close %s", .{titleOf(w.app)});
+                    closeWindow(si);
                 },
-                .minimize, .maximize => klog.info("builtin: min/max stub", .{}),
+                .minimize => {
+                    minimizeWindow(si);
+                },
+                .maximize => {
+                    maximizeWindow(si);
+                },
                 .none => {
                     drag_slot = si;
                     drag_off_x = px - w.x;
                     drag_off_y = py - w.y;
-                    drag_prev = .{ .x = w.x, .y = w.y, .w = DEF_W, .h = DEF_H };
+                    drag_prev = .{ .x = w.x, .y = w.y, .w = w.w, .h = w.h };
                 },
             }
             return true;
@@ -1105,16 +1356,41 @@ pub fn launch(id: BuiltinAppId) void {
         }
     }
     const si = free orelse blk: {
+        // 关闭最早的窗口
+        if (slots[0].pid != 0) {
+            process_table.unregisterDesktopProcess(slots[0].pid);
+            process_table.removeTaskbarApp(@intFromEnum(slots[0].app), slots[0].pid);
+        }
         slots[0].open = false;
         break :blk 0;
     };
+
+    // 分配模拟PID
+    const sim_pid: u32 = @intCast(1000 + si);
+
     slots[si] = .{
         .open = true,
         .app = id,
         .x = 48 + @as(i32, @intCast(si * 28)),
         .y = 52 + @as(i32, @intCast(si * 24)),
+        .w = DEF_W,
+        .h = DEF_H,
         .cap_hover = .none,
+        .pid = sim_pid,
+        .state = .normal,
+        .prev_x = 48 + @as(i32, @intCast(si * 28)),
+        .prev_y = 52 + @as(i32, @intCast(si * 24)),
+        .prev_w = DEF_W,
+        .prev_h = DEF_H,
     };
+
+    // 注册到进程表
+    const app_title = titleOf(id);
+    _ = process_table.registerDesktopProcess(sim_pid, app_title, @intFromEnum(id), app_title);
+    // 添加到任务栏
+    const icon_id = iconOf(id) orelse .info;
+    _ = process_table.addTaskbarApp(@intFromEnum(id), sim_pid, app_title, @intFromEnum(icon_id));
+
     focused_slot = si;
     if (id == .calculator) {
         calc_cur = 0;
@@ -1187,9 +1463,30 @@ pub fn renderShellHostedApps(scr_w: i32, scr_h: i32, t: *const theme.ThemeColors
     _ = scr_h;
     for (&slots, 0..) |*w, i| {
         if (!w.open) continue;
+        // 跳过最小化的窗口
+        if (w.state == .minimized) continue;
         const light = mode == .drag_light and drag_slot == i;
         if (light) renderOneWindowLight(w, t) else renderOneWindow(w, t);
     }
+}
+
+/// 获取窗口数量（包含最小化的）
+pub fn getOpenWindowCount() usize {
+    var count: usize = 0;
+    for (&slots) |*w| {
+        if (w.open) count += 1;
+    }
+    return count;
+}
+
+/// 获取窗口列表
+pub fn getWindowList() []WinSlot {
+    return slots[0..MAX_SLOTS];
+}
+
+/// 获取当前聚焦的窗口索引
+pub fn getFocusedSlotIndex() usize {
+    return focused_slot;
 }
 
 fn renderOneWindowLight(w: *WinSlot, t: *const theme.ThemeColors) void {

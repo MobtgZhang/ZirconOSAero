@@ -65,6 +65,21 @@ pub const renderShellHostedApps = shell.renderShellHostedApps;
 pub const ResizeEdge = shell.ResizeEdge;
 pub const hitTestFrameResizeEdge = shell.hitTestFrameResizeEdge;
 pub const clampShellFrameToWorkArea = shell.clampShellFrameToWorkArea;
+pub const process_table = shell.process_table;
+pub const initDesktopProcessTable = shell.initDesktopProcessTable;
+pub const registerDesktopProcess = shell.registerDesktopProcess;
+pub const getTaskbarAppList = shell.getTaskbarAppList;
+pub const getTaskbarAppCount = shell.getTaskbarAppCount;
+pub const DesktopProcessEntry = shell.DesktopProcessEntry;
+pub const TaskbarAppEntry = shell.TaskbarAppEntry;
+pub const minimizeWindow = shell.minimizeWindow;
+pub const maximizeWindow = shell.maximizeWindow;
+pub const closeWindow = shell.closeWindow;
+pub const isWindowMinimized = shell.isWindowMinimized;
+pub const getWindowState = shell.getWindowState;
+pub const WinState = shell.WinState;
+pub const getOpenWindowCount = shell.getOpenWindowCount;
+pub const getFocusedSlotIndex = shell.getFocusedSlotIndex;
 
 // ── wallpaper ──
 pub const wallpaper_bitmap = wallpaper.wallpaper_bitmap;

@@ -249,30 +249,52 @@ pub fn selectItemsInRubberBand(
 
 pub fn navigateSelection(direction: SelectionDirection, total_items: usize, column_count: usize) void {
     if (total_items == 0) return;
-    
+
+    // 防止除零：如果 column_count 为 0，设置为 1（单列模式）
+    const safe_column_count = if (column_count == 0) @as(usize, 1) else column_count;
+
     const current = last_clicked_index;
-    
     var new_index: usize = current;
-    
+
     switch (direction) {
         .up => {
-            if (current >= column_count) {
-                new_index = current - column_count;
+            if (current >= safe_column_count) {
+                new_index = current - safe_column_count;
+            } else {
+                // 循环到最后一行
+                const last_row = (total_items - 1) / safe_column_count;
+                const current_col = current % safe_column_count;
+                new_index = last_row * safe_column_count + current_col;
+                if (new_index >= total_items) {
+                    new_index = total_items - 1;
+                }
             }
         },
         .down => {
-            if (current + column_count < total_items) {
-                new_index = current + column_count;
+            const current_row = current / safe_column_count;
+            const next_row_start = (current_row + 1) * safe_column_count;
+            if (next_row_start < total_items) {
+                new_index = next_row_start + (current % safe_column_count);
+                if (new_index >= total_items) {
+                    new_index = total_items - 1;
+                }
+            } else {
+                // 循环到第一行
+                new_index = current % safe_column_count;
             }
         },
         .left => {
             if (current > 0) {
                 new_index = current - 1;
+            } else {
+                new_index = total_items - 1; // 循环到最后一个
             }
         },
         .right => {
             if (current + 1 < total_items) {
                 new_index = current + 1;
+            } else {
+                new_index = 0; // 循环到第一个
             }
         },
         .home => {
@@ -282,18 +304,20 @@ pub fn navigateSelection(direction: SelectionDirection, total_items: usize, colu
             new_index = total_items - 1;
         },
         .page_up => {
-            if (current >= column_count * 10) {
-                new_index = current - column_count * 10;
+            const visible_rows: usize = 10;
+            if (current >= safe_column_count * visible_rows) {
+                new_index = current - safe_column_count * visible_rows;
             } else {
-                new_index = 0;
+                new_index = current % safe_column_count;
             }
         },
         .page_down => {
-            const new_pos = current + column_count * 10;
-            new_index = @min(new_pos, total_items - 1);
+            const visible_rows: usize = 10;
+            const target = current + safe_column_count * visible_rows;
+            new_index = @min(target, total_items - 1);
         },
     }
-    
+
     if (new_index != current) {
         selectOnly(new_index);
     }

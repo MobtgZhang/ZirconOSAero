@@ -1090,9 +1090,15 @@ fn statusStr(s: PartitionStatus) []const u8 {
 
 fn fsTypeStr(fs: vfs.FsType) []const u8 {
     return switch (fs) {
+        .fat12 => "FAT12",
+        .fat16 => "FAT16",
         .fat32 => "FAT32",
         .ntfs => "NTFS",
+        .exfat => "exFAT",
         .devfs => "DevFS",
+        .iso9660 => "ISO9660",
+        .udf => "UDF",
+        .refs => "ReFS",
         .unknown => "RAW",
     };
 }

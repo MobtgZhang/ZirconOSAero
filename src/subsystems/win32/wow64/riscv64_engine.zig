@@ -326,6 +326,18 @@ pub const RV64CodeGen = struct {
         self.emitB(0x63, 7, rs1, rs2, @as(u13, @bitCast(imm)));
     }
 
+    pub fn genBnez(self: *RV64CodeGen, rs: u5, imm: i13) void {
+        self.emitB(0x63, 1, rs, 0, @as(u13, @bitCast(imm)));
+    }
+
+    pub fn genBgt(self: *RV64CodeGen, rs1: u5, rs2: u5, imm: i13) void {
+        self.emitB(0x63, 4, rs2, rs1, @as(u13, @bitCast(imm)));
+    }
+
+    pub fn genBgtu(self: *RV64CodeGen, rs1: u5, rs2: u5, imm: i13) void {
+        self.emitB(0x63, 6, rs2, rs1, @as(u13, @bitCast(imm)));
+    }
+
     pub fn genJal(self: *RV64CodeGen, rd: u5, imm: i21) void {
         self.emitJ(0x6F, rd, @as(u21, @bitCast(imm)));
     }
@@ -526,14 +538,53 @@ pub fn translateX86Block(x86_addr: u32, x86_bytes: []const u8, out_buf: []u8, wo
             .jmp_rel8, .jmp_rel32 => {
                 codegen.genNop();
             },
-            .je_rel8, .jne_rel8, .je_rel32, .jne_rel32 => {
-                codegen.genBeq(10, 11, 0);
+            .je_rel8, .je_rel32, .jz_rel8, .jz_rel32 => {
+                codegen.genBeq(5, 6, 0);
             },
-            .jl_rel8, .jl_rel32, .jle_rel8, .jle_rel32 => {
-                codegen.genBlt(10, 11, 0);
+            .jne_rel8, .jne_rel32, .jnz_rel8, .jnz_rel32 => {
+                codegen.genBnez(5, 0);
             },
-            .jg_rel8, .jg_rel32, .jge_rel8, .jge_rel32 => {
-                codegen.genBge(10, 11, 0);
+            .jl_rel8, .jl_rel32, .jnge_rel8, .jnge_rel32 => {
+                codegen.genBlt(5, 6, 0);
+            },
+            .jle_rel8, .jle_rel32, .jng_rel8, .jng_rel32 => {
+                codegen.genBgt(6, 5, 0);
+            },
+            .jg_rel8, .jg_rel32, .jnle_rel8, .jnle_rel32 => {
+                codegen.genBlt(6, 5, 0);
+            },
+            .jge_rel8, .jge_rel32, .jnl_rel8, .jnl_rel32 => {
+                codegen.genBge(5, 6, 0);
+            },
+            .ja_rel8, .ja_rel32, .jnbe_rel8, .jnbe_rel32 => {
+                codegen.genBgtu(5, 6, 0);
+            },
+            .jb_rel8, .jb_rel32, .jnae_rel8, .jnae_rel32 => {
+                codegen.genBltu(5, 6, 0);
+            },
+            .jae_rel8, .jae_rel32, .jnb_rel8, .jnb_rel32 => {
+                codegen.genBgeu(5, 6, 0);
+            },
+            .jbe_rel8, .jbe_rel32, .jna_rel8, .jna_rel32 => {
+                codegen.genBgtu(6, 5, 0);
+            },
+            .jc_rel8, .jc_rel32 => {
+                codegen.genBltu(5, 6, 0);
+            },
+            .jnc_rel8, .jnc_rel32 => {
+                codegen.genBgeu(5, 6, 0);
+            },
+            .jo_rel8, .jo_rel32 => {
+                codegen.genBnez(7, 0);
+            },
+            .jno_rel8, .jno_rel32 => {
+                codegen.genBeq(7, 6, 0);
+            },
+            .js_rel8, .js_rel32 => {
+                codegen.genBnez(8, 0);
+            },
+            .jns_rel8, .jns_rel32 => {
+                codegen.genBeq(8, 6, 0);
             },
             .call_rel32 => {
                 codegen.genNop();
@@ -600,9 +651,42 @@ pub fn translateAndExecute(x86_entry: u32, context_va: u64) ntdll.NTSTATUS {
 }
 
 fn readX86Memory(addr: u32, buf: []u8) usize {
-    _ = addr;
-    _ = buf;
-    return 0;
+    // 从当前 WOW64 进程的 x86 模拟地址空间读取
+    const process = @import("../../../ps/process.zig");
+    const ps = process.getCurrentProcess() orelse return 0;
+    const asp = ps.address_space orelse return 0;
+
+    // 零初始化缓冲区
+    @memset(buf, 0);
+
+    // 处理跨页面边界读取
+    const page_size = @import("../../../arch.zig").impl.paging.page_size;
+    const page_mask = page_size - 1;
+
+    var offset: usize = 0;
+    var current_addr = @as(u64, addr);
+
+    while (offset < buf.len) {
+        const page_start = current_addr & ~page_mask;
+        const page_end = page_start + page_size;
+        const remaining_in_page = page_end - current_addr;
+        const chunk = @min(buf.len - offset, remaining_in_page);
+
+        // 读取一页（使用 probe 模块安全探测）
+        const probe = @import("../../../mm/probe.zig");
+        if (!probe.probeUserMemory(asp, current_addr, chunk, false)) {
+            break;
+        }
+
+        // 直接从用户 VA 复制（已在上面验证了地址有效性）
+        const src_ptr: [*]const u8 = @ptrFromInt(current_addr);
+        @memcpy(buf[offset..][0..chunk], src_ptr[0..chunk]);
+
+        offset += chunk;
+        current_addr += chunk;
+    }
+
+    return offset;
 }
 
 pub fn handlePageFault(fault_addr: u32) ntdll.NTSTATUS {

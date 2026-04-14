@@ -229,9 +229,38 @@ pub const LA64CodeGen = struct {
         self.emit32(instr);
     }
 
+    pub fn genAndi(self: *LA64CodeGen, rd: u5, rj: u5, simm: i12) void {
+        const imm12 = @as(u12, @intCast(simm));
+        const instr: u32 = 0x08000000 | (@as(u32, rd) << 5) | (@as(u32, rj) << 10) |
+            (@as(u32, imm12) << 16);
+        self.emit32(instr);
+    }
+
+    pub fn genJmp(self: *LA64CodeGen, simm: i16) void {
+        const imm16 = @as(u16, @intCast(simm));
+        const instr: u32 = 0x10000000 | (@as(u32, 0) << 5) | (@as(u32, 0) << 10) |
+            (@as(u32, imm16) << 16);
+        self.emit32(instr);
+    }
+
+    pub fn genB(self: *LA64CodeGen, simm: i16) void {
+        const imm16 = @as(u16, @intCast(simm));
+        const instr: u32 = 0x10000000 | (@as(u32, 0) << 5) | (@as(u32, 0) << 10) |
+            (@as(u32, imm16) << 16);
+        self.emit32(instr);
+    }
+
+    pub fn genBl(self: *LA64CodeGen, simm: i16) void {
+        const imm16 = @as(u16, @intCast(simm));
+        const instr: u32 = 0x10000001 | (@as(u32, 0) << 5) | (@as(u32, 0) << 10) |
+            (@as(u32, imm16) << 16);
+        self.emit32(instr);
+    }
+
     pub fn genLdB(self: *LA64CodeGen, rd: u5, rj: u5, simm: i12) void {
+        const imm12 = @as(u12, @intCast(simm));
         const instr: u32 = 0x20000000 | (@as(u32, rd) << 5) | (@as(u32, rj) << 10) |
-            (@as(u32, @as(u12, @bitCast(simm))) << 16);
+            (@as(u32, imm12) << 16);
         self.emit32(instr);
     }
 
@@ -455,59 +484,122 @@ pub fn translateX86Block(x86_addr: u32, x86_bytes: []const u8, out_buf: []u8, wo
 
         switch (opcode) {
             .nop => codegen.genNop(),
+            // mov instructions
             .mov_rm8_r8, .mov_r8_rm8 => codegen.genMove(4, 5),
             .mov_rm16_r16, .mov_r16_rm16 => codegen.genMove(4, 5),
             .mov_rm32_r32, .mov_r32_rm32 => codegen.genMove(4, 5),
             .mov_rm64_r64, .mov_r64_rm64 => codegen.genMove(4, 5),
+            .mov_imm8 => codegen.genOr(4, 0, 0), // mov r32, imm8
+            .mov_imm32 => codegen.genOr(4, 0, 0), // mov r32, imm32
+            // add instructions
             .add_rm8_r8, .add_r8_rm8 => codegen.genAddD(4, 4, 5),
             .add_rm16_r16, .add_r16_rm16 => codegen.genAddW(4, 4, 5),
             .add_rm32_r32, .add_r32_rm32 => codegen.genAddW(4, 4, 5),
             .add_rm64_r64, .add_r64_rm64 => codegen.genAddD(4, 4, 5),
+            .add_rm8_imm8 => codegen.genAddiD(4, 4, 0),
+            .add_rm32_imm32 => codegen.genAddiD(4, 4, 0),
+            .add_eax_imm32 => codegen.genAddiD(4, 4, 0),
+            // sub instructions
             .sub_rm8_r8, .sub_r8_rm8 => codegen.genSubD(4, 4, 5),
             .sub_rm16_r16, .sub_r16_rm16 => codegen.genSubW(4, 4, 5),
             .sub_rm32_r32, .sub_r32_rm32 => codegen.genSubW(4, 4, 5),
             .sub_rm64_r64, .sub_r64_rm64 => codegen.genSubD(4, 4, 5),
+            .sub_rm8_imm8 => codegen.genAddiD(4, 4, 0),
+            .sub_rm32_imm32 => codegen.genAddiD(4, 4, 0),
+            // and instructions
             .and_rm8_r8, .and_r8_rm8 => codegen.genAnd(4, 4, 5),
             .and_rm16_r16, .and_r16_rm16 => codegen.genAnd(4, 4, 5),
             .and_rm32_r32, .and_r32_rm32 => codegen.genAnd(4, 4, 5),
             .and_rm64_r64, .and_r64_rm64 => codegen.genAnd(4, 4, 5),
+            .and_rm8_imm8 => codegen.genAndi(4, 4, 0),
+            .and_rm32_imm32 => codegen.genAndi(4, 4, 0),
+            // or instructions
             .or_rm8_r8, .or_r8_rm8 => codegen.genOr(4, 4, 5),
             .or_rm16_r16, .or_r16_rm16 => codegen.genOr(4, 4, 5),
             .or_rm32_r32, .or_r32_rm32 => codegen.genOr(4, 4, 5),
             .or_rm64_r64, .or_r64_rm64 => codegen.genOr(4, 4, 5),
+            .or_rm8_imm8 => codegen.genOri(4, 4, 0),
+            .or_rm32_imm32 => codegen.genOri(4, 4, 0),
+            // xor instructions
             .xor_rm8_r8, .xor_r8_rm8 => codegen.genXor(4, 4, 5),
             .xor_rm16_r16, .xor_r16_rm16 => codegen.genXor(4, 4, 5),
             .xor_rm32_r32, .xor_r32_rm32 => codegen.genXor(4, 4, 5),
             .xor_rm64_r64, .xor_r64_rm64 => codegen.genXor(4, 4, 5),
+            // cmp instructions (set flags but don't store result)
             .cmp_rm8_r8, .cmp_r8_rm8 => codegen.genSubD(0, 4, 5),
             .cmp_rm16_r16, .cmp_r16_rm16 => codegen.genSubW(0, 4, 5),
             .cmp_rm32_r32, .cmp_r32_rm32 => codegen.genSubW(0, 4, 5),
             .cmp_rm64_r64, .cmp_r64_rm64 => codegen.genSubD(0, 4, 5),
+            .cmp_rm8_imm8 => codegen.genAddiD(0, 4, 0),
+            .cmp_rm32_imm32 => codegen.genAddiD(0, 4, 0),
+            .cmp_eax_imm32 => codegen.genAddiD(0, 4, 0),
+            // test instructions
             .test_rm8_r8, .test_r8_rm8 => codegen.genAnd(0, 4, 5),
             .test_rm16_r16, .test_r16_rm16 => codegen.genAnd(0, 4, 5),
             .test_rm32_r32, .test_r32_rm32 => codegen.genAnd(0, 4, 5),
             .test_rm64_r64, .test_r64_rm64 => codegen.genAnd(0, 4, 5),
-            .je_rel8, .jne_rel8, .je_rel32, .jne_rel32 => codegen.genBeq(4, 5, 0),
-            .jl_rel8, .jl_rel32, .jle_rel8, .jle_rel32 => codegen.genBlt(4, 5, 0),
-            .jg_rel8, .jg_rel32, .jge_rel8, .jge_rel32 => codegen.genBgt(5, 4, 0),
-            .jb_rel8, .jb_rel32, .jbe_rel8, .jbe_rel32 => codegen.genBltu(4, 5, 0),
-            .jae_rel8, .jae_rel32, .ja_rel8, .ja_rel32 => codegen.genBltu(5, 4, 0),
-            .call_rel32 => codegen.genNop(),
+            .test_al_imm8 => codegen.genAndi(0, 4, 0),
+            .test_eax_imm32 => codegen.genAndi(0, 4, 0),
+            // unconditional jump
+            .jmp_rel8, .jmp_rel32 => codegen.genB(0),
+            // conditional jumps (simplified: use zero register as comparison)
+            .je_rel8, .je_rel32, .jz_rel8, .jz_rel32 => codegen.genBeq(4, 5, 0),
+            .jne_rel8, .jne_rel32, .jnz_rel8, .jnz_rel32 => codegen.genBne(4, 5, 0),
+            .jl_rel8, .jl_rel32, .jnge_rel8, .jnge_rel32, .jle_rel8, .jle_rel32, .jng_rel8, .jng_rel32 => codegen.genBlt(4, 5, 0),
+            .jg_rel8, .jg_rel32, .jnle_rel8, .jnle_rel32, .jge_rel8, .jge_rel32, .jnl_rel8, .jnl_rel32 => codegen.genBgt(4, 5, 0),
+            .jb_rel8, .jb_rel32, .jnae_rel8, .jnae_rel32, .jbe_rel8, .jbe_rel32, .jna_rel8, .jna_rel32 => codegen.genBltu(4, 5, 0),
+            .jae_rel8, .jae_rel32, .jnb_rel8, .jnb_rel32, .ja_rel8, .ja_rel32, .jnbe_rel8, .jnbe_rel32 => codegen.genBltu(5, 4, 0),
+            .jo_rel8, .jo_rel32 => codegen.genB(0),
+            .jno_rel8, .jno_rel32 => codegen.genB(0),
+            .js_rel8, .js_rel32 => codegen.genB(0),
+            .jns_rel8, .jns_rel32 => codegen.genB(0),
+            .jp_rel8, .jp_rel32, .jpe_rel8, .jpe_rel32 => codegen.genB(0),
+            .jnp_rel8, .jnp_rel32, .jpo_rel8, .jpo_rel32 => codegen.genB(0),
+            .jc_rel8, .jc_rel32 => codegen.genB(0),
+            .jnc_rel8, .jnc_rel32 => codegen.genB(0),
+            // call and return
+            .call_rel32 => codegen.genBl(0),
+            .call_rm32 => codegen.genSyscall(),
             .ret => {
                 codegen.genRet();
                 pos = x86_bytes.len;
                 break;
             },
+            // stack operations
             .push_r32 => {
-                codegen.genAddiD(3, 3, -4);
-                codegen.genStW(4, 3, 0);
+                codegen.genAddiD(3, 3, -8);
+                codegen.genStD(4, 3, 0);
             },
+            .push_r64 => {
+                codegen.genAddiD(3, 3, -8);
+                codegen.genStD(4, 3, 0);
+            },
+            .push_imm8 => codegen.genNop(),
+            .push_imm32 => codegen.genNop(),
             .pop_r32 => {
-                codegen.genLdW(4, 3, 0);
-                codegen.genAddiD(3, 3, 4);
+                codegen.genLdD(4, 3, 0);
+                codegen.genAddiD(3, 3, 8);
             },
+            .pop_r64 => {
+                codegen.genLdD(4, 3, 0);
+                codegen.genAddiD(3, 3, 8);
+            },
+            // syscall
             .syscall => codegen.genSyscall(),
-            else => codegen.genNop(),
+            // flag operations
+            .clc => codegen.genNop(),
+            .stc => codegen.genNop(),
+            .cld => codegen.genNop(),
+            .std => codegen.genNop(),
+            .cli => codegen.genNop(),
+            .sti => codegen.genNop(),
+            .cmc => codegen.genNop(),
+            .nop, .pause, .hlt => codegen.genNop(),
+            else => {
+                // Unknown instruction - emit a trap to let LBT handle it
+                total_lbt_assists += 1;
+                codegen.genSyscall();
+            },
         }
 
         pos += insn.length;
@@ -545,9 +637,42 @@ pub fn translateAndExecute(x86_entry: u32, context_va: u64) ntdll.NTSTATUS {
 }
 
 fn readX86Memory(addr: u32, buf: []u8) usize {
-    _ = addr;
-    _ = buf;
-    return 0;
+    // 从当前 WOW64 进程的 x86 模拟地址空间读取
+    const process = @import("../../ps/process.zig");
+    const ps = process.getCurrentProcess() orelse return 0;
+    const asp = ps.address_space orelse return 0;
+
+    // 零初始化缓冲区
+    @memset(buf, 0);
+
+    // 处理跨页面边界读取
+    const page_size = @import("../../arch.zig").impl.paging.page_size;
+    const page_mask = page_size - 1;
+
+    var offset: usize = 0;
+    var current_addr = @as(u64, addr);
+
+    while (offset < buf.len) {
+        const page_start = current_addr & ~page_mask;
+        const page_end = page_start + page_size;
+        const remaining_in_page = page_end - current_addr;
+        const chunk = @min(buf.len - offset, remaining_in_page);
+
+        // 读取一页（使用 probe 模块安全探测）
+        const probe = @import("../../mm/probe.zig");
+        if (!probe.probeUserMemory(asp, current_addr, chunk, false)) {
+            break;
+        }
+
+        // 直接从用户 VA 复制（已在上面验证了地址有效性）
+        const src_ptr: [*]const u8 = @ptrFromInt(current_addr);
+        @memcpy(buf[offset..][0..chunk], src_ptr[0..chunk]);
+
+        offset += chunk;
+        current_addr += chunk;
+    }
+
+    return offset;
 }
 
 pub fn handlePageFault(fault_addr: u32) ntdll.NTSTATUS {

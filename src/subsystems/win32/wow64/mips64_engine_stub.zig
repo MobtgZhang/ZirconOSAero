@@ -183,6 +183,14 @@ pub const MIPS64CodeGen = struct {
         self.emitOpcode(0, rs, rt, rd, 0, 0x21);
     }
 
+    pub fn genDaddu(self: *MIPS64CodeGen, rd: u5, rs: u5, rt: u5) void {
+        self.emitOpcode(0, rs, rt, rd, 0, 0x2D);
+    }
+
+    pub fn genMov(self: *MIPS64CodeGen, rd: u5, rs: u5) void {
+        self.genDaddu(rd, rs, 0);
+    }
+
     pub fn genSub(self: *MIPS64CodeGen, rd: u5, rs: u5, rt: u5) void {
         self.emitOpcode(0, rs, rt, rd, 0, 0x22);
     }
@@ -475,8 +483,29 @@ pub fn translateX86Block(x86_addr: u32, x86_bytes: []const u8, out_buf: []u8, wo
             .nop => {
                 codegen.genNop();
             },
-            .mov_rm8_r8, .mov_rm16_r16, .mov_rm32_r32, .mov_rm64_r64 => {
-                codegen.genAddiu(2, 2, 0);
+            .mov_rm8_r8 => {
+                codegen.genLbu(2, 0, 0);
+            },
+            .mov_rm16_r16 => {
+                codegen.genLhu(2, 0, 0);
+            },
+            .mov_rm32_r32 => {
+                codegen.genLwu(2, 0, 0);
+            },
+            .mov_rm64_r64 => {
+                codegen.genLd(2, 0, 0);
+            },
+            .mov_r8_rm8 => {
+                codegen.genSb(2, 0, 0);
+            },
+            .mov_r16_rm16 => {
+                codegen.genSh(2, 0, 0);
+            },
+            .mov_r32_rm32 => {
+                codegen.genSw(2, 0, 0);
+            },
+            .mov_r64_rm64 => {
+                codegen.genSd(2, 0, 0);
             },
             .add_rm8_r8, .add_rm16_r16, .add_rm32_r32, .add_rm64_r64 => {
                 codegen.genAddu(2, 2, 3);
@@ -578,9 +607,42 @@ pub fn translateAndExecute(x86_entry: u64, context_ptr: u64) ntdll.NTSTATUS {
 }
 
 fn readX86Memory(addr: u32, buf: []u8) usize {
-    _ = addr;
-    _ = buf;
-    return 0;
+    // 从当前 WOW64 进程的 x86 模拟地址空间读取
+    const process = @import("../../../ps/process.zig");
+    const ps = process.getCurrentProcess() orelse return 0;
+    const asp = ps.address_space orelse return 0;
+
+    // 零初始化缓冲区
+    @memset(buf, 0);
+
+    // 处理跨页面边界读取
+    const page_size = @import("../../../arch.zig").impl.paging.page_size;
+    const page_mask = page_size - 1;
+
+    var offset: usize = 0;
+    var current_addr = @as(u64, addr);
+
+    while (offset < buf.len) {
+        const page_start = current_addr & ~page_mask;
+        const page_end = page_start + page_size;
+        const remaining_in_page = page_end - current_addr;
+        const chunk = @min(buf.len - offset, remaining_in_page);
+
+        // 读取一页（使用 probe 模块安全探测）
+        const probe = @import("../../../mm/probe.zig");
+        if (!probe.probeUserMemory(asp, current_addr, chunk, false)) {
+            break;
+        }
+
+        // 直接从用户 VA 复制（已在上面验证了地址有效性）
+        const src_ptr: [*]const u8 = @ptrFromInt(current_addr);
+        @memcpy(buf[offset..][0..chunk], src_ptr[0..chunk]);
+
+        offset += chunk;
+        current_addr += chunk;
+    }
+
+    return offset;
 }
 
 pub fn handlePageFault(fault_addr: u32) ntdll.NTSTATUS {

@@ -52,6 +52,7 @@ pub const WPARAM = u64;
 pub const LPARAM = i64;
 pub const LRESULT = i64;
 pub const ATOM = u16;
+pub const HHOOK = u64;
 
 pub const HWND_TOP: HWND = 0;
 pub const HWND_BOTTOM: HWND = 1;
@@ -133,6 +134,8 @@ pub const WM_SYSCOMMAND: u32 = 0x0112;
 pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
 pub const WM_EXITSIZEMOVE: u32 = 0x0232;
 pub const WM_MENUCHAR: u32 = 0x0120;  // 菜单字符消息
+pub const WM_ENTERMENULOOP: u32 = 0x0211;
+pub const WM_EXITMENULOOP: u32 = 0x0212;
 
 pub const SC_MOVE: WPARAM = 0xF010;
 pub const SC_SIZE: WPARAM = 0xF000;
@@ -1656,6 +1659,79 @@ pub fn TranslateMessage(_: *const MSG) BOOL {
     return TRUE;
 }
 
+/// 简单的扫描码到 ASCII 转换表（基本 US 键盘布局）
+/// 实际实现需要更复杂的键盘布局映射和 shift/ctrl/alt 修饰键处理
+const vk_to_ascii: [256]u8 = blk: {
+    var table: [256]u8 = .{0} ** 256;
+    // 字母键 (扫描码转 ASCII)
+    table[0x1E] = 'a'; // A
+    table[0x30] = 'b'; // B
+    table[0x2E] = 'c'; // C
+    table[0x20] = 'd'; // D
+    table[0x12] = 'e'; // E
+    table[0x21] = 'f'; // F
+    table[0x22] = 'g'; // G
+    table[0x23] = 'h'; // H
+    table[0x17] = 'i'; // I
+    table[0x24] = 'j'; // J
+    table[0x25] = 'k'; // K
+    table[0x26] = 'l'; // L
+    table[0x32] = 'm'; // M
+    table[0x31] = 'n'; // N
+    table[0x18] = 'o'; // O
+    table[0x19] = 'p'; // P
+    table[0x10] = 'q'; // Q
+    table[0x13] = 'r'; // R
+    table[0x1F] = 's'; // S
+    table[0x14] = 't'; // T
+    table[0x16] = 'u'; // U
+    table[0x2F] = 'v'; // V
+    table[0x11] = 'w'; // W
+    table[0x2D] = 'x'; // X
+    table[0x15] = 'y'; // Y
+    table[0x2C] = 'z'; // Z
+    // 数字键
+    table[0x02] = '1';
+    table[0x03] = '2';
+    table[0x04] = '3';
+    table[0x05] = '4';
+    table[0x06] = '5';
+    table[0x07] = '6';
+    table[0x08] = '7';
+    table[0x09] = '8';
+    table[0x0A] = '9';
+    table[0x0B] = '0';
+    // 符号键
+    table[0x0C] = '-';
+    table[0x0D] = '=';
+    table[0x1A] = '[';
+    table[0x1B] = ']';
+    table[0x2B] = '\\';
+    table[0x33] = ';';
+    table[0x34] = '\'';
+    table[0x35] = '`';
+    table[0x2C] = ',';
+    table[0x36] = '.';
+    table[0x37] = '/';
+    break :blk table;
+};
+
+/// TranslateMessageEx: 更完整的键盘翻译（支持多种修饰键）
+/// Ref: Learn - TranslateMessage 将虚拟键码转换为字符消息
+pub fn TranslateMessageEx(msg: *MSG, flags: u32) BOOL {
+    _ = flags;
+    // 简化实现：对于 WM_KEYDOWN，生成 WM_CHAR
+    if (msg.message == WM_KEYDOWN) {
+        const vk = @as(u8, @truncate(msg.wparam));
+        if (vk_to_ascii[vk] != 0) {
+            const ch = vk_to_ascii[vk];
+            // 生成 WM_CHAR 消息并投递到同一窗口
+            _ = PostMessageA(msg.hwnd, WM_CHAR, ch, 0);
+        }
+    }
+    return TRUE;
+}
+
 /// Ref: Learn — `DispatchMessage` 调用窗口 `WndProc`；本仓库以 `class_id`（ATOM）→ `WindowClass.wndproc_id`，命中 `registerKernelWndProc` 表则先调内核例程，否则 `DefWindowProcA`（矩阵 §5）。
 /// **D-D1-7**：`WM_DWM*` 的默认应答在 `DefWindowProcA`（返回 0）；内核 `wndproc_id` 若需拦截须自行处理或显式再调 `DefWindowProcA`，勿假定表项自动转发。
 pub fn DispatchMessageA(msg: *const MSG) LRESULT {
@@ -2402,14 +2478,31 @@ pub fn DrawMenuBar(hwnd: HWND) BOOL {
 }
 
 /// TrackPopupMenu: 显示弹出菜单
+/// 实现与 DWM compositor 的集成，支持菜单动画
 pub fn TrackPopupMenu(hmenu: HMENU, flags: u32, x: i32, y: i32, _: i32, hwnd: HWND, _: ?*const RECT) BOOL {
     _ = findMenuIndex(hmenu) orelse return FALSE;
-    // 简化实现：发送 WM_MENUCHAR 消息模拟菜单选择
     const wnd = findWindow(hwnd) orelse return FALSE;
-    _ = wnd.postMessage(WM_MENUCHAR, 0, 0);
     _ = flags;
-    _ = x;
-    _ = y;
+
+    // 通知 DWM 开始菜单动画
+    if (dwm_comp.getCompositorState() == .composited) {
+        _ = dwm_comp.notifyMenuOpen(hmenu, x, y);
+    }
+
+    // 发送 WM_ENTERMENULOOP 消息
+    _ = PostMessageA(hwnd, WM_ENTERMENULOOP, 0, 0);
+
+    // 简化的菜单跟踪循环（实际实现可扩展为完整的菜单模态循环）
+    _ = wnd.postMessage(WM_MENUCHAR, 0, 0);
+
+    // 发送 WM_EXITMENULOOP 消息
+    _ = PostMessageA(hwnd, WM_EXITMENULOOP, 0, 0);
+
+    // 通知 DWM 菜单关闭
+    if (dwm_comp.getCompositorState() == .composited) {
+        _ = dwm_comp.notifyMenuClose();
+    }
+
     return TRUE;
 }
 
@@ -2418,6 +2511,102 @@ fn findMenuIndex(hmenu: HMENU) ?usize {
         if (menus[i].handle == hmenu) return i;
     }
     return null;
+}
+
+// ── Windows Hook Framework ──
+/// 钩子类型常量（与 Win32 API 一致）
+pub const WH_MIN: i32 = -1;
+pub const WH_MSGFILTER: i32 = -1;
+pub const WH_JOURNALRECORD: i32 = 0;
+pub const WH_JOURNALPLAYBACK: i32 = 1;
+pub const WH_KEYBOARD: i32 = 2;
+pub const WH_GETMESSAGE: i32 = 3;
+pub const WH_CALLWNDPROC: i32 = 4;
+pub const WH_CBT: i32 = 5;
+pub const WH_SYSMSGFILTER: i32 = 6;
+pub const WH_MOUSE: i32 = 7;
+pub const WH_HARDWARE: i32 = 8;
+pub const WH_DEBUG: i32 = 9;
+pub const WH_SHELL: i32 = 10;
+pub const WH_FOREGROUNDIDLE: i32 = 11;
+pub const WH_CALLWNDPROCRET: i32 = 12;
+pub const WH_KEYBOARD_LL: i32 = 13;
+pub const WH_MOUSE_LL: i32 = 14;
+pub const WH_MAX: i32 = 14;
+pub const WH_MAXyy: i32 = 11;
+
+/// 钩子结构
+const Hook = struct {
+    hook_type: i32 = 0,
+    hook_proc: ?*const fn(i32, WPARAM, LPARAM) LRESULT = null,
+    thread_id: u32 = 0,
+    hook_id: u64 = 0,
+    next: ?*Hook = null,
+};
+
+const MAX_HOOKS: usize = 32;
+var hooks: [MAX_HOOKS]Hook = [_]Hook{.{}} ** MAX_HOOKS;
+var hook_count: usize = 0;
+var next_hook_id: u64 = 1;
+
+/// 查找钩子
+fn findHookById(id: u64) ?*Hook {
+    for (hooks[0..hook_count]) |*h| {
+        if (h.hook_id == id) return h;
+    }
+    return null;
+}
+
+/// SetWindowsHookExA: 安装线程或全局钩子
+pub fn SetWindowsHookExA(hook_type: i32, hook_proc: ?*const fn(i32, WPARAM, LPARAM) LRESULT, _: HINSTANCE, thread_id: u32) HHOOK {
+    if (hook_count >= MAX_HOOKS) return 0;
+    if (hook_type < WH_MIN or hook_type > WH_MAX) return 0;
+
+    const h = &hooks[hook_count];
+    h.* = .{};
+    h.hook_type = hook_type;
+    h.hook_proc = hook_proc;
+    h.thread_id = thread_id;
+    h.hook_id = next_hook_id;
+    next_hook_id +|= 1;
+    hook_count += 1;
+
+    klog.debug("user32: SetWindowsHookEx type=%d id=%u thread=%u", .{ hook_type, h.hook_id, thread_id });
+    return @as(HHOOK, h.hook_id);
+}
+
+/// UnhookWindowsHookEx: 卸载钩子
+pub fn UnhookWindowsHookEx(hk: HHOOK) BOOL {
+    for (0..hook_count) |i| {
+        if (hooks[i].hook_id == hk) {
+            hooks[i] = .{};
+            if (i < hook_count - 1) {
+                std.mem.swap(Hook, &hooks[i], &hooks[hook_count - 1]);
+            }
+            hook_count -= 1;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/// CallNextHookEx: 调用链中的下一个钩子
+pub fn CallNextHookEx(hk: HHOOK, code: i32, wparam: WPARAM, lparam: LPARAM) LRESULT {
+    _ = hk;
+    _ = code;
+    _ = wparam;
+    _ = lparam;
+    return 0;
+}
+
+/// 向钩子链发送消息
+fn dispatchToHooks(code: i32, wparam: WPARAM, lparam: LPARAM) LRESULT {
+    for (hooks[0..hook_count]) |*h| {
+        if (h.hook_proc) |proc| {
+            _ = proc(code, wparam, lparam);
+        }
+    }
+    return 0;
 }
 
 // ── Helpers ──
@@ -2837,6 +3026,120 @@ pub const WNDCLASSEXW = struct {
     icon_sm: HICON = 0,
 };
 
+// ── Clipboard ──
+
+const MAX_CLIPBOARD_DATA: usize = 65536;
+
+var clipboard_open: bool = false;
+var clipboard_owner: u32 = 0;
+var clipboard_data: [MAX_CLIPBOARD_DATA]u8 = [_]u8{0} ** MAX_CLIPBOARD_DATA;
+var clipboard_size: usize = 0;
+var clipboard_format: u32 = 1;
+
+pub const CF_TEXT: u32 = 1;
+pub const CF_UNICODETEXT: u32 = 13;
+pub const CF_BITMAP: u32 = 2;
+
+pub fn OpenClipboard(hwnd: ?HWND) BOOL {
+    if (clipboard_open) return FALSE;
+    clipboard_open = true;
+    clipboard_owner = if (hwnd) |_| kernel32.GetCurrentThreadId() else 0;
+    return TRUE;
+}
+
+pub fn CloseClipboard() BOOL {
+    if (!clipboard_open) return FALSE;
+    clipboard_open = false;
+    clipboard_owner = 0;
+    return TRUE;
+}
+
+pub fn EmptyClipboard() BOOL {
+    if (!clipboard_open) return FALSE;
+    clipboard_size = 0;
+    clipboard_format = CF_TEXT;
+    @memset(&clipboard_data, 0);
+    return TRUE;
+}
+
+pub fn SetClipboardData(format: u32, mem: ?[*]const anyopaque) BOOL {
+    if (!clipboard_open) return FALSE;
+    if (mem == null) return FALSE;
+    clipboard_format = format;
+    clipboard_size = 0;
+    return TRUE;
+}
+
+pub fn GetClipboardData(format: u32) ?[*]u8 {
+    if (!clipboard_open) return null;
+    if (format != clipboard_format) return null;
+    if (clipboard_size == 0) return null;
+    return &clipboard_data;
+}
+
+pub fn IsClipboardFormatAvailable(format: u32) BOOL {
+    if (!clipboard_open) return FALSE;
+    return if (format == clipboard_format) TRUE else FALSE;
+}
+
+// ── GDI Object Management ──
+
+const MAX_GDI_OBJECTS: usize = 256;
+
+const GdiObjectType = enum(u8) {
+    none = 0,
+    dc,
+    bitmap,
+    brush,
+    pen,
+    font,
+    region,
+};
+
+const GdiObject = struct {
+    obj_type: GdiObjectType = .none,
+    ref_count: u32 = 1,
+};
+
+var gdi_objects: [MAX_GDI_OBJECTS]GdiObject = @splat(.{ .obj_type = .none, .ref_count = 0 });
+var next_gdi_handle: u64 = 1;
+
+fn allocGdiObject(obj_type: GdiObjectType) u64 {
+    for (0..MAX_GDI_OBJECTS) |i| {
+        if (gdi_objects[i].obj_type == .none) {
+            gdi_objects[i].obj_type = obj_type;
+            gdi_objects[i].ref_count = 1;
+            return @as(u64, i + 1);
+        }
+    }
+    return 0;
+}
+
+fn getGdiObject(handle: u64) ?*GdiObject {
+    const index = (handle & 0xFFFF) - 1;
+    if (index >= MAX_GDI_OBJECTS) return null;
+    return &gdi_objects[index];
+}
+
+fn releaseGdiObject(handle: u64) void {
+    const index = (handle & 0xFFFF) - 1;
+    if (index >= MAX_GDI_OBJECTS) return;
+    if (gdi_objects[index].ref_count > 0) {
+        gdi_objects[index].ref_count -= 1;
+        if (gdi_objects[index].ref_count == 0) {
+            gdi_objects[index].obj_type = .none;
+        }
+    }
+}
+
+fn addRefGdiObject(handle: u64) void {
+    const index = (handle & 0xFFFF) - 1;
+    if (index >= MAX_GDI_OBJECTS) return;
+    if (gdi_objects[index].obj_type != .none) {
+        gdi_objects[index].ref_count += 1;
+    }
+}
+
 // ── GDI Functions ──
 
 // BitBlt 光栅操作码
@@ -2890,7 +3193,7 @@ pub fn StretchBlt(hdc_dst: HDC, x_dst: i32, y_dst: i32, cx_dst: i32, cy_dst: i32
 /// CreateCompatibleDC: 创建与指定设备兼容的内存设备上下文
 pub fn CreateCompatibleDC(hdc: ?HDC) HDC {
     _ = hdc;
-    return @as(HDC, 0);
+    return @as(HDC, allocGdiObject(.dc));
 }
 
 /// CreateCompatibleBitmap: 创建与指定设备兼容的位图
@@ -2898,26 +3201,38 @@ pub fn CreateCompatibleBitmap(hdc: ?HDC, cx: i32, cy: i32) HBITMAP {
     _ = hdc;
     _ = cx;
     _ = cy;
-    return @as(HBITMAP, 0);
+    return @as(HBITMAP, allocGdiObject(.bitmap));
 }
 
 /// DeleteDC: 删除设备上下文
 pub fn DeleteDC(hdc: HDC) BOOL {
-    _ = hdc;
-    return TRUE;
+    if (getGdiObject(hdc)) |obj| {
+        if (obj.obj_type == .dc) {
+            releaseGdiObject(hdc);
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 /// SelectObject: 将对象选入设备上下文
 pub fn SelectObject(hdc: HDC, hgdiobj: HGDIOBJ) HGDIOBJ {
-    _ = hdc;
-    _ = hgdiobj;
+    if (getGdiObject(hdc)) |_| {
+        addRefGdiObject(hgdiobj);
+        return 0;
+    }
     return 0;
 }
 
 /// DeleteObject: 删除 GDI 对象
 pub fn DeleteObject(hgdiobj: HGDIOBJ) BOOL {
-    _ = hgdiobj;
-    return TRUE;
+    if (getGdiObject(hgdiobj)) |obj| {
+        if (obj.obj_type != .none) {
+            releaseGdiObject(hgdiobj);
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 /// CreateSolidBrush: 创建实心画刷

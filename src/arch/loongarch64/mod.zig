@@ -1,9 +1,10 @@
 pub const boot = @import("boot.zig");
+pub const fb = @import("../../drivers/video/core/framebuffer.zig");
 pub const paging = @import("paging.zig");
 pub const thread_switch = @import("thread_switch.zig");
 pub const framebuffer = @import("../../hal/loongarch64/framebuffer.zig");
 const uart = @import("../../hal/loongarch64/uart.zig");
-const traps = @import("traps.zig");
+pub const traps = @import("traps.zig");
 const liointc = @import("../../hal/loongarch64/liointc.zig");
 
 pub const name: []const u8 = "loongarch64";
@@ -165,4 +166,16 @@ pub fn consumeTaskMgrHotkey() bool {
 
 pub fn consumeWallpaperCycleHotkey() bool {
     return @import("../../drivers/input/evdev_virtio_bridge.zig").consumeWallpaperCycleHotkey();
+}
+
+/// AP (Application Processor) 入口点，从汇编代码调用
+export fn loongarch_ap_init(hartid: u64) noreturn {
+    _ = hartid; // 目前未使用hartid参数，后续SMP实现会用到
+    // 启用中断
+    enableInterrupts();
+
+    // 目前先让AP核进入休眠，后续完善SMP支持
+    while (true) {
+        asm volatile ("idle 0");
+    }
 }

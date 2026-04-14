@@ -1,6 +1,7 @@
 pub const boot = @import("boot.zig");
 pub const paging = @import("paging.zig");
 pub const framebuffer = @import("../../hal/mips64el/framebuffer.zig");
+pub const fb = framebuffer;
 pub const thread_switch = @import("thread_switch.zig");
 const traps = @import("traps.zig");
 const uart = @import("../../hal/mips64el/uart.zig");

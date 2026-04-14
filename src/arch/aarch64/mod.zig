@@ -1,7 +1,9 @@
 pub const boot = @import("boot.zig");
 pub const paging = @import("paging.zig");
 pub const thread_switch = @import("thread_switch.zig");
-pub const framebuffer = @import("../../hal/aarch64/framebuffer.zig");
+pub const traps = @import("traps.zig");
+pub const fb = @import("../../hal/aarch64/framebuffer.zig");
+pub const framebuffer = fb;
 const uart = @import("../../hal/aarch64/uart.zig");
 const gic = @import("../../hal/aarch64/gic.zig");
 const arm_timer = @import("../../hal/aarch64/timer.zig");

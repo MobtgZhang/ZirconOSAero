@@ -89,7 +89,7 @@ pub fn parse(magic: u32, phys_addr: usize) ?BootInfo {
             return .{
                 .mem_lower_kb = 0,
                 .mem_upper_kb = mem_upper_kb,
-                .mmap_ptr = @ptrFromInt(0), // DTB mmap 由 fdt 模块内部管理
+                .mmap_ptr = @ptrCast(&default_mmap), // DTB mmap 由 fdt 模块内部管理，entry_count=0时不会被访问
                 .mmap_entry_count = 0,
                 .mmap_entry_size = @sizeOf(mb2.MmapEntry),
             };
@@ -98,4 +98,3 @@ pub fn parse(magic: u32, phys_addr: usize) ?BootInfo {
 
     return qemuVirtDefault();
 }
-

@@ -1,4 +1,5 @@
 pub const boot = @import("boot.zig");
+pub const fb = @import("../../drivers/video/core/framebuffer.zig");
 pub const paging = @import("paging.zig");
 pub const framebuffer = @import("../../hal/riscv64/framebuffer.zig");
 pub const traps = @import("traps.zig");
@@ -119,4 +120,22 @@ pub fn restoreInterrupts(were_enabled: bool) void {
 pub fn linkerKernelEndExclusive() usize {
     const end_ptr: *const u8 = &@extern(*const u8, .{ .name = "_kernel_end" });
     return @intFromPtr(end_ptr);
+}
+
+/// AP (Application Processor) 入口点，从汇编代码调用
+export fn riscv_ap_init(hartid: u64) noreturn {
+    _ = hartid; // 目前未使用hartid参数，后续SMP实现会用到
+    // 初始化S模式中断
+    asm volatile ("csrw stvec, %[p]"
+        :
+        : [p] "r" (@intFromPtr(&riscv_early_trap_entry)),
+        : .{ .memory = true });
+
+    // 启用中断
+    enableInterrupts();
+
+    // 目前先让AP核进入休眠，后续完善SMP支持
+    while (true) {
+        asm volatile ("wfi");
+    }
 }

@@ -17,12 +17,10 @@ pub const A64ThreadContext = extern struct {
 };
 
 pub extern fn aarch64_switch_context(from: *A64ThreadContext, to: *A64ThreadContext) callconv(.c) void;
+pub extern fn aarch64_thread_trampoline() void;
 
 pub fn trampolineAddr() usize {
-    return asm volatile (
-        "adr %[o], aarch64_thread_trampoline"
-        : [o] "=r" (-> usize),
-    );
+    return @intFromPtr(&aarch64_thread_trampoline);
 }
 
 /// Prepare a new kernel thread: entry address pushed on stack, lr -> trampoline.

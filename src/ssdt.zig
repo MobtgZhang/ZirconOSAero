@@ -36,6 +36,7 @@ const io = @import("./io/io.zig");
 const vm = @import("./mm/vm.zig");
 const vad = @import("./mm/vad.zig");
 const ob = @import("./ob/object.zig");
+const registry = @import("./registry/registry.zig");
 
 /// NT syscall service function signature
 pub const SyscallHandlerFn = *const fn (argc: u64, args: *const [6]u64) io.NTSTATUS;
@@ -300,6 +301,13 @@ pub fn init() void {
     _ = registerSyscall(0x000E, &NtDeviceIoControlFileStub, 10, 80, "NtDeviceIoControlFile");
     _ = registerSyscall(0x0009, &NtCancelIoFileStub, 2, 16, "NtCancelIoFile");
     _ = registerSyscall(0x0010, &NtCreateIoCompletionPortStub, 4, 32, "NtCreateIoCompletionPort");
+
+    // Registry system calls
+    _ = registerSyscall(0x003A, &NtCreateKeyStub, 7, 56, "NtCreateKey");
+    _ = registerSyscall(0x003B, &NtOpenKeyStub, 3, 24, "NtOpenKey");
+    _ = registerSyscall(0x003C, &NtQueryKeyStub, 5, 40, "NtQueryKey");
+    _ = registerSyscall(0x003D, &NtSetValueKeyStub, 6, 48, "NtSetValueKey");
+    _ = registerSyscall(0x003E, &NtGetValueKeyStub, 6, 48, "NtGetValueKey");
 
     klog.info("SSDT: Initialized with %d registered system calls", .{main_ssdt.count});
 }
@@ -778,4 +786,406 @@ fn NtCreateIoCompletionPortStub(argc: u64, args: *const [6]u64) io.NTSTATUS {
     _ = argc;
     _ = args;
     return io.STATUS_NOT_IMPLEMENTED;
+}
+
+// Registry system call stubs
+fn NtCreateKeyStub(argc: u64, args: *const [6]u64) io.NTSTATUS {
+    _ = argc;
+    const key_handle_ptr = args[0];
+    const desired_access = args[1];
+    const object_attributes_ptr = args[2];
+    const title_index = args[3];
+    const class_ptr = args[4];
+    const create_options = args[5];
+    const disposition_ptr = args[6];
+
+    _ = title_index;
+    _ = class_ptr;
+    _ = create_options;
+    _ = disposition_ptr;
+
+    // Validate input pointers
+    if (!probeUserPointer(key_handle_ptr, @sizeOf(u64), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+    if (!probeUserPointer(object_attributes_ptr, 32, .{ .read_access = true, .allow_null = false })) // OBJECT_ATTRIBUTES is 32 bytes on x64
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Read object attributes
+    const obj_attr: *const [32]u8 = @ptrFromInt(object_attributes_ptr);
+    _ = @as(u64, @bitCast(obj_attr[8..16][0..8].*)); // Root handle unused for now
+    const object_name_ptr = @as(u64, @bitCast(obj_attr[16..24][0..8].*));
+
+    // Read object name
+    if (!probeUserPointer(object_name_ptr, 16, .{ .read_access = true, .allow_null = false })) // UNICODE_STRING is 16 bytes on x64
+        return io.STATUS_INVALID_PARAMETER;
+    const uni_str: *const [16]u8 = @ptrFromInt(object_name_ptr);
+    const name_len = @as(u16, @bitCast(uni_str[0..2][0..2].*));
+    const name_buf_ptr = @as(u64, @bitCast(uni_str[8..16][0..8].*));
+    if (!probeUserPointer(name_buf_ptr, name_len, .{ .read_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Convert UTF-16 name to UTF-8
+    var name_utf8: [256]u8 = undefined;
+    const name_buf: [*]const u16 = @ptrFromInt(name_buf_ptr);
+    var name_len_utf8: usize = 0;
+    for (0..name_len / 2) |i| {
+        const c = name_buf[i];
+        if (c < 0x80) {
+            name_utf8[name_len_utf8] = @as(u8, @truncate(c));
+            name_len_utf8 += 1;
+        } else if (c < 0x800) {
+            name_utf8[name_len_utf8] = 0xC0 | @as(u8, @truncate(c >> 6));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 2;
+        } else {
+            name_utf8[name_len_utf8] = 0xE0 | @as(u8, @truncate(c >> 12));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate((c >> 6) & 0x3F));
+            name_utf8[name_len_utf8 + 2] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 3;
+        }
+        if (name_len_utf8 >= name_utf8.len - 1) break;
+    }
+    name_utf8[name_len_utf8] = 0;
+    const path = name_utf8[0..name_len_utf8];
+
+    // Create or open key
+    const result = registry.createKeyFromNtPath(path) orelse return io.STATUS_OBJECT_NAME_NOT_FOUND;
+
+    // Create handle for the key
+    const handle = ob.createHandle(registry.keyHeaderPtr(result.idx) orelse return io.STATUS_INTERNAL_ERROR, desired_access) orelse return io.STATUS_NO_MEMORY;
+
+    // Write back handle
+    const dst_handle: *u64 = @ptrFromInt(key_handle_ptr);
+    dst_handle.* = handle;
+
+    return io.STATUS_SUCCESS;
+}
+
+fn NtOpenKeyStub(argc: u64, args: *const [6]u64) io.NTSTATUS {
+    _ = argc;
+    const key_handle_ptr = args[0];
+    const desired_access = args[1];
+    const object_attributes_ptr = args[2];
+
+    // Validate input pointers
+    if (!probeUserPointer(key_handle_ptr, @sizeOf(u64), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+    if (!probeUserPointer(object_attributes_ptr, 32, .{ .read_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Read object attributes
+    const obj_attr: *const [32]u8 = @ptrFromInt(object_attributes_ptr);
+    _ = @as(u64, @bitCast(obj_attr[8..16][0..8].*)); // Root handle unused for now
+    const object_name_ptr = @as(u64, @bitCast(obj_attr[16..24][0..8].*));
+
+    // Read object name
+    if (!probeUserPointer(object_name_ptr, 16, .{ .read_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+    const uni_str: *const [16]u8 = @ptrFromInt(object_name_ptr);
+    const name_len = @as(u16, @bitCast(uni_str[0..2][0..2].*));
+    const name_buf_ptr = @as(u64, @bitCast(uni_str[8..16][0..8].*));
+    if (!probeUserPointer(name_buf_ptr, name_len, .{ .read_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Convert UTF-16 name to UTF-8
+    var name_utf8: [256]u8 = undefined;
+    const name_buf: [*]const u16 = @ptrFromInt(name_buf_ptr);
+    var name_len_utf8: usize = 0;
+    for (0..name_len / 2) |i| {
+        const c = name_buf[i];
+        if (c < 0x80) {
+            name_utf8[name_len_utf8] = @as(u8, @truncate(c));
+            name_len_utf8 += 1;
+        } else if (c < 0x800) {
+            name_utf8[name_len_utf8] = 0xC0 | @as(u8, @truncate(c >> 6));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 2;
+        } else {
+            name_utf8[name_len_utf8] = 0xE0 | @as(u8, @truncate(c >> 12));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate((c >> 6) & 0x3F));
+            name_utf8[name_len_utf8 + 2] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 3;
+        }
+        if (name_len_utf8 >= name_utf8.len - 1) break;
+    }
+    name_utf8[name_len_utf8] = 0;
+    const path = name_utf8[0..name_len_utf8];
+
+    // Open key
+    const key_idx = registry.openKeyByNtPath(path) orelse return io.STATUS_OBJECT_NAME_NOT_FOUND;
+
+    // Create handle for the key
+    const handle = ob.createHandle(registry.keyHeaderPtr(key_idx) orelse return io.STATUS_INTERNAL_ERROR, desired_access) orelse return io.STATUS_NO_MEMORY;
+
+    // Write back handle
+    const dst_handle: *u64 = @ptrFromInt(key_handle_ptr);
+    dst_handle.* = handle;
+
+    return io.STATUS_SUCCESS;
+}
+
+fn NtQueryKeyStub(argc: u64, args: *const [6]u64) io.NTSTATUS {
+    _ = argc;
+    const key_handle = args[0];
+    const key_information_class = @as(u32, @truncate(args[1]));
+    const key_information_ptr = args[2];
+    const key_information_length = args[3];
+    const result_length_ptr = args[4];
+
+    // Validate input pointers
+    if (!probeUserPointer(result_length_ptr, @sizeOf(u32), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+    if (key_information_ptr != 0 and !probeUserPointer(key_information_ptr, @as(usize, @intCast(key_information_length)), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Get key object from handle
+    const obj = ob.getObjectByHandle(key_handle, .key) orelse return io.STATUS_INVALID_HANDLE;
+    const key = registry.regKeyFromHeader(obj);
+
+    // Calculate required length based on information class
+    const required_len: u32 = switch (key_information_class) {
+        0 => 24 + key.name_len, // KeyBasicInformation
+        1 => 32 + key.name_len, // KeyNodeInformation
+        2 => 16, // KeyFullInformation (simplified)
+        else => return io.STATUS_INVALID_PARAMETER,
+    };
+
+    // Write result length
+    const dst_len: *u32 = @ptrFromInt(result_length_ptr);
+    dst_len.* = required_len;
+
+    if (key_information_length < required_len)
+        return io.STATUS_BUFFER_TOO_SMALL;
+    if (key_information_ptr == 0)
+        return io.STATUS_SUCCESS;
+
+    // Fill buffer based on information class
+    const buf: *[*]u8 = @ptrFromInt(key_information_ptr);
+    @memset(buf[0..required_len], 0);
+
+    switch (key_information_class) {
+        0 => { // KeyBasicInformation
+            // LastWriteTime (zero for now)
+            // TitleIndex (zero)
+            std.mem.writeInt(u32, buf[8..12], 0, .little);
+            // NameLength
+            std.mem.writeInt(u32, buf[12..16], key.name_len, .little);
+            // Name
+            @memcpy(buf[16..][0..key.name_len], key.name[0..key.name_len]);
+        },
+        1 => { // KeyNodeInformation
+            // LastWriteTime
+            // TitleIndex
+            std.mem.writeInt(u32, buf[8..12], 0, .little);
+            // ClassOffset
+            std.mem.writeInt(u32, buf[12..16], 0, .little);
+            // ClassLength
+            std.mem.writeInt(u32, buf[16..20], 0, .little);
+            // NameLength
+            std.mem.writeInt(u32, buf[20..24], key.name_len, .little);
+            // Name
+            @memcpy(buf[24..][0..key.name_len], key.name[0..key.name_len]);
+        },
+        2 => { // KeyFullInformation (simplified)
+            // LastWriteTime
+            // TitleIndex
+            std.mem.writeInt(u32, buf[8..12], 0, .little);
+            // ClassOffset
+            std.mem.writeInt(u32, buf[12..16], 0, .little);
+            // ClassLength
+            std.mem.writeInt(u32, buf[16..20], 0, .little);
+            // SubKeys
+            std.mem.writeInt(u32, buf[20..24], key.subkey_count, .little);
+            // MaxNameLen
+            std.mem.writeInt(u32, buf[24..28], registry.MAX_KEY_NAME, .little);
+            // MaxClassLen
+            std.mem.writeInt(u32, buf[28..32], 0, .little);
+            // Values
+            std.mem.writeInt(u32, buf[32..36], key.value_count, .little);
+            // MaxValueNameLen
+            std.mem.writeInt(u32, buf[36..40], registry.MAX_VALUE_NAME, .little);
+            // MaxValueDataLen
+            std.mem.writeInt(u32, buf[40..44], registry.MAX_VALUE_DATA, .little);
+        },
+        else => unreachable,
+    }
+
+    return io.STATUS_SUCCESS;
+}
+
+fn NtSetValueKeyStub(argc: u64, args: *const [6]u64) io.NTSTATUS {
+    _ = argc;
+    const key_handle = args[0];
+    const value_name_ptr = args[1];
+    const title_index = args[2];
+    const value_type = @as(u32, @truncate(args[3]));
+    const value_data_ptr = args[4];
+    const value_data_length = args[5];
+
+    _ = title_index;
+
+    // Validate input pointers
+    if (!probeUserPointer(value_name_ptr, 16, .{ .read_access = true, .allow_null = false })) // UNICODE_STRING
+        return io.STATUS_INVALID_PARAMETER;
+    if (value_data_length > 0 and !probeUserPointer(value_data_ptr, @as(usize, @intCast(value_data_length)), .{ .read_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Get key object from handle
+    const obj = ob.getObjectByHandle(key_handle, .key) orelse return io.STATUS_INVALID_HANDLE;
+    const key_idx = registry.keyIndexFromObjectHeader(obj) orelse return io.STATUS_INTERNAL_ERROR;
+
+    // Read value name
+    const uni_str: *const [16]u8 = @ptrFromInt(value_name_ptr);
+    const name_len = @as(u16, @bitCast(uni_str[0..2][0..2].*));
+    const name_buf_ptr = @as(u64, @bitCast(uni_str[8..16][0..8].*));
+    if (!probeUserPointer(name_buf_ptr, name_len, .{ .read_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Convert UTF-16 name to UTF-8
+    var name_utf8: [registry.MAX_VALUE_NAME]u8 = undefined;
+    const name_buf: [*]const u16 = @ptrFromInt(name_buf_ptr);
+    var name_len_utf8: usize = 0;
+    for (0..name_len / 2) |i| {
+        const c = name_buf[i];
+        if (c < 0x80) {
+            name_utf8[name_len_utf8] = @as(u8, @truncate(c));
+            name_len_utf8 += 1;
+        } else if (c < 0x800) {
+            name_utf8[name_len_utf8] = 0xC0 | @as(u8, @truncate(c >> 6));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 2;
+        } else {
+            name_utf8[name_len_utf8] = 0xE0 | @as(u8, @truncate(c >> 12));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate((c >> 6) & 0x3F));
+            name_utf8[name_len_utf8 + 2] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 3;
+        }
+        if (name_len_utf8 >= name_utf8.len) break;
+    }
+    const name = name_utf8[0..name_len_utf8];
+
+    // Handle different value types
+    switch (value_type) {
+        1 => { // REG_SZ
+            const data: [*]const u8 = @ptrFromInt(value_data_ptr);
+            const data_slice = data[0..@as(usize, @intCast(value_data_length))];
+            if (!registry.setValueSz(key_idx, name, data_slice))
+                return io.STATUS_INSUFFICIENT_RESOURCES;
+        },
+        4 => { // REG_DWORD
+            if (value_data_length != 4)
+                return io.STATUS_INVALID_PARAMETER;
+            const dword_val: *const u32 = @ptrFromInt(value_data_ptr);
+            if (!registry.setValueDword(key_idx, name, dword_val.*))
+                return io.STATUS_INSUFFICIENT_RESOURCES;
+        },
+        else => return io.STATUS_INVALID_PARAMETER, // Unsupported type
+    }
+
+    return io.STATUS_SUCCESS;
+}
+
+fn NtGetValueKeyStub(argc: u64, args: *const [6]u64) io.NTSTATUS {
+    _ = argc;
+    const key_handle = args[0];
+    const value_name_ptr = args[1];
+    const title_index = args[2];
+    const value_type_ptr = args[3];
+    const value_data_ptr = args[4];
+    const value_data_length_ptr = args[5];
+    const result_length_ptr = args[6];
+
+    _ = title_index;
+
+    // Validate input pointers
+    if (!probeUserPointer(value_name_ptr, 16, .{ .read_access = true, .allow_null = false })) // UNICODE_STRING
+        return io.STATUS_INVALID_PARAMETER;
+    if (!probeUserPointer(result_length_ptr, @sizeOf(u32), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+    if (value_type_ptr != 0 and !probeUserPointer(value_type_ptr, @sizeOf(u32), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+    if (value_data_length_ptr != 0 and !probeUserPointer(value_data_length_ptr, @sizeOf(u32), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Get key object from handle
+    const obj = ob.getObjectByHandle(key_handle, .key) orelse return io.STATUS_INVALID_HANDLE;
+    const key_idx = registry.keyIndexFromObjectHeader(obj) orelse return io.STATUS_INTERNAL_ERROR;
+
+    // Read value name
+    const uni_str: *const [16]u8 = @ptrFromInt(value_name_ptr);
+    const name_len = @as(u16, @bitCast(uni_str[0..2][0..2].*));
+    const name_buf_ptr = @as(u64, @bitCast(uni_str[8..16][0..8].*));
+    if (!probeUserPointer(name_buf_ptr, name_len, .{ .read_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Convert UTF-16 name to UTF-8
+    var name_utf8: [registry.MAX_VALUE_NAME]u8 = undefined;
+    const name_buf: [*]const u16 = @ptrFromInt(name_buf_ptr);
+    var name_len_utf8: usize = 0;
+    for (0..name_len / 2) |i| {
+        const c = name_buf[i];
+        if (c < 0x80) {
+            name_utf8[name_len_utf8] = @as(u8, @truncate(c));
+            name_len_utf8 += 1;
+        } else if (c < 0x800) {
+            name_utf8[name_len_utf8] = 0xC0 | @as(u8, @truncate(c >> 6));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 2;
+        } else {
+            name_utf8[name_len_utf8] = 0xE0 | @as(u8, @truncate(c >> 12));
+            name_utf8[name_len_utf8 + 1] = 0x80 | @as(u8, @truncate((c >> 6) & 0x3F));
+            name_utf8[name_len_utf8 + 2] = 0x80 | @as(u8, @truncate(c & 0x3F));
+            name_len_utf8 += 3;
+        }
+        if (name_len_utf8 >= name_utf8.len) break;
+    }
+    const name = name_utf8[0..name_len_utf8];
+
+    // Get the value
+    const value = registry.queryValue(key_idx, name) orelse return io.STATUS_OBJECT_NAME_NOT_FOUND;
+
+    // Calculate required length
+    const required_len: u32 = @intCast(value.data_len);
+
+    // Write result length
+    const dst_len: *u32 = @ptrFromInt(result_length_ptr);
+    dst_len.* = required_len;
+
+    // Write type if requested
+    if (value_type_ptr != 0) {
+        const dst_type: *u32 = @ptrFromInt(value_type_ptr);
+        dst_type.* = @intFromEnum(value.value_type);
+    }
+
+    // Write data length if requested
+    if (value_data_length_ptr != 0) {
+        const dst_data_len: *u32 = @ptrFromInt(value_data_length_ptr);
+        dst_data_len.* = required_len;
+    }
+
+    // If data pointer is null, return success (just got size)
+    if (value_data_ptr == 0)
+        return io.STATUS_SUCCESS;
+
+    // Validate data buffer size
+    var provided_len: u32 = 0;
+    if (value_data_length_ptr != 0) {
+        const src_len: *const u32 = @ptrFromInt(value_data_length_ptr);
+        provided_len = src_len.*;
+    } else {
+        provided_len = @as(u32, @intCast(std.mem.alignForward(usize, required_len, 4)));
+    }
+
+    if (provided_len < required_len)
+        return io.STATUS_BUFFER_TOO_SMALL;
+
+    // Validate data buffer
+    if (!probeUserPointer(value_data_ptr, @as(usize, @intCast(provided_len)), .{ .write_access = true, .allow_null = false }))
+        return io.STATUS_INVALID_PARAMETER;
+
+    // Copy data
+    const dst_data: *[*]u8 = @ptrFromInt(value_data_ptr);
+    @memcpy(dst_data[0..value.data_len], value.data[0..value.data_len]);
+
+    return io.STATUS_SUCCESS;
 }

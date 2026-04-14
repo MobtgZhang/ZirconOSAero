@@ -31,6 +31,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const klog = @import("../rtl/klog.zig");
 const arch = @import("../arch.zig");
+const se = @import("../se/security_descriptor.zig");
+const token = @import("../se/token.zig");
 
 pub const ObjectType = enum(u16) {
     process = 0,
@@ -75,7 +77,7 @@ pub const ObjectHeader = struct {
     flags: u32 = 0,
     name_ptr: u64 = 0,
     name_len: u16 = 0,
-    security_desc: u64 = 0,
+    security: ?*se.ObjectSecurity = null,
     signal_state: bool = false,
     wait_count: u32 = 0,
     /// 通用时间戳字段；**同步对象**：`.semaphore` 时打包 `current_count|max_count`（各 32 bit，见 `ke/wait.zig`），其它类型勿依赖此布局。
@@ -365,6 +367,20 @@ pub fn createObject(obj_type: ObjectType, ptr: u64) void {
     hdr.obj_type = obj_type;
     @atomicStore(u32, &hdr.ref_count, 1, .seq_cst);
     @atomicStore(u32, &hdr.handle_count, 0, .seq_cst);
+
+    // Initialize default security descriptor
+    hdr.security = std.heap.page_allocator.create(se.ObjectSecurity) catch null;
+    if (hdr.security) |sec| {
+        sec.* = se.ObjectSecurity.initDefault();
+    }
+}
+
+/// Check access to an object for the given token
+pub fn checkObjectAccess(hdr: *const ObjectHeader, user_token: *const token.Token, desired_access: ACCESS_MASK) bool {
+    // If no security descriptor, allow full access
+    if (hdr.security == null) return true;
+
+    return hdr.security.?.checkAccess(user_token, desired_access);
 }
 
 pub fn referenceObject(ptr: u64) void {
@@ -560,7 +576,6 @@ pub fn normalizeNtObjectPathResolveSymlinks(path: []const u8) []const u8 {
 
 /// B3：按 NT 路径前缀做 **SE 门闸**（不分配句柄）。`tok` 须为 `se/token.zig` 中 `Token`。
 pub fn obOpenObjectByNameAccessProbe(path: []const u8, desired: ACCESS_MASK, tok: *const anyopaque) bool {
-    const se = @import("../se/token.zig");
-    const t: *const se.Token = @ptrCast(@alignCast(tok));
-    return se.openNamedObjectAccessCheck(path, desired, t);
+    const t: *const token.Token = @ptrCast(@alignCast(tok));
+    return token.openNamedObjectAccessCheck(path, desired, t);
 }

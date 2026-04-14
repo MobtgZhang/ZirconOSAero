@@ -43,6 +43,9 @@ pub const IMAGE_FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
 pub const IMAGE_FILE_LARGE_ADDRESS_AWARE: u16 = 0x0020;
 pub const IMAGE_FILE_DLL: u16 = 0x2000;
 
+pub const IMAGE_DLLCHARACTERISTICS_NX_COMPAT: u16 = 0x0100;
+pub const IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE: u16 = 0x0040;
+
 pub const IMAGE_SUBSYSTEM_UNKNOWN: u16 = 0;
 pub const IMAGE_SUBSYSTEM_NATIVE: u16 = 1;
 pub const IMAGE_SUBSYSTEM_WINDOWS_GUI: u16 = 2;
@@ -781,10 +784,505 @@ fn readDataDirectoryRva(data: []const u8, entry: usize) ?u32 {
     return std.mem.readInt(u32, data[dd_off..][0..4], .little);
 }
 
+/// 应用 PE 基址重定位，处理所有重定位块。
+/// `data` 为已映射到 `image_base` 的 PE 映像字节。
+/// `preferred_base` 为 PE 首选加载基址。
+/// `delta` = image_base - preferred_base，即重定位偏移量。
+pub fn applyRelocations(data: []u8, image_base: u64, preferred_base: u64, machine: u16) LoadStatus {
+    const delta = @as(i64, @intCast(image_base)) - @as(i64, @intCast(preferred_base));
+    if (delta == 0) return .success; // 已加载到首选基址，无需重定位
+
+    const reloc_rva = readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_BASERELOC) orelse return .relocation_error;
+    if (reloc_rva == 0) return .success; // 无重定位表
+
+    const reloc_dir = @as(*const BaseRelocation, @ptrCast(@alignCast(data.ptr + reloc_rva)));
+    var current_block = reloc_dir;
+
+    while (current_block.virtual_address != 0 or current_block.size_of_block != 0) {
+        const block_base = current_block.virtual_address;
+        const block_size = current_block.size_of_block;
+
+        // 计算重定位项数量：每个项2字节，减去头部8字节
+        const num_entries = (block_size - @sizeOf(BaseRelocation)) / 2;
+        const entries = @as([*]const u16, @ptrCast(@alignCast(@as([*]u8, @ptrCast(current_block)) + @sizeOf(BaseRelocation))));
+
+        for (entries[0..num_entries]) |entry| {
+            const typ = entry >> 12;
+            const offset = entry & 0xFFF;
+            const site_va = image_base + block_base + offset;
+
+            // 检查是否在映像范围内
+            if (site_va < @intFromPtr(data.ptr) or site_va >= @intFromPtr(data.ptr) + data.len) {
+                continue;
+            }
+
+            const site_ptr = @as(*u64, @ptrCast(@alignCast(site_va)));
+
+            switch (machine) {
+                IMAGE_FILE_MACHINE_AMD64 => {
+                    switch (typ) {
+                        IMAGE_REL_BASED_ABSOLUTE => {}, // 填充项，忽略
+                        IMAGE_REL_BASED_DIR64 => { // 64位绝对地址重定位
+                            site_ptr.* += @as(u64, @bitCast(delta));
+                        },
+                        else => return .relocation_error, // 不支持的重定位类型
+                    }
+                },
+                IMAGE_FILE_MACHINE_I386 => {
+                    switch (typ) {
+                        IMAGE_REL_BASED_ABSOLUTE => {},
+                        IMAGE_REL_BASED_HIGHLOW => { // 32位绝对地址重定位
+                            const site32 = @as(*u32, @ptrCast(site_ptr));
+                            site32.* += @as(u32, @truncate(@as(u64, @bitCast(delta))));
+                        },
+                        else => return .relocation_error,
+                    }
+                },
+                IMAGE_FILE_MACHINE_LOONGARCH64 => {
+                    if (!applyLoongArch64Reloc(site_ptr, typ, delta)) {
+                        return .relocation_error;
+                    }
+                },
+                IMAGE_FILE_MACHINE_ARM64 => {
+                    switch (typ) {
+                        IMAGE_REL_BASED_ABSOLUTE => {},
+                        IMAGE_REL_BASED_DIR64 => {
+                            site_ptr.* += @as(u64, @bitCast(delta));
+                        },
+                        IMAGE_REL_BASED_ARM64_MOV32 => {
+                            // 处理MOVW/MOVT指令对
+                            const site32 = @as(*[2]u32, @ptrCast(site_ptr));
+                            const imm16_lo = site32[0] >> 5 & 0xFFFF;
+                            const imm16_hi = site32[1] >> 5 & 0xFFFF;
+                            var full_addr = (@as(u32, imm16_hi) << 16) | imm16_lo;
+                            full_addr += @as(u32, @truncate(@as(u64, @bitCast(delta))));
+                            // 重新编码指令
+                            site32[0] = (site32[0] & 0x1F) | ((full_addr & 0xFFFF) << 5);
+                            site32[1] = (site32[1] & 0x1F) | ((full_addr >> 16) << 5);
+                        },
+                        else => return .relocation_error,
+                    }
+                },
+                IMAGE_FILE_MACHINE_RISCV64 => {
+                    switch (typ) {
+                        IMAGE_REL_BASED_ABSOLUTE => {},
+                        IMAGE_REL_BASED_DIR64 => {
+                            site_ptr.* += @as(u64, @bitCast(delta));
+                        },
+                        else => return .relocation_error,
+                    }
+                },
+                else => return .relocation_error, // 不支持的架构
+            }
+        }
+
+        // 移动到下一个重定位块
+        current_block = @as(*const BaseRelocation, @ptrCast(@alignCast(@as([*]const u8, @ptrCast(current_block)) + block_size)));
+    }
+
+    return .success;
+}
+
+/// 解析 PE 导出表，将所有导出函数添加到 LoadedImage 的 exports 数组。
+/// `data` 为已映射的 PE 映像字节。
+pub fn parseExportTable(img: *LoadedImage, data: []const u8) LoadStatus {
+    const export_rva = readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_EXPORT) orelse return .success;
+    if (export_rva == 0) return .success; // 无导出表
+
+    const export_dir = @as(*const ExportDirectory, @ptrCast(@alignCast(data.ptr + export_rva)));
+    const ordinal_base = export_dir.ordinal_base;
+    const num_functions = export_dir.number_of_functions;
+    const num_names = export_dir.number_of_names;
+
+    const address_table = @as([*]const u32, @ptrCast(@alignCast(data.ptr + export_dir.address_of_functions)));
+    const name_table = @as([*]const u32, @ptrCast(@alignCast(data.ptr + export_dir.address_of_names)));
+    const ordinal_table = @as([*]const u16, @ptrCast(@alignCast(data.ptr + export_dir.address_of_name_ordinals)));
+
+    // 首先处理有名称的导出
+    for (0..num_names) |i| {
+        const name_rva = name_table[i];
+        const ordinal = ordinal_table[i];
+        const func_rva = address_table[ordinal - ordinal_base];
+
+        // 读取函数名称
+        const name_ptr = @as([*]const u8, @ptrCast(@alignCast(data.ptr + name_rva)));
+        var name_len: usize = 0;
+        while (name_ptr[name_len] != 0 and name_len < 256) : (name_len += 1) {}
+        const name = name_ptr[0..name_len];
+
+        img.addExport(name, func_rva, ordinal);
+    }
+
+    // 处理只有序号的导出
+    for (0..num_functions) |i| {
+        const ordinal = @as(u16, @intCast(i)) + ordinal_base;
+        // 检查是否已经作为命名导出添加过
+        var found = false;
+        for (img.exports[0..img.export_count]) |exp| {
+            if (exp.ordinal == ordinal) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            const func_rva = address_table[i];
+            // 无名称，使用序号作为名称
+            var name_buf: [16]u8 = undefined;
+            const name = std.fmt.bufPrint(&name_buf, "#{}", .{ordinal}) catch continue;
+            img.addExport(name, func_rva, ordinal);
+        }
+    }
+
+    klog.debug("PE Loader: parsed {} exports from image", .{img.export_count});
+    return .success;
+}
+
+/// 解析 PE 导入表，将所有导入的 DLL 添加到 LoadedImage 的 imports 数组。
+/// `data` 为已映射的 PE 映像字节。
+pub fn parseImportTable(img: *LoadedImage, data: []const u8) LoadStatus {
+    const import_rva = readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_IMPORT) orelse return .success;
+    if (import_rva == 0) return .success; // 无导入表
+
+    var import_desc = @as(*const ImportDescriptor, @ptrCast(@alignCast(data.ptr + import_rva)));
+    while (import_desc.name_rva != 0) : (import_desc += 1) {
+        // 读取 DLL 名称
+        const name_ptr = @as([*]const u8, @ptrCast(@alignCast(data.ptr + import_desc.name_rva)));
+        var name_len: usize = 0;
+        while (name_ptr[name_len] != 0 and name_len < 256) : (name_len += 1) {}
+        const dll_name = name_ptr[0..name_len];
+
+        // 添加到导入列表
+        img.addImport(dll_name);
+
+        // 计算导入函数数量
+        const thunk_rva = if (import_desc.original_first_thunk != 0) import_desc.original_first_thunk else import_desc.first_thunk;
+        if (thunk_rva == 0) continue;
+
+        const thunk_ptr = @as([*]const u64, @ptrCast(@alignCast(data.ptr + thunk_rva)));
+        var func_count: u32 = 0;
+        var i: usize = 0;
+        while (thunk_ptr[i] != 0) : (i += 1) {
+            func_count += 1;
+        }
+
+        // 更新导入项的函数计数
+        if (img.import_count > 0) {
+            img.imports[img.import_count - 1].func_count = func_count;
+        }
+    }
+
+    klog.debug("PE Loader: parsed {} imported DLLs from image", .{img.import_count});
+    return .success;
+}
+
+/// PE 加载安全检查：验证校验和、DEP/ASLR设置、签名验证。
+pub fn performSecurityChecks(data: []const u8, optional_header: *const OptionalHeader64) LoadStatus {
+    // 验证校验和（如果非零）
+    if (optional_header.checksum != 0) {
+        // TODO: 实现PE校验和计算验证
+        klog.debug("PE Loader: skipping checksum verification (not implemented)", .{});
+    }
+
+    // 检查DEP设置（NX_COMPAT）
+    if ((optional_header.dll_characteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) == 0) {
+        klog.warning("PE Loader: image does not support DEP/NX", .{});
+        // 可以配置是否拒绝加载
+    }
+
+    // 检查ASLR设置（DYNAMIC_BASE）
+    if ((optional_header.dll_characteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) == 0) {
+        klog.warning("PE Loader: image does not support ASLR", .{});
+    }
+
+    // 检查安全证书（数字签名）
+    const security_rva = readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_SECURITY) orelse return .success;
+    if (security_rva != 0) {
+        // TODO: 实现PE签名验证，确保映像未被篡改
+        klog.debug("PE Loader: image has security directory (signature verification not implemented)", .{});
+    }
+
+    return .success;
+}
+
+/// 从原始PE字节数据加载PE映像到指定地址空间。
+/// `data` 为原始PE文件字节。
+/// `process` 为目标进程。
+/// `preferred_base` 为首选加载基址（0则自动选择）。
+pub fn loadPeFromData(data: []const u8, process: *process_mod.Process, preferred_base: u64) LoadResult {
+    // 验证PE头
+    const validate_status = validatePeHeader(data);
+    if (validate_status != .success) {
+        return .{ .status = validate_status };
+    }
+
+    // 解析DOS头和PE头
+    const dos = @as(*const DosHeader, @ptrCast(@alignCast(data.ptr)));
+    const pe_offset = dos.e_lfanew;
+    const file_header = @as(*const FileHeader, @ptrCast(@alignCast(data.ptr + pe_offset + 4)));
+
+    // 检查架构
+    if (file_header.machine != IMAGE_FILE_MACHINE_AMD64) {
+        // TODO: 支持其他架构
+        return .{ .status = .invalid_format };
+    }
+
+    // 读取可选头
+    const opt_header = @as(*const OptionalHeader64, @ptrCast(@alignCast(data.ptr + pe_offset + 4 + @sizeOf(FileHeader))));
+    if (opt_header.magic != PE32PLUS_MAGIC) {
+        return .{ .status = .not_pe64 };
+    }
+
+    // 执行安全检查
+    const security_status = performSecurityChecks(data, opt_header);
+    if (security_status != .success) {
+        return .{ .status = security_status };
+    }
+
+    // 确定加载基址
+    const image_base = if (preferred_base == 0) opt_header.image_base else preferred_base;
+    const size_of_image = opt_header.size_of_image;
+
+    // 分配地址空间
+    const asp = process.address_space orelse return .{ .status = .section_error };
+    _ = asp; // TODO: 调用vm.allocateVirtualMemory分配映像内存
+    klog.debug("PE Loader: allocating 0x{x} bytes at 0x{x}", .{ size_of_image, image_base });
+
+    // 创建加载映像对象
+    if (image_count >= MAX_LOADED_IMAGES) {
+        return .{ .status = .too_many_images };
+    }
+
+    var img = &loaded_images[image_count];
+    img.* = .{
+        .image_base = image_base,
+        .entry_point = image_base + opt_header.address_of_entry_point,
+        .size_of_image = size_of_image,
+        .subsystem = opt_header.subsystem,
+        .is_dll = (file_header.characteristics & IMAGE_FILE_DLL) != 0,
+        .machine = file_header.machine,
+        .timestamp = file_header.time_date_stamp,
+        .checksum = opt_header.checksum,
+        .dll_characteristics = opt_header.dll_characteristics,
+        .stack_reserve = opt_header.size_of_stack_reserve,
+        .stack_commit = opt_header.size_of_stack_commit,
+        .heap_reserve = opt_header.size_of_heap_reserve,
+        .heap_commit = opt_header.size_of_heap_commit,
+        .process_id = process.pid,
+        .is_loaded = true,
+    };
+
+    // 复制节信息
+    const section_headers = @as([*]const SectionHeader, @ptrCast(@alignCast(data.ptr + pe_offset + 4 + @sizeOf(FileHeader) + file_header.size_of_optional_header)));
+    for (0..file_header.number_of_sections) |i| {
+        const sec = &section_headers[i];
+        img.addSection(sec.name[0..8], sec.virtual_address, sec.virtual_size, sec.characteristics);
+        // 映射节到地址空间
+        if (sec.size_of_raw_data > 0) {
+            const sec_va = image_base + sec.virtual_address;
+            _ = data[sec.pointer_to_raw_data .. sec.pointer_to_raw_data + sec.size_of_raw_data];
+            klog.debug("PE Loader: mapping section '%s' to 0x{x} (size 0x{x})", .{ sec.name[0..8], sec_va, sec.virtual_size });
+            // TODO: 调用vm.mapUserMemory将节数据映射到进程地址空间
+            // 对于BSS节（无原始数据），只需分配并清零内存
+        }
+    }
+
+    // 应用重定位
+    const reloc_status = applyRelocations(@as([]u8, @ptrCast(@alignCast(data.ptr))), // TODO: 传递已映射的映像内存
+        image_base, opt_header.image_base, file_header.machine);
+    if (reloc_status != .success) {
+        return .{ .status = reloc_status };
+    }
+
+    // 解析导出表
+    const export_status = parseExportTable(img, data);
+    if (export_status != .success) {
+        return .{ .status = export_status };
+    }
+
+    // 解析导入表
+    const import_status = parseImportTable(img, data);
+    if (import_status != .success) {
+        return .{ .status = import_status };
+    }
+
+    // TODO: 解析并处理延迟导入、绑定导入、TLS目录等
+
+    // 初始化PEB和进程参数
+    img.peb = .{
+        .image_base = image_base,
+        .subsystem = opt_header.subsystem,
+        .os_major_version = opt_header.major_os_version,
+        .os_minor_version = opt_header.minor_os_version,
+        .os_build_number = 7601, // Windows 7 SP1 build number
+        .os_platform_id = 2, // VER_PLATFORM_WIN32_NT
+        .number_of_processors = 1,
+    };
+
+    img.teb = .{
+        .process_id = process.pid,
+        .peb_ptr = @intFromPtr(&img.peb),
+    };
+
+    img.ldr_entry = .{
+        .dll_base = image_base,
+        .entry_point = img.entry_point,
+        .size_of_image = size_of_image,
+    };
+
+    image_count += 1;
+
+    klog.info("PE Loader: PE image loaded successfully at 0x{x}, entry point at 0x{x}", .{ image_base, img.entry_point });
+
+    return .{ .status = .success, .image = img };
+}
+
+/// 获取已加载的映像按名称（不区分大小写，符合Windows DLL加载规则）。
+pub fn getLoadedImage(name: []const u8) ?*LoadedImage {
+    for (loaded_images[0..image_count]) |*img| {
+        if (!img.is_loaded) continue;
+        if (img.name_len != name.len) continue;
+        var match = true;
+        for (img.name[0..img.name_len], name) |a, b| {
+            const la = if (a >= 'A' and a <= 'Z') a + 32 else a;
+            const lb = if (b >= 'A' and b <= 'Z') b + 32 else b;
+            if (la != lb) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return img;
+    }
+    return null;
+}
+
+/// 获取已加载的映像按基址。
+pub fn getLoadedImageByBase(base: u64) ?*LoadedImage {
+    for (loaded_images[0..image_count]) |*img| {
+        if (!img.is_loaded) continue;
+        if (img.image_base == base) {
+            return img;
+        }
+    }
+    return null;
+}
+
+// ── NT API 实现 ──
+
+/// NtCreateSection: 创建节对象，用于映射PE映像或共享内存。
+pub fn NtCreateSection(section_handle: *ob.Handle, desired_access: ob.ACCESS_MASK, object_attributes: ?*ob.ObjectAttributes, maximum_size: ?u64, page_protection: u32, allocation_attributes: u32, file_handle: ?ob.Handle) callconv(.C) u32 {
+    _ = object_attributes;
+    _ = file_handle;
+
+    klog.debug("PE Loader: NtCreateSection called, desired_access=0x{x}, max_size=0x{x}, protection=0x{x}, alloc_attr=0x{x}", .{ desired_access, maximum_size orelse 0, page_protection, allocation_attributes });
+
+    // 检查是否为PE映像节
+    if ((allocation_attributes & SEC_IMAGE) != 0) {
+        klog.debug("PE Loader: creating PE image section", .{});
+        // TODO: 创建节对象，关联文件句柄对应的PE文件
+    }
+
+    // 创建节对象
+    const sec = section_mm.createSection(maximum_size orelse 0, page_protection, allocation_attributes) orelse {
+        return 0xC0000017; // STATUS_NO_MEMORY
+    };
+
+    // 分配句柄
+    const current_process = process_mod.getCurrentProcess() orelse return 0xC0000005; // STATUS_ACCESS_VIOLATION
+    const handle = ob.createHandle(&current_process.handle_table, @intFromPtr(sec), .section_object) orelse {
+        section_mm.releaseSection(sec);
+        return 0xC0000017; // STATUS_NO_MEMORY
+    };
+
+    section_handle.* = handle;
+    klog.debug("PE Loader: NtCreateSection succeeded, handle=0x{x}", .{handle});
+    return 0; // STATUS_SUCCESS
+}
+
+/// NtMapViewOfSection: 将节对象映射到进程地址空间。
+pub fn NtMapViewOfSection(section_handle: ob.Handle, process_handle: ob.Handle, base_address: *u64, zero_bits: usize, commit_size: usize, section_offset: ?*u64, view_size: *usize, inherit_disposition: u32, allocation_type: u32, protect: u32) callconv(.C) u32 {
+    _ = zero_bits;
+    _ = commit_size;
+    _ = inherit_disposition;
+    _ = allocation_type;
+
+    klog.debug("PE Loader: NtMapViewOfSection called, section_handle=0x{x}, process_handle=0x{x}, base=0x{x}", .{ section_handle, process_handle, base_address.* });
+
+    // 获取当前进程
+    const current_process = process_mod.getCurrentProcess() orelse return 0xC0000005; // STATUS_ACCESS_VIOLATION
+    const target_process = if (process_handle == 0xFFFFFFFFFFFFFFFF) // NtCurrentProcess()
+        current_process
+    else
+        process_mod.findProcess(process_handle) orelse return 0xC0000008; // STATUS_INVALID_HANDLE;
+
+    // 获取节对象
+    const sec = ob.getObjectFromHandle(&current_process.handle_table, section_handle, .section_object) orelse {
+        return 0xC0000008; // STATUS_INVALID_HANDLE
+    };
+    const section = @as(*section_mm.SectionObject, @ptrCast(@alignCast(sec)));
+
+    // 映射节到进程地址空间
+    const asp = target_process.address_space orelse return 0xC0000005; // STATUS_ACCESS_VIOLATION
+    const mapped_base = section_mm.mapSection(asp, section, base_address.*, view_size.*, section_offset orelse 0, protect) orelse {
+        return 0xC0000017; // STATUS_NO_MEMORY
+    };
+
+    base_address.* = mapped_base;
+    klog.debug("PE Loader: NtMapViewOfSection succeeded, mapped base=0x{x}, size=0x{x}", .{ mapped_base, view_size.* });
+    return 0; // STATUS_SUCCESS
+}
+
+/// LdrLoadDll: 加载DLL模块到进程地址空间。
+pub fn LdrLoadDll(dll_path: ?[*]const u16, flags: ?*u32, module_name: *const ob.UnicodeString, module_handle: *u64) callconv(.C) u32 {
+    _ = dll_path;
+    _ = flags;
+
+    klog.debug("PE Loader: LdrLoadDll called, module_name='%s'", .{module_name.buffer[0 .. module_name.length / 2]});
+
+    // 转换Unicode字符串为UTF-8
+    var dll_name_buf: [260]u8 = undefined;
+    var dll_name_len: usize = 0;
+    for (module_name.buffer[0 .. module_name.length / 2]) |wc| {
+        if (wc > 0x7F) {
+            // TODO: 完整Unicode转UTF-8
+            dll_name_buf[dll_name_len] = '?';
+        } else {
+            dll_name_buf[dll_name_len] = @as(u8, @truncate(wc));
+        }
+        dll_name_len += 1;
+        if (dll_name_len >= dll_name_buf.len) break;
+    }
+    const dll_name = dll_name_buf[0..dll_name_len];
+
+    // 检查是否已经加载
+    if (getLoadedImage(dll_name)) |existing| {
+        existing.ref_count += 1;
+        module_handle.* = existing.image_base;
+        klog.debug("PE Loader: LdrLoadDll succeeded (already loaded), handle=0x{x}", .{existing.image_base});
+        return 0; // STATUS_SUCCESS
+    }
+
+    // TODO: 从文件系统读取DLL文件
+    // TODO: 调用loadPeFromData加载DLL
+
+    // 临时：模拟加载成功
+    const result = loadDll(dll_name, 0x180000000); // 模拟DLL基址
+    if (result.status != .success and result.status != .already_loaded) {
+        klog.err("PE Loader: LdrLoadDll failed, status=%d", .{@intFromEnum(result.status)});
+        return 0xC0000135; // STATUS_DLL_NOT_FOUND
+    }
+
+    const img = result.image orelse return 0xC0000005; // STATUS_ACCESS_VIOLATION
+    module_handle.* = img.image_base;
+
+    klog.info("PE Loader: LdrLoadDll succeeded, DLL '%s' loaded at 0x{x}", .{ dll_name, img.image_base });
+    return 0; // STATUS_SUCCESS
+}
+
 /// 对 **已映射** PE 映像字节检查本加载器尚未接线的目录项；用于返回明确 `LoadStatus` / `NTSTATUS`（阶段 4 二进制兼容）。
 pub fn validatePeLoadPolicy(data: []const u8) LoadStatus {
-    const base = validatePeHeader(data);
-    if (base != .success) return base;
+    const header_status = validatePeHeader(data);
+    if (header_status != .success) return header_status;
+
     if (readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT)) |rva| {
         if (rva != 0) return .bound_import_not_supported;
     }
@@ -797,26 +1295,26 @@ pub fn validatePeLoadPolicy(data: []const u8) LoadStatus {
 }
 
 /// 将 `LoadStatus` 映射为与 `ntdll.NTSTATUS` 同数值的 `i32`（供 `exec`/syscall 路径统一失败码）。
-pub fn loadStatusToNtStatus(s: LoadStatus) i32 {
-    return switch (s) {
+pub fn loadStatusToNtStatus(status: LoadStatus) i32 {
+    return switch (status) {
         .success => 0,
         .invalid_format,
         .not_pe,
-        => @bitCast(@as(u32, 0xC000007B)), // STATUS_INVALID_IMAGE_FORMAT
-        .not_pe64 => @bitCast(@as(u32, 0xC000007A)), // STATUS_INVALID_IMAGE_WIN_TYPE（近似）
-        .too_many_images => @bitCast(@as(u32, 0xC000009A)), // STATUS_INSUFFICIENT_RESOURCES
-        .already_loaded => @bitCast(@as(u32, 0xC0000035)), // STATUS_OBJECT_NAME_COLLISION
+        => @as(i32, @bitCast(@as(u32, 0xC000007B))), // STATUS_INVALID_IMAGE_FORMAT
+        .not_pe64 => @as(i32, @bitCast(@as(u32, 0xC000007A))), // STATUS_INVALID_IMAGE_WIN_TYPE（近似）
+        .too_many_images => @as(i32, @bitCast(@as(u32, 0xC000009A))), // STATUS_INSUFFICIENT_RESOURCES
+        .already_loaded => @as(i32, @bitCast(@as(u32, 0xC0000035))), // STATUS_OBJECT_NAME_COLLISION
         .section_error,
         .relocation_error,
-        => @bitCast(@as(u32, 0xC000007B)), // STATUS_INVALID_IMAGE_FORMAT
+        => @as(i32, @bitCast(@as(u32, 0xC000007B))), // STATUS_INVALID_IMAGE_FORMAT
         .import_error,
         .dll_not_found,
         .entry_not_found,
-        => @bitCast(@as(u32, 0xC0000135)), // STATUS_DLL_NOT_FOUND
+        => @as(i32, @bitCast(@as(u32, 0xC0000135))), // STATUS_DLL_NOT_FOUND
         .tls_directory_not_supported,
         .delay_load_not_supported,
         .bound_import_not_supported,
-        => @bitCast(@as(u32, 0xC0000002)), // STATUS_NOT_IMPLEMENTED
+        => @as(i32, @bitCast(@as(u32, 0xC0000002))), // STATUS_NOT_IMPLEMENTED
     };
 }
 
@@ -1060,24 +1558,6 @@ pub fn resolveImportsFromPeBytes(data: []const u8, image_base: u64) LoadStatus {
 
     klog.debug("PE Loader: resolved %u import thunks from PE bytes", .{resolved_total});
     return if (resolved_total > 0) .success else .import_error;
-}
-
-pub fn getLoadedImage(name: []const u8) ?*LoadedImage {
-    for (loaded_images[0..image_count]) |*img| {
-        if (!img.is_loaded) continue;
-        if (img.name_len != name.len) continue;
-        var match = true;
-        for (img.name[0..img.name_len], name) |a, b| {
-            const la = if (a >= 'A' and a <= 'Z') a + 32 else a;
-            const lb = if (b >= 'A' and b <= 'Z') b + 32 else b;
-            if (la != lb) {
-                match = false;
-                break;
-            }
-        }
-        if (match) return img;
-    }
-    return null;
 }
 
 pub fn getImageByBase(base: u64) ?*LoadedImage {

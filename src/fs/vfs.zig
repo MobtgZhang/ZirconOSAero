@@ -31,6 +31,8 @@ const std = @import("std");
 const ob = @import("../ob/object.zig");
 const io = @import("../io/io.zig");
 const klog = @import("../rtl/klog.zig");
+const token = @import("../se/token.zig");
+const se = @import("../se/security_descriptor.zig");
 
 pub const MAX_PATH: usize = 260;
 pub const MAX_NAME: usize = 128;
@@ -430,11 +432,30 @@ pub fn resolvePath(path: []const u8) []const u8 {
     return ob.normalizeNtObjectPath(path);
 }
 
+/// 检查文件访问权限
+fn checkFileAccess(path: []const u8, access: FileAccessMode, user_token: *const token.Token) bool {
+    const desired_access: ob.ACCESS_MASK = switch (access) {
+        .read => ob.GENERIC_READ,
+        .write => ob.GENERIC_WRITE,
+        .read_write => ob.GENERIC_READ | ob.GENERIC_WRITE,
+        .execute => ob.GENERIC_EXECUTE,
+    };
+
+    return ob.obOpenObjectByNameAccessProbe(path, desired_access, user_token);
+}
+
 pub fn openEx(path: []const u8, access: FileAccessMode, share_access: u32) ?*FileObject {
     if (file_count >= MAX_OPEN_FILES) return null;
 
     const norm = resolvePath(path);
     const mp = findMount(norm) orelse return null;
+
+    // 安全检查：验证当前用户是否有权限访问该文件
+    const current_token = token.getCurrentToken();
+    if (!checkFileAccess(norm, access, current_token)) {
+        klog.debug("VFS: Access denied for path '%s' (access mode=%u)", .{ norm, @intFromEnum(access) });
+        return null;
+    }
 
     const want_write = access == .write or access == .read_write;
     if (shareConflict(norm, want_write, share_access)) return null;

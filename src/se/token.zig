@@ -233,6 +233,18 @@ pub fn seAccessActiveDesktopForWin32k(tok: *const Token, process_desktop_idx: u3
     return false;
 }
 
+/// Get the current security token for the running process.
+pub fn getCurrentToken() *const Token {
+    // TODO: Return actual current process token once process tokens are implemented
+    // For now, return system token as default
+    const system_token = createSystemToken();
+    // Since createSystemToken returns a stack copy, we need to store it somewhere
+    // For now, use a static instance
+    var current_token: Token = undefined;
+    current_token = system_token;
+    return &current_token;
+}
+
 pub fn init() void {
     next_token_id = 1;
     klog.info("Security: Reference Monitor initialized", .{});

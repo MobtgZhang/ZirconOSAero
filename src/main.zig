@@ -21,6 +21,58 @@ const arch = @import("arch.zig");
 const klog = @import("rtl/klog.zig");
 const std = @import("std");
 
+pub const std_options: std.Options = .{
+    .page_size_max = 4096,
+};
+
+// Zig 0.15.2 freestanding target workaround
+//
+// PROBLEM: Zig 0.15 introduced std.Options.page_size_max requirement for freestanding targets.
+// When this is provided, std.heap.page_allocator uses PageAllocator internally, which
+// depends on std.posix. However, std.posix.system struct has no members (E, MREMAP,
+// MAP, etc.) for freestanding/other OS targets, causing compilation errors.
+//
+// This is a Zig stdlib design issue: PageAllocator unconditionally references std.posix
+// even when those symbols don't exist for the target OS.
+//
+// Related Zig issues:
+// - Zig stdlib std/heap.zig:56 requires page_size_max for freestanding
+// - Zig stdlib std/posix.zig:69-85 references missing system.* members
+//
+// WORKAROUND: Override std.heap.page_allocator with an empty stub since ZirconOS
+// uses its own heap implementation (src/mm/heap.zig) and never calls std.heap.page_allocator.
+pub const os = struct {
+    pub const heap = struct {
+        pub const page_allocator: std.mem.Allocator = .{
+            .ptr = undefined,
+            .vtable = &empty_allocator_vtable,
+        };
+    };
+};
+
+const empty_allocator_vtable: std.mem.Allocator.VTable = .{
+    .alloc = emptyAlloc,
+    .resize = emptyResize,
+    .free = emptyFree,
+    .remap = emptyRemap,
+};
+
+fn emptyAlloc(_: *anyopaque, _: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
+    return null;
+}
+
+fn emptyResize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+    return false;
+}
+
+fn emptyFree(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
+    return;
+}
+
+fn emptyRemap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+    return null;
+}
+
 pub const panic = std.debug.FullPanic(panicImpl);
 
 fn writeHexU32ToConsole(n: u32) void {

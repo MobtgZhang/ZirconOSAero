@@ -248,3 +248,89 @@ pub const SpinLock = struct {
         arch.restoreInterrupts(self.saved_if);
     }
 };
+
+/// NT 兼容临界区结构，支持用户态快速进入、递归获取、TryEnter 语义
+pub const RTL_CRITICAL_SECTION = extern struct {
+    header: ob.ObjectHeader = .{ .obj_type = .critical_section },
+    lock_count: i32 = 0, // <0: 未锁定; 0: 已锁定无等待者; >0: 已锁定有等待者
+    recursion_count: u32 = 0,
+    owner_tid: u32 = 0,
+    lock_sem: Semaphore = Semaphore.init(0, 1), // 等待者信号量
+    spin_count: u32 = 4000, // 自旋次数，用户态自旋后进入等待
+
+    pub fn init(spin_count: u32) RTL_CRITICAL_SECTION {
+        return .{
+            .header = .{ .obj_type = .critical_section },
+            .lock_count = -1,
+            .recursion_count = 0,
+            .owner_tid = 0,
+            .spin_count = spin_count,
+            .lock_sem = Semaphore.init(0, 1),
+        };
+    }
+
+    /// 尝试进入临界区，不阻塞
+    pub fn tryEnter(self: *RTL_CRITICAL_SECTION) bool {
+        const tid = @as(u32, @intCast(scheduler.getCurrentThreadId()));
+        // 检查是否已持有锁（递归情况）
+        if (self.owner_tid == tid) {
+            self.recursion_count += 1;
+            _ = @atomicRmw(i32, &self.lock_count, .add, 1, .seq_cst);
+            return true;
+        }
+        // 尝试原子交换将lock_count从-1变为0
+        const old = @atomicRmw(i32, &self.lock_count, .xchg, 0, .seq_cst);
+        if (old == -1) {
+            // 获取成功
+            self.owner_tid = tid;
+            self.recursion_count = 1;
+            return true;
+        }
+        // 获取失败
+        _ = @atomicRmw(i32, &self.lock_count, .add, 1, .seq_cst); // 回滚计数
+        return false;
+    }
+
+    /// 进入临界区，阻塞直到获取成功
+    pub fn enter(self: *RTL_CRITICAL_SECTION) void {
+        if (self.tryEnter()) return;
+
+        var spin_remaining = self.spin_count;
+
+        // 自旋阶段
+        while (spin_remaining > 0) {
+            if (self.tryEnter()) return;
+            spin_remaining -= 1;
+            arch.spinCpuRelax();
+        }
+
+        // 自旋失败，进入等待
+        while (!self.tryEnter()) {
+            _ = self.lock_sem.acquire();
+        }
+    }
+
+    /// 离开临界区
+    pub fn leave(self: *RTL_CRITICAL_SECTION) bool {
+        const tid = @as(u32, @intCast(scheduler.getCurrentThreadId()));
+        if (self.owner_tid != tid) return false;
+
+        self.recursion_count -= 1;
+        const old_count = @atomicRmw(i32, &self.lock_count, .sub, 1, .seq_cst);
+
+        if (self.recursion_count == 0) {
+            // 完全释放锁
+            self.owner_tid = 0;
+            if (old_count > 0) {
+                // 有等待者，唤醒一个
+                _ = self.lock_sem.release();
+            }
+        }
+
+        return true;
+    }
+
+    pub fn isSignaled(self: *const RTL_CRITICAL_SECTION) bool {
+        return @atomicLoad(i32, &self.lock_count, .seq_cst) < 0;
+    }
+};

@@ -408,6 +408,23 @@ pub fn getCurrentPid() u32 {
     return current_pid;
 }
 
+/// 检查进程访问权限
+pub fn checkProcessAccess(proc: *const Process, desired_access: ob.ACCESS_MASK) bool {
+    const current_token = token.getCurrentToken();
+    return ob.checkObjectAccess(&proc.header, current_token, desired_access);
+}
+
+/// 按 PID 打开进程并检查访问权限
+pub fn openProcess(pid: u32, desired_access: ob.ACCESS_MASK) ?*Process {
+    const proc = findProcess(pid) orelse return null;
+    if (!checkProcessAccess(proc, desired_access)) {
+        klog.debug("Process: access denied for PID=%u (desired_access=0x{x})", .{ pid, desired_access });
+        return null;
+    }
+    proc.header.addRef();
+    return proc;
+}
+
 pub fn getCurrentProcess() ?*Process {
     return findProcess(current_pid);
 }

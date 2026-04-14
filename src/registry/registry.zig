@@ -35,6 +35,8 @@ const klog = @import("../rtl/klog.zig");
 const ob = @import("../ob/object.zig");
 const os_version = @import("../config/os_version.zig");
 const regf_hive = @import("regf_hive_stub.zig");
+const vfs = @import("../fs/vfs.zig");
+const registry_hive = @import("hive.zig");
 
 /// B2：运行时可切换后端（**写路径** 在 `regfHiveBackendReady()==true` 之前恒为 `memory_tree`）。
 pub const RegBackend = enum(u8) {
@@ -156,6 +158,25 @@ pub var hkcu_control_panel_mouse_key: ?u16 = null;
 /// `HKLM\SOFTWARE\Microsoft\Windows\DWM`（主题色等）；`init()` 后有效。
 pub var hklm_dwm_key: ?u16 = null;
 
+/// Registry path cache (LRU, max 64 entries)
+const CACHE_ENTRIES: usize = 64;
+var cache: [CACHE_ENTRIES]struct { path: []const u8, idx: u16, last_used: u64 } = undefined;
+var cache_count: usize = 0;
+var cache_tick: u64 = 0;
+
+/// Cache statistics
+var cache_hits: u64 = 0;
+var cache_misses: u64 = 0;
+
+/// Dirty tracking: true if registry has unpersisted changes
+var dirty: bool = false;
+/// Auto-sync enabled (default: true for normal operation)
+var auto_sync_enabled: bool = true;
+/// Last sync time (kernel tick count)
+var last_sync_tick: u64 = 0;
+/// Auto-sync interval in ticks (5 seconds @ 1000 ticks per second)
+const AUTO_SYNC_INTERVAL: u64 = 5000;
+
 fn strCopy(dst: []u8, src: []const u8) u16 {
     const len = @min(dst.len, src.len);
     for (dst[0..len], src[0..len]) |*d, s| d.* = s;
@@ -237,6 +258,9 @@ pub fn setValueSz(key_idx: u16, name: []const u8, data: []const u8) bool {
     val.value_type = .sz;
     val.data_len = strCopy(&val.data, data);
     val.dword_value = 0;
+
+    // Mark registry as dirty for persistence
+    dirty = true;
     return true;
 }
 
@@ -269,6 +293,9 @@ pub fn setValueDword(key_idx: u16, name: []const u8, data: u32) bool {
     val.data[2] = @truncate(data >> 16);
     val.data[3] = @truncate(data >> 24);
     val.data_len = 4;
+
+    // Mark registry as dirty for persistence
+    dirty = true;
     return true;
 }
 
@@ -345,21 +372,110 @@ pub fn openKeyPathFromRoot(root_idx: u16, rel_path: []const u8) ?u16 {
 const nt_machine_prefix = "\\Registry\\Machine\\";
 const nt_user_prefix = "\\Registry\\User\\";
 
+/// Cache lookup: find path in cache, increment hit counter on match
+fn cacheLookup(path: []const u8) ?u16 {
+    cache_tick += 1;
+    var i: usize = 0;
+    while (i < cache_count) : (i += 1) {
+        if (strEq(cache[i].path, path)) {
+            cache[i].last_used = cache_tick;
+            cache_hits += 1;
+            return cache[i].idx;
+        }
+    }
+    cache_misses += 1;
+    return null;
+}
+
+/// Cache insertion: add path to cache, evict LRU entry if cache is full
+fn cacheInsert(path: []const u8, idx: u16) void {
+    // Check if path already exists
+    var i: usize = 0;
+    while (i < cache_count) : (i += 1) {
+        if (strEq(cache[i].path, path)) {
+            cache[i].idx = idx;
+            cache[i].last_used = cache_tick;
+            return;
+        }
+    }
+
+    if (cache_count < CACHE_ENTRIES) {
+        // Cache has space, add new entry
+        cache[cache_count] = .{
+            .path = path,
+            .idx = idx,
+            .last_used = cache_tick,
+        };
+        cache_count += 1;
+    } else {
+        // Evict LRU entry (smallest last_used)
+        var lru_idx: usize = 0;
+        var min_used: u64 = cache[0].last_used;
+        var j: usize = 1;
+        while (j < CACHE_ENTRIES) : (j += 1) {
+            if (cache[j].last_used < min_used) {
+                min_used = cache[j].last_used;
+                lru_idx = j;
+            }
+        }
+        cache[lru_idx] = .{
+            .path = path,
+            .idx = idx,
+            .last_used = cache_tick,
+        };
+    }
+}
+
+/// Cache invalidation: remove all entries pointing to a key index (used on key deletion)
+pub fn cacheInvalidateKey(idx: u16) void {
+    var i: usize = 0;
+    while (i < cache_count) : (i += 1) {
+        if (cache[i].idx == idx) {
+            // Shift entries to fill gap
+            var j: usize = i;
+            while (j < cache_count - 1) : (j += 1) {
+                cache[j] = cache[j + 1];
+            }
+            cache_count -= 1;
+            i -= 1; // Recheck current position
+        }
+    }
+}
+
+/// Get cache hit rate (0-100)
+pub fn cacheHitRate() u8 {
+    const total = cache_hits + cache_misses;
+    if (total == 0) return 0;
+    return @intCast((cache_hits * 100) / total);
+}
+
 /// Resolve `\Registry\Machine\...` / `\Registry\User\...` style paths (NT Native API).
 pub fn openKeyByNtPath(full_path: []const u8) ?u16 {
+    // Check cache first
+    if (cacheLookup(full_path)) |idx| {
+        return idx;
+    }
+
+    // Not in cache, do normal lookup
+    var result: ?u16 = null;
     if (full_path.len >= nt_machine_prefix.len and
         std.mem.eql(u8, full_path[0..nt_machine_prefix.len], nt_machine_prefix))
     {
         const root = getHiveRootIndex(.hklm) orelse return null;
-        return openKeyPathFromRoot(root, full_path[nt_machine_prefix.len..]);
-    }
-    if (full_path.len >= nt_user_prefix.len and
+        result = openKeyPathFromRoot(root, full_path[nt_machine_prefix.len..]);
+    } else if (full_path.len >= nt_user_prefix.len and
         std.mem.eql(u8, full_path[0..nt_user_prefix.len], nt_user_prefix))
     {
         const root = getHiveRootIndex(.hkcu) orelse return null;
-        return openKeyPathFromRoot(root, full_path[nt_user_prefix.len..]);
+        result = openKeyPathFromRoot(root, full_path[nt_user_prefix.len..]);
     }
-    return null;
+
+    // Add to cache if found
+    if (result) |idx| {
+        cacheInsert(full_path, idx);
+    }
+
+    return result;
 }
 
 pub fn getKey(idx: u16) ?*const RegKey {
@@ -769,9 +885,40 @@ pub fn serializeMouseAndDwmZosh1(out: []u8) usize {
     return pos;
 }
 
+/// Force sync all dirty registry changes to disk immediately
+pub fn forceSync() void {
+    if (!dirty or !vfs.isInitialized()) return;
+    // Save to both default paths
+    _ = registry_hive.saveBootstrapSnapshot(registry_hive.default_user_export_vfs_path);
+    _ = registry_hive.saveBootstrapSnapshot(registry_hive.default_ntfs_dwm_export_vfs_path);
+    dirty = false;
+    last_sync_tick = cache_tick; // Use cache tick as system tick
+    klog.info("Registry: changes synced to disk", .{});
+}
+
+/// Auto-sync tick handler: should be called periodically by the kernel
+pub fn tick(current_tick: u64) void {
+    if (!auto_sync_enabled or !dirty or !vfs.isInitialized()) return;
+    if (current_tick < last_sync_tick + AUTO_SYNC_INTERVAL) return;
+    forceSync();
+}
+
+/// Enable or disable auto-sync functionality
+pub fn setAutoSync(enabled: bool) void {
+    auto_sync_enabled = enabled;
+}
+
+/// Check if there are unpersisted changes in the registry
+pub fn hasDirtyChanges() bool {
+    return dirty;
+}
+
 pub fn init() void {
     key_count = 0;
     populateDefaults();
+    // Load any existing overlay files
+    registry_hive.tryLoadBootstrapOverlays();
+    dirty = false; // Reset dirty flag after loading overlays
     initialized = true;
     klog.info("Registry: initialized (%u keys, 5 hives loaded)", .{key_count});
 }

@@ -276,6 +276,15 @@ var driver_initialized: bool = false;
 var config_ready: bool = false;
 var total_draw_calls: u64 = 0;
 var total_flips: u64 = 0;
+var console_enabled: bool = true;
+
+pub fn setConsoleEnabled(enabled: bool) void {
+    console_enabled = enabled;
+}
+
+pub fn isConsoleEnabled() bool {
+    return console_enabled;
+}
 
 // ── Double / triple off-screen buffering ──
 // 双缓冲：单离屏槽 + GOP。三缓冲（乒乓）：两离屏槽 + GOP；present 后切换 draw_slot（概念见 docs/cn/AeroDesktopRuntime.md §9，自研非 DXGI）。
@@ -1101,7 +1110,8 @@ pub fn drawRoundedRectAA(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32
                     const py = corner.cy + dy;
 
                     if (px >= 0 and px < @as(i32, @intCast(fb_config.width)) and
-                        py >= 0 and py < @as(i32, @intCast(fb_config.height))) {
+                        py >= 0 and py < @as(i32, @intCast(fb_config.height)))
+                    {
                         const existing = getPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)));
                         const er = (existing >> 16) & 0xFF;
                         const eg = (existing >> 8) & 0xFF;
@@ -1112,8 +1122,7 @@ pub fn drawRoundedRectAA(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32
                         const out_g = (@as(u32, g_ch) * @as(u32, alpha) + @as(u32, eg) * inv_alpha) / 255;
                         const out_b = (@as(u32, b_ch) * @as(u32, alpha) + @as(u32, eb) * inv_alpha) / 255;
 
-                        putPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)),
-                            (out_r << 16) | (out_g << 8) | out_b);
+                        putPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)), (out_r << 16) | (out_g << 8) | out_b);
                     }
                 }
             }
@@ -1140,7 +1149,8 @@ pub fn drawLineAA(x1: i32, y1: i32, x2: i32, y2: i32, color: u32) void {
     while (true) {
         // 绘制主像素
         if (x >= 0 and x < @as(i32, @intCast(fb_config.width)) and
-            y >= 0 and y < @as(i32, @intCast(fb_config.height))) {
+            y >= 0 and y < @as(i32, @intCast(fb_config.height)))
+        {
             const existing = getPixel32(@as(u32, @intCast(x)), @as(u32, @intCast(y)));
             blendPixelWithAA(@as(u32, @intCast(x)), @as(u32, @intCast(y)), r_ch, g_ch, b_ch, @as(u8, 255), existing);
         }
@@ -1878,9 +1888,7 @@ fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: 
                 const bl: u32 = if (sy2 + 1 < sh) small_buf[(sy2 + 1) * sw + sx2b] else tl;
                 const br: u32 = if (sx2b + 1 < sw and sy2 + 1 < sh)
                     small_buf[(sy2 + 1) * sw + sx2b + 1]
-                else if (sx2b + 1 < sw) tr
-                else if (sy2 + 1 < sh) bl
-                else tl;
+                else if (sx2b + 1 < sw) tr else if (sy2 + 1 < sh) bl else tl;
 
                 const dst_x0 = x0 + sx2b * factor;
                 const dst_x1 = @min(dst_x0 + factor, x0 + w);
@@ -2681,6 +2689,10 @@ pub fn isInitialized() bool {
     return config_ready;
 }
 
+pub fn isReady() bool {
+    return config_ready;
+}
+
 pub fn isDriverRegistered() bool {
     return driver_initialized;
 }
@@ -2801,7 +2813,7 @@ pub fn init(addr: usize, width: u32, height: u32, pitch: u32, bpp: u8, pixel_bgr
         const fb_end = addr + required;
         if (back_start < fb_end and addr < back_end) {
             klog.err("Framebuffer: OVERLAP DETECTED — GOP [0x%x..0x%x) vs back [0x%x..0x%x); disabling double buffer to avoid alias panic", .{
-                @as(u32, @truncate(addr)),     @as(u32, @truncate(fb_end)),
+                @as(u32, @truncate(addr)),       @as(u32, @truncate(fb_end)),
                 @as(u32, @truncate(back_start)), @as(u32, @truncate(back_end)),
             });
             double_buffer_active = false;

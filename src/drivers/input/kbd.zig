@@ -17,6 +17,8 @@ else
         pub fn hasData() bool {
             return false;
         }
+        pub fn injectSyntheticChar(_: u8) void {}
+        pub fn handleIrq() void {}
     };
 
 pub const IOCTL_KBD_READ_CHAR: u32 = 0x00080000;
@@ -81,4 +83,40 @@ pub fn init() void {
 
 pub fn isInitialized() bool {
     return driver_initialized;
+}
+
+pub fn hasData() bool {
+    return hal_kbd.hasData();
+}
+
+pub fn injectSyntheticChar(c: u8) void {
+    hal_kbd.injectSyntheticChar(c);
+}
+
+pub fn handleIrq() void {
+    hal_kbd.handleIrq();
+}
+
+pub fn readChar() ?u8 {
+    return hal_kbd.readChar();
+}
+
+pub fn consumeTaskMgrHotkey() bool {
+    return hal_kbd.consumeTaskMgrHotkey();
+}
+
+pub fn consumeWallpaperCycleHotkey() bool {
+    return hal_kbd.consumeWallpaperCycleHotkey();
+}
+
+pub fn consumeFlip3dHotkey() bool {
+    return hal_kbd.consumeFlip3dHotkey();
+}
+
+pub fn consumeFlip3dDismiss() bool {
+    return hal_kbd.consumeFlip3dDismiss();
+}
+
+pub fn takeCursorNudge() @import("cursor_types.zig").CursorNudge {
+    return hal_kbd.takeCursorNudge();
 }

@@ -11,12 +11,15 @@ const std = @import("std");
 const arch = @import("../arch.zig");
 const heap = @import("heap.zig");
 const vm = @import("vm.zig");
+const klog = @import("../rtl/klog.zig");
 
-fn kernelMapRange(ctx: *anyopaque, virt_lo: usize, byte_len: usize) bool {
+pub fn kernelMapRange(ctx: *anyopaque, virt_lo: usize, byte_len: usize) bool {
     if (byte_len == 0) return true;
     const sp: *vm.AddressSpace = @ptrCast(@alignCast(ctx));
     const ps = arch.impl.paging.page_size;
     if (byte_len % ps != 0) return false;
+    klog.info("Heap: mapping 0x%x + 0x%x bytes (0x%x pages)", .{ virt_lo, byte_len, byte_len / ps });
+    arch.flushDebugSerialOutput();
     var off: usize = 0;
     while (off < byte_len) : (off += ps) {
         if (sp.mapPageAlloc(virt_lo + off, .{ .writable = true, .executable = false, .no_cache = false }) == null)
@@ -27,6 +30,7 @@ fn kernelMapRange(ctx: *anyopaque, virt_lo: usize, byte_len: usize) bool {
 
 /// `max_size_kb` 来自配置 `memory.heap_size_kb`；上限 512MiB 以免虚址窗口失控。
 pub fn initKernelHeapAfterVm(space: *vm.AddressSpace, max_size_kb: u32) void {
+    klog.info("Heap init: max_kb=%u", .{max_size_kb});
     const ps = arch.impl.paging.page_size;
     const max_bytes_u64 = @as(u64, @intCast(max_size_kb)) * 1024;
     const cap_u64 = @min(
@@ -38,12 +42,16 @@ pub fn initKernelHeapAfterVm(space: *vm.AddressSpace, max_size_kb: u32) void {
     else
         @intCast(cap_u64);
     const capacity = std.mem.alignBackward(usize, cap, ps);
+    klog.info("Heap init: cap=%u bytes (%.1f MiB)", .{ capacity, @as(f64, @floatFromInt(capacity)) / 1024.0 / 1024.0 });
     if (capacity < 512 * 1024) {
+        klog.info("Heap init: capacity too small (<512KB), using static fallback", .{});
         heap.init();
         return;
     }
     const initial_target = @min(capacity, 512 * 1024);
     const initial_commit = std.mem.alignForward(usize, initial_target, ps);
+    klog.info("Heap init: initial_commit=%u bytes", .{initial_commit});
+    arch.flushDebugSerialOutput();
     if (heap.initGrowable(.{
         .base_virt = heap.KERNEL_HEAP_VIRT_BASE,
         .capacity = capacity,
@@ -51,6 +59,10 @@ pub fn initKernelHeapAfterVm(space: *vm.AddressSpace, max_size_kb: u32) void {
         .page_size = ps,
         .map_ctx = @ptrCast(space),
         .map_range = kernelMapRange,
-    })) return;
+    })) {
+        klog.info("Heap init: growable succeeded", .{});
+        return;
+    }
+    klog.info("Heap init: growable failed, using static fallback", .{});
     heap.init();
 }

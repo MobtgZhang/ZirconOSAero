@@ -14,7 +14,9 @@ const std = @import("std");
 const page_size_bytes: u64 = 4096;
 
 /// AVL 节点上限；受 `AddressSpace` 总大小约束（见 `ps/process.zig` 静态断言）。
-pub const max_vad: usize = 512;
+/// 48 KiB 限制下 VadTable（nodes[36B] + free_stack[16b]）最多约 1 052 个节点，
+/// 取 1 024 作为安全上限。若将来 AddressSpace 采用堆分配 VadTable，可再提升。
+pub const max_vad: usize = 1024;
 const MAX_NODES: usize = max_vad;
 const NULL_IDX: u16 = 0;
 

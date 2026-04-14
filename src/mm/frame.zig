@@ -14,6 +14,19 @@ const build_cfg = @import("build_options");
 const mb2_gop = @import("../boot/multiboot2_parse.zig");
 const klog = @import("../rtl/klog.zig");
 
+/// Phase3.1/Phase3.3：在任何内核页表建立之前，限制 `allocZeroed` 在已知恒等映射范围内的帧。
+/// 防止 `memsetPhysicalPage` 访问未映射的高地址 MMIO 区域（如 LAPIC/HPET/PCI BAR）。
+/// 设为 null 表示无上限（Phase 4+ 使用）。
+var g_alloc_phys_ceiling_exclusive: ?u64 = null;
+
+pub fn setAllocPhysCeilingExclusive(ceiling: ?u64) void {
+    g_alloc_phys_ceiling_exclusive = ceiling;
+}
+
+pub fn getAllocPhysCeilingExclusive() ?u64 {
+    return g_alloc_phys_ceiling_exclusive;
+}
+
 pub const FRAME_SIZE: usize = arch.PAGE_SIZE;
 
 /// 链表「空」哨兵（合法 PFN 下标恒 &lt; 2^20..2^27 量级，远小于 u32::MAX）。
@@ -95,29 +108,24 @@ fn flushDebugSerialIfPossible() void {
 /// 调试：QEMU `-S -s` + `target remote :1234`，`break memsetPhysicalPage`（或 `rb *memsetPhysicalPage`）；#PF 时 `info registers cr2 rip`。
 /// ISA 调试口 0xE9：Debug 下进/出 `rep stosq` 各写一字节（Bochs/QEMU `-d guest_errors` 等可见）。
 pub fn memsetPhysicalPage(phys: u64) void {
-    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding) {
-        if (klog.DEBUG_MODE) {
-            asm volatile ("outb %[t], $0xe9"
-                :
-                : [t] "{al}" (@as(u8, 0xA1)),
-                : .{ .memory = true });
+    // 硬上限断言（无条件）：即使 DEBUG_MODE=false 也强制检查。
+    // Phase 3.1 后 `g_alloc_phys_ceiling_exclusive` 已设定；若 phys 超出上限，
+    // 说明分配器有 bug（将 MMIO 帧放入 zeroed 链表），必须立即检测而非让 memset 触发 #PF。
+    // 绕过此检查的代价是 STOP 0x50 PAGE FAULT IN NONPAGED AREA，而非优雅停机。
+    if (g_alloc_phys_ceiling_exclusive) |ceil| {
+        if (phys >= ceil) {
+            klog.err("BUG: memsetPhysicalPage GPA 0x%x >= memset ceiling 0x%x (ceiling set by Phase3.1; check PFN allocator)", .{ phys, ceil });
+            if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
+                arch.flushDebugSerialOutput();
+            }
+            arch.halt();
         }
-        asm volatile (
-            \\cld
-            \\rep stosq
-            :
-            : [rdi] "{rdi}" (phys),
-              [rcx] "{rcx}" (@as(usize, 512)),
-              [rax] "{rax}" (@as(usize, 0)),
-            : .{ .rdi = true, .rcx = true, .rax = true, .memory = true });
-        if (klog.DEBUG_MODE) {
-            asm volatile ("outb %[t], $0xe9"
-                :
-                : [t] "{al}" (@as(u8, 0xA2)),
-                : .{ .memory = true });
-        }
-        return;
     }
+    if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
+        klog.info("memsetPhysicalPage: about to zero GPA 0x%x", .{phys});
+        arch.flushDebugSerialOutput();
+    }
+    // Zig 循环：所有优化模式下都安全，debug 下可 GDB 单步。
     var i: usize = 0;
     const p: [*]volatile u64 = @ptrFromInt(phys);
     while (i < 512) : (i += 1) p[i] = 0;
@@ -207,7 +215,8 @@ fn zoneToIdx(z: MemoryZone) usize {
 pub const FrameAllocator = struct {
     bitmap: [BITMAP_SIZE]u64,
     pfn_meta: [MAX_PHYS_FRAMES]u8,
-    pfn_locks: [MAX_PHYS_FRAMES]u8,
+    /// PFN 锁引用计数：从 u8 改为 u16 以支持 CoW 场景下超过 255 个映射
+    pfn_locks: [MAX_PHYS_FRAMES]u16,
     /// CoW / 共享物理页引用计数；无共享时为 0；`notePageShared` 用于 fork/视图共享。
     pfn_share_count: [MAX_PHYS_FRAMES]u16,
     pfn_flink: [MAX_PHYS_FRAMES]u32,
@@ -368,6 +377,17 @@ pub const FrameAllocator = struct {
         const avail_mn = mergePhysSpans(avail_raw[0..avail_n], &avail_merged_buf);
         const avail_merged = avail_merged_buf[0..avail_mn];
 
+        klog.info("PFN seed: avail=%u spans, first 5:", .{avail_mn});
+        flushDebugSerialIfPossible();
+        var si: usize = 0;
+        while (si < avail_mn and si < 5) : (si += 1) {
+            const s = avail_merged[si];
+            klog.info("PFN seed:   [%u] [0x%x, 0x%x) len=0x%x", .{
+                si, s.start, s.end_excl, s.end_excl - s.start,
+            });
+            flushDebugSerialIfPossible();
+        }
+
         var sub_frag: [mmap_non_ram_cap + 1]MmapPhysSpan = undefined;
         if (nram_dropped != 0) {
             klog.warn("Frame: Multiboot2 non-RAM mmap entries truncated (cap=%u, dropped=%u)", .{ mmap_non_ram_cap, nram_dropped });
@@ -378,6 +398,11 @@ pub const FrameAllocator = struct {
         const seed_cache = bootSeedReservedCacheFrom(self, kernel_end);
         var seeded_progress: usize = 0;
         var next_progress_log: usize = 1 << 17;
+        klog.info("PFN seed: kern_pfn_excl=%u bss_end=0x%x", .{
+            seed_cache.kernel_low_pfn_excl,
+            seed_cache.kernel_bss_end_exclusive,
+        });
+        flushDebugSerialIfPossible();
         for (avail_merged) |span| {
             const nsub = subtractNonRamFromRange(span.start, span.end_excl, nram_merged, &sub_frag);
             for (sub_frag[0..nsub]) |sub| {
@@ -680,7 +705,7 @@ pub const FrameAllocator = struct {
 
     pub fn lockPfnPhys(self: *FrameAllocator, phys: u64) void {
         const fr = self.pfnSlotFromPhys(phys) orelse return;
-        if (self.pfn_locks[fr] < 255) self.pfn_locks[fr] += 1;
+        if (self.pfn_locks[fr] < std.math.maxInt(u16)) self.pfn_locks[fr] += 1;
     }
 
     pub fn unlockPfnPhys(self: *FrameAllocator, phys: u64) void {
@@ -688,7 +713,7 @@ pub const FrameAllocator = struct {
         if (self.pfn_locks[fr] > 0) self.pfn_locks[fr] -= 1;
     }
 
-    pub fn pfnLockCount(self: *const FrameAllocator, phys: u64) u8 {
+    pub fn pfnLockCount(self: *const FrameAllocator, phys: u64) u16 {
         const fr = self.pfnSlotFromPhys(phys) orelse return 0;
         return self.pfn_locks[fr];
     }
@@ -743,13 +768,25 @@ pub const FrameAllocator = struct {
     }
 
     pub fn allocZeroed(self: *FrameAllocator) ?u64 {
+        if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
+            klog.info("PFN allocZeroed: calling (ceiling=%any)", .{g_alloc_phys_ceiling_exclusive});
+            arch.flushDebugSerialOutput();
+        }
         const zorder = [_]MemoryZone{ .normal, .high, .dma };
         for (zorder) |z| {
             const idx = zoneToIdx(z);
             if (self.listPop(&self.zeroed_head, idx)) |f| {
-                // 不在此 assert：Debug 下链不一致会 panic，表现为难以诊断的启动失败。
-                self.activateFrame(f);
                 const p = self.physFromSlot(f);
+                // 若帧超出恒等映射上限，须归还 zeroed 链表供后续 drain 统一处理。
+                // 否则该帧会被标记为 active，但其 phys 在 `memsetPhysicalPage` 时会导致 #PF（MMIO 地址无映射）。
+                if (g_alloc_phys_ceiling_exclusive) |ceil| {
+                    if (p >= ceil) {
+                        // 帧超出恒等映射上限，须归还 zeroed 链表供后续 drain 统一处理。
+                        self.listPrepend(&self.zeroed_head, idx, f);
+                        continue;
+                    }
+                }
+                self.activateFrame(f);
                 if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
                     klog.debug("PFN: allocZeroed reuse zeroed GPA 0x%x (no memset)", .{p});
                     flushDebugSerialIfPossible();
@@ -758,7 +795,17 @@ pub const FrameAllocator = struct {
             }
         }
         const phys = self.alloc() orelse return null;
-        if (!self.isPhysPlausibleForZeroFill(phys)) return null;
+        if (!self.isPhysPlausibleForZeroFill(phys)) {
+            self.free(phys);
+            return null;
+        }
+        if (g_alloc_phys_ceiling_exclusive) |ceil| {
+            if (phys >= ceil) {
+                // 帧超出恒等映射上限，无法直接 memsetPhysicalPage（无 identity 映射）。
+                self.free(phys);
+                return null;
+            }
+        }
         if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
             klog.debug("PFN: allocZeroed zero-fill GPA 0x%x (before memsetPhysicalPage)", .{phys});
             flushDebugSerialIfPossible();
@@ -774,25 +821,31 @@ pub const FrameAllocator = struct {
     pub fn allocZeroedBelowMaxPhys(self: *FrameAllocator, max_phys_exclusive: u64) ?u64 {
         if (max_phys_exclusive == 0) return null;
         const zorder = [_]MemoryZone{ .normal, .high, .dma };
+        // 仅从 zeroed 链表弹出 phys 在 [0, max_phys_exclusive) 范围内的帧。
+        // 不检查 bitmap（Phase 3.2 中 bitmap 扫描分配帧时，activateFrame 没有从 free 链表中摘除帧，
+        // 导致该帧可能同时在 free 链表 + active 状态。检查 bitmap 会错误地将 active 帧移回 free 链表。
         for (zorder) |z| {
             const idx = zoneToIdx(z);
-            if (self.listPop(&self.zeroed_head, idx)) |f| {
+            var f = self.zeroed_head[idx];
+            while (f != pfn_list_nil) {
                 const phys_z = self.physFromSlot(f);
-                if (phys_z >= max_phys_exclusive) {
-                    self.listPrepend(&self.zeroed_head, idx, f);
-                    continue;
+                const next = self.pfn_flink[f];
+                if (phys_z < max_phys_exclusive) {
+                    self.listUnlink(&self.zeroed_head, idx, f);
+                    self.activateFrame(f);
+                    if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
+                        klog.debug("PFN: allocZeroedBelowMaxPhys reuse zeroed GPA 0x{x} (ceiling 0x{x}, no memset)", .{
+                            phys_z,
+                            max_phys_exclusive,
+                        });
+                        flushDebugSerialIfPossible();
+                    }
+                    return phys_z;
                 }
-                self.activateFrame(f);
-                if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
-                    klog.debug("PFN: allocZeroedBelowMaxPhys reuse zeroed GPA 0x%x (ceiling 0x%x, no memset)", .{
-                        phys_z,
-                        max_phys_exclusive,
-                    });
-                    flushDebugSerialIfPossible();
-                }
-                return phys_z;
+                f = next;
             }
         }
+        // bitmap 扫描：跳过 zeroed 链表后直接走 scan，避免 alloc() 路径弹出超出上限的 free 帧。
         var slot: usize = 0;
         while (slot < MAX_PHYS_FRAMES) : (slot += 1) {
             const phys = self.physFromSlot(slot);
@@ -932,11 +985,37 @@ pub const FrameAllocator = struct {
         self.removeFromFreeOrZeroedLists(frame);
         self.enqueueZeroedFrame(frame);
     }
+
+    /// Phase3→Phase4 边界：清空所有 zone 的零页链表。
+    /// 关键：在将帧入队到 free 链表前，检查其 PFN 状态。
+    /// - zeroed/active 帧：跳过（已在 bitmap 中标记为非 free，无需回收）。
+    /// - free 帧：正常入队到 free 链表（Phase 3.2 identity 映射的页表帧通过此路径回收）。
+    ///
+    /// 背景：Phase 3.2 的 bitmap 扫描分配页表帧（通过 `allocZeroed`），这些帧在 bitmap 中被标记为
+    /// "active"（非 free），但 `allocZeroed` 的 zeroed 链表路径仍然将帧加入了 zeroed 链表。
+    /// `drainZeroedHeadsToFree` 从 zeroed 链表弹出这些帧后发现它们已是 active，跳过入队。
+    /// 结果：页表帧不会被错误回收，它们保持在 bitmap 的 active 状态，后续 bitmap 扫描会正确跳过。
+    pub fn drainZeroedHeadsToFree(self: *FrameAllocator) void {
+        const zones = [_]MemoryZone{ .normal, .high, .dma };
+        for (zones) |z| {
+            const idx = zoneToIdx(z);
+            while (self.listPop(&self.zeroed_head, idx)) |f| {
+                // 只回收 bitmap 中仍标记为 free 的帧；active 帧（页表帧）保持 active 状态。
+                if (!self.isFreeBitmap(f)) continue;
+                self.bitmapMarkFree(f);
+                self.setPfn(f, .free);
+                self.listPrepend(&self.free_head, idx, f);
+            }
+        }
+    }
 };
 
 /// Multiboot 种子热路径缓存（须置于 `FrameAllocator` 定义之后以便引用其布局）。
 const BootSeedReservedCache = struct {
     kernel_low_pfn_excl: u64,
+    /// 内核 BSS 末尾（`_kernel_end`），覆盖 BSS 内的所有静态变量（含 kernel heap `_storage`）。
+    /// identity 映射从 0 开始，BSS 静态变量在其范围内须全部 reserved。
+    kernel_bss_end_exclusive: u64,
     mb_active: bool,
     mb_hs: u64,
     mb_he: u64,
@@ -951,7 +1030,11 @@ const BootSeedReservedCache = struct {
 
 fn bootSeedReservedCacheFrom(fa: *FrameAllocator, kernel_end: usize) BootSeedReservedCache {
     const fs_u64: u64 = @intCast(FRAME_SIZE);
-    const thresh = @max(@as(u64, 0x100000), @as(u64, @intCast(kernel_end)));
+    // 修正：PFN 种子 reserved 范围须覆盖完整内核映像（含 BSS 内的 kernel heap _storage）。
+    // 之前用 `max(0x100000, kernel_end)` 在 kernel_end > 1MB 时会错误地将 [1MB, kernel_end) 暴露给分配器。
+    // 改为：若 kernel_end > 1MB 则直接用 kernel_end；否则保留 1MB 上限（保护 IVT/BDA/EBDA）。
+    // self.boot_kernel_end_exclusive == kernel_end（init 中已赋值）。
+    const thresh = if (kernel_end > 0x100000) kernel_end else 0x100000;
     const kernel_low_pfn_excl = (thresh + fs_u64 - 1) / fs_u64;
 
     const bitmap_begin = @intFromPtr(&fa.bitmap);
@@ -972,6 +1055,7 @@ fn bootSeedReservedCacheFrom(fa: *FrameAllocator, kernel_end: usize) BootSeedRes
 
     return .{
         .kernel_low_pfn_excl = kernel_low_pfn_excl,
+        .kernel_bss_end_exclusive = @intCast(kernel_end),
         .mb_active = fa.mb_handoff_end_exclusive > fa.mb_handoff_start,
         .mb_hs = @intCast(fa.mb_handoff_start),
         .mb_he = @intCast(fa.mb_handoff_end_exclusive),
@@ -992,6 +1076,7 @@ fn isReservedBootSeed(frame: usize, c: *const BootSeedReservedCache) bool {
     if (f > std.math.maxInt(u64) / fs_u64) return true;
     const addr = f * fs_u64;
     if (f < c.kernel_low_pfn_excl) return true;
+    if (addr < c.kernel_bss_end_exclusive) return true;
     if (c.mb_active) {
         const past_ok = addr <= std.math.maxInt(u64) - fs_u64;
         if (addr < c.mb_he) {

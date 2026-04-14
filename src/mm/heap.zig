@@ -9,6 +9,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const klog = @import("../rtl/klog.zig");
 
 /// 主机 `zig test` 与可增长初始化失败时的后备大小。
 const STATIC_FALLBACK_BYTES: usize = 512 * 1024;
@@ -93,6 +94,7 @@ fn blockOverhead() usize {
 }
 
 pub fn init() void {
+    klog.info("Heap: using static fallback init", .{});
     lockHeap();
     defer unlockHeap();
     initUnlockedStatic();
@@ -273,6 +275,13 @@ fn ptrAt(offset: usize) [*]u8 {
 }
 
 pub const kfree = free;
+
+/// 释放通过 allocSlice 分配的切片
+pub fn freeSlice(comptime T: type, slice: []T) void {
+    const ptr: [*]u8 = @ptrCast(@alignCast(slice.ptr));
+    const size = @sizeOf(T) * slice.len;
+    free(ptr, size, @alignOf(T));
+}
 
 pub fn free(ptr: [*]u8, user_size: usize, alignment: usize) void {
     if (!heap_initialized or user_size == 0) return;

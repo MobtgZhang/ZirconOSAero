@@ -1,6 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
-const wr = @import("tooling/wallpaper_resolution.zig");
+const wr = @import("tools/wallpaper_resolution.zig");
 
 const PreferredFbDims = wr.PreferredFbDims;
 const parseResolutionFromBuildConfText = wr.parseResolutionFromBuildConfText;
@@ -11,6 +11,12 @@ const wallpaper_png_inputs = wr.wallpaper_png_inputs;
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
+
+    // Clean step
+    const clean_step = b.step("clean", "Remove build artifacts and cache");
+    const clean_cmd = b.addSystemCommand(&.{ "rm", "-rf", "build", ".zig-cache", "svg_embed_output" });
+    clean_step.dependOn(&clean_cmd.step);
+
     ensureWallpaperPngAssetsPresent(b);
 
     // AArch64 / RISC-V64：内核与 ZBM 由 zig 构建；QEMU 下完整 UEFI 链路为 Makefile（`make run-aarch64` / `make run-riscv64`，含固件与 esp-*.img）。
@@ -265,11 +271,21 @@ pub fn build(b: *std.Build) void {
         .optimize = kernel_optimize,
     });
 
-    const run_svg_embed = b.addSystemCommand(&.{
-        "python3",
-        "tools/svg_to_rgba.py",
-        "svg_embed_output",
+    // Build SVG to RGBA converter (Zig version)
+    const svg_to_rgba_mod = b.createModule(.{
+        .root_source_file = b.path("tools/svg_to_rgba.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
     });
+    svg_to_rgba_mod.addImport("png", image_png_mod);
+
+    const svg_to_rgba_exe = b.addExecutable(.{
+        .name = "svg_to_rgba",
+        .root_module = svg_to_rgba_mod,
+    });
+
+    const run_svg_embed = b.addRunArtifact(svg_to_rgba_exe);
+    run_svg_embed.addArg("svg_embed_output");
     run_svg_embed.setCwd(b.path("."));
     run_svg_embed.step.dependOn(&run_wallpaper_embed.step);
     run_svg_embed.has_side_effects = true;
@@ -280,6 +296,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = kernel_optimize,
     });
+
+    const desktop_opt = b.option(
+        []const u8,
+        "desktop",
+        "Desktop theme for boot entries (aero, none)",
+    ) orelse "aero";
 
     const desktop_default = b.option(
         []const u8,
@@ -388,6 +410,7 @@ pub fn build(b: *std.Build) void {
         .red_zone = if (cpu_arch == .x86_64) false else null,
         .strip = false,
     });
+
     root_mod.addOptions("build_options", build_opts);
     root_mod.addImport("wallpaper_data", wallpaper_data_mod);
     root_mod.addImport("svg_data", svg_data_mod);
@@ -478,15 +501,48 @@ pub fn build(b: *std.Build) void {
         kernel.addAssemblyFile(b.path("src/arch/mips64el/context_switch.S"));
     }
 
-    b.installArtifact(kernel);
+    const install_kernel = b.addInstallArtifact(kernel, .{});
+    b.getInstallStep().dependOn(&install_kernel.step);
 
     const step = b.step("kernel", "Build the kernel ELF");
-    step.dependOn(&kernel.step);
+    step.dependOn(&install_kernel.step);
+
+    const timekeeping_mod = b.createModule(.{
+        .root_source_file = b.path("src/ke/timekeeping.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const arch_mod_host = b.createModule(.{
+        .root_source_file = b.path("src/arch.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const klog_ringbuf_mod = b.createModule(.{
+        .root_source_file = b.path("src/rtl/klog_ringbuf.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "timekeeping", .module = timekeeping_mod },
+        },
+    });
+    const klog_mod = b.createModule(.{
+        .root_source_file = b.path("src/rtl/klog.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "arch", .module = arch_mod_host },
+            .{ .name = "timekeeping", .module = timekeeping_mod },
+            .{ .name = "klog_ringbuf", .module = klog_ringbuf_mod },
+        },
+    });
 
     const heap_test_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/heap.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "klog", .module = klog_mod },
+        },
     });
     const heap_tests = b.addTest(.{
         .root_module = heap_test_mod,
@@ -498,6 +554,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/mm/pool.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "klog", .module = klog_mod },
+        },
     });
     const pool_tests = b.addTest(.{
         .root_module = pool_test_mod,
@@ -520,6 +579,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/mm/slab.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "klog", .module = klog_mod },
+        },
     });
     const slab_tests = b.addTest(.{
         .root_module = slab_test_mod,
@@ -647,6 +709,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     ob_object_test_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    ob_object_test_mod.addImport("klog", klog_mod);
     ob_object_test_mod.addOptions("build_options", build_opts);
     const ob_object_tests = b.addTest(.{
         .root_module = ob_object_test_mod,
@@ -1408,6 +1471,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     phase_b_exec_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    phase_b_exec_host_mod.addImport("klog", klog_mod);
     phase_b_exec_host_mod.addOptions("build_options", build_opts);
     const phase_b_exec_host_tests = b.addTest(.{
         .root_module = phase_b_exec_host_mod,
@@ -1549,6 +1613,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     fork_cow_share_nt61_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    fork_cow_share_nt61_host_mod.addImport("klog", klog_mod);
     fork_cow_share_nt61_host_mod.addOptions("build_options", build_opts);
     const fork_cow_share_nt61_tests = b.addTest(.{
         .root_module = fork_cow_share_nt61_host_mod,
@@ -1562,6 +1627,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     vm_user_va_policy_nt61_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    vm_user_va_policy_nt61_host_mod.addImport("klog", klog_mod);
     vm_user_va_policy_nt61_host_mod.addOptions("build_options", build_opts);
     const vm_user_va_policy_nt61_tests = b.addTest(.{
         .root_module = vm_user_va_policy_nt61_host_mod,
@@ -1575,6 +1641,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     loongarch_nt61_mm_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    loongarch_nt61_mm_host_mod.addImport("klog", klog_mod);
     loongarch_nt61_mm_host_mod.addOptions("build_options", build_opts);
     const loongarch_nt61_mm_host_tests = b.addTest(.{
         .root_module = loongarch_nt61_mm_host_mod,
@@ -1588,6 +1655,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     mips64el_nt61_mm_host_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_host_mod);
+    mips64el_nt61_mm_host_mod.addImport("klog", klog_mod);
     mips64el_nt61_mm_host_mod.addOptions("build_options", build_opts);
     const mips64el_nt61_mm_host_tests = b.addTest(.{
         .root_module = mips64el_nt61_mm_host_mod,
@@ -1723,7 +1791,7 @@ pub fn build(b: *std.Build) void {
 
     addMinimalPeNt61Step(b);
 
-    buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h);
+    buildUefi(b, cpu_arch, optimize, debug_mode, zbm_fb_w, zbm_fb_h, desktop_opt);
     buildZbm(b, cpu_arch, optimize, debug_mode);
     if (cpu_arch == .loongarch64) {
         buildLoongArchZbmEfiObject(b, optimize, desktop_default, debug_mode, zbm_fb_w, zbm_fb_h);
@@ -2005,6 +2073,7 @@ fn buildUefi(
     debug_mode: bool,
     zbm_fb_w: u32,
     zbm_fb_h: u32,
+    desktop_opt: []const u8,
 ) void {
     // LoongArch: use boot/zbm/uefi/main_loongarch64.zig → .o + GNU-EFI link (see buildLoongArchZbmEfiObject).
     // LoongArch UEFI PE/COFF: Zig's linker does not emit it directly (UnsupportedCoffArchitecture).
@@ -2022,8 +2091,6 @@ fn buildUefi(
         .os_tag = .uefi,
         .abi = .none,
     });
-
-    const desktop_opt = b.option([]const u8, "desktop", "Desktop theme for UEFI boot entries") orelse "aero";
 
     const uefi_opts = b.addOptions();
     uefi_opts.addOption(bool, "debug", debug_mode);

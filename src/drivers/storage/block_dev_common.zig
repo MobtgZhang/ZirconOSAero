@@ -12,8 +12,16 @@ const io = @import("../../io/io.zig");
 /// 同步读 `lba` 起连续扇区入 `buf`（扇区大小由实现约定，常为 512）。
 pub const ReadBlocksFn = *const fn (ctx: *anyopaque, lba: u64, buf: []u8) io.NTSTATUS;
 
-/// H3：多后端块读表（NVMe 与 AHCI 可各填一张，供上层 `vfs`/卷挂载演进）。
+/// 同步写 `buf` 内容至 `lba` 起连续扇区（扇区数 = `buf.len / 512`）。
+pub const WriteBlocksFn = *const fn (ctx: *anyopaque, lba: u64, buf: []const u8) io.NTSTATUS;
+
+/// 强制将设备写缓存中的数据刷新到非易失性介质（相当于 ATA FLUSH CACHE / NVMe Flush）。
+pub const FlushBlocksFn = *const fn (ctx: *anyopaque) io.NTSTATUS;
+
+/// H3：多后端块读写刷新表（NVMe 与 AHCI 可各填一张，供上层 `vfs`/卷挂载演进）。
 pub const BlockDevVTable = struct {
     ctx: *anyopaque,
     read_blocks: ReadBlocksFn,
+    write_blocks: ?WriteBlocksFn = null,
+    flush_blocks: ?FlushBlocksFn = null,
 };

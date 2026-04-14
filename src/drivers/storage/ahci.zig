@@ -440,6 +440,124 @@ fn runReadSector(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *frame.Fra
     return runReadSectorLba28(abar, port, lba, out_phys, fa);
 }
 
+/// WRITE SECTORS (0x24)，LBA28 单扇区写。
+/// Ref: Serial ATA AHCI 1.3.1 — H2D Register FIS, ATA WRITE SECTORS command.
+fn runWriteSectorLba28(abar: usize, port: u32, lba: u64, in_phys: u64, fa: *frame.FrameAllocator) bool {
+    const cl_phys = fa.allocZeroed() orelse return false;
+    const fb_phys = fa.allocZeroed() orelse return false;
+    const ct_phys = fa.allocZeroed() orelse return false;
+    defer {
+        fa.free(cl_phys);
+        fa.free(fb_phys);
+        fa.free(ct_phys);
+    }
+
+    portStop(abar, port);
+    portStart(abar, port, cl_phys, fb_phys);
+    if (!waitPortNotBusy(abar, port, tfd_not_busy_max_iter)) {
+        portStop(abar, port);
+        return false;
+    }
+
+    const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
+    const ct: [*]u8 = @ptrFromInt(ct_phys);
+    @memset(ct[0..256], 0);
+    ct[0] = 0x27;
+    ct[1] = 0x80;
+    ct[2] = 0x24;
+    ct[3] = 0;
+    ct[4] = @truncate(lba);
+    ct[5] = @truncate(lba >> 8);
+    ct[6] = @truncate(lba >> 16);
+    ct[7] = 0x40 | @as(u8, @truncate((lba >> 24) & 0x0F));
+    ct[12] = 1;
+
+    const prdt_off: usize = 0x80;
+    const le_in = std.mem.nativeToLittle(u64, in_phys);
+    @memcpy(ct[prdt_off .. prdt_off + 8], std.mem.asBytes(&le_in));
+    @memset(ct[prdt_off + 8 .. prdt_off + 12], 0);
+    const le_bc = std.mem.nativeToLittle(u32, (@as(u32, 511)) | (@as(u32, 1) << 31));
+    @memcpy(ct[prdt_off + 12 .. prdt_off + 16], std.mem.asBytes(&le_bc));
+
+    cl[0] = 5 | (@as(u32, 1) << 16);
+    cl[1] = 0;
+    cl[2] = @truncate(ct_phys);
+    cl[3] = @truncate(ct_phys >> 32);
+
+    asm volatile ("" ::: .{ .memory = true });
+    portW(abar, port, 0x10, 0xFFFF_FFFF);
+    portW(abar, port, 0x38, 1);
+
+    const ok = waitPxCiClear(abar, port, pxci_wait_max_iter);
+    portStop(abar, port);
+    return ok;
+}
+
+/// WRITE DMA EXT (0x35)，48 位 LBA + 16 位扇区计数。
+/// Ref: Serial ATA — Register H2D FIS; ACS WRITE DMA EXT.
+fn runWriteSectorDmaExt(abar: usize, port: u32, lba: u64, in_phys: u64, fa: *frame.FrameAllocator) bool {
+    const cl_phys = fa.allocZeroed() orelse return false;
+    const fb_phys = fa.allocZeroed() orelse return false;
+    const ct_phys = fa.allocZeroed() orelse return false;
+    defer {
+        fa.free(cl_phys);
+        fa.free(fb_phys);
+        fa.free(ct_phys);
+    }
+
+    portStop(abar, port);
+    portStart(abar, port, cl_phys, fb_phys);
+    if (!waitPortNotBusy(abar, port, tfd_not_busy_max_iter)) {
+        portStop(abar, port);
+        return false;
+    }
+
+    const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
+    const ct: [*]u8 = @ptrFromInt(ct_phys);
+    @memset(ct[0..256], 0);
+    ct[0] = 0x27;
+    ct[1] = 0x80;
+    ct[2] = 0x35;
+    ct[3] = 0;
+    ct[4] = 1;
+    ct[5] = 0;
+    ct[6] = @truncate(lba);
+    ct[7] = @truncate(lba >> 8);
+    ct[8] = @truncate(lba >> 16);
+    ct[9] = 0x40;
+    ct[10] = 0;
+    ct[11] = 0;
+    ct[12] = @truncate(lba >> 24);
+    ct[13] = @truncate(lba >> 32);
+    ct[14] = @truncate(lba >> 40);
+    ct[15] = 0;
+
+    const prdt_off: usize = 0x80;
+    const le_in = std.mem.nativeToLittle(u64, in_phys);
+    @memcpy(ct[prdt_off .. prdt_off + 8], std.mem.asBytes(&le_in));
+    @memset(ct[prdt_off + 8 .. prdt_off + 12], 0);
+    const le_bc = std.mem.nativeToLittle(u32, (@as(u32, 511)) | (@as(u32, 1) << 31));
+    @memcpy(ct[prdt_off + 12 .. prdt_off + 16], std.mem.asBytes(&le_bc));
+
+    cl[0] = 5 | (@as(u32, 1) << 16);
+    cl[1] = 0;
+    cl[2] = @truncate(ct_phys);
+    cl[3] = @truncate(ct_phys >> 32);
+
+    asm volatile ("" ::: .{ .memory = true });
+    portW(abar, port, 0x10, 0xFFFF_FFFF);
+    portW(abar, port, 0x38, 1);
+
+    const ok = waitPxCiClear(abar, port, pxci_wait_max_iter);
+    portStop(abar, port);
+    return ok;
+}
+
+fn runWriteSector(abar: usize, port: u32, lba: u64, in_phys: u64, fa: *frame.FrameAllocator) bool {
+    if (lba > 0x0FFF_FFFF) return runWriteSectorDmaExt(abar, port, lba, in_phys, fa);
+    return runWriteSectorLba28(abar, port, lba, in_phys, fa);
+}
+
 fn readBlocksImpl(ctx: *anyopaque, lba: u64, buf: []u8) io.NTSTATUS {
     _ = ctx;
     if (!g_storage_ready or buf.len < 512 or (buf.len % 512) != 0) return io.STATUS_INVALID_PARAMETER;
@@ -454,6 +572,75 @@ fn readBlocksImpl(ctx: *anyopaque, lba: u64, buf: []u8) io.NTSTATUS {
         const phys_lba = base +% s;
         if (!runReadSector(g_abar_va, g_active_port, phys_lba, p, fa)) return io.STATUS_IO_DEVICE_ERROR;
         @memcpy(slice, @as([*]const u8, @ptrFromInt(p))[0..512]);
+    }
+    return io.STATUS_SUCCESS;
+}
+
+fn writeBlocksImpl(ctx: *anyopaque, lba: u64, buf: []const u8) io.NTSTATUS {
+    _ = ctx;
+    if (!g_storage_ready or buf.len < 512 or (buf.len % 512) != 0) return io.STATUS_INVALID_PARAMETER;
+    const fa = frame.kernelFrameAllocatorPtr();
+    const sectors = buf.len / 512;
+    const base = lba +% g_partition_start_lba;
+    var s: u64 = 0;
+    while (s < sectors) : (s += 1) {
+        const slice = buf[s * 512 ..][0..512];
+        const p = fa.allocZeroed() orelse return io.STATUS_INSUFFICIENT_RESOURCES;
+        defer fa.free(p);
+        @memcpy(@as([*]u8, @ptrFromInt(p))[0..512], slice);
+        const phys_lba = base +% s;
+        if (!runWriteSector(g_abar_va, g_active_port, phys_lba, p, fa)) return io.STATUS_IO_DEVICE_ERROR;
+    }
+    return io.STATUS_SUCCESS;
+}
+
+/// ATA FLUSH CACHE (0xE7)：强制将设备写缓存中的所有数据写入非易失性介质。
+/// Ref: Serial ATA AHCI 1.3.1 — NCQ non-queued, or non-NCQ cache flush command.
+fn runFlushCache(abar: usize, port: u32, fa: *frame.FrameAllocator) bool {
+    const cl_phys = fa.allocZeroed() orelse return false;
+    const fb_phys = fa.allocZeroed() orelse return false;
+    const ct_phys = fa.allocZeroed() orelse return false;
+    defer {
+        fa.free(cl_phys);
+        fa.free(fb_phys);
+        fa.free(ct_phys);
+    }
+
+    portStop(abar, port);
+    portStart(abar, port, cl_phys, fb_phys);
+    if (!waitPortNotBusy(abar, port, tfd_not_busy_max_iter)) {
+        portStop(abar, port);
+        return false;
+    }
+
+    const cl: [*]volatile u32 = @ptrFromInt(cl_phys);
+    const ct: [*]u8 = @ptrFromInt(ct_phys);
+    @memset(ct[0..256], 0);
+    ct[0] = 0x27;
+    ct[1] = 0x80;
+    ct[2] = 0xE7;
+
+    cl[0] = 5;
+    cl[1] = 0;
+    cl[2] = @truncate(ct_phys);
+    cl[3] = @truncate(ct_phys >> 32);
+
+    asm volatile ("" ::: .{ .memory = true });
+    portW(abar, port, 0x10, 0xFFFF_FFFF);
+    portW(abar, port, 0x38, 1);
+
+    const ok = waitPxCiClear(abar, port, pxci_wait_max_iter);
+    portStop(abar, port);
+    return ok;
+}
+
+fn flushBlocksImpl(ctx: *anyopaque) io.NTSTATUS {
+    _ = ctx;
+    if (!g_storage_ready) return io.STATUS_DEVICE_NOT_READY;
+    const fa = frame.kernelFrameAllocatorPtr();
+    if (!runFlushCache(g_abar_va, g_active_port, fa)) {
+        klog.warn("AHCI: FLUSH CACHE failed on port %u", .{g_active_port});
+        return io.STATUS_IO_DEVICE_ERROR;
     }
     return io.STATUS_SUCCESS;
 }
@@ -483,12 +670,14 @@ fn probePartitionStartLba(abar: usize, port: u32, fa: *frame.FrameAllocator) voi
     }
 }
 
-/// 供 NVMe/AHCI 共享的块读表（当前仅 AHCI 就绪时有效）。
+/// 供 NVMe/AHCI 共享的块读写刷新表。
 pub fn blockDevVTableOrNull() ?block_common.BlockDevVTable {
     if (!g_storage_ready) return null;
     return .{
         .ctx = @ptrCast(&g_ahci_blk_ctx),
         .read_blocks = readBlocksImpl,
+        .write_blocks = writeBlocksImpl,
+        .flush_blocks = flushBlocksImpl,
     };
 }
 
@@ -511,7 +700,7 @@ pub fn tryInitMmioDmaPath(max_bus: u8) void {
         klog.warn("AHCI: mapDeviceMmioIdentity failed for ABAR 0x%x", .{dev.abar_phys});
         return;
     }
-
+    klog.info("AHCI: ABAR mapped at VA 0x%x (PA 0x%x)", .{ dev.abar_phys, dev.abar_phys });
     const abar: usize = @intCast(dev.abar_phys);
     g_abar_va = abar;
     if (!hbaReset(abar)) {

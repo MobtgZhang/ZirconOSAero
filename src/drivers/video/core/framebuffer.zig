@@ -362,11 +362,16 @@ pub const FbStatsResponse = extern struct {
     bpp: u8,
     double_buffer_active: bool,
     triple_buffer_active: bool,
-    reserved: [2]u8 = [_]u8{0} ** 2,
+    reserved: [2]u8 = .{ 0, 0 },
+    /// 模糊操作总数
+    total_blur_ops: u64 = 0,
+    /// 使用下采样的模糊操作数
+    total_downscaled_blur_ops: u64 = 0,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(FbStatsResponse) == 32);
+    // 原始 32 字节 + total_blur_ops (8) + total_downscaled_blur_ops (8) = 48 字节
+    std.debug.assert(@sizeOf(FbStatsResponse) == 48);
 }
 
 // ── Internal Helpers ──
@@ -721,7 +726,33 @@ pub fn blitRgbaScaled(
     const y1: u32 = @min(screen_y0 + dh, fb_config.height);
     if (screen_x0 >= x1 or screen_y0 >= y1) return;
 
-    // 最近邻缩放：inverse scale = source pixels per destination pixel
+    // 对于放大超过2倍的情况使用双线性插值
+    const scale_x: f64 = @as(f64, @floatFromInt(dw)) / @as(f64, @floatFromInt(src_w));
+    const scale_y: f64 = @as(f64, @floatFromInt(dh)) / @as(f64, @floatFromInt(src_h));
+
+    if (scale_x > 2.0 or scale_y > 2.0) {
+        // 大比例缩放使用双线性插值提升质量
+        blitRgbaBilinearInternal(rgba, src_w, src_h, screen_x0, screen_y0, x1, y1, src_clip_x, src_clip_y, dw, dh);
+    } else {
+        // 小比例缩放使用最近邻（性能更好）
+        blitRgbaNearestInternal(rgba, src_w, src_h, screen_x0, screen_y0, x1, y1, src_clip_x, src_clip_y, dw, dh);
+    }
+}
+
+/// 内部函数：最近邻缩放实现
+fn blitRgbaNearestInternal(
+    rgba: [*]const u8,
+    src_w: u32,
+    src_h: u32,
+    screen_x0: u32,
+    screen_y0: u32,
+    x1: u32,
+    y1: u32,
+    src_clip_x: u32,
+    src_clip_y: u32,
+    dw: u32,
+    dh: u32,
+) void {
     const inv_scale_x: f64 = @as(f64, @floatFromInt(src_w)) / @as(f64, @floatFromInt(dw));
     const inv_scale_y: f64 = @as(f64, @floatFromInt(src_h)) / @as(f64, @floatFromInt(dh));
 
@@ -753,6 +784,90 @@ pub fn blitRgbaScaled(
             }
         }
     }
+}
+
+/// 内部函数：双线性插值缩放实现
+fn blitRgbaBilinearInternal(
+    rgba: [*]const u8,
+    src_w: u32,
+    src_h: u32,
+    screen_x0: u32,
+    screen_y0: u32,
+    x1: u32,
+    y1: u32,
+    src_clip_x: u32,
+    src_clip_y: u32,
+    dw: u32,
+    dh: u32,
+) void {
+    const inv_scale_x: f32 = @as(f32, @floatFromInt(src_w - 1)) / @as(f32, @floatFromInt(dw -| 1));
+    const inv_scale_y: f32 = @as(f32, @floatFromInt(src_h - 1)) / @as(f32, @floatFromInt(dh -| 1));
+
+    var dy: u32 = screen_y0;
+    var sy_float: f32 = @as(f32, @floatFromInt(src_clip_y)) * inv_scale_y;
+    while (dy < y1) : (dy += 1) {
+        const src_y_f: f32 = @min(sy_float, @as(f32, @floatFromInt(src_h - 1)));
+        const src_y0_val: u32 = @intFromFloat(src_y_f);
+        const src_y1: u32 = @min(src_y0_val + 1, src_h - 1);
+        const fy: f32 = src_y_f - @as(f32, @floatFromInt(src_y0_val));
+
+        sy_float += inv_scale_y;
+
+        var dx: u32 = screen_x0;
+        var sx_float: f32 = @as(f32, @floatFromInt(src_clip_x)) * inv_scale_x;
+        while (dx < x1) : (dx += 1) {
+            const src_x_f: f32 = @min(sx_float, @as(f32, @floatFromInt(src_w - 1)));
+            const src_x0_val: u32 = @intFromFloat(src_x_f);
+            const src_x1: u32 = @min(src_x0_val + 1, src_w - 1);
+            const fx: f32 = src_x_f - @as(f32, @floatFromInt(src_x0_val));
+
+            sx_float += inv_scale_x;
+
+            // 采样四个角点
+            const idx00 = src_y0_val * src_w * 4 + src_x0_val * 4;
+            const idx10 = src_y0_val * src_w * 4 + src_x1 * 4;
+            const idx01 = src_y1 * src_w * 4 + src_x0_val * 4;
+            const idx11 = src_y1 * src_w * 4 + src_x1 * 4;
+
+            // 双线性插值
+            const r0 = @as(f32, @floatFromInt(rgba[idx00])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx10])) * fx;
+            const g0 = @as(f32, @floatFromInt(rgba[idx00 + 1])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx10 + 1])) * fx;
+            const b0 = @as(f32, @floatFromInt(rgba[idx00 + 2])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx10 + 2])) * fx;
+            const a0 = @as(f32, @floatFromInt(rgba[idx00 + 3])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx10 + 3])) * fx;
+
+            const r1 = @as(f32, @floatFromInt(rgba[idx01])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx11])) * fx;
+            const g1 = @as(f32, @floatFromInt(rgba[idx01 + 1])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx11 + 1])) * fx;
+            const b1 = @as(f32, @floatFromInt(rgba[idx01 + 2])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx11 + 2])) * fx;
+            const a1 = @as(f32, @floatFromInt(rgba[idx01 + 3])) * (1.0 - fx) + @as(f32, @floatFromInt(rgba[idx11 + 3])) * fx;
+
+            const r_final = r0 * (1.0 - fy) + r1 * fy;
+            const g_final = g0 * (1.0 - fy) + g1 * fy;
+            const b_final = b0 * (1.0 - fy) + b1 * fy;
+            const a_final = a0 * (1.0 - fy) + a1 * fy;
+
+            const a_val: u8 = @intFromFloat(a_final);
+            if (a_val == 0) continue;
+            if (a_val == 255) {
+                putPixel32(dx, dy, @as(u32, @intFromFloat(b_final)) | (@as(u32, @intFromFloat(g_final)) << 8) | (@as(u32, @intFromFloat(r_final)) << 16));
+            } else {
+                blendPixel(dx, dy, @as(u32, @intFromFloat(b_final)) | (@as(u32, @intFromFloat(g_final)) << 8) | (@as(u32, @intFromFloat(r_final)) << 16), a_val);
+            }
+        }
+    }
+}
+
+/// 高质量 RGBA blit：自动选择最佳缩放算法
+/// 当缩放比例 > 2x 时使用双线性插值，否则使用最近邻
+pub fn blitRgbaHighQuality(
+    rgba: [*]const u8,
+    src_w: u32,
+    src_h: u32,
+    dest_x: i32,
+    dest_y: i32,
+    dest_w: i32,
+    dest_h: i32,
+) void {
+    blitRgbaScaled(rgba, src_w, src_h, dest_x, dest_y, dest_w, dest_h);
 }
 
 // ── Optimized Drawing Primitives ──
@@ -1598,11 +1713,23 @@ const BLUR_MIN_AREA_PIXELS: u32 = 64 * 64;
 /// 下采样阈值：宽或高超过此值时启用下采样模糊
 const BLUR_DOWNSCALE_THRESHOLD: u32 = 512;
 
+/// 下采样阈值（超大）：超过此值时使用4倍下采样
+const BLUR_DOWNSCALE_THRESHOLD_4X: u32 = 1024;
+
 /// 下采样比例（2=缩小一半）
 const BLUR_DOWNSCALE_FACTOR: u32 = 2;
 
+/// 下采样比例（4=缩小1/4，用于极大区域）
+const BLUR_DOWNSCALE_FACTOR_4X: u32 = 4;
+
 /// 最小可模糊面积（避免死循环或极小区域开销不成比例）
 const BLUR_MIN_DIMENSION: u32 = 8;
+
+/// 性能统计：模糊操作计数
+var total_blur_ops: u64 = 0;
+
+/// 性能统计：使用下采样的模糊操作计数
+var total_downscaled_blur_ops: u64 = 0;
 
 // ── Blur Efficiency Helper ──
 
@@ -1612,9 +1739,14 @@ fn shouldSkipBlur(w: u32, h: u32) bool {
         w * h < BLUR_MIN_AREA_PIXELS;
 }
 
-/// 检查是否应该使用下采样模糊
+/// 检查是否应该使用下采样模糊（2倍）
 fn shouldUseDownscaledBlur(w: u32, h: u32) bool {
     return w > BLUR_DOWNSCALE_THRESHOLD or h > BLUR_DOWNSCALE_THRESHOLD;
+}
+
+/// 检查是否应该使用4倍下采样模糊（用于极大区域）
+fn shouldUse4xDownscaledBlur(w: u32, h: u32) bool {
+    return w > BLUR_DOWNSCALE_THRESHOLD_4X or h > BLUR_DOWNSCALE_THRESHOLD_4X;
 }
 
 /// 优化的模糊矩形处理：
@@ -1624,6 +1756,12 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
     if (w <= 0 or h <= 0 or radius == 0 or passes == 0) return;
     if (!config_ready) return;
     if (fb_config.bpp < 24) return;
+
+    // 验证帧缓冲尺寸有效
+    if (fb_config.width == 0 or fb_config.height == 0) return;
+
+    // 限制 radius 防止过大导致性能问题或越界
+    const safe_radius = @min(radius, @as(u32, 64));
 
     const x0: u32 = if (x < 0) 0 else @intCast(x);
     const y0: u32 = if (y < 0) 0 else @intCast(y);
@@ -1637,21 +1775,36 @@ pub fn boxBlurRect(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) voi
     // 早退出：小区域不值得模糊
     if (shouldSkipBlur(rw, rh)) return;
 
-    // 边界检查
-    if (rw > BLUR_MAX_LINE or rh > BLUR_MAX_LINE) return;
+    total_blur_ops += 1;
 
-    // 大区域使用下采样优化
-    if (shouldUseDownscaledBlur(rw, rh)) {
-        boxBlurRectDownscaled(x0, y0, rw, rh, radius, passes);
+    // 超大区域使用4倍下采样（性能优先）
+    if (shouldUse4xDownscaledBlur(rw, rh)) {
+        total_downscaled_blur_ops += 1;
+        boxBlurRectDownscaled(x0, y0, rw, rh, safe_radius, passes, BLUR_DOWNSCALE_FACTOR_4X);
         return;
     }
 
-    boxBlurRectCore(x0, y0, rw, rh, radius, passes);
+    // 边界检查：限制最大处理尺寸
+    if (rw > BLUR_MAX_LINE or rh > BLUR_MAX_LINE) {
+        // 大区域使用下采样路径，即使超过 MAX_LINE 也能处理
+        total_downscaled_blur_ops += 1;
+        boxBlurRectDownscaled(x0, y0, rw, rh, safe_radius, passes, BLUR_DOWNSCALE_FACTOR);
+        return;
+    }
+
+    // 大区域使用下采样优化（2倍）
+    if (shouldUseDownscaledBlur(rw, rh)) {
+        total_downscaled_blur_ops += 1;
+        boxBlurRectDownscaled(x0, y0, rw, rh, safe_radius, passes, BLUR_DOWNSCALE_FACTOR);
+        return;
+    }
+
+    boxBlurRectCore(x0, y0, rw, rh, safe_radius, passes);
 }
 
 /// 下采样模糊：缩小→模糊→放大
-fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: u32) void {
-    const factor = BLUR_DOWNSCALE_FACTOR;
+/// factor: 下采样比例（2=缩小一半，4=缩小1/4）
+fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: u32, factor: u32) void {
     const sw = @max(w / factor, 1);
     const sh = @max(h / factor, 1);
     const sr = @max(radius / factor, 1);
@@ -1660,6 +1813,10 @@ fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: 
     const small_len = @as(usize, sw) * @as(usize, sh);
     var small_buf: []u32 = @import("../../../mm/heap.zig").allocSlice(u32, small_len) orelse return;
     var small_tmp: []u32 = @import("../../../mm/heap.zig").allocSlice(u32, small_len) orelse return;
+    defer {
+        @import("../../../mm/heap.zig").freeSlice(u32, small_buf);
+        @import("../../../mm/heap.zig").freeSlice(u32, small_tmp);
+    }
 
     const buf = getDrawBuffer();
     const pitch = fb_config.pitch;
@@ -2355,7 +2512,9 @@ fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
                 .bpp = fb_config.bpp,
                 .double_buffer_active = double_buffer_active,
                 .triple_buffer_active = triple_buffer_active,
-                .reserved = [_]u8{0} ** 2,
+                .reserved = .{ 0, 0 },
+                .total_blur_ops = total_blur_ops,
+                .total_downscaled_blur_ops = total_downscaled_blur_ops,
             };
             irp.bytes_transferred = @sizeOf(FbStatsResponse);
             irp.complete(io.STATUS_SUCCESS, @sizeOf(FbStatsResponse));
@@ -2384,6 +2543,17 @@ pub fn getHeight() u32 {
 
 pub fn getBpp() u8 {
     return fb_config.bpp;
+}
+
+/// 获取模糊操作统计
+pub fn getBlurStats() struct { total: u64, downscaled: u64 } {
+    return .{ .total = total_blur_ops, .downscaled = total_downscaled_blur_ops };
+}
+
+/// 获取下采样使用比例（百分比）
+pub fn getBlurDownscaleRatio() u8 {
+    if (total_blur_ops == 0) return 0;
+    return @as(u8, @intCast(@min(100, total_downscaled_blur_ops * 100 / total_blur_ops)));
 }
 
 /// 与 VirtIO `virtio_gpu_mem_entry` 同布局（guest 物理地址 + 长度），供 `RESOURCE_ATTACH_BACKING` 多段路径；定义于此避免 `framebuffer` ↔ `virtio_gpu_spec` 循环依赖。

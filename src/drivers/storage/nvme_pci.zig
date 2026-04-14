@@ -112,6 +112,8 @@ const OPC_IDENTIFY: u8 = 0x06;
 const OPC_CREATE_SQ: u8 = 0x01;
 const OPC_CREATE_CQ: u8 = 0x05;
 const OPC_NVM_READ: u8 = 0x02;
+const OPC_NVM_WRITE: u8 = 0x01;
+const OPC_FLUSH: u8 = 0x00;
 
 const ADMIN_Q_DEPTH: u32 = 8;
 const IO_Q_DEPTH: u32 = 8;
@@ -307,6 +309,40 @@ fn nvmeReadSector(bar: usize, lba: u64, out_phys: u64) bool {
     return pollIoCompletion(bar);
 }
 
+/// NVM Write (OPC 0x01)：将一个 LBA (512B) 写入 `in_phys` 物理缓冲。
+fn nvmeWriteSector(bar: usize, lba: u64, in_phys: u64) bool {
+    var sqe: [64]u8 = [_]u8{0} ** 64;
+    sqe[0] = OPC_NVM_WRITE;
+    std.mem.writeInt(u16, sqe[2..4], g_io_cid, .little);
+    g_io_cid +%= 1;
+    std.mem.writeInt(u32, sqe[4..8], g_nsid, .little);
+    std.mem.writeInt(u64, sqe[24..32], in_phys, .little);
+    std.mem.writeInt(u32, sqe[40..44], @truncate(lba), .little);
+    std.mem.writeInt(u32, sqe[44..48], @truncate(lba >> 32), .little);
+    std.mem.writeInt(u32, sqe[48..52], 0, .little);
+
+    const slot = g_io_sq_tail;
+    @memcpy(@as([*]u8, @ptrFromInt(g_iosq_phys + slot * 64))[0..64], &sqe);
+    g_io_sq_tail = (g_io_sq_tail + 1) % IO_Q_DEPTH;
+    mmioW32(bar, ioSqTailDb(bar), g_io_sq_tail);
+    return pollIoCompletion(bar);
+}
+
+/// Flush (OPC 0x00)：将所有挂起的写数据刷新到非易失性存储。
+fn nvmeFlush(bar: usize) bool {
+    var sqe: [64]u8 = [_]u8{0} ** 64;
+    sqe[0] = OPC_FLUSH;
+    std.mem.writeInt(u16, sqe[2..4], g_io_cid, .little);
+    g_io_cid +%= 1;
+    std.mem.writeInt(u32, sqe[4..8], g_nsid, .little);
+
+    const slot = g_io_sq_tail;
+    @memcpy(@as([*]u8, @ptrFromInt(g_iosq_phys + slot * 64))[0..64], &sqe);
+    g_io_sq_tail = (g_io_sq_tail + 1) % IO_Q_DEPTH;
+    mmioW32(bar, ioSqTailDb(bar), g_io_sq_tail);
+    return pollIoCompletion(bar);
+}
+
 fn namespaceLbads512(ident_ns: *const [4096]u8) bool {
     const flbas = ident_ns[26];
     const idx = flbas & 0xF;
@@ -359,11 +395,41 @@ fn readBlocksImpl(ctx: *anyopaque, lba: u64, buf: []u8) io.NTSTATUS {
     return io.STATUS_SUCCESS;
 }
 
+fn writeBlocksImpl(ctx: *anyopaque, lba: u64, buf: []const u8) io.NTSTATUS {
+    _ = ctx;
+    if (!g_storage_ready or buf.len < 512 or (buf.len % 512) != 0) return io.STATUS_INVALID_PARAMETER;
+    const fa = frame.kernelFrameAllocatorPtr();
+    const sectors = buf.len / 512;
+    const base = lba +% g_partition_start_lba;
+    var s: u64 = 0;
+    while (s < sectors) : (s += 1) {
+        const slice = buf[s * 512 ..][0..512];
+        const p = fa.allocZeroed() orelse return io.STATUS_INSUFFICIENT_RESOURCES;
+        defer fa.free(p);
+        @memcpy(@as([*]u8, @ptrFromInt(p))[0..512], slice);
+        const phys_lba = base +% s;
+        if (!nvmeWriteSector(g_bar, phys_lba, p)) return io.STATUS_IO_DEVICE_ERROR;
+    }
+    return io.STATUS_SUCCESS;
+}
+
+fn flushBlocksImpl(ctx: *anyopaque) io.NTSTATUS {
+    _ = ctx;
+    if (!g_storage_ready) return io.STATUS_DEVICE_NOT_READY;
+    if (!nvmeFlush(g_bar)) {
+        klog.warn("NVMe: FLUSH failed", .{});
+        return io.STATUS_IO_DEVICE_ERROR;
+    }
+    return io.STATUS_SUCCESS;
+}
+
 pub fn blockDevVTableOrNull() ?block_common.BlockDevVTable {
     if (!g_storage_ready) return null;
     return .{
         .ctx = @ptrCast(&g_nvme_blk_ctx),
         .read_blocks = readBlocksImpl,
+        .write_blocks = writeBlocksImpl,
+        .flush_blocks = flushBlocksImpl,
     };
 }
 

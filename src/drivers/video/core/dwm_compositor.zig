@@ -101,6 +101,13 @@ var surfaces: [MAX_SURFACES]RedirectedSurface = [_]RedirectedSurface{.{}} ** MAX
 /// 与 `surfaces[id]` 一一对应；`destroySurface` 时清零。
 var surface_dwm: [MAX_SURFACES]SurfaceDwmState = [_]SurfaceDwmState{.{}} ** MAX_SURFACES;
 var surface_count: u16 = 0;
+/// 表面世代数组：每个表面一个世代号，销毁时递增。用于检测 stale ID。
+var surface_generations: [MAX_SURFACES]u32 = [_]u32{0} ** MAX_SURFACES;
+/// 全局世代计数器，递增用于分配新世代
+var generation_counter: u32 = 1;
+/// 已销毁表面的 ID 回收列表（延迟重用）
+var freed_surface_ids: [MAX_SURFACES]u16 = undefined;
+var freed_surface_count: usize = 0;
 var frame_number: u64 = 0;
 var vsync_enabled: bool = true;
 var wallpaper_surface_id: u16 = 0;
@@ -116,6 +123,25 @@ var authority_tree_sync_generation_applied: u32 = 0;
 
 pub fn getAuthorityTreeSyncGenerationApplied() u32 {
     return authority_tree_sync_generation_applied;
+}
+
+/// 验证表面 ID 是否仍然有效（世代匹配）
+fn isSurfaceIdValid(id: u16) bool {
+    return id < MAX_SURFACES and surface_generations[id] != 0;
+}
+
+/// 获取表面的当前世代号
+pub fn getSurfaceGeneration(id: u16) u32 {
+    if (id >= MAX_SURFACES) return 0;
+    return surface_generations[id];
+}
+
+/// 检查 ID 是否在回收列表中（用于区分已回收ID和有效ID）
+fn notInFreedList(id: u16) bool {
+    for (freed_surface_ids[0..freed_surface_count]) |fid| {
+        if (fid == id) return false;
+    }
+    return true;
 }
 
 /// 阶段 C：用户态（user32 窗口 Z 序）经 csrss `compositor_tree_sync` 下推的 **权威** Z 补丁；内核不再单独 `setSurfaceZOrder` 维护并行真相。
@@ -164,8 +190,26 @@ pub fn initAero(cfg: AeroConfig) void {
 pub fn createSurface(x: i32, y: i32, width: u32, height: u32, owner_pid: u32) ?u16 {
     compositor_lock.acquire();
     defer compositor_lock.release();
-    if (surface_count >= MAX_SURFACES) return null;
-    const id = surface_count;
+
+    var id: u16 = 0;
+
+    // 优先从回收列表获取 ID
+    if (freed_surface_count > 0) {
+        freed_surface_count -= 1;
+        id = freed_surface_ids[freed_surface_count];
+    } else if (surface_count >= MAX_SURFACES) {
+        // 没有可用 ID
+        return null;
+    } else {
+        id = surface_count;
+        surface_count += 1;
+    }
+
+    // 分配新世代
+    const gen = generation_counter;
+    generation_counter +%= 1;
+    if (generation_counter == 0) generation_counter = 1;
+
     surfaces[id] = .{
         .id = id,
         .x = x,
@@ -177,17 +221,31 @@ pub fn createSurface(x: i32, y: i32, width: u32, height: u32, owner_pid: u32) ?u
         .dirty = true,
     };
     surfaces[id].shadow_size = aero_cfg.shadow_offset;
-    surface_count += 1;
+    surface_generations[id] = gen;
+
     return id;
 }
 
 pub fn destroySurface(id: u16) void {
     compositor_lock.acquire();
     defer compositor_lock.release();
-    if (id >= surface_count) return;
+
+    if (id >= MAX_SURFACES) return;
+    if (surface_generations[id] == 0) return; // 已经销毁
+
     surfaces[id].visible = false;
     surfaces[id].owner_pid = 0;
     surface_dwm[id] = .{};
+
+    // 递增世代，标记为无效
+    surface_generations[id] +%= 1;
+    if (surface_generations[id] == 0) surface_generations[id] = 1;
+
+    // 添加到回收列表
+    if (freed_surface_count < MAX_SURFACES) {
+        freed_surface_ids[freed_surface_count] = id;
+        freed_surface_count += 1;
+    }
 }
 
 fn syncDwmPolicyToKernelFlags(id: u16) void {
@@ -366,13 +424,6 @@ pub fn setSurfaceOpacity(id: u16, opacity: u8) void {
     defer compositor_lock.release();
     if (id >= surface_count) return;
     surfaces[id].opacity = opacity;
-    surfaces[id].dirty = true;
-}
-
-pub fn markSurfaceDirty(id: u16) void {
-    compositor_lock.acquire();
-    defer compositor_lock.release();
-    if (id >= surface_count) return;
     surfaces[id].dirty = true;
 }
 
@@ -834,4 +885,203 @@ pub fn notifyFlip3dOverlayKernelActive(active: bool) void {
 
 pub fn isFlip3dOverlayKernelActive() bool {
     return flip3d_overlay_kernel_active;
+}
+
+/// 获取表面缓冲区地址和步幅（供 blitSurface 使用）
+pub fn getSurfaceBufferInfo(id: u16) ?struct { addr: usize, pitch: u32 } {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+    if (id >= surface_count) return null;
+    const s = surfaces[id];
+    if (s.buffer_addr == 0) return null;
+    return .{ .addr = s.buffer_addr, .pitch = s.buffer_pitch };
+}
+
+/// 获取表面几何信息（供 blitSurface 使用）
+pub fn getSurfaceGeometry(id: u16) ?struct { x: i32, y: i32, width: u32, height: u32 } {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+    if (id >= surface_count) return null;
+    const s = surfaces[id];
+    return .{ .x = s.x, .y = s.y, .width = s.width, .height = s.height };
+}
+
+/// blitSurface 回调实现：将表面 blit 到帧缓冲
+/// 从 surface.buffer_addr 读取像素数据，按 z_order 合成到帧缓冲
+pub fn blitSurfaceToFramebuffer(id: u16) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+
+    // 世代验证：确保表面仍然有效
+    if (id >= MAX_SURFACES) return;
+    if (surface_generations[id] == 0) return; // 已被销毁
+
+    if (id >= surface_count and notInFreedList(id)) return;
+
+    const s = surfaces[id];
+    if (!s.visible or s.buffer_addr == 0) return;
+    if (s.width == 0 or s.height == 0) return;
+
+    const fw = fb.getWidth();
+    const fh = fb.getHeight();
+    if (fw == 0 or fh == 0) return;
+
+    // 计算裁剪后的有效区域
+    const dst_x0: i32 = s.x;
+    const dst_y0: i32 = s.y;
+    const dst_x1: i32 = @min(s.x + @as(i32, @intCast(s.width)), @as(i32, @intCast(fw)));
+    const dst_y1: i32 = @min(s.y + @as(i32, @intCast(s.height)), @as(i32, @intCast(fh)));
+
+    // 完全在屏幕外的区域跳过
+    if (dst_x1 <= 0 or dst_y1 <= 0) return;
+    if (dst_x0 >= @as(i32, @intCast(fw)) or dst_y0 >= @as(i32, @intCast(fh))) return;
+
+    // 源区域裁剪偏移
+    const src_x_offset: u32 = if (dst_x0 < 0) @intCast(-dst_x0) else 0;
+    const src_y_offset: u32 = if (dst_y0 < 0) @intCast(-dst_y0) else 0;
+
+    // 有效宽度和高度
+    const eff_w: u32 = @intCast(dst_x1 - @max(dst_x0, 0));
+    const eff_h: u32 = @intCast(dst_y1 - @max(dst_y0, 0));
+
+    if (eff_w == 0 or eff_h == 0) return;
+
+    const src_ptr: [*]const volatile u8 = @ptrFromInt(s.buffer_addr);
+    const bpp = fb.getBpp();
+    const bytes_pp: u32 = if (bpp >= 24) 4 else if (bpp >= 16) 2 else if (bpp >= 8) 1 else 1;
+    const opacity: u8 = s.opacity;
+
+    // 逐行 blit
+    var row: u32 = src_y_offset;
+    while (row < s.height and row - src_y_offset < eff_h) : (row += 1) {
+        const dst_row: u32 = @intCast(@max(dst_y0, 0) + (row - src_y_offset));
+        const src_row_offset = row * s.buffer_pitch;
+
+        var col: u32 = src_x_offset;
+        while (col < s.width and col - src_x_offset < eff_w) : (col += 1) {
+            const dst_col: u32 = @intCast(@max(dst_x0, 0) + (col - src_x_offset));
+            const src_offset = src_row_offset + col * bytes_pp;
+
+            // 从源表面读取 BGRA 像素（UEFI GOP 通常是 BGRA）
+            const b: u8 = src_ptr[src_offset];
+            const g: u8 = src_ptr[src_offset + 1];
+            const r: u8 = src_ptr[src_offset + 2];
+            var a: u8 = src_ptr[src_offset + 3];
+
+            // 跳过完全透明的像素
+            if (a == 0) continue;
+
+            // 应用表面不透明度
+            if (opacity < 255) {
+                a = @intCast((@as(u16, a) * @as(u16, opacity)) / 255);
+            }
+
+            if (a == 255) {
+                // 不透明：直接写入
+                fb.putPixel32(dst_col, dst_row, @as(u32, b) | (@as(u32, g) << 8) | (@as(u32, r) << 16));
+            } else if (a > 0) {
+                // 半透明：alpha 混合
+                fb.blendPixel(dst_col, dst_row, @as(u32, b) | (@as(u32, g) << 8) | (@as(u32, r) << 16), a);
+            }
+        }
+    }
+}
+
+/// 菜单打开通知（供 user32.zig TrackPopupMenu 使用）
+pub fn notifyMenuOpen(_: u64, _: i32, _: i32) bool {
+    if (state != .composing and state != .ready) return false;
+    return true;
+}
+
+/// 菜单关闭通知（供 user32.zig TrackPopupMenu 使用）
+pub fn notifyMenuClose() bool {
+    if (state != .composing and state != .ready) return false;
+    return true;
+}
+
+/// 获取合成器状态（供 user32.zig 使用）
+pub fn getCompositorState() CompositorState {
+    return state;
+}
+
+/// 设置表面缓冲区信息（供 Win32k 或用户态窗口管理调用）
+pub fn setSurfaceBufferInfo(id: u16, addr: usize, pitch: u32) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+    if (id >= surface_count) return;
+    surfaces[id].buffer_addr = addr;
+    surfaces[id].buffer_pitch = pitch;
+    surfaces[id].dirty = true;
+}
+
+/// 标记表面为脏（需要重绘）
+pub fn markSurfaceDirty(id: u16) void {
+    compositor_lock.acquire();
+    defer compositor_lock.release();
+    if (id >= surface_count) return;
+    surfaces[id].dirty = true;
+}
+
+/// 获取表面 Z 顺序比较器（按 z_order 排序）
+pub fn getSurfaceZOrderComparator() *const fn (u16, u16) callconv(.C) i32 {
+    return &surfaceZOrderCompare;
+}
+
+fn surfaceZOrderCompare(a: u16, b: u16) i32 {
+    if (a >= surface_count or b >= surface_count) return 0;
+    const za = surfaces[a].z_order;
+    const zb = surfaces[b].z_order;
+    if (za < zb) return -1;
+    if (za > zb) return 1;
+    return 0;
+}
+
+// ── VSync 等待 ──
+
+/// 等待下一帧 VSync（基于帧号比较）
+/// 在 vsync_enabled 为 true 时阻塞直到新帧出现
+/// 返回实际等待的帧号
+pub fn waitForVsync() u64 {
+    if (!vsync_enabled) {
+        return frame_number;
+    }
+
+    const sched = @import("../../../ke/scheduler.zig");
+    const current_frame = frame_number;
+    const timeout_ticks: u64 = 100; // 100 ticks 超时（约 1 秒 @ 100Hz）
+
+    var waited_ticks: u64 = 0;
+    while (frame_number == current_frame) {
+        if (waited_ticks >= timeout_ticks) {
+            // 超时，返回当前帧号
+            return frame_number;
+        }
+        // 让出 CPU，等待调度器下次调度
+        sched.yieldCurrentThread();
+        waited_ticks += 1;
+    }
+
+    return frame_number;
+}
+
+/// 启用或禁用 VSync
+pub fn setVsyncEnabled(enabled: bool) void {
+    vsync_enabled = enabled;
+}
+
+/// 获取 VSync 是否启用
+pub fn isVsyncEnabled() bool {
+    return vsync_enabled;
+}
+
+/// 等待特定帧号（用于帧同步）
+/// 如果帧号已过，立即返回当前帧号
+pub fn waitForFrame(target_frame: u64) u64 {
+    var current = frame_number;
+    while (current < target_frame) {
+        const sched = @import("../../../ke/scheduler.zig");
+        sched.yieldCurrentThread();
+        current = frame_number;
+    }
+    return current;
 }

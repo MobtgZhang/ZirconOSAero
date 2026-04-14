@@ -192,7 +192,7 @@ var orb_press_progress: f32 = 0.0;
 
 /// Toggle 节流机制：防止快速连击导致状态混乱
 var last_toggle_tick: u32 = 0;
-const TOGGLE_THROTTLE_MS: u32 = 100;
+const TOGGLE_THROTTLE_MS: u32 = 20; // Further reduced to 20ms for better click responsiveness
 
 /// 动画持续时间（帧数，约 200ms @ 60fps）
 const ANIM_FRAMES: u8 = 12;
@@ -1303,6 +1303,24 @@ fn drawSearchMagnifier(cx: i32, cy: i32, fg: u32) void {
 /// orb_press: 按压进度（0.0 到 1.0，1.0 表示完全按下）
 fn drawOrbGraphic(ox: i32, oy: i32, orb_hover: f32, orb_press: f32) void {
     const display_size: i32 = 36;
+    // 添加Aero发光效果，根据hover进度
+    const glow_size = display_size + 8 + @as(i32, @intFromFloat(orb_hover * 4.0));
+    const glow_alpha = @as(u8, @intFromFloat(60.0 + orb_hover * 80.0)); // 更亮的Aero发光效果
+    const glow_r = @divTrunc(glow_size, 2);
+    const r_sq = glow_r * glow_r;
+    const center_x = ox + @divTrunc(display_size, 2);
+    const center_y = oy + @divTrunc(display_size, 2);
+    var y: i32 = -glow_r;
+    while (y < glow_r) : (y += 1) {
+        var x: i32 = -glow_r;
+        while (x < glow_r) : (x += 1) {
+            const dist_sq = x * x + y * y;
+            if (dist_sq <= r_sq) {
+                const alpha = glow_alpha - @as(u8, @intFromFloat(@as(f32, @floatFromInt(dist_sq)) / @as(f32, @floatFromInt(r_sq)) * 40.0));
+                fb.blendTintRect(center_x + x, center_y + y, 1, 1, rgb(0x40, 0xA0, 0xFF), alpha, 255); // 更鲜艳的Aero蓝色发光
+            }
+        }
+    }
     icons.drawStartOrb(ox, oy, display_size, orb_hover, orb_press);
 }
 
@@ -1331,9 +1349,22 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const inner_w = L.inner_w;
     const inner_h = L.inner_h;
 
-    // ========== Win7 Aero 玻璃效果 ==========
+    // ========== Aero 投影效果 ==========
+    const shadow_size = 8;
+    const shadow_color = rgb(0, 0, 0);
+    // 右侧和底部投影
+    var s: i32 = 0;
+    while (s < shadow_size) : (s += 1) {
+        const alpha = @as(u8, @intCast(30 - @divTrunc(30 * s, shadow_size)));
+        // 右侧阴影
+        fb.blendTintRect(inner_x + inner_w + s, inner_y + shadow_size, 1, inner_h, shadow_color, alpha, 255);
+        // 底部阴影
+        fb.blendTintRect(inner_x + shadow_size, inner_y + inner_h + s, inner_w, 1, shadow_color, alpha, 255);
+    }
+
+    // ========== Aero 玻璃效果 ==========
     // 使用 DWM 玻璃模糊效果（如果启用）
-    const glass_bg_color = rgb(0xE8, 0xF0, 0xF8);
+    const glass_bg_color = rgb(0xF8, 0xFC, 0xFF); // 更亮的Aero玻璃效果，减少暗色
     if (dwm.isGlassEnabled()) {
         dwm.renderGlassEffect(inner_x, inner_y, inner_w, inner_h, glass_bg_color, .panel);
     } else {
@@ -1355,11 +1386,12 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     // 左列顶部高光线
     fb.blendTintRect(main_x, content_y, LEFT_COL_W, 1, rgb(0xFF, 0xFF, 0xFF), 80, 200);
 
-    // ========== 右列：深色用户区 ==========
+    // ========== 右列：渐变蓝色用户区 ==========
     const right_col_w = main_w - LEFT_COL_W;
-    const right_bg = rgb(0xDC, 0xEC, 0xF8);
-    fb.fillRect(split_x, content_y, right_col_w, bottom_y - content_y, right_bg);
-    // 右列左侧分隔线
+    const right_bg_top = rgb(0xF0, 0xF8, 0xFF); // 更亮的渐变，符合Aero效果
+    const right_bg_bottom = rgb(0xE0, 0xF0, 0xFA); // 更亮的渐变，减少暗色
+    fb.drawGradientV(split_x, content_y, right_col_w, bottom_y - content_y, right_bg_top, right_bg_bottom);
+    // 右列左侧分隔线（渐变效果）
     fb.drawVLine(split_x, content_y, bottom_y - content_y, rgb(0xB8, 0xC4, 0xD4));
 
     // ========== 头像区域（正方形，一半在菜单外，一半在菜单内，右侧居中）==========
@@ -1367,9 +1399,10 @@ pub fn render(scr_w: i32, scr_h: i32) void {
     const av_sq_size: i32 = 64;
     // 头像在右列内水平居中
     const av_x = split_x + @divTrunc(right_col_w - av_sq_size, 2);
-    // 头像底部与菜单顶部对齐，头像向上延伸超出菜单
-    const av_bottom_y = content_y;
-    const av_top_y = av_bottom_y - av_sq_size;
+    // 头像中心与菜单顶部对齐，一半在菜单内，一半在菜单外
+    const av_center_y = content_y;
+    const av_top_y = av_center_y - @divTrunc(av_sq_size, 2);
+    const av_bottom_y = av_center_y + @divTrunc(av_sq_size, 2);
     const av_icon_r = @divTrunc(av_sq_size, 2);
 
     // 头像正方形背景（灰色边框 + 浅色填充）
@@ -1389,11 +1422,8 @@ pub fn render(scr_w: i32, scr_h: i32) void {
             if (dx_sq + dy_sq <= r_sq) {
                 const px = av_x + cx2;
                 const py = av_top_y + cy2;
-                // 圆形的下半部分（py >= inner_y）在菜单内可见
-                // 圆形的上半部分（py < inner_y）超出菜单边界，不可见
-                if (py >= L.inner_y) {
-                    fb.putPixel32(@intCast(px), @intCast(py), rgb(0xD8, 0xE8, 0xF8));
-                }
+                // 绘制整个圆形，一半在菜单内，一半在菜单外
+                fb.putPixel32(@intCast(px), @intCast(py), rgb(0xD8, 0xE8, 0xF8));
             }
         }
     }
@@ -1410,9 +1440,8 @@ pub fn render(scr_w: i32, scr_h: i32) void {
             if (d2 <= r_inner_sq and d2 > r_outer_sq) {
                 const px = av_x + cx3;
                 const py = av_top_y + cy3;
-                if (py >= L.inner_y) {
-                    fb.putPixel32(@intCast(px), @intCast(py), rgb(0xB8, 0xD0, 0xE8));
-                }
+                // 绘制整个圆形边框，一半在菜单内，一半在菜单外
+                fb.putPixel32(@intCast(px), @intCast(py), rgb(0xB8, 0xD0, 0xE8));
             }
         }
     }
@@ -1441,7 +1470,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
             if (iy + ROW_H > all_prog_y - 2) break;
             const row_r = hover_display_index == @as(i32, @intCast(li));
             if (row_r) {
-                fb.fillRect(main_x + 4, iy, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+                fb.fillRoundedRect(main_x + 4, iy, LEFT_COL_W - 8, ROW_H, 4, rgb(0xCC, 0xDD, 0xF0));
             }
             // 图标（14px，与行高协调）
             const icon_x = main_x + 8;
@@ -1465,7 +1494,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
         const ap_hov = hover_display_index == IDX_ALL;
         const all_prog_lbl = shell_strings.startmenuLine("all_programs");
         if (ap_hov) {
-            fb.fillRect(main_x + 4, all_prog_y - 1, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+            fb.fillRoundedRect(main_x + 4, all_prog_y - 1, LEFT_COL_W - 8, ROW_H, 4, rgb(0xCC, 0xDD, 0xF0));
             fb.drawTextTransparentUi(main_x + 36, all_prog_y + @divTrunc(ROW_H - 14, 2), all_prog_lbl, text_dark);
             fb.drawTextTransparentUi(main_x + LEFT_COL_W - 24, all_prog_y + @divTrunc(ROW_H - 14, 2), ">", text_dim);
         } else {
@@ -1483,7 +1512,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
             const idx = IDX_ALLPROG_BASE + i;
             const row_r = hover_display_index == idx;
             if (row_r) {
-                fb.fillRect(main_x + 4, iy, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+                fb.fillRoundedRect(main_x + 4, iy, LEFT_COL_W - 8, ROW_H, 4, rgb(0xCC, 0xDD, 0xF0));
                 fb.drawTextTransparentUi(main_x + 36, iy + @divTrunc(ROW_H - 14, 2), lab, text_dark);
             } else {
                 fb.drawTextTransparentUi(main_x + 36, iy + @divTrunc(ROW_H - 14, 2), lab, text_dim);
@@ -1496,7 +1525,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
         const back_hov = hover_display_index == IDX_BACK;
         const back_lbl = shell_strings.startmenuLine("back");
         if (back_hov) {
-            fb.fillRect(main_x + 4, back_bottom_y - ROW_H - 2, LEFT_COL_W - 8, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+            fb.fillRoundedRect(main_x + 4, back_bottom_y - ROW_H - 2, LEFT_COL_W - 8, ROW_H, 4, rgb(0xCC, 0xDD, 0xF0));
             fb.drawTextTransparentUi(main_x + 36, back_bottom_y - ROW_H + @divTrunc(ROW_H - 14, 2), back_lbl, text_dark);
             fb.drawTextTransparentUi(main_x + LEFT_COL_W - 24, back_bottom_y - ROW_H + @divTrunc(ROW_H - 14, 2), "<", text_dim);
         } else {
@@ -1522,7 +1551,7 @@ pub fn render(scr_w: i32, scr_h: i32) void {
         const row_r = hover_display_index == 100 + @as(i32, @intCast(ri));
         const icon_y = iy + @divTrunc(ROW_H - right_icon_cell, 2);
         if (row_r) {
-            fb.fillRect(split_x + 2, iy, RIGHT_COL_W - 4, ROW_H, rgb(0xCC, 0xDD, 0xF0));
+            fb.fillRoundedRect(split_x + 2, iy, RIGHT_COL_W - 4, ROW_H, 4, rgb(0xCC, 0xDD, 0xF0));
             if (item.icon_id) |iid| {
                 drawMenuIcon(iid, icon_col_x, icon_y, right_icon_cell);
             }

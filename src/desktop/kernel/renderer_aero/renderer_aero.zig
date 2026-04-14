@@ -513,8 +513,11 @@ fn renderExplorerWindowShared(scr_w: i32, scr_h: i32, t: *const theme.ThemeColor
         fb.fillRect(win_x + 3, win_y + 3, win_w, win_h, rgb(0x30, 0x30, 0x30));
     }
 
-    fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, t.window_bg);
-    const ex_pair = display.shellExplorerTitlebarPair(t);
+    // 调亮资源管理器窗口背景，减少暗色，优化Aero效果
+    const explorer_window_bg = rgb(0xF8, 0xF8, 0xFC);
+    fb.fillRect(win_x, win_y + aero_tb_h, win_w, win_h - aero_tb_h, explorer_window_bg);
+    // 调亮标题栏颜色，更符合Windows7 Aero风格
+    const ex_pair = .{ .left = rgb(0xE0, 0xEF, 0xFF), .right = rgb(0xC0, 0xD8, 0xF8) };
     if (dwm.isGlassEnabled()) {
         if (hint == .light) {
             dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, ex_pair.left, .caption);

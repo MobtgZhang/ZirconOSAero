@@ -6,6 +6,8 @@ const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const klog = @import("../rtl/klog.zig");
 const desktop_session = @import("desktop_session.zig");
+const mouse = @import("../drivers/input/mouse.zig");
+const kbd = @import("../drivers/input/kbd.zig");
 
 extern const stack_top: u8;
 extern const _kernel_end: u8;
@@ -196,16 +198,17 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     if (@import("build_options").enable_idt) {
         const idt = @import("../arch/x86_64/idt.zig");
         idt.init();
-        const syscall_msr = @import("../arch/x86_64/syscall_msr.zig");
-        syscall_msr.initSyscallInstructionPath();
+        arch.impl.initSyscallInstructionPath();
         klog.info("IDT initialized (256 vectors; syscall/sysret MSR primary; Debug: vector 128=int 0x80 → same dispatch)", .{});
 
         timer.init();
         klog.info("Timer: PIC + PIT ready (~100Hz)", .{});
 
+        kbd.init();
         arch.initKeyboard();
         klog.info("Keyboard: PS/2 driver initialized, IRQ1 unmasked", .{});
 
+        mouse.initHardware();
         arch.initMouse();
         klog.info("Mouse: PS/2 driver initialized, IRQ12 unmasked", .{});
 
@@ -271,8 +274,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
                 const madt = @import("../hal/x86_64/madt.zig");
                 acpi_pci.initFromRsdp(bi.acpi_rsdp_phys);
                 madt.initFromRsdp(bi.acpi_rsdp_phys);
-                const lapic_tt = @import("../hal/x86_64/lapic_timer_tick.zig");
-                lapic_tt.tryAttachPeriodicFromPhase3();
+                arch.impl.lapic_tick.tryAttachPeriodicFromPhase3();
                 const ioapic_rt = @import("../hal/x86_64/ioapic_route.zig");
                 ioapic_rt.logIoApicRedirectionMilestone();
             }

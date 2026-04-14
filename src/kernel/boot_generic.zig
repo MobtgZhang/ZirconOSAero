@@ -49,15 +49,13 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     // 极早 handoff 诊断（UEFI→内核）：区分「未进内核」与「进内核后崩溃」；与 ZBM 写入的 mb2_phys 对照。
     switch (builtin.target.cpu.arch) {
         .aarch64 => {
-            const ab = @import("../arch/aarch64/boot.zig");
             klog.info("HandoffDiag(a64): multiboot_magic=0x%x reg_x1=0x%x vec_mb2_phys=0x%x", .{
-                magic, info_addr, ab.uefiVectorMb2PhysForDiag(),
+                magic, info_addr, boot.uefiVectorMb2PhysForDiag(),
             });
         },
         .riscv64 => {
-            const rb = @import("../arch/riscv64/boot.zig");
             klog.info("HandoffDiag(rv): multiboot_magic=0x%x reg_a1=0x%x vec_mb2_phys=0x%x (UART MMIO 0x10000000)", .{
-                magic, info_addr, rb.uefiVectorMb2PhysForDiag(),
+                magic, info_addr, boot.uefiVectorMb2PhysForDiag(),
             });
         },
         else => {},
@@ -480,13 +478,13 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     scheduler.init();
     @import("../ke/apc.zig").init();
     if (builtin.target.cpu.arch == .loongarch64) {
-        @import("../arch/loongarch64/traps.zig").init();
+        arch.impl.traps.init();
     }
     if (builtin.target.cpu.arch == .riscv64) {
-        @import("../arch/riscv64/traps.zig").init();
+        arch.impl.traps.init();
     }
     if (builtin.target.cpu.arch == .aarch64) {
-        @import("../arch/aarch64/traps.zig").init();
+        arch.impl.traps.init();
     }
     timer.init();
     if (builtin.target.cpu.arch == .loongarch64) {
@@ -541,7 +539,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     registry.init();
     @import("../registry/hive.zig").tryLoadBootstrapOverlays();
     klog.info("Registry: %u keys in 5 hives", .{registry.getKeyCount()});
-    @import("../drivers/input/mouse.zig").syncFromRegistry();
+    drivers_generic.input.mouse.syncFromRegistry();
 
     klog.info("--- Phase 7: Loader ---", .{});
     elf_loader.init();

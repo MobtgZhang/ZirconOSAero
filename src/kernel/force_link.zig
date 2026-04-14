@@ -3,13 +3,8 @@
 const builtin = @import("builtin");
 
 comptime {
-    switch (builtin.target.cpu.arch) {
-        .aarch64 => _ = @import("../arch/aarch64/mod.zig"),
-        .loongarch64 => _ = @import("../arch/loongarch64/mod.zig"),
-        .riscv64 => _ = @import("../arch/riscv64/mod.zig"),
-        .mips64el => _ = @import("../arch/mips64el/mod.zig"),
-        else => {},
-    }
+    // Use arch module instead of direct import to avoid module conflict
+    _ = @import("../arch.zig");
     _ = @import("../mm/pool.zig");
     _ = @import("../mm/section.zig");
     _ = @import("../ke/apc.zig");
@@ -29,30 +24,6 @@ comptime {
     _ = @import("../servers/csrss_skeleton.zig");
     _ = @import("../lpc/alpc_min.zig");
     _ = @import("../loader/seh_pdata_min.zig");
-    if (builtin.cpu.arch == .x86_64) {
-        _ = @import("../hal/x86_64/ap_entry.zig");
-        _ = @import("../hal/x86_64/tlb_broadcast.zig");
-        _ = @import("../hal/x86_64/ioapic_route.zig");
-    }
-    if (builtin.cpu.arch == .aarch64) {
-        _ = @import("../arch/aarch64/traps.zig");
-        _ = @import("../arch/aarch64/thread_switch.zig");
-        _ = @import("../arch/aarch64/syscall_dispatch.zig");
-        _ = @import("../hal/aarch64/cpu_topology.zig");
-        _ = @import("../hal/aarch64/tlb_flush.zig");
-        _ = @import("../hal/aarch64/smp_boot_stub.zig");
-        _ = @import("../hal/aarch64/psci.zig");
-        _ = @import("../hal/aarch64/gic_sgi.zig");
-    }
-    if (builtin.cpu.arch == .loongarch64) {
-        _ = @import("../hal/loongarch64/smp_boot_stub.zig");
-    }
-    if (builtin.cpu.arch == .riscv64) {
-        _ = @import("../hal/riscv64/smp_boot_stub.zig");
-        _ = @import("../hal/riscv64/cpu_topology.zig");
-        _ = @import("../hal/riscv64/sbi_hsm.zig");
-        _ = @import("../hal/riscv64/fdt.zig");
-        _ = @import("../hal/riscv64/percpu.zig");
-        _ = @import("../hal/riscv64/sbi_timebase.zig");
-    }
+    // HAL files are already imported through the arch module, no need to import them here
+    // Importing them directly would cause module conflict since they are part of the arch module
 }

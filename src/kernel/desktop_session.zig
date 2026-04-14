@@ -99,10 +99,10 @@ fn initDesktopFramebufferFromHandoff(
         }
     }
 
-    if (!arch.impl.framebuffer.isReady()) {
+    if (!arch.impl.fb.isReady()) {
         arch.initFramebuffer(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp);
     }
-    arch.impl.framebuffer.setConsoleEnabled(false);
+    arch.impl.fb.setConsoleEnabled(false);
     drivers.initDesktopMode(fb_addr, use_fb.width, use_fb.height, use_fb.pitch, use_fb.bpp, use_fb.pixel_bgr);
     user32_mod.syncScreenFromFramebuffer();
     display.syncCursorFromMouse();
@@ -261,7 +261,7 @@ pub fn enterDesktopSession(
     const display = drivers.video.display;
 
     klog.info("Desktop: Preparing %s theme...", .{desktopThemeName(desktop_theme)});
-    arch.impl.framebuffer.setConsoleEnabled(false);
+    arch.impl.fb.setConsoleEnabled(false);
 
     if (boot_info_opt) |binfo| {
         if (binfo.fb_info) |fb_i| {

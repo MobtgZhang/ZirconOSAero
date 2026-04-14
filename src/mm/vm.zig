@@ -1070,7 +1070,7 @@ fn forkDupChildPteFlags(pte_raw: u64) u64 {
             // - 保留 NR 位（可能的安全标志）
             // - 保留 PLV_USER 使用户态可访问
             var f: u64 = pte_raw;
-            f &= ~@as(u64, paging.D);  // 清除 D 位（不可写 → CoW）
+            f &= ~@as(u64, paging.D); // 清除 D 位（不可写 → CoW）
             f &= ~@as(u64, paging.NR); // 清除 NR 位（如有设置）
             // 确保 Present 和 Accessed 标志存在
             f |= paging.Present;

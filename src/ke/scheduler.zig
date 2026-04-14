@@ -93,6 +93,8 @@ var ready_head: [MAX_SCHED_CPUS][NUM_PRI]i32 = @splat(@splat(-1));
 var ready_tail: [MAX_SCHED_CPUS][NUM_PRI]i32 = @splat(@splat(-1));
 /// Bit `p` set if bucket `(cpu, p)` 非空。
 var non_empty: [MAX_SCHED_CPUS]u32 = @splat(0);
+/// P5: 全局非空优先级位掩码缓存，避免每次遍历所有CPU计算最高优先级
+var global_non_empty: u32 = 0;
 /// 同优先级跨 CPU 取头的轮询起点（近似全局 FIFO）。
 var rr_cpu_cursor: [NUM_PRI]u8 = @splat(0);
 
@@ -147,6 +149,7 @@ fn resetReadyQueues() void {
         for (row) |*t| t.* = -1;
     }
     for (&non_empty) |*m| m.* = 0;
+    global_non_empty = 0;
     for (&rr_cpu_cursor) |*c| c.* = 0;
 }
 
@@ -158,6 +161,14 @@ fn refreshNonEmptyBit(cpu: usize, pri: u8) void {
     } else {
         non_empty[cpu] |= bit;
     }
+    // P5: 更新全局非空优先级缓存，避免每次计算最高优先级时遍历所有CPU
+    var combined: u32 = 0;
+    const n = schedNumCpus();
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        combined |= non_empty[i];
+    }
+    global_non_empty = combined;
 }
 
 fn unlinkFromBucket(cpu: usize, pri: u8, tid: usize) void {
@@ -552,6 +563,15 @@ fn effectivePriority(t: *const Thread) u8 {
     const sum = @as(u16, t.priority) + @as(u16, t.io_boost);
     var p: u8 = @intCast(@min(sum, @as(u16, 31)));
     p = @max(p, t.mutex_inherit_floor);
+
+    // P5: 前台进程线程额外优先级加成，提升桌面响应速度
+    // 前台进程（包括桌面GUI、活动窗口）的线程优先级+1，减少交互延迟
+    if (process_mod.findProcess(t.process_id)) |proc| {
+        if (proc.is_foreground) {
+            p = @min(p + 1, 31);
+        }
+    }
+
     // SP-01: 使用运行时可配置的饥饿阈值
     if (t.priority <= PRIORITY_DYNAMIC_MAX and
         t.state == .ready and
@@ -564,8 +584,7 @@ fn effectivePriority(t: *const Thread) u8 {
         p = p +| boost;
         // SP-05: 饥饿预警日志（首次提升时）
         if (p > prev_p and starve_ticks[t.id] == g_starvation_threshold + 1) {
-            klog.debug("Scheduler: thread %u starvation boost: pri %u -> %u (starved %u ticks)",
-                .{ t.id, prev_p, p, starve_ticks[t.id] });
+            klog.debug("Scheduler: thread %u starvation boost: pri %u -> %u (starved %u ticks)", .{ t.id, prev_p, p, starve_ticks[t.id] });
         }
     }
     return p;
@@ -1199,8 +1218,7 @@ pub fn propagateChainInheritance(released_owner_tid: usize) void {
     // 注意：不需要实际唤醒这些等待者，它们会通过正常的等待路径被唤醒
     // 优先级抬升会在 effectivePriority() 计算时生效
     if (pending_count > 0) {
-        klog.debug("Scheduler: propagated chain inheritance floor=%u to %u waiters of tid %u",
-            .{ owner.mutex_inherit_floor, pending_count, released_owner_tid });
+        klog.debug("Scheduler: propagated chain inheritance floor=%u to %u waiters of tid %u", .{ owner.mutex_inherit_floor, pending_count, released_owner_tid });
     }
 }
 

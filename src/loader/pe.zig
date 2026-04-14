@@ -260,7 +260,6 @@ pub const IMAGE_REL_LOONGARCH64_RELATIVE64: u16 = 5;
 /// IMAGE_REL_BASED_ARM64_MOV32: patch MOVW/MOVT pair (16-bit low / 16-bit high).
 pub const IMAGE_REL_BASED_ARM64_MOV32: u16 = 5;
 /// IMAGE_REL_BASED_DIR64 (type 10) already covers most AArch64 64-bit relocations.
-
 /// PE TLS Directory（IMAGE_DIRECTORY_ENTRY_TLS）— 公开 COFF 规范。
 pub const TlsDirectory = extern struct {
     raw_data_start_va: u32 align(1) = 0,
@@ -332,9 +331,11 @@ pub fn applyLoongArch64Reloc(site: *u64, typ: u16, delta: i64) bool {
             // JUMPER：补丁分支指令的 PC 相对偏移。
             // LoongArch 分支指令：立即数字段编码为 SImm14 << 2，14-bit 有符号偏移 × 4。
             const raw: u32 = @truncate(site.*);
-            const cur_off: i32 = @bitCast(@as(u32, site.* >> 32));
+            const hi32: u32 = @truncate(site.* >> 32);
+            const cur_off: i32 = @bitCast(hi32);
             const new_off = cur_off +% @as(i32, @intCast(delta));
-            site.* = (@as(u64, @bitCast(new_off)) << 32) | @as(u64, raw);
+            const new_off_u32: u32 = @bitCast(new_off);
+            site.* = (@as(u64, new_off_u32) << 32) | @as(u64, raw);
             return true;
         },
         IMAGE_REL_LOONGARCH64_REFLOCAL => {
@@ -998,8 +999,7 @@ pub fn resolveImportsFromPeBytes(data: []const u8, image_base: u64) LoadStatus {
     const import_rva = readDataDirectoryRva(data, IMAGE_DIRECTORY_ENTRY_IMPORT) orelse return .success;
     if (import_rva == 0) return .success;
 
-    const import_ptr = @as([*]const ImportDescriptor, @ptrFromInt(
-        @intFromPtr(data.ptr) + import_rva));
+    const import_ptr = @as([*]const ImportDescriptor, @ptrFromInt(@intFromPtr(data.ptr) + import_rva));
 
     var resolved_total: usize = 0;
     var desc_ptr = import_ptr;
@@ -1027,8 +1027,7 @@ pub fn resolveImportsFromPeBytes(data: []const u8, image_base: u64) LoadStatus {
                         const ordinal = @as(u16, @truncate(hint_name_rva & 0xFFFF));
                         iat_ptr[idx] = dll.findExportByOrdinal(ordinal) orelse 0;
                     } else {
-                        const hint_name_ptr = @as([*]const u8, @ptrFromInt(
-                            @intFromPtr(data.ptr) + hint_name_rva));
+                        const hint_name_ptr = @as([*]const u8, @ptrFromInt(@intFromPtr(data.ptr) + hint_name_rva));
                         var hint_len: usize = 0;
                         while (hint_len < 128 and hint_name_ptr[hint_len] != 0) : (hint_len += 1) {}
                         iat_ptr[idx] = dll.findExport(hint_name_ptr[0..hint_len]) orelse 0;

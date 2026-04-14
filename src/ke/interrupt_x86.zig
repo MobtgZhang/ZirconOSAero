@@ -164,6 +164,8 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         1 => {
             if (builtin.target.cpu.arch == .x86_64) {
                 dpc.requestInputFlushDeferred();
+                const kbd = @import("../drivers/input/kbd.zig");
+                kbd.handleIrq();
             } else {
                 arch.handleKeyboardIrq();
             }
@@ -171,6 +173,11 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         12 => {
             if (builtin.target.cpu.arch == .x86_64) {
                 dpc.requestInputFlushDeferred();
+                const virtio_input_pci = @import("../drivers/input/virtio_input_pci.zig");
+                const mouse = @import("../drivers/input/mouse.zig");
+                if (!(virtio_input_pci.isActive() and !@import("build_options").ps2_mouse_with_virtio)) {
+                    mouse.handleIrq();
+                }
             } else {
                 arch.handleMouseIrq();
             }

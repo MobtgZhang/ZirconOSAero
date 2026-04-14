@@ -727,3 +727,7 @@ pub fn emulateSpecialInstruction(x86_addr: u32, insn_bytes: []const u8) ntdll.NT
     _ = insn_bytes;
     return ntdll.STATUS_SUCCESS;
 }
+
+pub fn logBringUpStub() void {
+    klog.info("mips64_engine: WOW64 DBT engine stub brought up successfully", .{});
+}

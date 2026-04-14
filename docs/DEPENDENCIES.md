@@ -31,9 +31,7 @@
 
 ## 子模块 / 第三方源码
 
-| 依赖 | 当前版本 | 仓库 / 提交 | 用途 | 更新方式 |
-|------|----------|-------------|------|----------|
-| **zigimg** | `7b98e82621fe302a9edc147df1191f4d1b7ff7a5` | https://github.com/MarkAureh/zip（克隆为 zigimg） | PNG/JPEG/TIFF 图片解码 | `cd src/3rd/zigimg && git fetch origin && git checkout <new-hash>` |
+（无外部子模块依赖；所有图片解码器位于 `src/libs/image/` 目录）
 
 ## CI 锁定的版本策略
 
@@ -47,9 +45,6 @@
 # 验证工具链版本
 zig version    # 应输出 0.15.2 或 CI 锁定版本
 qemu-system-x86_64 --version
-
-# 验证子模块
-cd src/3rd/zigimg && git log -1 --oneline
 
 # 运行完整构建
 zig build install

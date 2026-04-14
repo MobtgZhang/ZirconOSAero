@@ -6,7 +6,7 @@
 //! Run by build.zig (see wallpaper_gen output directory argument).
 
 const std = @import("std");
-const zigimg = @import("zigimg");
+const png = @import("png");
 
 const max_tex_w: usize = 640;
 const max_tex_h: usize = 360;
@@ -69,8 +69,6 @@ pub fn main() !void {
     var out_dir = try std.fs.openDirAbsolute(out_abs, .{});
     defer out_dir.close();
 
-    var read_buf: [1 << 23]u8 = undefined;
-
     var manifest: std.ArrayList(u8) = .{};
     defer manifest.deinit(alloc);
     const mw = manifest.writer(alloc);
@@ -85,18 +83,18 @@ pub fn main() !void {
     , .{inputs.len});
 
     for (inputs, 0..) |rel_path, i| {
-        var img = try zigimg.Image.fromFilePath(alloc, rel_path, &read_buf);
-        defer img.deinit(alloc);
-        try img.convert(alloc, zigimg.PixelFormat.rgba32);
-        const raw = img.rawBytes();
-        const sw = img.width;
-        const sh = img.height;
+        const file_data = try std.fs.cwd().readFileAlloc(alloc, rel_path, 1 << 24);
+        defer alloc.free(file_data);
+        var pixels = try png.pngDecoder.decode(alloc, file_data);
+        defer pixels.free(alloc);
+        const sw: usize = @intCast(pixels.width);
+        const sh: usize = @intCast(pixels.height);
         if (sw == 0 or sh == 0) return error.EmptyImage;
 
         const nw, const nh = scaleDims(sw, sh);
         const out_pixels = try alloc.alloc(u8, nw * nh * 4);
         defer alloc.free(out_pixels);
-        nearestResize(raw, sw, sh, nw, nh, out_pixels);
+        nearestResize(pixels.data, sw, sh, nw, nh, out_pixels);
 
         const rgba_name = try std.fmt.allocPrint(alloc, "preset{d}.rgba", .{i});
         defer alloc.free(rgba_name);

@@ -235,16 +235,19 @@ pub fn build(b: *std.Build) void {
     };
     const target = b.resolveTargetQuery(freestanding_query);
 
-    const zigimg_dep = b.dependency("zigimg", .{
-        .target = b.graph.host,
-        .optimize = .ReleaseSafe,
+    const image_png_mod = b.createModule(.{
+        .root_source_file = b.path("src/libs/image/png.zig"),
     });
+    const image_mod_mod = b.createModule(.{
+        .root_source_file = b.path("src/libs/image/mod.zig"),
+    });
+    image_png_mod.addImport("mod.zig", image_mod_mod);
     const wallpaper_embed_mod = b.createModule(.{
         .root_source_file = b.path("tools/wallpaper_embed.zig"),
         .target = b.graph.host,
         .optimize = .ReleaseSafe,
     });
-    wallpaper_embed_mod.addImport("zigimg", zigimg_dep.module("zigimg"));
+    wallpaper_embed_mod.addImport("png", image_png_mod);
     const wallpaper_embed_exe = b.addExecutable(.{
         .name = "wallpaper_embed",
         .root_module = wallpaper_embed_mod,

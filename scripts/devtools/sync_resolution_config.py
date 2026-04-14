@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BUILD_CONF = ROOT / "build.conf"
 TMP_DIR = ROOT / "build" / "tmp"
 PREF_FB_H = TMP_DIR / "zircon_pref_fb.h"
@@ -54,10 +54,8 @@ def resolve_wh_d() -> tuple[int, int, int]:
         return parse_resolution_triple(env)
     if BUILD_CONF.is_file():
         return parse_resolution_from_build_conf(BUILD_CONF.read_text(encoding="utf-8"))
-    raise RuntimeError(
-        "Missing build.conf and ZIRCON_RESOLUTION is unset. "
-        "Set RESOLUTION in build.conf or: ZIRCON_RESOLUTION=1920x1080x32 python3 scripts/sync_resolution_config.py"
-    )
+    # 默认分辨率，与Makefile保持一致
+    return 1440, 900, 32
 
 
 def patch_desktop(content: str, w: int, h: int) -> str:

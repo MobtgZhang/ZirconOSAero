@@ -411,6 +411,16 @@ pub fn build(b: *std.Build) void {
         .strip = false,
     });
 
+    // NOTE: Zig 0.15 stdlib requires freestanding targets to provide std.Options
+    // (see src/main.zig std_options declaration). This was previously handled via
+    // root_mod.addOptions("std.options", std_options) using b.addModule(), but
+    // Zig 0.15.2 changed addModule's API signature. The options are now declared
+    // directly in the root source file (src/main.zig) via pub const std_options.
+    //
+    // Related Zig issues:
+    // - std/heap.zig:56 requires page_size_max for freestanding targets
+    // - std/posix.zig:69+ missing system.* members for freestanding/other OS
+
     root_mod.addOptions("build_options", build_opts);
     root_mod.addImport("wallpaper_data", wallpaper_data_mod);
     root_mod.addImport("svg_data", svg_data_mod);

@@ -76,9 +76,15 @@ pub const FileStatus = enum(u32) {
 
 pub const FsType = enum(u8) {
     unknown = 0,
-    fat32 = 1,
-    ntfs = 2,
-    devfs = 3,
+    fat12 = 1,
+    fat16 = 2,
+    fat32 = 3,
+    ntfs = 4,
+    exfat = 5,
+    devfs = 6,
+    iso9660 = 7,
+    udf = 8,
+    refs = 9,
 };
 
 pub const MAX_OPEN_FILES: usize = 128;

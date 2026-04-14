@@ -68,8 +68,9 @@ pub const ExplorerDirEntry = struct {
 
 pub fn classifyFsKind(fs: vfs.FsType) ExplorerVolKind {
     return switch (fs) {
-        .fat32, .ntfs, .unknown => .fixed,
+        .fat12, .fat16, .fat32, .ntfs, .exfat, .unknown => .fixed,
         .devfs => .removable_block,
+        .iso9660, .udf, .refs => .removable_block,
     };
 }
 

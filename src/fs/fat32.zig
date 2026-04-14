@@ -1,7 +1,9 @@
 //! FAT32 File System Implementation
 //! Supports reading/writing FAT32 formatted volumes,
 //! directory enumeration, file creation and deletion.
+//! Includes VFAT (long filename) support per the Microsoft VFAT specification.
 
+const std = @import("std");
 const vfs = @import("vfs.zig");
 const klog = @import("../rtl/klog.zig");
 
@@ -21,6 +23,90 @@ pub const ATTR_VOLUME_ID: u8 = 0x08;
 pub const ATTR_DIRECTORY: u8 = 0x10;
 pub const ATTR_ARCHIVE: u8 = 0x20;
 pub const ATTR_LONG_NAME: u8 = ATTR_READ_ONLY | ATTR_HIDDEN | ATTR_SYSTEM | ATTR_VOLUME_ID;
+
+/// VFAT 长文件名条目结构（每个条目占 32 字节）。
+/// Ref: Microsoft VFAT specification — Long Directory Entry layout.
+pub const LongDirEntry = extern struct {
+    /// 序号：位 6..0 = 序列号（1..20），位 7 = LAST_ENTRY_FLAG (0x40)。
+    sequence: u8 align(1) = 0,
+    /// Unicode 名字的 UTF-16LE 前 5 个字符（每个字符 2 字节）。
+    name1: [10]u8 align(1) = [_]u8{0} ** 10,
+    attr: u8 align(1) = 0,
+    /// VFAT 类型：0 表示长文件名条目。
+    entry_type: u8 align(1) = 0,
+    /// 校验和：短文件名的 DOS 名字段校验和。
+    checksum: u8 align(1) = 0,
+    /// Unicode 名字的第 6..11 个字符（6 个字符）。
+    name2: [12]u8 align(1) = [_]u8{0} ** 12,
+    /// 起始簇号（未使用，必须为 0）。
+    first_cluster: u16 align(1) = 0,
+    /// Unicode 名字的第 12..12 个字符（最后 2 个字符）。
+    name3: [4]u8 align(1) = [_]u8{0} ** 4,
+
+    pub fn isLast(self: *const LongDirEntry) bool {
+        return (self.sequence & 0x40) != 0;
+    }
+
+    pub fn getSequence(self: *const LongDirEntry) u8 {
+        return self.sequence & 0x3F;
+    }
+
+    pub fn isLfnEntry(self: *const LongDirEntry) bool {
+        return self.attr == ATTR_LONG_NAME and self.entry_type == 0;
+    }
+};
+
+/// 计算 DOS 8.3 短文件名的校验和（用于 VFAT 校验）。
+fn lfnChecksum(name: [11]u8) u8 {
+    var sum: u8 = 0;
+    var i: u8 = 11;
+    while (i > 0) : (i -= 1) {
+        const carry: u8 = if ((sum & 1) != 0) 0x80 else 0;
+        sum = carry | (sum >> 1);
+        sum +%= name[11 - i];
+    }
+    return sum;
+}
+
+/// 将 VFAT 条目中的 UTF-16LE 编码的 Unicode 片段解码为 UTF-8。
+fn decodeLfnFragment(dst: []u8, src: []const u8) usize {
+    var pos: usize = 0;
+    var i: usize = 0;
+    while (i + 1 < src.len and pos < dst.len) : (i += 2) {
+        const ch = std.mem.readInt(u16, src[i..][0..2], .little);
+        if (ch == 0) break;
+        if (ch < 0x80) {
+            dst[pos] = @truncate(ch);
+            pos += 1;
+        } else if (ch < 0x800) {
+            if (pos + 1 >= dst.len) break;
+            dst[pos] = @truncate(0xC0 | (ch >> 6));
+            dst[pos + 1] = @truncate(0x80 | (ch & 0x3F));
+            pos += 2;
+        } else {
+            if (pos + 2 >= dst.len) break;
+            dst[pos] = @truncate(0xE0 | (ch >> 12));
+            dst[pos + 1] = @truncate(0x80 | ((ch >> 6) & 0x3F));
+            dst[pos + 2] = @truncate(0x80 | (ch & 0x3F));
+            pos += 3;
+        }
+    }
+    return pos;
+}
+
+/// 从 VFAT 长文件名条目链解码出完整的 Unicode 文件名。
+fn decodeLfnChain(entries: []LongDirEntry) []u8 {
+    @setRuntimeSafety(false);
+    var name_buf: [260]u8 = undefined;
+    var pos: usize = 0;
+
+    for (entries) |*e| {
+        pos += decodeLfnFragment(name_buf[pos..], &e.name1);
+        pos += decodeLfnFragment(name_buf[pos..], &e.name2);
+        pos += decodeLfnFragment(name_buf[pos..], &e.name3);
+    }
+    return name_buf[0..pos];
+}
 
 pub const BPB = extern struct {
     jmp_boot: [3]u8 align(1) = .{ 0, 0, 0 },
@@ -266,6 +352,25 @@ pub const Fat32Volume = struct {
         return max_read;
     }
 
+    /// 从簇链中读取目录数据到缓冲区（跨多个簇的目录遍历）。
+    pub fn readDataFromClusterChain(self: *const Fat32Volume, start_cluster: u32, offset_bytes: usize, buffer: []u8) usize {
+        if (start_cluster < 2) return 0;
+        var remaining = offset_bytes;
+        var current_cluster = start_cluster;
+        while (remaining >= CLUSTER_SIZE and current_cluster >= 2) {
+            const next = self.getNextCluster(current_cluster) orelse break;
+            current_cluster = next;
+            remaining -= CLUSTER_SIZE;
+        }
+        if (remaining >= CLUSTER_SIZE) return 0;
+        const offset = self.clusterToOffset(current_cluster) orelse return 0;
+        const src = self.data_area[offset..];
+        const avail = src.len - remaining;
+        const to_copy = @min(buffer.len, avail);
+        @memcpy(buffer[0..to_copy], src[remaining..][0..to_copy]);
+        return to_copy;
+    }
+
     pub fn getEntryCount(self: *const Fat32Volume) usize {
         return self.root_entry_count;
     }
@@ -332,6 +437,69 @@ fn toUpper(c: u8) u8 {
     return c;
 }
 
+/// 从目录条目链提取文件名：若前有条 VFAT 长名条目则返回长名，否则返回短名。
+/// `entries` 应包含若干 `LongDirEntry` 后跟一个 `DirEntry83`。
+fn extractNameFromDirChain(entries: []u8) []u8 {
+    @setRuntimeSafety(false);
+    if (entries.len < 32) return "";
+
+    var lfn_buf: [260]u8 = undefined;
+    var lfn_len: usize = 0;
+    var short_entry: ?*DirEntry83 = null;
+    var offset: usize = 0;
+
+    while (offset + 32 <= entries.len) : (offset += 32) {
+        const raw = entries[offset..][0..32];
+        const attr = raw[11];
+        if (attr == ATTR_LONG_NAME) {
+            const lfn = @as(*LongDirEntry, @ptrCast(raw.ptr));
+            if (lfn.isLfnEntry()) {
+                const seq = lfn.getSequence();
+                if (seq >= 1 and seq <= 20) {
+                    lfn_len += decodeLfnFragment(lfn_buf[lfn_len..], &lfn.name1);
+                    lfn_len += decodeLfnFragment(lfn_buf[lfn_len..], &lfn.name2);
+                    lfn_len += decodeLfnFragment(lfn_buf[lfn_len..], &lfn.name3);
+                }
+            }
+        } else {
+            const de = @as(*DirEntry83, @ptrCast(raw.ptr));
+            if (!de.isFree() and !de.isVolumeId()) {
+                short_entry = de;
+                break;
+            }
+        }
+    }
+
+    if (lfn_len > 0 and short_entry != null) {
+        return lfn_buf[0..lfn_len];
+    }
+    if (short_entry) |de| {
+        var short_name: [13]u8 = undefined;
+        var np: usize = 0;
+        for (de.name) |c| {
+            if (c == ' ') break;
+            short_name[np] = c;
+            np += 1;
+        }
+        var has_ext = false;
+        for (de.ext) |c| {
+            if (c != ' ') { has_ext = true; break; }
+        }
+        if (has_ext) {
+            short_name[np] = '.';
+            np += 1;
+            for (de.ext) |c| {
+                if (c == ' ') break;
+                short_name[np] = c;
+                np += 1;
+            }
+        }
+        @memcpy(lfn_buf[0..np], short_name[0..np]);
+        return lfn_buf[0..np];
+    }
+    return "";
+}
+
 // ── VFS Integration ──
 
 var volume: Fat32Volume = .{};
@@ -367,6 +535,18 @@ fn fat32Open(f: *vfs.FileObject, path: []const u8, _: vfs.FileAccessMode) vfs.Fi
 }
 
 fn fat32Close(_: *vfs.FileObject) vfs.FileStatus {
+    return .success;
+}
+
+fn fat32Seek(f: *vfs.FileObject, offset: i64, origin: vfs.SeekOrigin) vfs.FileStatus {
+    var new_pos: i64 = switch (origin) {
+        .begin => 0,
+        .current => @as(i64, @intCast(f.position)),
+        .end => @as(i64, @intCast(f.file_size)),
+    };
+    new_pos +%= offset;
+    if (new_pos < 0) return .invalid_parameter;
+    f.position = @intCast(new_pos);
     return .success;
 }
 
@@ -506,6 +686,7 @@ pub fn getOps() vfs.FsOps {
         .mkdir = &fat32Mkdir,
         .remove = &fat32Remove,
         .stat = &fat32Stat,
+        .seek = &fat32Seek,
         .query_space = &fat32QuerySpace,
     };
 }

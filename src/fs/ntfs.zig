@@ -2,9 +2,14 @@
 //! Supports basic NTFS volume operations with MFT, attribute parsing,
 //! file read/write, and directory enumeration.
 //! 阶段五：可靠性深化与配置存储分轨；hive/注册表烟测见 `zig build test`（`ntfs_hive_minimum_host`、`registry_zosh1_host`）。
+//!
+//! P1 增强：添加真实磁盘 I/O 支持 — 引导扇区解析、MFT 记录读取、DataRun 解析。
 
+const std = @import("std");
 const vfs = @import("vfs.zig");
 const klog = @import("../rtl/klog.zig");
+const io = @import("../io/io.zig");
+const block_common = @import("../drivers/storage/block_dev_common.zig");
 
 pub const NTFS_SIGNATURE: [4]u8 = .{ 'N', 'T', 'F', 'S' };
 pub const MFT_RECORD_SIZE: usize = 1024;
@@ -103,8 +108,23 @@ pub const NtfsVolume = struct {
     next_record: u32 = 0,
     next_data_cluster: u32 = 0,
     is_mounted: bool = false,
+    is_disk_backed: bool = false,
     label: [32]u8 = [_]u8{0} ** 32,
     label_len: usize = 0,
+    /// 块设备后端（用于真实磁盘 I/O）。
+    backend: ?*block_common.BlockDevVTable = null,
+    /// 簇大小（字节）。
+    cluster_size: u32 = 0,
+    /// MFT 起始扇区（LBA）。
+    mft_start_lba: u64 = 0,
+    /// 引导扇区所在的扇区（LBA），通常为 0。
+    boot_sector_lba: u64 = 0,
+    /// 每簇扇区数。
+    sectors_per_cluster: u32 = 0,
+    /// 簇位图数据。
+    cluster_bitmap: []u8 = &[_]u8{},
+    cluster_bitmap_clusters: u32 = 0,
+    next_free_cluster: u32 = 2,
 
     pub fn format(self: *NtfsVolume, label: []const u8) void {
         self.boot = .{};
@@ -287,12 +307,172 @@ fn toUpperN(c: u8) u8 {
     return c;
 }
 
+// ── 磁盘 I/O 支持 ──
+
+/// 从块设备读取扇区到缓冲区。
+fn readSector(dev: *block_common.BlockDevVTable, lba: u64, buf: []u8) bool {
+    if (buf.len < SECTOR_SIZE) return false;
+    return dev.read_blocks(dev.ctx, lba, buf[0..SECTOR_SIZE]) == io.STATUS_SUCCESS;
+}
+
+/// 读取 NTFS 引导扇区。
+fn readBootSector(dev: *block_common.BlockDevVTable) ?NtfsBootSector {
+    var buf: [SECTOR_SIZE]u8 = undefined;
+    if (!readSector(dev, 0, &buf)) return null;
+    const bs = @as(*align(1) const NtfsBootSector, @ptrCast(&buf)).*;
+    if (std.mem.readInt(u32, bs.signature[0..4], .little) != 0x4546584E) { // "NTFS"
+        klog.warn("NTFS: invalid boot sector signature", .{});
+        return null;
+    }
+    return bs;
+}
+
+/// 读取 MFT 记录（从磁盘）。MFT 记录大小由引导扇区的 clusters_per_mft_record 决定。
+fn readMftRecordFromDisk(vol: *NtfsVolume, record_num: u32, buf: []u8) bool {
+    if (vol.backend == null) return false;
+    const dev = vol.backend.?;
+    const rec_size = if (vol.boot.clusters_per_mft_record < 0)
+        @as(usize, @intCast(-vol.boot.clusters_per_mft_record)) * SECTOR_SIZE
+    else
+        @as(usize, vol.boot.clusters_per_mft_record) * vol.cluster_size;
+    if (buf.len < rec_size) return false;
+    const mft_offset = vol.mft_start_lba + @as(u64, record_num) * @as(u64, rec_size / SECTOR_SIZE);
+    return dev.read_blocks(dev.ctx, mft_offset, buf[0..rec_size]) == io.STATUS_SUCCESS;
+}
+
+/// 解析 DataRun（NTFS 属性中的非驻留数据区域描述）。
+/// 返回值：实际簇号（基于起始簇的偏移）。
+/// DataRun 格式: [len][offset] 变长编码，每个字节高 4 位表示该字段长度。
+fn parseDataRun(data: []const u8, offset: *usize) ?u64 {
+    if (offset.* >= data.len) return null;
+    const header = data[offset.*];
+    offset.* += 1;
+    const len_len = @as(usize, header & 0x0F);
+    const off_len = @as(usize, (header >> 4) & 0x0F);
+    if (offset.* + len_len + off_len > data.len) return null;
+    var len: u64 = 0;
+    var i: usize = 0;
+    while (i < len_len) : (i += 1) {
+        len |= @as(u64, data[offset.* + i]) << (8 * i);
+    }
+    offset.* += len_len;
+    var off_delta: i64 = 0;
+    var j: usize = 0;
+    while (j < off_len) : (j += 1) {
+        off_delta |= @as(i64, data[offset.* + j]) << @as(i64, 8 * j);
+    }
+    offset.* += off_len;
+    return len;
+}
+
+/// 从 DataRuns 中读取数据到缓冲区。
+fn readFromDataRuns(vol: *NtfsVolume, runs: []const u8, file_offset: u64, buf: []u8) usize {
+    var offset: usize = 0;
+    var current_cluster: u64 = 0;
+    var bytes_read: usize = 0;
+    var remaining = file_offset;
+
+    // 解析所有 DataRun 并累积簇号直到找到包含 file_offset 的 DataRun
+    while (offset < runs.len) {
+        const header = runs[offset];
+        offset += 1;
+        const len_len = @as(usize, header & 0x0F);
+        const off_len = @as(usize, (header >> 4) & 0x0F);
+
+        if (offset + len_len + off_len > runs.len) break;
+
+        var len: u64 = 0;
+        var i: usize = 0;
+        while (i < len_len) : (i += 1) {
+            len |= @as(u64, runs[offset + i]) << (8 * i);
+        }
+        offset += len_len;
+
+        var off_delta: i64 = 0;
+        var j: usize = 0;
+        while (j < off_len) : (j += 1) {
+            off_delta |= @as(i64, runs[offset + j]) << @as(i64, 8 * j);
+        }
+        offset += off_len;
+
+        // 更新当前簇号（增量编码）
+        if (current_cluster == 0) {
+            current_cluster = @as(u64, @intCast(off_delta));
+        } else {
+            current_cluster += @as(u64, @intCast(off_delta));
+        }
+
+        const run_len_clusters = len;
+        const run_len_bytes = run_len_clusters * @as(u64, vol.cluster_size);
+
+        // 如果 file_offset 在这个 DataRun 中，计算实际读取位置
+        if (remaining < run_len_bytes) {
+            const offset_in_run = remaining;
+            const cluster_offset = offset_in_run / vol.cluster_size;
+            const byte_offset_in_cluster = offset_in_run % vol.cluster_size;
+
+            // 从这个 DataRun 中读取数据
+            const start_cluster = current_cluster + cluster_offset;
+            var read_pos: usize = 0;
+
+            while (read_pos < buf.len and (start_cluster * @as(u64, vol.cluster_size) + byte_offset_in_cluster + read_pos) < (start_cluster + run_len_clusters) * @as(u64, vol.cluster_size)) {
+                const cluster = start_cluster + @as(u64, @intCast(read_pos / vol.cluster_size));
+                const sector_lba = vol.boot_sector_lba + cluster * @as(u64, @intCast(vol.sectors_per_cluster));
+                var sector_buf: [SECTOR_SIZE]u8 = undefined;
+
+                if (vol.backend) |dev| {
+                    if (dev.read_blocks(dev.ctx, sector_lba, &sector_buf) != io.STATUS_SUCCESS) {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+
+                const copy_start = if (read_pos == 0) byte_offset_in_cluster else 0;
+                const copy_len = @min(buf.len - read_pos, @as(usize, @intCast(vol.cluster_size - copy_start)));
+                @memcpy(buf[read_pos..read_pos + copy_len], sector_buf[@as(usize, @intCast(copy_start))..][0..copy_len]);
+                read_pos += copy_len;
+                bytes_read += copy_len;
+
+                if (read_pos >= buf.len) break;
+            }
+            break;
+        } else {
+            remaining -= run_len_bytes;
+        }
+    }
+
+    return bytes_read;
+}
+
 // ── VFS Integration ──
 
 var ntfs_volume: NtfsVolume = .{};
 
 pub fn getVolume() *NtfsVolume {
     return &ntfs_volume;
+}
+
+/// 从块设备挂载 NTFS 卷。
+pub fn mountFromBlockDev(dev: *block_common.BlockDevVTable) bool {
+    const bs = readBootSector(dev) orelse {
+        klog.warn("NTFS: failed to read boot sector", .{});
+        return false;
+    };
+    ntfs_volume.boot = bs;
+    ntfs_volume.backend = dev;
+    ntfs_volume.cluster_size = @as(u32, bs.sectors_per_cluster) * SECTOR_SIZE;
+    ntfs_volume.sectors_per_cluster = bs.sectors_per_cluster;
+    ntfs_volume.mft_start_lba = bs.mft_cluster * @as(u64, bs.sectors_per_cluster);
+    ntfs_volume.boot_sector_lba = 0; // 引导扇区在 LBA 0
+    ntfs_volume.is_disk_backed = true;
+    ntfs_volume.is_mounted = true;
+    klog.info("NTFS: mounted (mft_cluster=%u sectors_per_cluster=%u total_sectors=%u)", .{
+        bs.mft_cluster,
+        bs.sectors_per_cluster,
+        bs.total_sectors,
+    });
+    return true;
 }
 
 fn ntfsOpen(f: *vfs.FileObject, path: []const u8, _: vfs.FileAccessMode) vfs.FileStatus {

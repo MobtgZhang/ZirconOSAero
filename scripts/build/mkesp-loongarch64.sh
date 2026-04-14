@@ -70,7 +70,7 @@ if [ -z "${SHELL_SRC}" ] || [ ! -f "${SHELL_SRC}" ]; then
 	done
 fi
 
-DISK_MB="${ESP_DISK_MB:-64}"
+DISK_MB="${ESP_DISK_MB:-256}"
 TOTAL_SECTORS=$((DISK_MB * 1024 * 1024 / 512))
 
 if ! command -v sgdisk >/dev/null 2>&1; then
@@ -90,8 +90,9 @@ if [ -f "$OUT" ] && command -v fuser >/dev/null 2>&1; then
 	fi
 fi
 
+echo "[ZirconOS] 构建 loongarch64 ESP 镜像: ${OUT} (${DISK_MB}MB)"
 rm -f "$OUT"
-dd if=/dev/zero of="$OUT" bs=1M count="$DISK_MB" status=none
+dd if=/dev/zero of="$OUT" bs=1M count="$DISK_MB" status=progress
 sgdisk -n "1:2048:0" -t "1:EF00" -c "1:EFI System" "$OUT" >/dev/null 2>&1
 
 PART_KB=$(( (TOTAL_SECTORS - 2048) * 512 / 1024 ))

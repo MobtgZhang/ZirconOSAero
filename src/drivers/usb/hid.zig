@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! USB HID Boot Protocol：解析引导键盘/鼠标报告；鼠标送入 `mouse.deliverMouseEvent`（问题六 M2），键盘经 `arch.injectSyntheticChar` 与 PS/2 队列汇合（`input_hub.pollAll` 顺序见该文件头注释）。
 
 const mouse = @import("../input/mouse.zig");

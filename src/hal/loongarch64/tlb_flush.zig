@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // LoongArch64：进程页表释放与多映射拆除后的本地 TLB 一致性占位。
 // 当前 QEMU virt 目标无 x86 式 MADT/AP 在线表；与 `hal/x86_64/tlb_broadcast.zig` 接口形状对齐，便于 SMP 扩展。

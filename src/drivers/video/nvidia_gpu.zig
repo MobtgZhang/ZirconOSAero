@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! NVIDIA PCI 显示（10DE，class 0x03）— 阶段一：枚举、BAR0 MMIO 映射、GOP 帧缓冲 handoff。
 //!
 //! - **非** Windows WDDM / 闭源驱动 ABI；仅内核占位 `\\Driver\\Nvidia`、`\\Device\\Nvidia0`（create/close），供后续 IOCTL 面扩展。

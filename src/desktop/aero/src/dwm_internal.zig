@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! 阶段 C：与 Microsoft Learn `Dwm*` 语义对齐的 **用户态 Zig API**（不经 PE 导出 thunk）。
 //! 写入 [`compositor.zig`](compositor.zig) 的表面状态；内核内嵌 CSRSS 仍以 [`dwmapi.zig`](../../../subsystems/win32/dwmapi.zig) + `dwm_compositor` 为真源。
 

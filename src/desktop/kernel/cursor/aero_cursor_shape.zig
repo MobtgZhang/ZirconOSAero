@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! Aero 箭头光标位图（与 `desktop/aero/src/cursor.zig` 中 `aero_cursor_bitmap` 一致）。
 //! 内核帧缓冲路径不加载 SVG，仅使用此数组绘制；修改形状时请与 Aero 库同步。
 //! 其它形态为壳层命中测试用近似（与 `resources/cursors/*.svg` 语义对应，非 SVG 渲染）。

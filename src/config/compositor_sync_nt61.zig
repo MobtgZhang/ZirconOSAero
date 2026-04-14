@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! 阶段 C：用户态 compositor 与内核 DWM 像素层之间的 **LPC 载荷布局**（clean-room）。
 //! 逻辑树（Z-order、脏区）**不得**依赖双端裸写共享缓冲；像素位图仍走既有重定向表面路径。
 //! Ref: [SOFTWARE_COMPOSITOR_WDDM.md](../../docs/cn/SOFTWARE_COMPOSITOR_WDDM.md) 阶段 C 节。

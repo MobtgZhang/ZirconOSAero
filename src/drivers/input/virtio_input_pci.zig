@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! VirtIO Input PCI（QEMU `virtio-mouse-pci` / `virtio-tablet-pci` / `virtio-keyboard-pci`，均为 1af4:1052）
 //! 现代 VirtIO 1.0 传输 + 事件队列轮询；支持最多 MAX_INST 个 PCI 实例（键鼠/平板等）。
 //! 参考：VirtIO 1.2 §5.4 Input、§4.1.4 Virtio PCI。

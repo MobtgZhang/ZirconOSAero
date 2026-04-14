@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // 主机：LoongArch64 NT6.1 MM 规格中的 VA 分解与 `userVaRangeAllowedLa64`（不导入 `arch/loongarch64/paging.zig`，避免宿主目标汇编）。
 // 同时覆盖 LoongArch64 ASID 管理非 freestanding 路径（分配/释放/版本）。

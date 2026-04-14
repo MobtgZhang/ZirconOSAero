@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! ZirconOSAero — NT 6.1 风格 Aero 桌面合成默认参数 — **唯一数值源**（与 `docs/cn/AeroRendering.md`、`docs/cn/DesktopManagerSpec.md` 一致）。
 //! 内核帧缓冲路径（`src/drivers/video/`）与用户态 Aero 库（`src/desktop/aero/`）均应通过本模块引用，
 //! 避免 `initAeroDwm` 与 `theme.DwmDefaults` 漂移。（对外 ABI 对齐目标为 NT 6.1 档公开行为描述。）

@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
@@ -14,9 +32,9 @@ const std = @import("std");
 const page_size_bytes: u64 = 4096;
 
 /// AVL 节点上限；受 `AddressSpace` 总大小约束（见 `ps/process.zig` 静态断言）。
-/// 48 KiB 限制下 VadTable（nodes[36B] + free_stack[16b]）最多约 1 052 个节点，
-/// 取 1 024 作为安全上限。若将来 AddressSpace 采用堆分配 VadTable，可再提升。
-pub const max_vad: usize = 1024;
+/// 提升到 4096 以支持更大的地址空间和更多的内存区域，符合 NT6.1 实际需求。
+/// 若将来 AddressSpace 采用堆分配 VadTable，可再进一步提升。
+pub const max_vad: usize = 4096;
 const MAX_NODES: usize = max_vad;
 const NULL_IDX: u16 = 0;
 

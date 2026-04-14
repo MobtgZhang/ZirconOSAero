@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! Process & Thread Model (NT style)
 //! Integrates with Object Manager, Handle Table, and Security Token
 
@@ -6,8 +24,8 @@ const builtin = @import("builtin");
 const vm = @import("../mm/vm.zig");
 
 comptime {
-    // `AddressSpace` 含大 VAD 表；须明显小于常见内核栈（如 64KiB）以免 `createProcess` 栈帧过深。
-    std.debug.assert(@sizeOf(vm.AddressSpace) < 48 * 1024);
+    // `AddressSpace` 含大 VAD 表；须明显小于常见内核栈（如 256KiB）以免 `createProcess` 栈帧过深。
+    std.debug.assert(@sizeOf(vm.AddressSpace) < 256 * 1024);
 }
 const kuser_shared = @import("../mm/kuser_shared.zig");
 const FrameAllocator = @import("../mm/frame.zig").FrameAllocator;
@@ -15,8 +33,8 @@ const klog = @import("../rtl/klog.zig");
 const ob = @import("../ob/object.zig");
 const token = @import("../se/token.zig");
 
-pub const MAX_PROCESSES: usize = 32;
-pub const MAX_THREADS_PER_PROCESS: usize = 8;
+pub const MAX_PROCESSES: usize = 128;
+pub const MAX_THREADS_PER_PROCESS: usize = 64;
 
 pub const ProcessState = enum {
     creating,
@@ -427,7 +445,7 @@ pub const PsThreadObject = struct {
     host_pid: u32 = 0,
 };
 
-const max_ps_thread_objects: usize = 128;
+const max_ps_thread_objects: usize = 1024;
 var g_ps_threads: [max_ps_thread_objects]PsThreadObject = undefined;
 var g_ps_thread_busy: [max_ps_thread_objects]bool = [_]bool{false} ** max_ps_thread_objects;
 

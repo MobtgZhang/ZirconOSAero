@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! Object Manager (NT style)
 //! Manages kernel objects with unified header, handle table, namespace,
 //! reference counting, waitable objects, and lifecycle management.
@@ -173,7 +191,7 @@ pub const HandleEntry = struct {
     }
 };
 
-const MAX_HANDLES: usize = 256;
+const MAX_HANDLES: usize = 4096;
 
 pub const HandleTable = struct {
     entries: [MAX_HANDLES]HandleEntry = [_]HandleEntry{.{}} ** MAX_HANDLES,
@@ -361,7 +379,7 @@ pub fn dereferenceObject(ptr: u64) bool {
 
 // ── Object Namespace ──
 
-const MAX_NAMESPACE_ENTRIES: usize = 64;
+const MAX_NAMESPACE_ENTRIES: usize = 1024;
 
 pub const NamespaceEntry = struct {
     name: [64]u8 = [_]u8{0} ** 64,
@@ -543,6 +561,6 @@ pub fn normalizeNtObjectPathResolveSymlinks(path: []const u8) []const u8 {
 /// B3：按 NT 路径前缀做 **SE 门闸**（不分配句柄）。`tok` 须为 `se/token.zig` 中 `Token`。
 pub fn obOpenObjectByNameAccessProbe(path: []const u8, desired: ACCESS_MASK, tok: *const anyopaque) bool {
     const se = @import("../se/token.zig");
-    const t: *const se.Token = @alignCast(@ptrCast(tok));
+    const t: *const se.Token = @ptrCast(@alignCast(tok));
     return se.openNamedObjectAccessCheck(path, desired, t);
 }

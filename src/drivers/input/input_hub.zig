@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! 输入总线聚合：VirtIO-Input PCI 与 PS/2 8042（及 USB HID）**统一经本入口**，再进入 `mouse.zig` 的合并/插值队列（问题六：禁止并行第二套指针状态机）。
 //! **单轮顺序（M3）**：`usb.poll`（`-Dusb_xhci` 且 xHCI 活跃）→ `virtio_input_pci.poll` →（x86_64 且 VirtIO 未 attach）`mouse.poll` PS/2。USB **Boot 键盘** 经 `hid.deliverBootKeyboardReport` → `arch.injectSyntheticChar`，与 PS/2 字符注入共用键盘队列；**指针设备**仍以 VirtIO 优先、PS/2 回退。与 [PointerPolicy_NT61.md](../../docs/cn/PointerPolicy_NT61.md) §4 双源策略一致。
 //! **阶段 D-D1-8**：桌面主循环在 `mouse.popEvent` / `display.handleMouseMove` **之前**先 `pollAll` 排空设备；消息投递（若有 Win32 用户线程）须在输入取样之后，避免「读队列先于硬件刷新」的竞态；详见 `main.zig` `runDesktopMainLoop`。

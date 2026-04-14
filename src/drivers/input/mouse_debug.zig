@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! 可选编译（`-Dmouse_debug=true`）：串口/控制台输出指针坐标与 VirtIO 队列快照，底栏叠加 `ptr x,y`。
 //! 用于判断「主循环在跑 / VirtIO used 环是否在前进 / deliver 是否被调用」。
 //! 与 `agent_ndjson.zig` 中 H1–H7 对照；`noteVirtioSyncDeliver` 统计 `syncDeliver` 次数（确认 SYN/REL 是否送达 mouse 层）。

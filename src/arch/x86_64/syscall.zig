@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! x86_64 系统调用分发：经 **`syscall`/`sysret`**（`syscall_lstar.s`）进入，本模块使用 **NT 6.1 x64** 寄存器约定。
 //! - **服务号**：`ssdt_nt61.zig` 中公开 SSDT 索引（Windows 7 SP1 x64 参考：j00ru/windows-syscalls）。
 //! - **约定**：第 1 参在 **R10**（`syscall` 时 RCX 存用户 RIP，故不用 RCX 传参）；第 2–4 参为 **RDX/R8/R9**；其余在用户栈。

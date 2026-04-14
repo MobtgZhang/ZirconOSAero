@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
@@ -36,6 +54,10 @@ pub const STATUS_CANCELLED: NTSTATUS = @bitCast(@as(u32, 0xC0000120));
 pub const STATUS_INSUFFICIENT_RESOURCES: NTSTATUS = -1073741823;
 /// `STATUS_NOT_SUPPORTED`（0xC00000BB）— 能力或配置不支持该请求。
 pub const STATUS_NOT_SUPPORTED: NTSTATUS = @bitCast(@as(u32, 0xC00000BB));
+/// `STATUS_TIMEOUT`（0x00000102）— 操作超时。
+pub const STATUS_TIMEOUT: NTSTATUS = 258;
+/// `STATUS_INVALID_DEVICE_STATE`（0xC0000184）— 设备处于无效状态。
+pub const STATUS_INVALID_DEVICE_STATE: NTSTATUS = @bitCast(@as(u32, 0xC0000184));
 
 /// 与用户态/文档 `IO_STATUS_BLOCK` 布局对齐（x64：8+8）。
 pub const IO_STATUS_BLOCK = extern struct {
@@ -395,6 +417,237 @@ pub fn IoForwardIrpToNextDevice(upper_idx: u32, irp: *Irp) NTSTATUS {
 
 pub fn getDeviceCount() usize {
     return device_count;
+}
+
+// ==============================================
+// I/O Completion Port (IOCP) Implementation
+// ==============================================
+
+/// Maximum number of I/O completion ports
+pub const MAX_IO_COMPLETION_PORTS: usize = 64;
+
+/// Maximum number of pending I/O completions per port
+pub const MAX_IO_COMPLETIONS_PER_PORT: usize = 256;
+
+/// I/O completion entry
+pub const IoCompletionEntry = struct {
+    key: u64 = 0,
+    overlapped: u64 = 0,
+    status: NTSTATUS = STATUS_SUCCESS,
+    information: u64 = 0,
+};
+
+/// I/O Completion Port structure
+pub const IoCompletionPort = struct {
+    header: ob.ObjectHeader = .{ .obj_type = .io_completion_port },
+    entries: [MAX_IO_COMPLETIONS_PER_PORT]IoCompletionEntry = [_]IoCompletionEntry{.{}} ** MAX_IO_COMPLETIONS_PER_PORT,
+    read_idx: usize = 0,
+    write_idx: usize = 0,
+    count: usize = 0,
+    concurrent_threads: u32 = 0,
+};
+
+/// Global IOCP table
+var io_completion_ports: [MAX_IO_COMPLETION_PORTS]IoCompletionPort = [_]IoCompletionPort{.{}} ** MAX_IO_COMPLETION_PORTS;
+var iocp_count: usize = 0;
+
+/// Create a new I/O completion port
+pub fn IoCreateIoCompletionPort(file_handle: u32, existing_port: u32, completion_key: u64, concurrent_threads: u32) ?u32 {
+    _ = file_handle;
+    _ = completion_key;
+
+    // If existing port is provided, just return it
+    if (existing_port != 0 and existing_port < iocp_count) {
+        return existing_port;
+    }
+
+    if (iocp_count >= MAX_IO_COMPLETION_PORTS) {
+        return null;
+    }
+
+    const idx = iocp_count;
+    const port = &io_completion_ports[idx];
+    port.* = .{
+        .concurrent_threads = concurrent_threads,
+    };
+
+    iocp_count += 1;
+    klog.debug("I/O: Created completion port %u (concurrent threads=%u)", .{ idx, concurrent_threads });
+    return @intCast(idx);
+}
+
+/// Post an I/O completion status to a port
+pub fn IoPostQueuedCompletionStatus(port_idx: u32, status: NTSTATUS, bytes_transferred: u64, overlapped: u64) bool {
+    if (port_idx >= iocp_count) {
+        return false;
+    }
+
+    var port = &io_completion_ports[port_idx];
+    if (port.count >= MAX_IO_COMPLETIONS_PER_PORT) {
+        return false;
+    }
+
+    port.entries[port.write_idx] = .{
+        .status = status,
+        .information = bytes_transferred,
+        .overlapped = overlapped,
+    };
+
+    port.write_idx = (port.write_idx + 1) % MAX_IO_COMPLETIONS_PER_PORT;
+    port.count += 1;
+
+    // TODO: Wake waiting threads
+    return true;
+}
+
+/// Get a queued completion status from a port
+pub fn IoGetQueuedCompletionStatus(port_idx: u32, timeout_ms: u32, bytes_transferred: *u64, completion_key: *u64, overlapped: *u64) NTSTATUS {
+    _ = timeout_ms;
+
+    if (port_idx >= iocp_count) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    var port = &io_completion_ports[port_idx];
+    if (port.count == 0) {
+        // TODO: Handle timeout
+        return STATUS_TIMEOUT;
+    }
+
+    const entry = &port.entries[port.read_idx];
+    bytes_transferred.* = entry.information;
+    completion_key.* = entry.key;
+    overlapped.* = entry.overlapped;
+
+    port.read_idx = (port.read_idx + 1) % MAX_IO_COMPLETIONS_PER_PORT;
+    port.count -= 1;
+
+    return entry.status;
+}
+
+// ==============================================
+// Plug and Play (PnP) Implementation
+// ==============================================
+
+/// PnP device state
+pub const PnpDeviceState = enum(u8) {
+    not_present = 0,
+    stopped = 1,
+    working = 2,
+    pending_stop = 3,
+    pending_remove = 4,
+    surprise_removed = 5,
+};
+
+/// PnP device information
+pub const PnpDeviceInfo = struct {
+    device_idx: u32 = 0,
+    state: PnpDeviceState = .not_present,
+    instance_id: [64]u8 = [_]u8{0} ** 64,
+    hardware_id: [64]u8 = [_]u8{0} ** 64,
+    compatible_ids: [128]u8 = [_]u8{0} ** 128,
+};
+
+/// Global PnP device info table
+var pnp_devices: [MAX_DEVICES]PnpDeviceInfo = [_]PnpDeviceInfo{.{}} ** MAX_DEVICES;
+
+/// Initialize PnP subsystem
+pub fn pnpInit() void {
+    @memset(&pnp_devices, .{});
+    klog.info("I/O: PnP subsystem initialized", .{});
+}
+
+/// Register a PnP device
+pub fn pnpRegisterDevice(device_idx: u32, hardware_id: []const u8, compatible_ids: []const u8) bool {
+    if (device_idx >= device_count) {
+        return false;
+    }
+
+    var info = &pnp_devices[device_idx];
+    info.* = .{
+        .device_idx = device_idx,
+        .state = .stopped,
+    };
+
+    const hw_id_len = @min(hardware_id.len, info.hardware_id.len);
+    @memcpy(info.hardware_id[0..hw_id_len], hardware_id[0..hw_id_len]);
+
+    const compat_len = @min(compatible_ids.len, info.compatible_ids.len);
+    @memcpy(info.compatible_ids[0..compat_len], compatible_ids[0..compat_len]);
+
+    klog.debug("I/O: PnP device %u registered (HW ID: %s)", .{ device_idx, hardware_id });
+    return true;
+}
+
+/// Start a PnP device
+pub fn pnpStartDevice(device_idx: u32) NTSTATUS {
+    if (device_idx >= device_count) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    var info = &pnp_devices[device_idx];
+    if (info.state != .stopped) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    // Send IRP_MJ_PNP / IRP_MN_START_DEVICE to the device
+    var irp: Irp = .{
+        .major_function = .pnp,
+        .minor_function = @intFromEnum(IrpMinorPnp.start_device),
+    };
+
+    const status = dispatchIrp(device_idx, &irp);
+    if (status == STATUS_SUCCESS) {
+        info.state = .working;
+        klog.debug("I/O: PnP device %u started successfully", .{device_idx});
+    }
+
+    return status;
+}
+
+/// Query device capabilities
+pub fn pnpQueryDeviceCapabilities(device_idx: u32, capabilities: *anyopaque) NTSTATUS {
+    _ = capabilities;
+    if (device_idx >= device_count) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Send IRP_MJ_PNP / IRP_MN_QUERY_CAPABILITIES to the device
+    var irp: Irp = .{
+        .major_function = .pnp,
+        .minor_function = @intFromEnum(IrpMinorPnp.query_capabilities),
+    };
+
+    return dispatchIrp(device_idx, &irp);
+}
+
+/// Remove a PnP device
+pub fn pnpRemoveDevice(device_idx: u32) NTSTATUS {
+    if (device_idx >= device_count) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    var info = &pnp_devices[device_idx];
+    info.state = .pending_remove;
+
+    // Send IRP_MJ_PNP / IRP_MN_REMOVE_DEVICE to the device
+    var irp: Irp = .{
+        .major_function = .pnp,
+        .minor_function = @intFromEnum(IrpMinorPnp.remove_device),
+    };
+
+    const status = dispatchIrp(device_idx, &irp);
+    if (status == STATUS_SUCCESS) {
+        info.state = .not_present;
+        klog.debug("I/O: PnP device %u removed", .{device_idx});
+    }
+
+    return status;
+}
+
+/// Get number of I/O completion ports
+pub fn getIoCompletionPortCount() usize {
+    return iocp_count;
 }
 
 pub fn getDriverCount() usize {

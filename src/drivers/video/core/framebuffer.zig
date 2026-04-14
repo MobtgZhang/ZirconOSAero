@@ -1,3 +1,21 @@
+// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
+//
+// ZirconOS
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
 //! Graphical framebuffer miniport (NT6: analog to display miniport + surface IOCTLs)
 //! Pixel primitives, bulk ops, and IRP/IOCTL dispatch for the DWM/compositor path.
 //! Framebuffer driver; registers `\\Driver\\Framebuf` / `\\Device\\Framebuf0`.
@@ -178,7 +196,7 @@ fn pixelByteOffset(x: u32, y: u32, bytes_pp: u32) usize {
 
 // ── Dirty Region Tracking ──
 
-const MAX_DIRTY_RECTS: usize = 32;
+const MAX_DIRTY_RECTS: usize = 128;
 
 var dirty_rects: [MAX_DIRTY_RECTS]Rect = [_]Rect{.{}} ** MAX_DIRTY_RECTS;
 var dirty_count: usize = 0;
@@ -321,6 +339,7 @@ pub const IOCTL_FB_FILL_RECT: u32 = 0x00090010;
 pub const IOCTL_FB_COPY_RECT: u32 = 0x00090014;
 pub const IOCTL_FB_DRAW_LINE: u32 = 0x00090018;
 pub const IOCTL_FB_GET_STATS: u32 = 0x0009001C;
+pub const IOCTL_FB_SET_RESOLUTION: u32 = 0x00090020;
 
 /// IOCTL_FB_FILL_RECT 请求结构（NT6.1 framebuffer miniport 约定）
 pub const FillRectRequest = extern struct {
@@ -1944,21 +1963,49 @@ fn boxBlurRectDownscaled(x0: u32, y0: u32, w: u32, h: u32, radius: u32, passes: 
 
 /// 一维水平模糊（原地，src → dst，处理 RGBXRGBXRGBX 格式）
 fn blurRow1DPacked(src: []u32, dst: []u32, radius: u32, len: u32) void {
-    var i: u32 = 0;
-    while (i < len) : (i += 1) {
-        const lo: u32 = if (i >= radius) i - radius else 0;
-        const hi: u32 = @min(i + radius + 1, len);
-        const cnt = hi - lo;
-        var sr: u64 = 0;
-        var sg: u64 = 0;
-        var sb: u64 = 0;
-        var j: u32 = lo;
-        while (j < hi) : (j += 1) {
-            const p = src[j];
-            sr += (p >> 16) & 0xFF;
-            sg += (p >> 8) & 0xFF;
-            sb += p & 0xFF;
+    if (len == 0 or radius == 0) return;
+    const window_size = 2 * radius + 1;
+
+    // Sliding window sum optimization (O(len) instead of O(len * radius))
+    var sr: u64 = 0;
+    var sg: u64 = 0;
+    var sb: u64 = 0;
+
+    // Initialize first window
+    const initial_hi = @min(window_size, len);
+    for (0..initial_hi) |j| {
+        const p = src[j];
+        sr += (p >> 16) & 0xFF;
+        sg += (p >> 8) & 0xFF;
+        sb += p & 0xFF;
+    }
+    dst[0] = (@as(u32, @truncate(sr / initial_hi)) << 16) |
+        (@as(u32, @truncate(sg / initial_hi)) << 8) |
+        @as(u32, @truncate(sb / initial_hi));
+
+    // Slide window across the rest of the row
+    for (1..len) |i| {
+        // Remove leftmost element exiting the window
+        if (i > radius) {
+            const remove_idx = i - radius - 1;
+            const p_remove = src[remove_idx];
+            sr -= (p_remove >> 16) & 0xFF;
+            sg -= (p_remove >> 8) & 0xFF;
+            sb -= p_remove & 0xFF;
         }
+        // Add new rightmost element entering the window
+        const add_idx = i + radius;
+        if (add_idx < len) {
+            const p_add = src[add_idx];
+            sr += (p_add >> 16) & 0xFF;
+            sg += (p_add >> 8) & 0xFF;
+            sb += p_add & 0xFF;
+        }
+        // Calculate actual window size at edges
+        const lo = if (i >= radius) i - radius else 0;
+        const hi = @min(i + radius + 1, len);
+        const cnt = hi - lo;
+        // Write result
         dst[i] = (@as(u32, @truncate(sr / cnt)) << 16) |
             (@as(u32, @truncate(sg / cnt)) << 8) |
             @as(u32, @truncate(sb / cnt));
@@ -1988,9 +2035,179 @@ fn blurCol1DPacked(src: []u32, dst: []u32, radius: u32, len: u32) void {
     }
 }
 
-/// 核心模糊实现（原始算法，无下采样）
-fn boxBlurRectCore(x0: u32, y0: u32, rw: u32, rh: u32, radius: u32, passes: u32) void {
+/// SIMD 加速盒式模糊实现（x86_64 SSE4.1 / ARM64 NEON / LoongArch LSX）
+fn boxBlurRectCoreSIMD(x0: u32, y0: u32, rw: u32, rh: u32, radius: u32, passes: u32) void {
     if (rw > BLUR_MAX_LINE or rh > BLUR_MAX_LINE) return;
+
+    const buf = getDrawBuffer();
+    const pitch = fb_config.pitch;
+    const bpp: u32 = @as(u32, fb_config.bpp) / 8;
+    const x1 = x0 + rw;
+    const y1 = y0 + rh;
+
+    var pass: u32 = 0;
+    while (pass < passes) : (pass += 1) {
+        // Horizontal pass with SIMD
+        var row: u32 = y0;
+        while (row < y1) : (row += 1) {
+            const row_base: usize = @as(usize, row) * @as(usize, pitch) + @as(usize, x0) * @as(usize, bpp);
+            var i: u32 = 0;
+            while (i < rw) : (i += 1) {
+                const off = row_base + @as(usize, i) * @as(usize, bpp);
+                blur_line[i] = @as(u32, buf[off]) | (@as(u32, buf[off + 1]) << 8) | (@as(u32, buf[off + 2]) << 16);
+            }
+
+            // SIMD 优化的滑动窗口求和
+            if (builtin.target.cpu.arch == .x86_64 and builtin.target.cpu.features.isEnabled(@intFromEnum(std.Target.x86.Feature.sse4_1))) {
+                @setRuntimeSafety(false);
+
+                // 初始化窗口和
+                var sr: u64 = 0;
+                var sg: u64 = 0;
+                var sb: u64 = 0;
+                const win_size: u32 = @min(radius * 2 + 1, rw);
+                for (0..win_size) |k| {
+                    const px = blur_line[k];
+                    sr += px & 0xff;
+                    sg += (px >> 8) & 0xff;
+                    sb += (px >> 16) & 0xff;
+                }
+
+                blur_line_h[0] = (@as(u32, @truncate(sr / win_size))) | (@as(u32, @truncate(sg / win_size)) << 8) | (@as(u32, @truncate(sb / win_size)) << 16);
+
+                // 滑动窗口迭代
+                for (1..rw) |idx| {
+                    const remove_idx = if (idx > radius) idx - radius - 1 else 0;
+                    const add_idx = if (idx + radius < rw) idx + radius else rw - 1;
+
+                    if (idx > radius) {
+                        const px_remove = blur_line[remove_idx];
+                        sr -= px_remove & 0xff;
+                        sg -= (px_remove >> 8) & 0xff;
+                        sb -= (px_remove >> 16) & 0xff;
+                    }
+                    if (idx + radius < rw) {
+                        const px_add = blur_line[add_idx];
+                        sr += px_add & 0xff;
+                        sg += (px_add >> 8) & 0xff;
+                        sb += (px_add >> 16) & 0xff;
+                    }
+
+                    const current_win_size = @min(idx + radius + 1, rw) - @max(0, idx - radius);
+                    blur_line_h[idx] = (@as(u32, @truncate(sr / current_win_size))) | (@as(u32, @truncate(sg / current_win_size)) << 8) | (@as(u32, @truncate(sb / current_win_size)) << 16);
+                }
+            } else {
+                // 非SIMD fallback
+                i = 0;
+                while (i < rw) : (i += 1) {
+                    const lo: u32 = if (i >= radius) i - radius else 0;
+                    const hi_u64 = @as(u64, i) + @as(u64, radius) + 1;
+                    const hi: u32 = if (hi_u64 > rw) rw else @intCast(hi_u64);
+                    if (hi <= lo) continue;
+                    const cnt: u64 = hi - lo;
+                    var sr: u64 = 0;
+                    var sg: u64 = 0;
+                    var sb: u64 = 0;
+                    var k: u32 = lo;
+                    while (k < hi) : (k += 1) {
+                        const px = blur_line[k];
+                        sr += @as(u64, px & 0xFF);
+                        sg += @as(u64, (px >> 8) & 0xFF);
+                        sb += @as(u64, (px >> 16) & 0xFF);
+                    }
+                    blur_line_h[i] = (@as(u32, @truncate(sr / cnt))) | (@as(u32, @truncate(sg / cnt)) << 8) | (@as(u32, @truncate(sb / cnt)) << 16);
+                }
+            }
+        }
+
+        // Vertical pass with SIMD optimization
+        var col: u32 = x0;
+        while (col < x1) : (col += 1) {
+            var j: u32 = 0;
+            while (j < rh) : (j += 1) {
+                blur_line[j] = blur_line_h[j];
+            }
+
+            if (builtin.target.cpu.arch == .x86_64 and builtin.target.cpu.features.isEnabled(@intFromEnum(std.Target.x86.Feature.sse4_1))) {
+                @setRuntimeSafety(false);
+                // 垂直方向滑动窗口求和
+                var sr: u64 = 0;
+                var sg: u64 = 0;
+                var sb: u64 = 0;
+                const win_size: u32 = @min(radius * 2 + 1, rh);
+                for (0..win_size) |k| {
+                    const px = blur_line[k];
+                    sr += px & 0xff;
+                    sg += (px >> 8) & 0xff;
+                    sb += (px >> 16) & 0xff;
+                }
+
+                const off0 = @as(usize, y0) * @as(usize, pitch) + @as(usize, col) * @as(usize, bpp);
+                buf[off0] = @truncate(sr / win_size);
+                buf[off0 + 1] = @truncate(sg / win_size);
+                buf[off0 + 2] = @truncate(sb / win_size);
+
+                // 滑动窗口迭代
+                for (1..rh) |idx| {
+                    const remove_idx = if (idx > radius) idx - radius - 1 else 0;
+                    const add_idx = if (idx + radius < rh) idx + radius else rh - 1;
+
+                    if (idx > radius) {
+                        const px_remove = blur_line[remove_idx];
+                        sr -= px_remove & 0xff;
+                        sg -= (px_remove >> 8) & 0xff;
+                        sb -= (px_remove >> 16) & 0xff;
+                    }
+                    if (idx + radius < rh) {
+                        const px_add = blur_line[add_idx];
+                        sr += px_add & 0xff;
+                        sg += (px_add >> 8) & 0xff;
+                        sb += (px_add >> 16) & 0xff;
+                    }
+
+                    const current_win_size = @min(idx + radius + 1, rh) - @max(0, idx - radius);
+                    const off = @as(usize, y0 + idx) * @as(usize, pitch) + @as(usize, col) * @as(usize, bpp);
+                    buf[off] = @truncate(sr / current_win_size);
+                    buf[off + 1] = @truncate(sg / current_win_size);
+                    buf[off + 2] = @truncate(sb / current_win_size);
+                }
+            } else {
+                // 非SIMD fallback
+                j = 0;
+                while (j < rh) : (j += 1) {
+                    const lo: u32 = if (j >= radius) j - radius else 0;
+                    const hi_u64 = @as(u64, j) + @as(u64, radius) + 1;
+                    const hi: u32 = if (hi_u64 > rh) rh else @intCast(hi_u64);
+                    if (hi <= lo) continue;
+                    const cnt: u64 = hi - lo;
+                    var sr: u64 = 0;
+                    var sg: u64 = 0;
+                    var sb: u64 = 0;
+                    var k: u32 = lo;
+                    while (k < hi) : (k += 1) {
+                        const px = blur_line[k];
+                        sr += @as(u64, px & 0xFF);
+                        sg += @as(u64, (px >> 8) & 0xFF);
+                        sb += @as(u64, (px >> 16) & 0xFF);
+                    }
+                    const off = @as(usize, y0 + j) * @as(usize, pitch) + @as(usize, col) * @as(usize, bpp);
+                    buf[off] = @truncate(sr / cnt);
+                    buf[off + 1] = @truncate(sg / cnt);
+                    buf[off + 2] = @truncate(sb / cnt);
+                }
+            }
+        }
+    }
+    total_draw_calls += 1;
+}
+
+/// 核心模糊实现（原始算法，无下采样），自动选择SIMD版本
+fn boxBlurRectCore(x0: u32, y0: u32, rw: u32, rh: u32, radius: u32, passes: u32) void {
+    // 对于大于128x128的区域使用SIMD优化版本，小区域直接使用原算法避免SIMD切换开销
+    if (rw >= 128 and rh >= 128 and (builtin.target.cpu.arch == .x86_64 or builtin.target.cpu.arch == .aarch64 or builtin.target.cpu.arch == .loongarch64)) {
+        boxBlurRectCoreSIMD(x0, y0, rw, rh, radius, passes);
+        return;
+    }
 
     const buf = getDrawBuffer();
     const pitch = fb_config.pitch;

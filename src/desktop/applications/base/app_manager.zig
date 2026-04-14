@@ -56,6 +56,10 @@ pub const AppId = enum(u16) {
     freecell = 42,
     mahjong_titans = 43,
     purble_place = 44,
+    sticky_notes = 45,
+    inkball = 46,
+    photo_gallery = 47,
+    psr = 48,
     _,
 };
 
@@ -106,6 +110,10 @@ fn toBuiltinId(id: AppId) builtin_apps.BuiltinAppId {
         .mahjong_titans => .mahjong_titans,
         .purble_place => .purble_place,
         .cmd_shell => .cmd_shell,
+        .sticky_notes => .sticky_notes_window,
+        .inkball => .inkball,
+        .photo_gallery => .photo_gallery,
+        .psr => .psr,
         .registry_editor => .regedit,
         .disk_cleanup => .disk_cleanup,
         .disk_defrag => .defrag,
@@ -427,6 +435,10 @@ pub const AppRegistry = struct {
         r.registerApp(.{ .id = .backup_restore, .name = "Backup and Restore", .description = "Backup management", .icon_id = 7, .category = .maintenance, .shortcut_path = "", .executable_path = "", .arguments = "", .launched = false });
         r.registerApp(.{ .id = .windows_update, .name = "Windows Update", .description = "Update system", .icon_id = 7, .category = .system, .shortcut_path = "", .executable_path = "", .arguments = "", .launched = false });
         r.registerApp(.{ .id = .security_center, .name = "Security Center", .description = "Security settings", .icon_id = 7, .category = .security, .shortcut_path = "", .executable_path = "", .arguments = "", .launched = false });
+        r.registerApp(.{ .id = .sticky_notes, .name = "Sticky Notes", .description = "Post-it notes on desktop", .icon_id = 1, .category = .accessories, .shortcut_path = "", .executable_path = "", .arguments = "", .launched = false });
+        r.registerApp(.{ .id = .inkball, .name = "InkBall", .description = "Path drawing game", .icon_id = 1, .category = .games, .shortcut_path = "", .executable_path = "", .arguments = "", .launched = false });
+        r.registerApp(.{ .id = .photo_gallery, .name = "Photo Gallery", .description = "Browse and manage photos", .icon_id = 10, .category = .entertainment, .shortcut_path = "", .executable_path = "", .arguments = "", .launched = false });
+        r.registerApp(.{ .id = .psr, .name = "Problem Steps Recorder", .description = "Record screen steps", .icon_id = 1, .category = .accessories, .shortcut_path = "", .executable_path = "", .arguments = "", .launched = false });
     }
 };
 

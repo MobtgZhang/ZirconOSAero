@@ -68,6 +68,68 @@ var acrylic_cfg: AcrylicConfig = .{};
 var mica_cfg: MicaConfig = .{};
 var material_initialized: bool = false;
 
+// ── Blur Caching for Dirty Region Optimization ──
+
+/// 模糊缓存：记录最近一次模糊的矩形区域和配置
+/// 避免在同一区域重复模糊，提升性能
+const BLUR_CACHE_SIZE: usize = 4;
+var blur_cache: [BLUR_CACHE_SIZE]BlurCacheEntry = [_]BlurCacheEntry{.{}} ** BLUR_CACHE_SIZE;
+
+/// 模糊缓存条目
+const BlurCacheEntry = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+    w: i32 = 0,
+    h: i32 = 0,
+    radius: u32 = 0,
+    passes: u32 = 0,
+    valid: bool = false,
+
+    /// 检查缓存是否匹配当前请求
+    fn matches(self: *const BlurCacheEntry, nx: i32, ny: i32, nw: i32, nh: i32, nr: u32, np: u32) bool {
+        return self.valid and
+            self.x == nx and self.y == ny and
+            self.w == nw and self.h == nh and
+            self.radius == nr and self.passes == np;
+    }
+};
+
+/// 检查模糊缓存是否命中
+fn isBlurCached(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) bool {
+    for (&blur_cache) |*entry| {
+        if (entry.matches(x, y, w, h, radius, passes)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 更新模糊缓存
+fn updateBlurCache(x: i32, y: i32, w: i32, h: i32, radius: u32, passes: u32) void {
+    // 移动缓存，腾出空间
+    var i: usize = BLUR_CACHE_SIZE - 1;
+    while (i > 0) : (i -= 1) {
+        blur_cache[i] = blur_cache[i - 1];
+    }
+    // 插入新条目
+    blur_cache[0] = .{
+        .x = x,
+        .y = y,
+        .w = w,
+        .h = h,
+        .radius = radius,
+        .passes = passes,
+        .valid = true,
+    };
+}
+
+/// 清除模糊缓存（窗口内容变化时调用）
+pub fn invalidateBlurCache() void {
+    for (&blur_cache) |*entry| {
+        entry.valid = false;
+    }
+}
+
 // ── Configuration Structures ──
 
 pub const GlassConfig = struct {
@@ -129,8 +191,13 @@ pub fn configureMica(cfg: MicaConfig) void {
 pub fn renderGlass(x: i32, y: i32, w: i32, h: i32) void {
     if (!fb.isInitialized()) return;
 
-    if (glass_cfg.blur_radius > 0) {
-        fb.boxBlurRect(x, y, w, h, @as(u32, glass_cfg.blur_radius), glass_cfg.blur_passes);
+    const radius: u32 = glass_cfg.blur_radius;
+    const passes: u32 = glass_cfg.blur_passes;
+
+    // 缓存检查：避免重复模糊
+    if (radius > 0 and !isBlurCached(x, y, w, h, radius, passes)) {
+        fb.boxBlurRect(x, y, w, h, radius, passes);
+        updateBlurCache(x, y, w, h, radius, passes);
     }
 
     fb.blendTintRect(x, y, w, h, glass_cfg.tint_color, glass_cfg.tint_opacity, glass_cfg.saturation);
@@ -158,8 +225,13 @@ pub fn renderGlass(x: i32, y: i32, w: i32, h: i32) void {
 pub fn renderAcrylic(x: i32, y: i32, w: i32, h: i32) void {
     if (!fb.isInitialized()) return;
 
-    if (acrylic_cfg.blur_radius > 0) {
-        fb.boxBlurRect(x, y, w, h, @as(u32, acrylic_cfg.blur_radius), acrylic_cfg.blur_passes);
+    const radius: u32 = acrylic_cfg.blur_radius;
+    const passes: u32 = acrylic_cfg.blur_passes;
+
+    // 缓存检查：避免重复模糊
+    if (radius > 0 and !isBlurCached(x, y, w, h, radius, passes)) {
+        fb.boxBlurRect(x, y, w, h, radius, passes);
+        updateBlurCache(x, y, w, h, radius, passes);
     }
 
     if (acrylic_cfg.noise_opacity > 0) {
@@ -189,9 +261,13 @@ pub fn renderAcrylic(x: i32, y: i32, w: i32, h: i32) void {
 pub fn renderMica(x: i32, y: i32, w: i32, h: i32) void {
     if (!fb.isInitialized()) return;
 
-    if (mica_cfg.blur_radius > 0) {
-        const passes: u8 = if (mica_cfg.blur_radius > 30) 5 else 3;
-        fb.boxBlurRect(x, y, w, h, @as(u32, mica_cfg.blur_radius), passes);
+    const radius: u32 = mica_cfg.blur_radius;
+    const passes: u32 = if (radius > 30) 5 else 3;
+
+    // 缓存检查：避免重复模糊
+    if (radius > 0 and !isBlurCached(x, y, w, h, radius, passes)) {
+        fb.boxBlurRect(x, y, w, h, radius, passes);
+        updateBlurCache(x, y, w, h, radius, passes);
     }
 
     applyDesaturate(x, y, w, h, 120);
@@ -212,7 +288,14 @@ pub fn renderMica(x: i32, y: i32, w: i32, h: i32) void {
 pub fn renderAcrylic2(x: i32, y: i32, w: i32, h: i32) void {
     if (!fb.isInitialized()) return;
 
-    fb.boxBlurRect(x, y, w, h, @as(u32, acrylic_cfg.blur_radius), acrylic_cfg.blur_passes);
+    const radius: u32 = acrylic_cfg.blur_radius;
+    const passes: u32 = acrylic_cfg.blur_passes;
+
+    // 缓存检查：避免重复模糊
+    if (radius > 0 and !isBlurCached(x, y, w, h, radius, passes)) {
+        fb.boxBlurRect(x, y, w, h, radius, passes);
+        updateBlurCache(x, y, w, h, radius, passes);
+    }
 
     applyLuminosityNormalize(x, y, w, h, 160);
 

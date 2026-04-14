@@ -14,6 +14,8 @@ const std = @import("std");
 /// `RT_*` numeric resource types (Win32 public constants).
 pub const rt_icon: u32 = 3;
 pub const rt_group_icon: u32 = 14;
+pub const rt_cursor: u32 = 12;
+pub const rt_group_cursor: u32 = 14;
 
 /// COFF `Machine` field (PE/COFF + UEFI portable-PE naming where applicable).
 pub const image_file_machine_amd64: u16 = 0x8664;

@@ -184,9 +184,10 @@ pub fn formatExplorerStatusBar(buf: []u8, item_count: usize, place_line: []const
 
 pub fn fsTypeLabel(fs: @import("../../../fs/vfs.zig").FsType, scratch: []u8) []const u8 {
     return switch (fs) {
-        .fat32 => loadString(.ex_fs_fat32, scratch),
+        .fat12, .fat16, .fat32 => loadString(.ex_fs_fat32, scratch),
         .ntfs => loadString(.ex_fs_ntfs, scratch),
+        .exfat => loadString(.ex_fs_ntfs, scratch),
         .devfs => loadString(.ex_fs_devfs, scratch),
-        .unknown => loadString(.ex_fs_unknown, scratch),
+        .iso9660, .udf, .refs, .unknown => loadString(.ex_fs_unknown, scratch),
     };
 }

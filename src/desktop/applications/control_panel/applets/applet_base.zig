@@ -40,6 +40,10 @@ pub const AppletId = enum(u16) {
     device_manager = 12,
     power_options = 13,
     system = 14,
+    ease_of_access = 15,
+    backup_restore = 16,
+    indexing_options = 17,
+    color_management = 18,
 };
 
 pub const CaptionButtonType = enum { none, minimize, maximize, close };

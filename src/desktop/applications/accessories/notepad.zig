@@ -2,7 +2,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/desktop/applications/accessories/notepad.zig
-// Purpose: Windows 7 style Notepad
+// Purpose: Windows 7 style Notepad with VFS file I/O
 //
 // This is an independent clean-room implementation.
 
@@ -10,11 +10,30 @@ const std = @import("std");
 const fb = @import("../../../drivers/video/core/framebuffer.zig");
 const theme_mod = @import("../../kernel/theme/root.zig");
 const dwm_mod = @import("../../../drivers/video/core/dwm.zig");
+const vfs = @import("../../../fs/vfs.zig");
+const klog = @import("../../../rtl/klog.zig");
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme_mod.rgb(r, g, b);
 }
 
+/// Notepad file dialog result
+pub const FileDialogResult = struct {
+    success: bool,
+    path: []const u8,
+};
+
+/// Notepad error types
+pub const NotepadError = enum {
+    success,
+    file_not_found,
+    access_denied,
+    io_error,
+    invalid_path,
+    out_of_memory,
+};
+
+/// Notepad App with VFS file I/O support
 pub const NotepadApp = struct {
     x: i32,
     y: i32,
@@ -23,85 +42,269 @@ pub const NotepadApp = struct {
     title: []const u8,
     visible: bool,
     focused: bool,
-    text: []u8,
+
+    // Text buffer (fixed size for VFS operations)
+    text: [65536]u8,
     text_len: usize,
-    text_capacity: usize,
+
     cursor_x: i32,
     cursor_y: i32,
     scroll_x: i32,
     scroll_y: i32,
     line_count: usize,
     modified: bool,
-    file_path: []const u8,
+
+    // File operations
+    file_path: [vfs.MAX_PATH]u8,
+    file_path_len: usize,
+    file_handle: ?*vfs.FileObject,
+    last_error: NotepadError,
+
     caption_hover: CaptionButtonType,
     show_menu: bool,
     menu_selection: i32,
 
     const CaptionButtonType = enum { none, minimize, maximize, close };
 
-    pub fn create(x_pos: i32, y_pos: i32, capacity: usize) NotepadApp {
-        var capacity_adjusted = capacity;
-        if (capacity_adjusted < 4096) capacity_adjusted = 4096;
-        var text: [65536]u8 = undefined;
-        text[0] = 0;
+    /// Create a new Notepad instance
+    pub fn create(x_pos: i32, y_pos: i32) NotepadApp {
         return .{
             .x = x_pos, .y = y_pos,
             .width = 640, .height = 480,
             .title = "Untitled - Notepad",
             .visible = true,
             .focused = false,
-            .text = text[0..capacity_adjusted],
+            .text = [_]u8{0} ** 65536,
             .text_len = 0,
-            .text_capacity = capacity_adjusted,
             .cursor_x = 0,
             .cursor_y = 0,
             .scroll_x = 0,
             .scroll_y = 0,
             .line_count = 1,
             .modified = false,
-            .file_path = "",
+            .file_path = [_]u8{0} ** vfs.MAX_PATH,
+            .file_path_len = 0,
+            .file_handle = null,
+            .last_error = .success,
             .caption_hover = .none,
             .show_menu = true,
             .menu_selection = -1,
         };
     }
 
+    /// Get the file path as a string slice
+    pub fn getFilePath(n: *NotepadApp) []const u8 {
+        return n.file_path[0..n.file_path_len];
+    }
+
+    /// Set file path from a string
+    pub fn setFilePath(n: *NotepadApp, path: []const u8) void {
+        n.file_path_len = @min(path.len, vfs.MAX_PATH - 1);
+        @memcpy(n.file_path[0..n.file_path_len], path[0..n.file_path_len]);
+        n.file_path[n.file_path_len] = 0;
+    }
+
+    /// Get window title with file name
+    pub fn getWindowTitle(n: *NotepadApp) []const u8 {
+        var title_buf: [128]u8 = undefined;
+        const prefix: []const u8 = if (n.modified) "*" else "";
+
+        if (n.file_path_len > 0) {
+            // Extract filename from path
+            var name_start: usize = n.file_path_len;
+            while (name_start > 0) {
+                if (n.file_path[name_start - 1] == '\\' or n.file_path[name_start - 1] == '/') {
+                    name_start += 1;
+                    break;
+                }
+                name_start -= 1;
+            }
+            const filename = n.file_path[name_start..n.file_path_len];
+            const len = std.fmt.bufPrint(&title_buf, "{s}{s} - Notepad", .{ prefix, filename }) catch "Untitled - Notepad";
+            return len;
+        }
+        return "Untitled - Notepad";
+    }
+
+    /// Open file from VFS path
+    /// Returns: NotepadError.success on success
+    pub fn openFile(n: *NotepadApp, path: []const u8) NotepadError {
+        // Close existing file if open
+        if (n.file_handle) |_| {
+            n.closeFile();
+        }
+
+        // Find or allocate a file slot
+        var file_idx: usize = 0;
+        var found = false;
+        for (0..vfs.MAX_OPEN_FILES) |i| {
+            if (!vfs.files[i].is_open) {
+                file_idx = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            n.last_error = .io_error;
+            return .io_error;
+        }
+
+        // Open the file
+        const status = vfs.open(&vfs.files[file_idx], path, .read);
+        if (status != .success) {
+            n.last_error = switch (status) {
+                .not_found => .file_not_found,
+                .access_denied => .access_denied,
+                else => .io_error,
+            };
+            return n.last_error;
+        }
+
+        n.file_handle = &vfs.files[file_idx];
+        n.setFilePath(path);
+
+        // Read file contents
+        const result = vfs.read(n.file_handle.?, &n.text);
+        if (result.status != .success) {
+            n.closeFile();
+            n.last_error = .io_error;
+            return .io_error;
+        }
+
+        n.text_len = result.bytes_read;
+        n.text[n.text_len] = 0; // Null terminate
+        n.modified = false;
+        n.updateLineCount();
+        n.last_error = .success;
+
+        klog.info("notepad: opened file '{s}' ({d} bytes)", .{ path, result.bytes_read });
+        return .success;
+    }
+
+    /// Save file to VFS path
+    /// Returns: NotepadError.success on success
+    pub fn saveFile(n: *NotepadApp, path: []const u8) NotepadError {
+        // Close existing file if open
+        if (n.file_handle) |_| {
+            n.closeFile();
+        }
+
+        // Find or allocate a file slot
+        var file_idx: usize = 0;
+        var found = false;
+        for (0..vfs.MAX_OPEN_FILES) |i| {
+            if (!vfs.files[i].is_open) {
+                file_idx = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            n.last_error = .io_error;
+            return .io_error;
+        }
+
+        // Create/open the file for writing
+        const status = vfs.open(&vfs.files[file_idx], path, .write);
+        if (status != .success and status != .success) {
+            n.last_error = switch (status) {
+                .not_found => .invalid_path,
+                .access_denied => .access_denied,
+                else => .io_error,
+            };
+            return n.last_error;
+        }
+
+        n.file_handle = &vfs.files[file_idx];
+        n.setFilePath(path);
+
+        // Write file contents
+        const text_slice = n.text[0..n.text_len];
+        const result = vfs.write(n.file_handle.?, text_slice);
+        if (result.status != .success) {
+            n.closeFile();
+            n.last_error = .io_error;
+            return .io_error;
+        }
+
+        n.modified = false;
+        n.last_error = .success;
+
+        klog.info("notepad: saved file '{s}' ({d} bytes)", .{ path, result.bytes_written });
+        return .success;
+    }
+
+    /// Save to current file (if path is set)
+    /// Returns: NotepadError.success on success
+    pub fn saveCurrentFile(n: *NotepadApp) NotepadError {
+        if (n.file_path_len == 0) {
+            return .invalid_path;
+        }
+        return n.saveFile(n.getFilePath());
+    }
+
+    /// Close the current file
+    pub fn closeFile(n: *NotepadApp) void {
+        if (n.file_handle) |handle| {
+            vfs.close(handle);
+            n.file_handle = null;
+        }
+    }
+
+    /// Get last error as string
+    pub fn getErrorString(n: *NotepadApp) []const u8 {
+        return switch (n.last_error) {
+            .success => "Success",
+            .file_not_found => "File not found",
+            .access_denied => "Access denied",
+            .io_error => "I/O error",
+            .invalid_path => "Invalid path",
+            .out_of_memory => "Out of memory",
+        };
+    }
+
+    /// Set text content
     pub fn setText(n: *NotepadApp, content: []const u8) void {
-        const len = @min(content.len, n.text_capacity - 1);
+        const len = @min(content.len, n.text.len - 1);
         @memcpy(n.text[0..len], content[0..len]);
-        n.text.len = len;
         n.text_len = len;
+        n.text[len] = 0;
         n.updateLineCount();
     }
 
+    /// Append text at current position
     pub fn appendText(n: *NotepadApp, content: []const u8) void {
-        if (n.text_len + content.len >= n.text_capacity) return;
+        if (n.text_len + content.len >= n.text.len) return;
         @memcpy(n.text[n.text_len..][0..content.len], content);
         n.text_len += content.len;
-        n.text.len = n.text_len;
+        n.text[n.text_len] = 0;
         n.updateLineCount();
         n.modified = true;
     }
 
+    /// Insert a single character at current position
     pub fn insertChar(n: *NotepadApp, ch: u8) void {
-        if (n.text_len >= n.text_capacity - 1) return;
-        if (n.cursor_y * 80 + n.cursor_x >= n.text_len) {
-            n.text[n.text_len] = ch;
-            n.text_len += 1;
-            n.text.len = n.text_len;
+        if (n.text_len >= n.text.len - 1) return;
+        // Shift existing content
+        var i = n.text_len;
+        while (i > 0) : (i -= 1) {
+            n.text[i] = n.text[i - 1];
         }
+        n.text[0] = ch;
+        n.text_len += 1;
+        n.text[n.text_len] = 0;
         n.modified = true;
         n.updateLineCount();
     }
 
+    /// Delete the last character
     pub fn deleteChar(n: *NotepadApp) void {
         if (n.text_len > 0) {
             n.text_len -= 1;
-            n.text.len = n.text_len;
             n.text[n.text_len] = 0;
+            n.modified = true;
+            n.updateLineCount();
         }
-        n.modified = true;
-        n.updateLineCount();
     }
 
     fn updateLineCount(n: *NotepadApp) void {
@@ -111,6 +314,7 @@ pub const NotepadApp = struct {
         }
     }
 
+    /// Render the Notepad window
     pub fn render(n: *NotepadApp, t: *const theme_mod.ThemeColors) void {
         if (!n.visible) return;
         n.renderWindowFrame(t);
@@ -140,10 +344,11 @@ pub const NotepadApp = struct {
 
         n.renderCaptionButtons(t);
 
-        const title_text = if (n.modified) "*" else "";
-        const title_x = wx + 8;
-        const title_y = wy + 10;
-        fb.drawTextTransparent(title_x, title_y, title_text, t.titlebar_text);
+        // Draw title with modified indicator
+        const prefix: []const u8 = if (n.modified) "* " else "";
+        const title = n.getWindowTitle();
+        fb.drawTextTransparent(wx + 8, wy + 10, prefix, t.titlebar_text);
+        fb.drawTextTransparent(wx + 8 + @as(i32, @intCast(prefix.len * 8)), wy + 10, title, t.titlebar_text);
 
         fb.draw3DRect(wx, wy, ww, wh, rgb(0xE8, 0xF0, 0xF8), rgb(0x50, 0x60, 0x70));
     }
@@ -210,7 +415,6 @@ pub const NotepadApp = struct {
         const line_height: i32 = 14;
         const char_width: i32 = 8;
         var line_start: usize = 0;
-        var line_num: i32 = 0;
         var text_y = ty + 2 - n.scroll_y;
 
         while (line_start < n.text_len and text_y < ty + th) {
@@ -226,7 +430,6 @@ pub const NotepadApp = struct {
             while (line_end < n.text_len and n.text[line_end] != '\n') line_end += 1;
             line_start += if (line_end < n.text_len and n.text[line_end] == '\n') line_end - line_start + 1 else line_end - line_start;
             text_y += line_height;
-            line_num += 1;
         }
 
         if (n.focused) {
@@ -249,8 +452,8 @@ pub const NotepadApp = struct {
         fb.drawHLine(sx, sy, sw, rgb(0xFF, 0xFF, 0xFF));
         fb.drawHLine(sx, sy + sh - 1, sw, rgb(0xC0, 0xC8, 0xD8));
 
-        var buf: [32]u8 = undefined;
-        const pos_text = std.fmt.bufPrint(&buf, "Ln {d}, Col {d}", .{ n.cursor_y + 1, n.cursor_x + 1 }) catch "";
+        var buf: [64]u8 = undefined;
+        const pos_text = std.fmt.bufPrint(&buf, "Ln {d}, Col {d} | {d} bytes", .{ n.cursor_y + 1, n.cursor_x + 1, n.text_len }) catch "";
         fb.drawTextTransparent(sx + 8, sy + 4, pos_text, rgb(0x30, 0x30, 0x40));
     }
 };

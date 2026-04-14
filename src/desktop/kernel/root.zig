@@ -10,6 +10,7 @@ pub const material = @import("material/root.zig");
 pub const cursor = @import("cursor/root.zig");
 pub const wallpaper = @import("wallpaper/root.zig");
 pub const shell = @import("shell/root.zig");
+pub const ime = @import("ime/root.zig");
 
 // ── renderer_aero ──
 pub const initDwm = renderer_aero.initDwm;
@@ -96,3 +97,20 @@ pub const cursorPixels = cursor.cursorPixels;
 // ── taskbar ──
 pub const aero_tray = taskbar.aero_tray;
 pub const taskbar_ex = taskbar.taskbar_ex;
+
+// ── IME (Input Method Framework) ──
+pub const ime_manager = ime.ime_manager;
+pub const input_context = ime.input_context;
+pub const candidates = ime.candidates;
+pub const pinyin_engine = ime.pinyin_engine;
+pub const imm_bridge = ime.imm_bridge;
+pub const ImeManager = ime.ImeManager;
+pub const InputContext = ime.InputContext;
+pub const CandidateWindow = ime.CandidateWindow;
+pub const PinyinEngine = ime.PinyinEngine;
+pub const ImmBridge = ime.ImmBridge;
+pub const ImeMode = ime.ImeMode;
+pub const CompositionState = ime.CompositionState;
+pub const initIme = ime.initIme;
+pub const getImeManager = ime.getImeManager;
+pub const global_ime_manager = ime.global_ime_manager;

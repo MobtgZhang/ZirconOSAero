@@ -37,3 +37,15 @@ pub const MediaPlayerWindow = media_player.MediaPlayerWindow;
 pub const PlayerState = media_player.PlayerState;
 pub const PlaylistManager = media_player.PlaylistManager;
 pub const Visualizer = media_player.Visualizer;
+
+// Re-export P0 enhanced accessories
+pub const SnippingTool = accessories.SnippingTool;
+pub const SnipMode = accessories.SnipMode;
+pub const WordPadWindow = accessories.WordPadWindow;
+pub const SoundRecorderWindow = accessories.SoundRecorderWindow;
+pub const SoundRecorderState = accessories.SoundRecorderState;
+pub const RecordingQuality = accessories.RecordingQuality;
+pub const AudioFormat = accessories.AudioFormat;
+pub const StickyNotesWindow = accessories.StickyNotesWindow;
+pub const StickyNote = accessories.StickyNote;
+pub const NoteColor = accessories.NoteColor;

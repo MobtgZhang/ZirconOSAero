@@ -22,3 +22,7 @@ pub const NetworkCenterApplet = @import("network_center.zig").NetworkCenterApple
 pub const DeviceManagerApplet = @import("device_manager.zig").DeviceManagerApplet;
 pub const PowerOptionsApplet = @import("power_options.zig").PowerOptionsApplet;
 pub const SystemApplet = @import("system.zig").SystemApplet;
+pub const EaseOfAccessApplet = @import("ease_of_access.zig");
+pub const BackupRestoreApplet = @import("backup_restore.zig");
+pub const IndexingOptionsApplet = @import("indexing_options.zig");
+pub const ColorManagementApplet = @import("color_management.zig");

@@ -86,10 +86,10 @@ var desktop_drag_offset_y: i32 = 0;
 var desktop_focused: bool = false;
 
 // Hover enhancement state
-var desktop_hover_start_tick: u32 = 0;  // 悬停开始时间
-var desktop_hover_tick: u32 = 0;        // 当前tick
-const HOVER_DELAY_TICKS: u32 = 5;        // 悬停延迟（帧数）
-const HOVER_ANIM_TICKS: u32 = 3;        // 悬停动画持续时间
+var desktop_hover_start_tick: usize = 0;  // 悬停开始时间（使用 usize 防止溢出）
+var desktop_hover_tick: usize = 0;        // 当前tick（使用 usize 防止溢出）
+const HOVER_DELAY_TICKS: usize = 5;        // 悬停延迟（帧数）
+const HOVER_ANIM_TICKS: usize = 3;        // 悬停动画持续时间
 
 // Layout
 const ICON_SIZE: i32 = 48;
@@ -335,13 +335,15 @@ pub fn updateDesktopHover(new_hover_index: i32) void {
 /// 获取悬停是否有效（延迟后生效）
 pub fn isHoverEffective() bool {
     if (desktop_hover_index < 0) return false;
-    return (desktop_hover_tick - desktop_hover_start_tick) >= HOVER_DELAY_TICKS;
+    // 使用 saturating_sub 防止溢出
+    const elapsed = desktop_hover_tick -| desktop_hover_start_tick;
+    return elapsed >= HOVER_DELAY_TICKS;
 }
 
 /// 获取悬停动画进度 (0.0 - 1.0)
 pub fn getHoverAnimProgress() f32 {
     if (desktop_hover_index < 0) return 0.0;
-    const elapsed = desktop_hover_tick - desktop_hover_start_tick;
+    const elapsed = desktop_hover_tick -| desktop_hover_start_tick;
     if (elapsed < HOVER_DELAY_TICKS) return 0.0;
     if (elapsed >= HOVER_DELAY_TICKS + HOVER_ANIM_TICKS) return 1.0;
     return @as(f32, @floatFromInt(elapsed - HOVER_DELAY_TICKS)) / @as(f32, @floatFromInt(HOVER_ANIM_TICKS));

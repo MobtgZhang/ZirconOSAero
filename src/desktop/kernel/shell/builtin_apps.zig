@@ -396,6 +396,10 @@ pub const BuiltinAppId = enum(u16) {
     uac_info = 58,
     explorer_libraries_hint = 59,
     generic_stub = 60,
+    sticky_notes_window = 61,
+    inkball = 62,
+    photo_gallery = 63,
+    psr = 64,
 };
 
 /// 侧栏高度有限；条目数变更时请同步 `docs/*/BuiltinApps_NT61_Roadmap.md`「与代码对齐」。
@@ -403,6 +407,7 @@ pub const ALL_PROGRAMS: []const BuiltinAppId = &.{
     .notepad,           .wordpad,   .paint,            .calculator,
     .minesweeper,       .solitaire, .spider_solitaire, .freecell,
     .hearts,            .osk,       .charmap,          .cmd_shell,
+    .sticky_notes_window,
     .dotnet_shell_host,
 };
 
@@ -478,12 +483,16 @@ pub fn titleOf(id: BuiltinAppId) []const u8 {
         .uac_info => "User Account Control",
         .explorer_libraries_hint => "Libraries",
         .generic_stub => "ZirconOSAero",
+        .sticky_notes_window => "Sticky Notes",
+        .inkball => "InkBall",
+        .photo_gallery => "Photo Gallery",
+        .psr => "Problem Steps Recorder",
     };
 }
 
 fn iconOf(id: BuiltinAppId) ?icons.IconId {
     return switch (id) {
-        .paint, .shell_pictures => .pictures,
+        .paint, .shell_pictures, .photo_gallery => .pictures,
         .notepad, .wordpad => .text_editor,
         .calculator => .calculator,
         .cmd_shell, .dotnet_shell_host, .shell_run => .terminal,
@@ -495,6 +504,9 @@ fn iconOf(id: BuiltinAppId) ?icons.IconId {
         .shell_network => .network,
         .shell_devices_printers => .printer,
         .taskmgr_focus, .eventvwr, .resmon, .perfmon => .settings,
+        .sticky_notes_window => .info,
+        .psr => .info,
+        .inkball => .info,
         else => .info,
     };
 }
@@ -1808,6 +1820,15 @@ fn renderClient(w: *WinSlot, t: *const theme.ThemeColors) void {
         .hearts => {
             fb.drawTextTransparent(x0 + 4, y0 + 6, "Hearts: trick-taking game — planned.", rgb(0x30, 0x38, 0x48));
         },
+        .sticky_notes_window => {
+            fb.drawTextTransparent(x0 + 4, y0 + 6, "Sticky Notes: click + New Note to create notes.", rgb(0x30, 0x38, 0x48));
+            fb.drawTextTransparent(x0 + 4, y0 + 22, "Available as standalone window in accessories.", rgb(0x50, 0x50, 0x60));
+            // Show a preview of the sticky note appearance
+            fb.fillRect(x0 + 10, y0 + 45, 80, 70, rgb(0xFF, 0xFF, 0xE0));
+            fb.draw3DRect(x0 + 10, y0 + 45, 80, 70, rgb(0xE0, 0xE0, 0x80), rgb(0xE0, 0xE0, 0x80));
+            fb.fillRect(x0 + 12, y0 + 47, 76, 3, rgb(0xFF, 0xD0, 0x00));
+            fb.drawTextTransparent(x0 + 16, y0 + 60, "Tap and type...", rgb(0x40, 0x40, 0x40));
+        },
         else => drawStubLines(w.app, x0, y0, body_w, t),
     }
 }
@@ -1846,6 +1867,10 @@ fn drawStubLines(id: BuiltinAppId, x0: i32, y0: i32, body_w: i32, t: *const them
         .uac_info => "UAC: elevation flow TBD — cross-ref src/se/token.zig and security roadmap.",
         .explorer_libraries_hint => "Libraries: Explorer command bar.",
         .generic_stub => "Placeholder window.",
+        .sticky_notes_window => "Sticky Notes: Win7 Aero post-it notes with multi-color support.",
+        .inkball => "InkBall: path-drawing game — planned (see roadmap).",
+        .photo_gallery => "Photo Gallery: image browser — planned (see roadmap).",
+        .psr => "Problem Steps Recorder: screen capture + steps — planned.",
         else => "Built-in stub — see BuiltinApps_NT61_Roadmap.md.",
     };
     fb.drawTextTransparentClipped(x0 + 4, y0 + 6, x0 + body_w - 4, lines, fg);

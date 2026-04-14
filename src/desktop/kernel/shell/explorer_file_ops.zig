@@ -10,7 +10,8 @@ const theme = @import("../theme/root.zig");
 const icons = @import("../icons/root.zig");
 const explorer_state = @import("../shell/explorer_state.zig");
 const builtin_apps = @import("builtin_apps.zig");
-
+const vfs = @import("../../../fs/vfs.zig");
+const klog = @import("../../../rtl/klog.zig");
 const rgb = theme.rgb;
 
 // ── File Operation Types ─────────────────────────────────────────────────────
@@ -81,12 +82,12 @@ pub fn startDrag(
 ) void {
     current_drag_state = .dragging;
     drag_operation = operation;
-    
+
     drag_source_count = @min(source_indices.len, drag_source_indices.len);
     for (0..drag_source_count) |i| {
         drag_source_indices[i] = source_indices[i];
     }
-    
+
     drag_ghost_icon = icon;
     drag_ghost_x = start_x;
     drag_ghost_y = start_y;
@@ -112,11 +113,11 @@ pub fn endDrag(_drop_x: i32, _drop_y: i32) DropEffect {
     _ = _drop_x;
     _ = _drop_y;
     const result = if (drag_over_target != null) drop_effect else .cancel;
-    
+
     current_drag_state = .none;
     show_drop_indicator = false;
     drag_over_target = null;
-    
+
     return result;
 }
 
@@ -134,14 +135,14 @@ const GHOST_OFFSET_Y: i32 = 4;
 
 pub fn renderDragGhost(x: i32, y: i32) void {
     if (current_drag_state != .dragging) return;
-    
+
     // Semi-transparent ghost at cursor position
     const ghost_x = x - GHOST_OFFSET_X;
     const ghost_y = y - GHOST_OFFSET_Y;
-    
+
     // Draw ghost icon with transparency effect
     icons.drawThemedIcon(drag_ghost_icon, ghost_x, ghost_y, 1, .aero, false);
-    
+
     // Cursor indicator based on operation
     const cursor_text = switch (drag_operation) {
         .copy => "+",
@@ -149,7 +150,7 @@ pub fn renderDragGhost(x: i32, y: i32) void {
         .link => "⤷",
         else => "",
     };
-    
+
     if (cursor_text.len > 0) {
         fb.drawTextTransparent(x + 8, y - 8, cursor_text, rgb(0x00, 0x51, 0x9E));
     }
@@ -157,11 +158,11 @@ pub fn renderDragGhost(x: i32, y: i32) void {
 
 pub fn renderDropIndicator(x: i32, y: i32, h: i32) void {
     if (!show_drop_indicator) return;
-    
+
     // Blue line indicator
     fb.drawRect(x + 2, y, 50, h, rgb(0x00, 0x51, 0x9E));
     fb.fillRect(x + 4, y, 48, h - 1, rgb(0x00, 0x51, 0x9E));
-    
+
     drop_indicator_x = x;
     drop_indicator_y = y;
     drop_indicator_h = h;
@@ -186,12 +187,12 @@ pub fn highlightDropTarget(_target_idx: usize, highlight: bool) void {
 pub fn startRename(item_index: usize, old_name: []const u8) void {
     rename_active = true;
     rename_index = item_index;
-    
+
     const len = @min(old_name.len, rename_text.len);
     @memcpy(rename_text[0..len], old_name[0..len]);
     rename_len = len;
     rename_cursor_pos = len;
-    
+
     const old_len = @min(old_name.len, rename_old_name_buf.len);
     @memcpy(rename_old_name_buf[0..old_len], old_name[0..old_len]);
     rename_old_name_len = old_len;
@@ -230,16 +231,16 @@ pub fn setRenameCursorPos(pos: usize) void {
 
 pub fn commitRename() bool {
     if (!rename_active) return false;
-    
+
     // Validate the new name
     if (rename_len == 0) {
         cancelRename();
         return false;
     }
-    
+
     // TODO: Call VFS rename operation
     // const success = vfs.rename(rename_old_name_buf[0..rename_old_name_len], rename_text[0..rename_len]);
-    
+
     rename_active = false;
     return true;
 }
@@ -257,16 +258,16 @@ pub fn renderRenameOverlay(
     h: i32,
 ) void {
     if (!rename_active) return;
-    
+
     // Background
     fb.fillRect(x, y, w, h, rgb(0xFF, 0xFF, 0xFF));
     fb.drawRect(x, y, w, h, rgb(0x00, 0x51, 0x9E));
-    
+
     // Text
     const text_x = x + 4;
     const text_y = y + (h - 14) / 2;
     fb.drawTextTransparent(text_x, text_y, rename_text[0..rename_len], rgb(0x18, 0x18, 0x18));
-    
+
     // Cursor
     const cursor_x = text_x + fb.textWidth(rename_text[0..rename_cursor_pos]);
     fb.fillRect(cursor_x, y + 2, 2, h - 4, rgb(0x00, 0x51, 0x9E));

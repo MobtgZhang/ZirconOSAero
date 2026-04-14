@@ -20,6 +20,7 @@ pub const magnifier = @import("magnifier.zig");
 pub const disk_cleanup = @import("disk_cleanup.zig");
 pub const sound_recorder = @import("sound_recorder.zig");
 pub const disk_defrag = @import("disk_defrag.zig");
+pub const sticky_notes = @import("sticky_notes.zig");
 pub const accessories_strings = @import("accessories_strings.zig");
 
 // Re-export types
@@ -40,4 +41,10 @@ pub const OnScreenKeyboard = on_screen_keyboard.OSKWindow;
 pub const MagnifierWindow = magnifier.MagnifierWindow;
 pub const DiskCleanupWindow = disk_cleanup.DiskCleanupWindow;
 pub const SoundRecorderWindow = sound_recorder.SoundRecorderWindow;
+pub const SoundRecorderState = sound_recorder.RecorderState;
+pub const RecordingQuality = sound_recorder.RecordingQuality;
+pub const AudioFormat = sound_recorder.AudioFormat;
 pub const DiskDefragWindow = disk_defrag.DiskDefragWindow;
+pub const StickyNotesWindow = sticky_notes.StickyNotesWindow;
+pub const StickyNote = sticky_notes.StickyNote;
+pub const NoteColor = sticky_notes.NoteColor;

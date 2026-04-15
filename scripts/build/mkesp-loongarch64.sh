@@ -131,13 +131,12 @@ fi
 
 # 多数 QEMU LoongArch 固件无法从 Boot0001 直启 virtio 盘上的 PE，会退回内置 Shell。
 # 在 ESP 根目录放置 startup.nsh：Shell 倒计时结束后自动执行 ZBM（勿按 ESC 跳过）。
-# 先 cd 到 EFI\BOOT 再执行 BOOTLOONGARCH64.EFI；直接写路径 EFI/BOOT/xxx 会被 Shell 当作命令名而报错。
+# 使用单行格式直接执行，避免多行脚本的兼容性问题。
 if [ -n "${BOOT_EFI}" ] && [ -f "${BOOT_EFI}" ]; then
 	_STARTUP_NSH="$(mktemp)"
 	{
-		printf '%s\r\n' 'fs0:'
-		printf '%s\r\n' 'cd \EFI\BOOT'
-		printf '%s\r\n' 'BOOTLOONGARCH64.EFI'
+		# 单行脚本：在 fs0 上执行 ZBM
+		printf 'fs0:\\EFI\\BOOT\\BOOTLOONGARCH64.EFI\r\n'
 	} > "${_STARTUP_NSH}"
 	mcopy -i "$OUT@@$OFF" "${_STARTUP_NSH}" ::/startup.nsh
 	rm -f "${_STARTUP_NSH}"

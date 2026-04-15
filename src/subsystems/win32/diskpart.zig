@@ -1114,6 +1114,7 @@ fn fsTypeStr(fs: vfs.FsType) []const u8 {
         .ntfs => "NTFS",
         .exfat => "exFAT",
         .devfs => "DevFS",
+        .initfs => "InitFS",
         .iso9660 => "ISO9660",
         .udf => "UDF",
         .refs => "ReFS",

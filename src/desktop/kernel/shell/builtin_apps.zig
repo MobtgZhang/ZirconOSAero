@@ -1350,6 +1350,48 @@ fn charmapClick(cx: i32, cy: i32, px: i32, py: i32) void {
     }
 }
 
+/// Handle Explorer navigation apps - opens Explorer window at specific location
+fn handleExplorerNavigation(id: BuiltinAppId) bool {
+    const explorer_state = @import("explorer_state.zig");
+    
+    switch (id) {
+        .shell_documents => {
+            explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Documents");
+            return true;
+        },
+        .shell_pictures => {
+            explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Pictures");
+            return true;
+        },
+        .shell_music => {
+            explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Music");
+            return true;
+        },
+        .shell_videos => {
+            explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Videos");
+            return true;
+        },
+        .shell_downloads => {
+            explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Downloads");
+            return true;
+        },
+        .games_folder => {
+            explorer_state.explorerNavigateToPath('C', "Program Files");
+            return true;
+        },
+        .shell_computer => {
+            explorer_state.setExplorerView(.computer);
+            return true;
+        },
+        .shell_network => {
+            // Network view - currently just opens Computer view
+            explorer_state.setExplorerView(.computer);
+            return true;
+        },
+        else => return false,
+    }
+}
+
 fn encodeUtf8Char(cp: u21, out: *[4]u8) usize {
     if (cp < 0x80) {
         out[0] = @truncate(cp);
@@ -1374,10 +1416,25 @@ fn encodeUtf8Char(cp: u21, out: *[4]u8) usize {
 }
 
 pub fn launch(id: BuiltinAppId) void {
+    // Handle Explorer navigation apps (open Explorer window at specific location)
+    if (handleExplorerNavigation(id)) return;
+    
     if (id == .taskmgr_focus) {
         klog.info("builtin: Task Manager — Ctrl+Shift+Esc or tray", .{});
         return;
     }
+    
+    // Handle CMD Shell - create a full GUI CMD window
+    if (id == .cmd_shell) {
+        const cmd_module = @import("cmd_shell_instance.zig");
+        if (cmd_module.createCmdWindow()) |_| {
+            klog.info("builtin: launch CMD Shell GUI", .{});
+        } else {
+            klog.err("builtin: failed to launch CMD Shell GUI", .{});
+        }
+        return;
+    }
+    
     var free: ?usize = null;
     for (&slots, 0..) |*sl, i| {
         if (!sl.open) {
@@ -1454,7 +1511,29 @@ pub fn launch(id: BuiltinAppId) void {
 pub fn pollKeyboardToFocused() bool {
     const arch_mod = @import("../../../arch.zig");
     var dirty = false;
+    
+    // 首先检查是否有 CMD 窗口聚焦，如果有则优先处理 CMD 输入
+    const cmd_module = @import("cmd_shell_instance.zig");
     while (arch_mod.readInputChar()) |c| {
+        // CMD Shell 键盘输入处理
+        if (cmd_module.getFocusedCmdIndex()) |_| {
+            if (c == 0x08) { // Backspace
+                cmd_module.cmdBackspace();
+                dirty = true;
+            } else if (c == 0x0D or c == 0x0A) { // Enter
+                cmd_module.cmdExecuteCommand();
+                dirty = true;
+            } else if (c == 0x1B) { // Escape
+                cmd_module.cmdClearInput();
+                dirty = true;
+            } else if (c >= 32 and c < 127) { // Printable ASCII
+                cmd_module.cmdAppendChar(c);
+                dirty = true;
+            }
+            continue;
+        }
+        
+        // 记事本/WordPad 键盘输入处理
         if (focused_slot >= slots.len or !slots[focused_slot].open) continue;
         const app = slots[focused_slot].app;
         if (app != .notepad and app != .wordpad) continue;

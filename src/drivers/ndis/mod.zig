@@ -16,17 +16,12 @@
 // License along with this library; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
-//! Desktop shared root (cross-stack consolidation entry).
-//! 架构分层：
-//! - aero: 用户空间Aero桌面环境（完整DWM合成器、窗口管理器、Shell应用）
-//! - kernel: 内核空间桌面渲染路径（帧缓冲渲染、内核级UI组件、快速响应路径）
-//! - 公共组件: strings、icons、dwm、events等跨层共享定义
+//!
+//! NDIS 6.20 模块导出
 
-pub const strings = @import("strings/root.zig");
-pub const icons = @import("icons/root.zig");
-pub const dwm = @import("dwm/root.zig");
-pub const events = @import("events.zig");
-pub const applications = @import("applications/root.zig");
+pub const types = @import("ndis_types.zig");
+pub const buffer = @import("ndis_buffer.zig");
+pub const protocol = @import("ndis_protocol.zig");
 
-pub const aero = @import("aero/src/root.zig");
-pub const kernel_desktop = @import("kernel/root.zig");
+// 常用类型已通过pub const导出，使用时可直接通过import访问
+// 例如：const ndis = @import("ndis/mod.zig"); 使用ndis.types.NDIS_*

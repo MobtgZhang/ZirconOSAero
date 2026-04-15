@@ -142,6 +142,190 @@ pub const UdpHeader = struct {
     checksum: u16,
 };
 
+/// 计算网络数据校验和（RFC 1071），适用于IP/ICMP/TCP/UDP等
+pub fn calculateChecksum(data: []const u8, initial: u16) u16 {
+    var sum: u32 = initial;
+    var i: usize = 0;
+
+    while (i < data.len - 1) : (i += 2) {
+        const word = std.mem.readInt(u16, data[i .. i + 2], .big);
+        sum += word;
+    }
+
+    // 处理奇数字节
+    if (i < data.len) {
+        const last_byte = data[i];
+        sum += @as(u16, last_byte) << 8;
+    }
+
+    // 折叠进位到16位
+    while (sum >> 16 != 0) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return ~@as(u16, @truncate(sum));
+}
+
+/// ICMP Echo 请求/应答完整结构
+pub const IcmpEchoMessage = struct {
+    header: IcmpHeader,
+    identifier: u16,
+    sequence: u16,
+    data: []const u8,
+};
+
+/// 构建ICMP Echo Request（ping请求）数据包
+pub fn buildIcmpEchoRequest(identifier: u16, sequence: u16, data: []const u8, out_buffer: []u8) ?usize {
+    const total_len = 8 + data.len;
+    if (out_buffer.len < total_len) return null;
+
+    // 填写ICMP头部
+    out_buffer[0] = ICMP_ECHO_REQUEST;
+    out_buffer[1] = 0; // code 0 for echo
+    std.mem.writeInt(u16, out_buffer[2..4], 0, .big); // 校验和先填0
+    std.mem.writeInt(u16, out_buffer[4..6], identifier, .big);
+    std.mem.writeInt(u16, out_buffer[6..8], sequence, .big);
+
+    // 复制数据
+    @memcpy(out_buffer[8 .. 8 + data.len], data);
+
+    // 计算校验和
+    const checksum = calculateChecksum(out_buffer[0..total_len], 0);
+    std.mem.writeInt(u16, out_buffer[2..4], checksum, .big);
+
+    return total_len;
+}
+
+/// 解析ICMP Echo Reply消息
+pub fn parseIcmpEchoReply(bytes: []const u8) ?IcmpEchoMessage {
+    if (bytes.len < 8) return null;
+
+    const header = parseIcmpHeader(bytes) orelse return null;
+    if (header.icmp_type != ICMP_ECHO_REPLY or header.code != 0) return null;
+
+    const identifier = std.mem.readInt(u16, bytes[4..6], .big);
+    const sequence = std.mem.readInt(u16, bytes[6..8], .big);
+
+    return .{
+        .header = header,
+        .identifier = identifier,
+        .sequence = sequence,
+        .data = bytes[8..],
+    };
+}
+
+/// 验证ICMP数据包校验和是否正确
+pub fn validateIcmpChecksum(icmp_packet: []const u8) bool {
+    if (icmp_packet.len < 4) return false;
+    return calculateChecksum(icmp_packet, 0) == 0;
+}
+
+/// RFC 793 TCP 首部（20字节固定头）
+pub const TcpHeader = struct {
+    src_port: u16,
+    dst_port: u16,
+    seq_num: u32,
+    ack_num: u32,
+    data_offset: u4,
+    reserved: u6,
+    flags: u8,
+    window_size: u16,
+    checksum: u16,
+    urgent_pointer: u16,
+};
+
+/// TCP 标志位定义
+pub const TCP_FLAG_FIN: u8 = 0x01;
+pub const TCP_FLAG_SYN: u8 = 0x02;
+pub const TCP_FLAG_RST: u8 = 0x04;
+pub const TCP_FLAG_PSH: u8 = 0x08;
+pub const TCP_FLAG_ACK: u8 = 0x10;
+pub const TCP_FLAG_URG: u8 = 0x20;
+
+/// 解析TCP首部
+pub fn parseTcpHeader(bytes: []const u8) ?TcpHeader {
+    if (bytes.len < 20) return null;
+
+    const data_offset_reserved = bytes[12];
+    const data_offset = @as(u4, @truncate(data_offset_reserved >> 4));
+
+    if (data_offset < 5) return null; // TCP首部至少20字节（5*4）
+
+    return .{
+        .src_port = std.mem.readInt(u16, bytes[0..2], .big),
+        .dst_port = std.mem.readInt(u16, bytes[2..4], .big),
+        .seq_num = std.mem.readInt(u32, bytes[4..8], .big),
+        .ack_num = std.mem.readInt(u32, bytes[8..12], .big),
+        .data_offset = data_offset,
+        .reserved = @as(u6, @truncate(data_offset_reserved & 0x0F)),
+        .flags = bytes[13],
+        .window_size = std.mem.readInt(u16, bytes[14..16], .big),
+        .checksum = std.mem.readInt(u16, bytes[16..18], .big),
+        .urgent_pointer = std.mem.readInt(u16, bytes[18..20], .big),
+    };
+}
+
+/// TCP伪首部，用于计算TCP校验和
+pub const TcpPseudoHeader = struct {
+    src_ip: u32,
+    dst_ip: u32,
+    zero: u8,
+    protocol: u8,
+    tcp_length: u16,
+};
+
+/// 计算TCP校验和
+pub fn calculateTcpChecksum(src_ip: u32, dst_ip: u32, tcp_segment: []const u8) u16 {
+    var pseudo = TcpPseudoHeader{
+        .src_ip = src_ip,
+        .dst_ip = dst_ip,
+        .zero = 0,
+        .protocol = IPPROTO_TCP,
+        .tcp_length = std.mem.nativeToBig(u16, @as(u16, @truncate(tcp_segment.len))),
+    };
+
+    var sum: u32 = 0;
+
+    // 计算伪首部校验和
+    const pseudo_bytes = std.mem.asBytes(&pseudo);
+    var i: usize = 0;
+    while (i < pseudo_bytes.len) : (i += 2) {
+        const word = std.mem.readInt(u16, pseudo_bytes[i .. i + 2], .big);
+        sum += word;
+    }
+
+    // 计算TCP段校验和
+    return calculateChecksum(tcp_segment, @as(u16, @truncate(sum & 0xFFFF)));
+}
+
+/// 构建TCP SYN报文（连接请求）
+pub fn buildTcpSynPacket(src_port: u16, dst_port: u16, seq_num: u32, window_size: u16, src_ip: u32, dst_ip: u32, out_buffer: []u8) ?usize {
+    if (out_buffer.len < 20) return null;
+
+    // 填写TCP头部
+    std.mem.writeInt(u16, out_buffer[0..2], src_port, .big);
+    std.mem.writeInt(u16, out_buffer[2..4], dst_port, .big);
+    std.mem.writeInt(u32, out_buffer[4..8], seq_num, .big);
+    std.mem.writeInt(u32, out_buffer[8..12], 0, .big); // ACK号为0
+    out_buffer[12] = 0x50; // 数据偏移5*4=20字节，保留位0
+    out_buffer[13] = TCP_FLAG_SYN; // SYN标志位
+    std.mem.writeInt(u16, out_buffer[14..16], window_size, .big);
+    std.mem.writeInt(u16, out_buffer[16..18], 0, .big); // 校验和先填0
+    std.mem.writeInt(u16, out_buffer[18..20], 0, .big); // 紧急指针
+
+    // 计算校验和
+    const checksum = calculateTcpChecksum(src_ip, dst_ip, out_buffer[0..20]);
+    std.mem.writeInt(u16, out_buffer[16..18], checksum, .big);
+
+    return 20;
+}
+
+/// 验证TCP SYN-ACK应答，判断连接是否成功建立
+pub fn isTcpSynAck(tcp_header: TcpHeader, expected_ack_num: u32) bool {
+    return (tcp_header.flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK) and
+        tcp_header.ack_num == expected_ack_num;
+}
+
 pub fn parseUdpHeader(bytes: []const u8) ?UdpHeader {
     if (bytes.len < 8) return null;
     return .{

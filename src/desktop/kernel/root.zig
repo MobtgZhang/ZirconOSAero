@@ -100,6 +100,39 @@ pub const WinState = shell.WinState;
 pub const getOpenWindowCount = shell.getOpenWindowCount;
 pub const getFocusedSlotIndex = shell.getFocusedSlotIndex;
 
+// ── CMD Shell Instance ──
+pub const cmd_shell_instance = shell.cmd_shell_instance;
+pub const createCmdWindow = shell.createCmdWindow;
+pub const destroyCmdWindow = shell.destroyCmdWindow;
+pub const getFocusedCmdIndex = shell.getFocusedCmdIndex;
+pub const setFocusedCmdIndex = shell.setFocusedCmdIndex;
+pub const moveCmdWindow = shell.moveCmdWindow;
+pub const resizeCmdWindow = shell.resizeCmdWindow;
+pub const minimizeCmdWindow = shell.minimizeCmdWindow;
+pub const maximizeCmdWindow = shell.maximizeCmdWindow;
+pub const restoreCmdWindow = shell.restoreCmdWindow;
+pub const updateCmdCaptionHover = shell.updateCmdCaptionHover;
+pub const cmdAppendChar = shell.cmdAppendChar;
+pub const cmdBackspace = shell.cmdBackspace;
+pub const cmdClearInput = shell.cmdClearInput;
+pub const cmdExecuteCommand = shell.cmdExecuteCommand;
+pub const renderAllCmdInstances = shell.renderAllCmdInstances;
+pub const getCmdInstanceCount = shell.getCmdInstanceCount;
+pub const getCmdInstance = shell.getCmdInstance;
+pub const anyCmdWindowVisible = shell.anyCmdWindowVisible;
+pub const hitTestCmdWindow = shell.hitTestCmdWindow;
+pub const hitTestCmdCaption = shell.hitTestCmdCaption;
+pub const hitTestCmdCloseButton = shell.hitTestCmdCloseButton;
+pub const focusCmdWindowAtPosition = shell.focusCmdWindowAtPosition;
+pub const getCmdInstanceAtPosition = shell.getCmdInstanceAtPosition;
+pub const startCmdWindowDrag = shell.startCmdWindowDrag;
+pub const processCmdWindowDrag = shell.processCmdWindowDrag;
+pub const endCmdWindowDrag = shell.endCmdWindowDrag;
+pub const isCmdWindowDragging = shell.isCmdWindowDragging;
+pub const getCmdDragIndex = shell.getCmdDragIndex;
+pub const CmdWindowInstance = shell.CmdWindowInstance;
+pub const CmdCaptionButtonType = shell.CaptionButtonType;
+
 // ── wallpaper ──
 pub const wallpaper_bitmap = wallpaper.wallpaper_bitmap;
 pub const drawPreset = wallpaper.drawPreset;

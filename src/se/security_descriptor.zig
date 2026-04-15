@@ -17,7 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! Security Descriptor (SECURITY_DESCRIPTOR) and ACL/ACE implementation
-//! Compatible with NT6.1 security descriptor format specification
+//! Compatible with NT6.1.7601 security descriptor format specification
 //! Clean-room implementation based on Microsoft public documentation
 
 const std = @import("std");

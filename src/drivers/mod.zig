@@ -64,6 +64,9 @@ pub const storage = if (is_x86) struct {
     pub const ahci = @import("storage/ahci.zig");
     pub const nvme_pci = @import("storage/nvme_pci.zig");
     pub const boot_probe = @import("storage/boot_probe.zig");
+    // 注意: scsi 和 storage_port 模块暂时注释掉，因为它们依赖尚未完全实现的 irp 和 ntstatus 模块
+    // pub const scsi = @import("storage/scsi.zig");
+    // pub const storage_port = @import("storage/storage_port.zig");
 } else struct {};
 
 pub const video = struct {
@@ -110,6 +113,17 @@ pub const net = struct {
     pub const minimal_stack = @import("net/minimal_stack.zig");
     pub const virtio_net_pci = @import("net/virtio_net_pci.zig");
 };
+
+// 注意: ndis_framework 和 wdf 模块暂时注释掉，因为它们依赖尚未完全实现的内核模块
+// 这些模块将在内核对应模块实现后启用
+// pub const ndis_framework = @import("ndis/mod.zig");
+// pub const wdf = struct {
+//     pub const framework = @import("wdf/mod.zig"),
+// };
+
+// 注意: scsi 和 storage_port 模块暂时注释掉，因为它们依赖尚未完全实现的 irp 和 ntstatus 模块
+// pub const scsi = @import("storage/scsi.zig");
+// pub const storage_port = @import("storage/storage_port.zig");
 
 var drivers_initialized: bool = false;
 

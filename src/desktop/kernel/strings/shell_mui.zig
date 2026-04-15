@@ -206,6 +206,7 @@ pub fn fsTypeLabel(fs: @import("../../../fs/vfs.zig").FsType, scratch: []u8) []c
         .ntfs => loadString(.ex_fs_ntfs, scratch),
         .exfat => loadString(.ex_fs_ntfs, scratch),
         .devfs => loadString(.ex_fs_devfs, scratch),
+        .initfs => loadString(.ex_fs_devfs, scratch),
         .iso9660, .udf, .refs, .unknown => loadString(.ex_fs_unknown, scratch),
     };
 }

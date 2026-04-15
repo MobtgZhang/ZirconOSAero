@@ -319,7 +319,7 @@ pub fn mapFlagsFromNtProtect(prot: u32) MapFlags {
     return .{ .writable = writable, .user = true, .executable = executable };
 }
 
-/// NT6.1 风格的虚拟内存分配（MEM_RESERVE / MEM_COMMIT 路径）。
+/// NT6.1.7601 风格的虚拟内存分配（MEM_RESERVE / MEM_COMMIT 路径）。
 /// 测试存根：验证 API 存在性；实际实现在 syscall 层。
 /// 参数：
 /// - `space`：目标地址空间

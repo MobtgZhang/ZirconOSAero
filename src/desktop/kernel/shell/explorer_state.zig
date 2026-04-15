@@ -208,6 +208,45 @@ pub fn explorerNavigateToSubdirectory(letter: u8, entry_name: []const u8) void {
     explorer_scroll_offset = 0;
 }
 
+/// Navigate to an arbitrary path (e.g., "Users\\Administrator\\Documents")
+pub fn explorerNavigateToPath(letter: u8, subpath: []const u8) void {
+    explorerPushNavHistory();
+    
+    explorer_has_subdir = true;
+    explorer_subdir.letter = letter;
+    
+    // Copy the full subpath
+    const copy_len = @min(subpath.len, explorer_subdir.path.len);
+    @memcpy(explorer_subdir.path[0..copy_len], subpath[0..copy_len]);
+    explorer_subdir.path_len = copy_len;
+    
+    // Parse path into parts for depth tracking
+    explorer_subdir.depth = 0;
+    var remaining = subpath[0..copy_len];
+    while (remaining.len > 0 and explorer_subdir.depth < explorer_subdir.path_parts.len) {
+        // Skip leading backslashes
+        while (remaining.len > 0 and (remaining[0] == '\\' or remaining[0] == '/')) {
+            remaining = remaining[1..];
+        }
+        if (remaining.len == 0) break;
+        
+        // Find next backslash
+        var end: usize = 0;
+        while (end < remaining.len and remaining[end] != '\\' and remaining[end] != '/') {
+            end += 1;
+        }
+        
+        explorer_subdir.path_parts[explorer_subdir.depth] = remaining[0..end];
+        explorer_subdir.depth += 1;
+        remaining = if (end < remaining.len) remaining[end + 1..] else "";
+    }
+    
+    setExplorerView(.computer);
+    explorer_current_location = .{ .drive_root = letter };
+    explorer_list_selected = EXPLORER_LIST_SEL_NONE;
+    explorer_scroll_offset = 0;
+}
+
 pub fn explorerNavigateUpFromSubdirectory() void {
     if (!explorer_has_subdir or explorer_subdir.depth == 0) {
         explorer_has_subdir = false;

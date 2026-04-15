@@ -1,1 +1,0 @@
-../tests/host/rtl_verify_version_info_host.zig

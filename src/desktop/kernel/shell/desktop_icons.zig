@@ -288,6 +288,61 @@ pub fn initDesktopIcons() void {
         .custom_path = null,
     };
     desktop_icon_count += 1;
+
+    // 第2列，第1行：Documents（文档）
+    desktop_icons[desktop_icon_count] = .{
+        .kind = .documents,
+        .label = "Documents",
+        .icon = .documents,
+        .x = DESKTOP_PADDING + ICON_STEP_X,
+        .y = DESKTOP_PADDING,
+        .custom_path = "C:\\Users\\Administrator\\Documents",
+    };
+    desktop_icon_count += 1;
+
+    // 第2列，第2行：Pictures（图片）
+    desktop_icons[desktop_icon_count] = .{
+        .kind = .pictures,
+        .label = "Pictures",
+        .icon = .pictures,
+        .x = DESKTOP_PADDING + ICON_STEP_X,
+        .y = DESKTOP_PADDING + ICON_STEP_Y,
+        .custom_path = "C:\\Users\\Administrator\\Pictures",
+    };
+    desktop_icon_count += 1;
+
+    // 第2列，第3行：Terminal（命令行）
+    desktop_icons[desktop_icon_count] = .{
+        .kind = .terminal,
+        .label = "Terminal",
+        .icon = .terminal,
+        .x = DESKTOP_PADDING + ICON_STEP_X,
+        .y = DESKTOP_PADDING + ICON_STEP_Y * 2,
+        .custom_path = null,
+    };
+    desktop_icon_count += 1;
+
+    // 第3列，第1行：Browser（浏览器）
+    desktop_icons[desktop_icon_count] = .{
+        .kind = .browser,
+        .label = "Internet Explorer",
+        .icon = .browser,
+        .x = DESKTOP_PADDING + ICON_STEP_X * 2,
+        .y = DESKTOP_PADDING,
+        .custom_path = null,
+    };
+    desktop_icon_count += 1;
+
+    // 第3列，第2行：Settings（控制面板）
+    desktop_icons[desktop_icon_count] = .{
+        .kind = .settings,
+        .label = "Control Panel",
+        .icon = .settings,
+        .x = DESKTOP_PADDING + ICON_STEP_X * 2,
+        .y = DESKTOP_PADDING + ICON_STEP_Y,
+        .custom_path = null,
+    };
+    desktop_icon_count += 1;
 }
 
 // ── Desktop Icon State ─────────────────────────────────────────────────────────
@@ -526,12 +581,12 @@ pub fn handleDesktopIconOpen(icon: DesktopIcon) void {
             // Open network view
         },
         .documents => {
-            explorer_state.setExplorerView(.libraries);
-            explorer_state.explorerNavigateToLibrary(.documents);
+            // Navigate to user's Documents folder
+            explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Documents");
         },
         .pictures => {
-            explorer_state.setExplorerView(.libraries);
-            explorer_state.explorerNavigateToLibrary(.pictures);
+            // Navigate to user's Pictures folder
+            explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Pictures");
         },
         .terminal => {
             builtin_apps.launch(.cmd_shell);
@@ -543,7 +598,16 @@ pub fn handleDesktopIconOpen(icon: DesktopIcon) void {
             builtin_apps.launch(.control_panel);
         },
         .custom => {
-            // Open custom path
+            // Open custom path in Explorer
+            if (icon.custom_path) |path| {
+                // Parse custom path to get drive letter and subpath
+                if (path.len >= 3 and path[1] == ':') {
+                    const letter = if (path[0] >= 'a' and path[0] <= 'z') 
+                        path[0] - 32 else path[0];
+                    const subpath = if (path.len > 3) path[3..] else "";
+                    explorer_state.explorerNavigateToPath(letter, subpath);
+                }
+            }
         },
         .user_files => {},
     }

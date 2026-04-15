@@ -52,7 +52,29 @@ pub const TIMER_TICK_MS: u64 = 10;
 
 pub const DEBUG_MODE: bool = @import("build_options").debug;
 
+/// Release 模式最小日志级别：仅显示 ERROR 及以上
 const RELEASE_MIN_LEVEL: LogLevel = .err;
+
+/// Desktop 模式最小日志级别：显示 WARNING 及以上（桌面会话时隐藏 INFO/DEBUG 日志）
+var desktop_mode: bool = false;
+var desktop_min_level: LogLevel = .warning;
+
+pub fn setDesktopMode(enabled: bool) void {
+    desktop_mode = enabled;
+}
+
+pub fn setDesktopMinLevel(level: LogLevel) void {
+    desktop_min_level = level;
+}
+
+pub fn shouldLog(level: LogLevel) bool {
+    if (DEBUG_MODE) return true;
+    // 桌面模式下使用更严格的日志级别
+    if (desktop_mode) {
+        return @intFromEnum(level) <= @intFromEnum(desktop_min_level);
+    }
+    return @intFromEnum(level) <= @intFromEnum(RELEASE_MIN_LEVEL);
+}
 
 /// Kept for backward compatibility — still 19, but no longer used for padding.
 pub const COMPONENT_FIELD_WIDTH: usize = 19;
@@ -64,11 +86,6 @@ var log_elapsed_us: std.atomic.Value(u64) = .init(0);
 
 pub fn notifyTimerTick() void {
     _ = log_elapsed_us.fetchAdd(TIMER_TICK_MS * 1000, .monotonic);
-}
-
-pub fn shouldLog(level: LogLevel) bool {
-    if (DEBUG_MODE) return true;
-    return @intFromEnum(level) <= @intFromEnum(RELEASE_MIN_LEVEL);
 }
 
 // ── Ticket spinlock ──────────────────────────────────────────────────

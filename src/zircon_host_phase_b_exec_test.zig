@@ -1,1 +1,0 @@
-../tests/host/zircon_host_phase_b_exec_test.zig

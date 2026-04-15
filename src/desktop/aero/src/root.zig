@@ -43,11 +43,16 @@ pub const pe_icon_resource = @import("pe_icon_resource.zig");
 pub const pe_icon_loader = @import("pe_icon_loader.zig");
 pub const shell_icons_manifest = @import("shell_icons_manifest.zig");
 pub const font_loader = @import("font_loader.zig");
+pub const window_manager = @import("window_manager.zig");
+pub const compositor = @import("compositor.zig");
+pub const renderer = @import("renderer.zig");
+pub const input = @import("input.zig");
+pub const cursor = @import("cursor.zig");
 
 // ── Theme identity ──
 
 pub const theme_name = "Aero";
-pub const theme_version = "1.2.0";
+pub const theme_version = "1.3.0";
 pub const theme_description = "ZirconAero — glass desktop (Harmony wallpaper, taskbar, tray, gadgets, compositor blur)";
 
 // ── Available theme variants ──

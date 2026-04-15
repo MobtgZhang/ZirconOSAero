@@ -96,19 +96,23 @@ pub const FileStatus = enum(u32) {
 
 pub const FsType = enum(u8) {
     unknown = 0,
-    fat12 = 1,
-    fat16 = 2,
-    fat32 = 3,
-    ntfs = 4,
-    exfat = 5,
-    devfs = 6,
-    iso9660 = 7,
-    udf = 8,
-    refs = 9,
+    initfs = 1,
+    fat12 = 2,
+    fat16 = 3,
+    fat32 = 4,
+    ntfs = 5,
+    exfat = 6,
+    devfs = 7,
+    iso9660 = 8,
+    udf = 9,
+    refs = 10,
 };
 
 pub const MAX_OPEN_FILES: usize = 128;
 pub const MAX_MOUNT_POINTS: usize = 16;
+
+/// VFS 文件句柄（等同于 `*FileObject`）
+pub const Handle = *FileObject;
 
 pub const FsOps = struct {
     open: ?*const fn (*FileObject, []const u8, FileAccessMode) FileStatus = null,

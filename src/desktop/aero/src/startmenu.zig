@@ -21,6 +21,7 @@
 //! link, right column has libraries and system links.
 //! Glass border, search box at bottom, user header.
 
+const std = @import("std");
 const theme = @import("theme.zig");
 
 /// 动画状态
@@ -85,29 +86,76 @@ pub fn isFullyOpen() bool {
     return anim_state == .open and anim_progress >= 1.0;
 }
 
-pub const MenuItem = struct {
-    name: [32]u8 = [_]u8{0} ** 32,
-    name_len: u8 = 0,
-    icon_id: u16 = 0,
-    is_separator: bool = false,
-    is_system_link: bool = false,
-};
-
-const MAX_LEFT_ITEMS: usize = 16;
+const MAX_PINNED_ITEMS: usize = 16;
+const MAX_RECENT_PROGRAMS: usize = 12;
+const MAX_RECENT_DOCUMENTS: usize = 16;
+const MAX_SEARCH_RESULTS: usize = 20;
 const MAX_RIGHT_ITEMS: usize = 16;
 
-var left_items: [MAX_LEFT_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_LEFT_ITEMS;
-var left_count: usize = 0;
+/// 菜单项类型
+const MenuItemType = enum {
+    pinned,
+    recent_program,
+    recent_document,
+    system_link,
+    search_result,
+    separator,
+};
 
+/// 菜单项结构
+pub const MenuItem = struct {
+    name: [64]u8 = [_]u8{0} ** 64,
+    name_len: u8 = 0,
+    icon_id: u16 = 0,
+    item_type: MenuItemType = .system_link,
+    is_separator: bool = false,
+    /// 用于存储目标路径/命令，比如程序路径、文档路径等
+    target: [256]u8 = [_]u8{0} ** 256,
+    target_len: u16 = 0,
+    /// 向后兼容字段
+    pub fn is_system_link(self: *const MenuItem) bool {
+        return self.item_type == .system_link;
+    }
+};
+
+/// 固定程序列表
+var pinned_items: [MAX_PINNED_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_PINNED_ITEMS;
+var pinned_count: usize = 0;
+
+/// 最近使用程序列表
+var recent_programs: [MAX_RECENT_PROGRAMS]MenuItem = [_]MenuItem{.{}} ** MAX_RECENT_PROGRAMS;
+var recent_programs_count: usize = 0;
+
+/// 最近文档列表
+var recent_documents: [MAX_RECENT_DOCUMENTS]MenuItem = [_]MenuItem{.{}} ** MAX_RECENT_DOCUMENTS;
+var recent_documents_count: usize = 0;
+
+/// 右栏系统链接
 var right_items: [MAX_RIGHT_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_RIGHT_ITEMS;
 var right_count: usize = 0;
+
+/// 搜索结果
+var search_results: [MAX_SEARCH_RESULTS]MenuItem = [_]MenuItem{.{}} ** MAX_SEARCH_RESULTS;
+var search_results_count: usize = 0;
 
 var visible: bool = false;
 var search_text: [128]u8 = [_]u8{0} ** 128;
 var search_len: usize = 0;
 
+/// 电源操作类型
+pub const PowerAction = enum {
+    shutdown,
+    restart,
+    sleep,
+    hibernate,
+    logoff,
+    lock,
+};
+
 pub fn init() void {
-    left_count = 0;
+    pinned_count = 0;
+    recent_programs_count = 0;
+    recent_documents_count = 0;
     right_count = 0;
     visible = false;
     search_len = 0;
@@ -123,21 +171,103 @@ fn setStr(dest: []u8, src: []const u8) u8 {
     return @intCast(len);
 }
 
-fn addLeft(name: []const u8, icon_id: u16) void {
-    if (left_count >= MAX_LEFT_ITEMS) return;
-    var item = &left_items[left_count];
+/// 添加固定程序
+fn addPinnedProgram(name: []const u8, icon_id: u16, target: []const u8) void {
+    if (pinned_count >= MAX_PINNED_ITEMS) return;
+    var item = &pinned_items[pinned_count];
     item.name_len = setStr(&item.name, name);
     item.icon_id = icon_id;
-    left_count += 1;
+    item.item_type = .pinned;
+    item.target_len = setStr(&item.target, target);
+    pinned_count += 1;
 }
 
-fn addRight(name: []const u8, icon_id: u16) void {
+/// 添加系统链接到右栏
+fn addRight(name: []const u8, icon_id: u16, target: []const u8) void {
     if (right_count >= MAX_RIGHT_ITEMS) return;
     var item = &right_items[right_count];
     item.name_len = setStr(&item.name, name);
     item.icon_id = icon_id;
-    item.is_system_link = true;
+    item.item_type = .system_link;
+    item.target_len = setStr(&item.target, target);
     right_count += 1;
+}
+
+/// 添加最近使用程序
+pub fn addRecentProgram(name: []const u8, icon_id: u16, target: []const u8) void {
+    // 如果程序已经存在，移动到最前面
+    for (0..recent_programs_count) |i| {
+        if (std.mem.eql(u8, recent_programs[i].name[0..recent_programs[i].name_len], name)) {
+            // 移动到最前面
+            const item = recent_programs[i];
+            var j = i;
+            while (j > 0) : (j -= 1) {
+                recent_programs[j] = recent_programs[j - 1];
+            }
+            recent_programs[0] = item;
+            return;
+        }
+    }
+
+    // 如果列表已满，移除最后一个
+    if (recent_programs_count >= MAX_RECENT_PROGRAMS) {
+        var i = MAX_RECENT_PROGRAMS - 1;
+        while (i > 0) : (i -= 1) {
+            recent_programs[i] = recent_programs[i - 1];
+        }
+        recent_programs_count -= 1;
+    }
+
+    // 插入到最前面
+    var item = &recent_programs[0];
+    item.name_len = setStr(&item.name, name);
+    item.icon_id = icon_id;
+    item.item_type = .recent_program;
+    item.target_len = setStr(&item.target, target);
+    recent_programs_count += 1;
+}
+
+/// 添加最近文档
+pub fn addRecentDocument(name: []const u8, icon_id: u16, target: []const u8) void {
+    // 如果文档已经存在，移动到最前面
+    for (0..recent_documents_count) |i| {
+        if (std.mem.eql(u8, recent_documents[i].name[0..recent_documents[i].name_len], name)) {
+            const item = recent_documents[i];
+            var j = i;
+            while (j > 0) : (j -= 1) {
+                recent_documents[j] = recent_documents[j - 1];
+            }
+            recent_documents[0] = item;
+            return;
+        }
+    }
+
+    // 如果列表已满，移除最后一个
+    if (recent_documents_count >= MAX_RECENT_DOCUMENTS) {
+        var i = MAX_RECENT_DOCUMENTS - 1;
+        while (i > 0) : (i -= 1) {
+            recent_documents[i] = recent_documents[i - 1];
+        }
+        recent_documents_count -= 1;
+    }
+
+    // 插入到最前面
+    var item = &recent_documents[0];
+    item.name_len = setStr(&item.name, name);
+    item.icon_id = icon_id;
+    item.item_type = .recent_document;
+    item.target_len = setStr(&item.target, target);
+    recent_documents_count += 1;
+}
+
+/// 清除最近使用程序记录
+pub fn clearRecentPrograms() void {
+    recent_programs_count = 0;
+}
+
+/// 清除最近文档记录
+pub fn clearRecentDocuments() void {
+    recent_documents_count = 0;
 }
 
 pub const identity = struct {
@@ -162,29 +292,31 @@ pub const identity_zh = struct {
 };
 
 fn addDefaultItems() void {
-    addLeft("Internet Explorer", 6);
-    addLeft("Zircon Media Player", 11);
-    addLeft("Terminal", 4);
-    addLeft(".NET Shell", 4);
-    addLeft("Notepad", 9);
-    addLeft("Calculator", 8);
-    addLeft("Paint", 10);
-    addLeft("Registry Editor", 7);
+    // 添加默认固定程序
+    addPinnedProgram("Internet Explorer", 6, "C:\\Program Files\\Internet Explorer\\iexplore.exe");
+    addPinnedProgram("Zircon Media Player", 11, "C:\\Windows\\System32\\wmplayer.exe");
+    addPinnedProgram("Terminal", 4, "C:\\Windows\\System32\\cmd.exe");
+    addPinnedProgram(".NET Shell", 4, "C:\\Windows\\System32\\powershell.exe");
+    addPinnedProgram("Notepad", 9, "C:\\Windows\\System32\\notepad.exe");
+    addPinnedProgram("Calculator", 8, "C:\\Windows\\System32\\calc.exe");
+    addPinnedProgram("Paint", 10, "C:\\Windows\\System32\\mspaint.exe");
+    addPinnedProgram("Registry Editor", 7, "C:\\Windows\\System32\\regedit.exe");
     // 与内核 `startmenu.zig` / `builtin_apps.zig` 左列顺序对齐；点击行为在帧缓冲 Shell 中实现。
 
-    addRight("Documents", 2);
-    addRight("Pictures", 10);
-    addRight("Music", 11);
-    addRight("Videos", 12);
-    addRight("Downloads", 12);
-    addRight("Games", 12);
-    addRight("Computer", 1);
-    addRight("Network", 5);
-    addRight("Control Panel", 13);
-    addRight("Devices and Printers", 22);
-    addRight("Default Programs", 7);
-    addRight("Help and Support", 7);
-    addRight("Run...", 4);
+    // 添加右栏系统链接
+    addRight("Documents", 2, "shell:Documents");
+    addRight("Pictures", 10, "shell:Pictures");
+    addRight("Music", 11, "shell:Music");
+    addRight("Videos", 12, "shell:Videos");
+    addRight("Downloads", 28, "shell:Downloads");
+    addRight("Games", 12, "shell:Games");
+    addRight("Computer", 1, "shell:MyComputer");
+    addRight("Network", 5, "shell:NetworkPlaces");
+    addRight("Control Panel", 13, "shell:ControlPanel");
+    addRight("Devices and Printers", 22, "shell:Printers");
+    addRight("Default Programs", 7, "shell:DefaultPrograms");
+    addRight("Help and Support", 7, "shell:Help");
+    addRight("Run...", 4, "shell:Run");
 }
 
 pub fn toggle() void {
@@ -271,12 +403,46 @@ pub fn contains(screen_h: i32, x: i32, y: i32) bool {
     return x >= 0 and x < menu_w and y >= menu_y and y < menu_y + menu_h;
 }
 
-pub fn getLeftItems() []const MenuItem {
-    return left_items[0..left_count];
+/// 获取固定程序列表
+pub fn getPinnedItems() []const MenuItem {
+    return pinned_items[0..pinned_count];
 }
 
+/// 获取最近使用程序列表
+pub fn getRecentPrograms() []const MenuItem {
+    return recent_programs[0..recent_programs_count];
+}
+
+/// 获取最近文档列表
+pub fn getRecentDocuments() []const MenuItem {
+    return recent_documents[0..recent_documents_count];
+}
+
+/// 获取右栏系统链接列表
 pub fn getRightItems() []const MenuItem {
     return right_items[0..right_count];
+}
+
+/// 获取搜索结果列表
+pub fn getSearchResults() []const MenuItem {
+    return search_results[0..search_results_count];
+}
+
+/// 向后兼容：返回左栏所有项目（固定程序 + 最近程序）
+pub fn getLeftItems() []const MenuItem {
+    // 合并固定程序和最近程序到临时缓冲区返回，用于向后兼容
+    // 实际渲染层应该分别调用getPinnedItems和getRecentPrograms
+    var temp: [MAX_PINNED_ITEMS + MAX_RECENT_PROGRAMS]MenuItem = undefined;
+    var count: usize = 0;
+    for (pinned_items[0..pinned_count]) |item| {
+        temp[count] = item;
+        count += 1;
+    }
+    for (recent_programs[0..recent_programs_count]) |item| {
+        temp[count] = item;
+        count += 1;
+    }
+    return temp[0..count];
 }
 
 pub fn getBackgroundColor() u32 {
@@ -313,4 +479,233 @@ pub fn getUserName() []const u8 {
 
 pub fn getUserSubtitle() []const u8 {
     return identity.header_sub;
+}
+
+/// 处理搜索键盘输入
+pub fn handleSearchInput(c: u8) void {
+    if (anim_state != .open) return;
+
+    // 处理退格
+    if (c == '\x08') {
+        if (search_len > 0) {
+            search_len -= 1;
+            search_text[search_len] = 0;
+            updateSearchResults();
+        }
+        return;
+    }
+
+    // 处理回车
+    if (c == '\r' or c == '\n') {
+        if (search_results_count > 0) {
+            // 默认打开第一个搜索结果
+            executeItem(&search_results[0]);
+        }
+        hide();
+        return;
+    }
+
+    // 处理ESC退出
+    if (c == 0x1B) {
+        hide();
+        return;
+    }
+
+    // 只处理可打印字符
+    if (c >= 32 and c <= 126 and search_len < search_text.len - 1) {
+        search_text[search_len] = c;
+        search_len += 1;
+        search_text[search_len] = 0;
+        updateSearchResults();
+    }
+}
+
+/// 更新搜索结果
+fn updateSearchResults() void {
+    search_results_count = 0;
+
+    // 如果搜索框为空，清空结果
+    if (search_len == 0) {
+        return;
+    }
+
+    const query = search_text[0..search_len];
+
+    // 搜索固定程序
+    for (pinned_items[0..pinned_count]) |item| {
+        if (matchSearchQuery(item.name[0..item.name_len], query)) {
+            addSearchResult(item.name[0..item.name_len], item.icon_id, item.target[0..item.target_len], .search_result);
+        }
+    }
+
+    // 搜索最近程序
+    for (recent_programs[0..recent_programs_count]) |item| {
+        if (matchSearchQuery(item.name[0..item.name_len], query)) {
+            addSearchResult(item.name[0..item.name_len], item.icon_id, item.target[0..item.target_len], .search_result);
+        }
+    }
+
+    // 搜索最近文档
+    for (recent_documents[0..recent_documents_count]) |item| {
+        if (matchSearchQuery(item.name[0..item.name_len], query)) {
+            addSearchResult(item.name[0..item.name_len], item.icon_id, item.target[0..item.target_len], .search_result);
+        }
+    }
+
+    // 搜索右栏系统链接
+    for (right_items[0..right_count]) |item| {
+        if (matchSearchQuery(item.name[0..item.name_len], query)) {
+            addSearchResult(item.name[0..item.name_len], item.icon_id, item.target[0..item.target_len], .search_result);
+        }
+    }
+
+    // 添加系统命令匹配
+    if (matchSearchQuery("Run", query)) {
+        addSearchResult("Run", 4, "shell:Run", .system_link);
+    }
+    if (matchSearchQuery("Cmd", query) or matchSearchQuery("Command Prompt", query)) {
+        addSearchResult("Command Prompt", 4, "C:\\Windows\\System32\\cmd.exe", .search_result);
+    }
+    if (matchSearchQuery("PowerShell", query)) {
+        addSearchResult("Windows PowerShell", 4, "C:\\Windows\\System32\\powershell.exe", .search_result);
+    }
+    if (matchSearchQuery("Regedit", query) or matchSearchQuery("Registry Editor", query)) {
+        addSearchResult("Registry Editor", 7, "C:\\Windows\\System32\\regedit.exe", .search_result);
+    }
+    if (matchSearchQuery("Calc", query) or matchSearchQuery("Calculator", query)) {
+        addSearchResult("Calculator", 8, "C:\\Windows\\System32\\calc.exe", .search_result);
+    }
+    if (matchSearchQuery("Notepad", query)) {
+        addSearchResult("Notepad", 9, "C:\\Windows\\System32\\notepad.exe", .search_result);
+    }
+    if (matchSearchQuery("Paint", query) or matchSearchQuery("Mspaint", query)) {
+        addSearchResult("Paint", 10, "C:\\Windows\\System32\\mspaint.exe", .search_result);
+    }
+}
+
+/// 搜索匹配逻辑：不区分大小写，支持前缀匹配和包含匹配
+fn matchSearchQuery(text: []const u8, query: []const u8) bool {
+    if (query.len == 0) return false;
+    if (text.len < query.len) return false;
+
+    var i: usize = 0;
+    while (i <= text.len - query.len) : (i += 1) {
+        var match = true;
+        var j: usize = 0;
+        while (j < query.len) : (j += 1) {
+            const c1 = toLower(text[i + j]);
+            const c2 = toLower(query[j]);
+            if (c1 != c2) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+
+    return false;
+}
+
+/// 字符转小写
+fn toLower(c: u8) u8 {
+    if (c >= 'A' and c <= 'Z') {
+        return c + ('a' - 'A');
+    }
+    return c;
+}
+
+/// 添加搜索结果
+fn addSearchResult(name: []const u8, icon_id: u16, target: []const u8, item_type: MenuItemType) void {
+    if (search_results_count >= MAX_SEARCH_RESULTS) return;
+
+    // 避免重复结果
+    for (0..search_results_count) |i| {
+        if (std.mem.eql(u8, search_results[i].name[0..search_results[i].name_len], name)) {
+            return;
+        }
+    }
+
+    var item = &search_results[search_results_count];
+    item.name_len = setStr(&item.name, name);
+    item.icon_id = icon_id;
+    item.item_type = item_type;
+    item.target_len = setStr(&item.target, target);
+    search_results_count += 1;
+}
+
+/// 执行菜单项对应的操作
+pub fn executeItem(item: *const MenuItem) void {
+    if (item.target_len == 0) return;
+
+    const target = item.target[0..item.target_len];
+
+    // 处理电源操作
+    if (std.mem.eql(u8, target, "power:shutdown")) {
+        executePowerAction(.shutdown);
+        return;
+    }
+    if (std.mem.eql(u8, target, "power:restart")) {
+        executePowerAction(.restart);
+        return;
+    }
+    if (std.mem.eql(u8, target, "power:sleep")) {
+        executePowerAction(.sleep);
+        return;
+    }
+    if (std.mem.eql(u8, target, "power:hibernate")) {
+        executePowerAction(.hibernate);
+        return;
+    }
+    if (std.mem.eql(u8, target, "power:logoff")) {
+        executePowerAction(.logoff);
+        return;
+    }
+    if (std.mem.eql(u8, target, "power:lock")) {
+        executePowerAction(.lock);
+        return;
+    }
+
+    // 其他目标交给上层shell处理执行
+    // 这里可以添加扩展逻辑，比如shell:协议处理、程序启动等
+}
+
+/// 执行电源操作
+fn executePowerAction(action: PowerAction) void {
+    // 上层shell需要注册电源操作回调来处理实际电源控制
+    // 这里只做通知，实际实现由系统层完成
+    switch (action) {
+        .shutdown => {
+            // 发送关机信号到内核
+        },
+        .restart => {
+            // 发送重启信号到内核
+        },
+        .sleep => {
+            // 发送睡眠信号到内核
+        },
+        .hibernate => {
+            // 发送休眠信号到内核
+        },
+        .logoff => {
+            // 注销当前用户
+        },
+        .lock => {
+            // 锁定工作站
+        },
+    }
+
+    hide();
+}
+
+/// 获取电源操作列表，用于渲染电源按钮和子菜单
+pub fn getPowerActions() []const struct { name: []const u8, icon_id: u16, action: PowerAction } {
+    const power_actions = [_]struct { name: []const u8, icon_id: u16, action: PowerAction }{
+        .{ .name = "Shut down", .icon_id = 17, .action = .shutdown },
+        .{ .name = "Restart", .icon_id = 17, .action = .restart },
+        .{ .name = "Sleep", .icon_id = 17, .action = .sleep },
+        .{ .name = "Hibernate", .icon_id = 17, .action = .hibernate },
+        .{ .name = "Log off", .icon_id = 16, .action = .logoff },
+        .{ .name = "Lock", .icon_id = 16, .action = .lock },
+    };
+    return &power_actions;
 }

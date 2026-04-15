@@ -1,1 +1,0 @@
-../tests/host/zircon_host_ob_test.zig

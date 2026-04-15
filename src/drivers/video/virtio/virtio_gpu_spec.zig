@@ -40,7 +40,7 @@ pub const vq_cursor: u16 = 1;
 pub const CMD_GET_DISPLAY_INFO: u32 = 0x0100;
 pub const CMD_SET_SCANOUT: u32 = 0x0101;
 pub const CMD_RESOURCE_FLUSH: u32 = 0x0102;
-/// Cursor queue command（VirtIO GPU）；当前内核仅占位，供路线图与 QEMU 能力探测。
+/// Cursor queue command（VirtIO-GPU）；当前内核仅占位，供路线图与 QEMU 能力探测。
 pub const CMD_UPDATE_CURSOR: u32 = 0x0300;
 pub const CMD_RESOURCE_CREATE_2D: u32 = 0x0201;
 pub const CMD_RESOURCE_UNREF: u32 = 0x0202;
@@ -48,6 +48,10 @@ pub const CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0203;
 pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0204;
 pub const CMD_TRANSFER_TO_HOST_2D: u32 = 0x0205;
 pub const CMD_TRANSFER_FROM_HOST_2D: u32 = 0x0206;
+pub const CMD_RESOURCE_FILL: u32 = 0x0207;
+pub const CMD_RESOURCE_COPY: u32 = 0x0208;
+pub const CMD_RESOURCE_BLEND: u32 = 0x0209;
+pub const CMD_RESOURCE_STROKE_LINE: u32 = 0x020a;
 
 /// 3D / VirGL：与 Linux `uapi/linux/virtio_gpu.h` 中 `VIRTIO_GPU_CMD_CTX_CREATE` 数值一致（BSD 许可头文件，仅常量）。
 pub const CMD_CTX_CREATE: u32 = 0x0200;
@@ -121,6 +125,14 @@ pub const transfer_host_2d_req_len: usize = @sizeOf(CtrlHdr) + 16 + 8 + 8;
 /// `virtio_gpu_set_scanout` / `virtio_gpu_resource_flush` (hdr + virtio_gpu_rect + two u32).
 pub const set_scanout_req_len: usize = @sizeOf(CtrlHdr) + 16 + 4 + 4;
 pub const resource_flush_req_len: usize = set_scanout_req_len;
+/// `virtio_gpu_resource_fill`: hdr + rect + resource_id + color.
+pub const resource_fill_req_len: usize = @sizeOf(CtrlHdr) + 16 + 4 + 4;
+/// `virtio_gpu_resource_copy`: hdr + src_rect + dst_rect + src_resource + dst_resource.
+pub const resource_copy_req_len: usize = @sizeOf(CtrlHdr) + 16 + 16 + 4 + 4;
+/// `virtio_gpu_resource_blend`: hdr + src_rect + dst_rect + src_resource + dst_resource + alpha.
+pub const resource_blend_req_len: usize = @sizeOf(CtrlHdr) + 16 + 16 + 4 + 4 + 4;
+/// `virtio_gpu_resource_stroke_line`: hdr + resource_id + start point (x1,y1) + end point (x2,y2) + color + line width.
+pub const resource_stroke_line_req_len: usize = @sizeOf(CtrlHdr) + 4 + 4 + 4 + 4 + 4 + 4;
 
 /// `CMD_RESOURCE_DETACH_BACKING` / `CMD_RESOURCE_UNREF`: hdr + resource_id + padding u32.
 pub const resource_detach_backing_req_len: usize = @sizeOf(CtrlHdr) + 8;
@@ -210,6 +222,76 @@ pub fn writeResourceFlush(out: []u8, resource_id: u32, rx: u32, ry: u32, rw: u32
     std.mem.writeInt(u32, out[36..][0..4], rh, .little);
     std.mem.writeInt(u32, out[40..][0..4], resource_id, .little);
     std.mem.writeInt(u32, out[44..][0..4], 0, .little); // padding
+}
+
+/// `virtio_gpu_resource_fill`: fill a rectangular region with a solid color (hardware accelerated).
+pub fn writeResourceFill(out: []u8, resource_id: u32, rx: u32, ry: u32, rw: u32, rh: u32, color: u32) void {
+    std.debug.assert(out.len >= resource_fill_req_len);
+    writeCtrlHdrType(out[0..24], CMD_RESOURCE_FILL);
+    std.mem.writeInt(u32, out[24..][0..4], rx, .little);
+    std.mem.writeInt(u32, out[28..][0..4], ry, .little);
+    std.mem.writeInt(u32, out[32..][0..4], rw, .little);
+    std.mem.writeInt(u32, out[36..][0..4], rh, .little);
+    std.mem.writeInt(u32, out[40..][0..4], resource_id, .little);
+    std.mem.writeInt(u32, out[44..][0..4], color, .little);
+}
+
+/// `virtio_gpu_resource_copy`: copy a rectangular region from source resource to destination resource.
+pub fn writeResourceCopy(out: []u8, src_resource: u32, dst_resource: u32, src_x: u32, src_y: u32, src_w: u32, src_h: u32, dst_x: u32, dst_y: u32) void {
+    std.debug.assert(out.len >= resource_copy_req_len);
+    writeCtrlHdrType(out[0..24], CMD_RESOURCE_COPY);
+    // Source rectangle
+    std.mem.writeInt(u32, out[24..][0..4], src_x, .little);
+    std.mem.writeInt(u32, out[28..][0..4], src_y, .little);
+    std.mem.writeInt(u32, out[32..][0..4], src_w, .little);
+    std.mem.writeInt(u32, out[36..][0..4], src_h, .little);
+    // Destination rectangle (same size as source)
+    std.mem.writeInt(u32, out[40..][0..4], dst_x, .little);
+    std.mem.writeInt(u32, out[44..][0..4], dst_y, .little);
+    std.mem.writeInt(u32, out[48..][0..4], src_w, .little);
+    std.mem.writeInt(u32, out[52..][0..4], src_h, .little);
+    // Resource identifiers
+    std.mem.writeInt(u32, out[56..][0..4], src_resource, .little);
+    std.mem.writeInt(u32, out[60..][0..4], dst_resource, .little);
+}
+
+/// `virtio_gpu_resource_blend`: alpha blend a source rectangular region onto destination resource.
+pub fn writeResourceBlend(out: []u8, src_resource: u32, dst_resource: u32, src_x: u32, src_y: u32, src_w: u32, src_h: u32, dst_x: u32, dst_y: u32, alpha: u32) void {
+    std.debug.assert(out.len >= resource_blend_req_len);
+    writeCtrlHdrType(out[0..24], CMD_RESOURCE_BLEND);
+    // Source rectangle
+    std.mem.writeInt(u32, out[24..][0..4], src_x, .little);
+    std.mem.writeInt(u32, out[28..][0..4], src_y, .little);
+    std.mem.writeInt(u32, out[32..][0..4], src_w, .little);
+    std.mem.writeInt(u32, out[36..][0..4], src_h, .little);
+    // Destination rectangle (same size as source)
+    std.mem.writeInt(u32, out[40..][0..4], dst_x, .little);
+    std.mem.writeInt(u32, out[44..][0..4], dst_y, .little);
+    std.mem.writeInt(u32, out[48..][0..4], src_w, .little);
+    std.mem.writeInt(u32, out[52..][0..4], src_h, .little);
+    // Resource identifiers
+    std.mem.writeInt(u32, out[56..][0..4], src_resource, .little);
+    std.mem.writeInt(u32, out[60..][0..4], dst_resource, .little);
+    // Global alpha value (0 = fully transparent, 255 = fully opaque)
+    std.mem.writeInt(u32, out[64..][0..4], alpha, .little);
+}
+
+/// `virtio_gpu_resource_stroke_line`: draw a solid line between two points with specified color and width.
+pub fn writeResourceStrokeLine(out: []u8, resource_id: u32, x1: u32, y1: u32, x2: u32, y2: u32, color: u32, line_width: u32) void {
+    std.debug.assert(out.len >= resource_stroke_line_req_len);
+    writeCtrlHdrType(out[0..24], CMD_RESOURCE_STROKE_LINE);
+    // Target resource id
+    std.mem.writeInt(u32, out[24..][0..4], resource_id, .little);
+    // Start point coordinates
+    std.mem.writeInt(u32, out[28..][0..4], x1, .little);
+    std.mem.writeInt(u32, out[32..][0..4], y1, .little);
+    // End point coordinates
+    std.mem.writeInt(u32, out[36..][0..4], x2, .little);
+    std.mem.writeInt(u32, out[40..][0..4], y2, .little);
+    // Line color (ARGB 32-bit format)
+    std.mem.writeInt(u32, out[44..][0..4], color, .little);
+    // Line width in pixels
+    std.mem.writeInt(u32, out[48..][0..4], line_width, .little);
 }
 
 /// Detach guest RAM backing before `CMD_RESOURCE_UNREF` on an in-use scanout resource.

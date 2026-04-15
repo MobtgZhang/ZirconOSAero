@@ -1,1 +1,0 @@
-../tests/host/loongarch_nt61_mm_host.zig

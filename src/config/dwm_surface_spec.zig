@@ -26,7 +26,7 @@
 // Reference: https://learn.microsoft.com/windows/win32/learnwin32/the-desktop-window-manager
 // Reference: [docs/cn/DesktopManagerSpec.md](../../docs/cn/DesktopManagerSpec.md)
 
-//! | 概念 (NT6.1 / MS DWM)   | 内核 `KernelCompositorSurfaceFlags` |
+//! | 概念 (NT6.1.7601 / MS DWM)   | 内核 `KernelCompositorSurfaceFlags` |
 //! |-------------------------|-------------------------------------|
 //! | 顶层 / TOPMOST          | `topmost`                           |
 //! | 分层窗口                | `layered`                           |

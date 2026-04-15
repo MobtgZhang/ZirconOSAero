@@ -32,7 +32,7 @@ const std = @import("std");
 const page_size_bytes: u64 = 4096;
 
 /// AVL 节点上限；受 `AddressSpace` 总大小约束（见 `ps/process.zig` 静态断言）。
-/// 提升到 4096 以支持更大的地址空间和更多的内存区域，符合 NT6.1 实际需求。
+/// 提升到 4096 以支持更大的地址空间和更多的内存区域，符合 NT6.1.7601 实际需求。
 /// 若将来 AddressSpace 采用堆分配 VadTable，可再进一步提升。
 pub const max_vad: usize = 4096;
 const MAX_NODES: usize = max_vad;

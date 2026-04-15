@@ -540,6 +540,16 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     vfs_mod.init();
     fat32_mod.init();
     ntfs_mod.init();
+
+    // Initialize and mount InitFS (RAM-based Windows filesystem)
+    const initfs_mod = @import("../fs/initfs.zig");
+    initfs_mod.init();
+    if (initfs_mod.mountAsDrive('C') == .success) {
+        klog.info("InitFS: C: drive mounted successfully", .{});
+    } else {
+        klog.warn("InitFS: Failed to mount C: drive", .{});
+    }
+
     if (builtin.target.cpu.arch == .x86_64) {
         drivers_generic.storage.boot_probe.mountBootProbeIfReady();
     }

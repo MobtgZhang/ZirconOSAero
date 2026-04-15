@@ -40,6 +40,7 @@ const dwm_comp = @import("../../../drivers/video/core/dwm_compositor.zig");
 const mat = @import("../material/root.zig");
 const display = @import("../../../drivers/video/core/display.zig");
 const builtin_apps = @import("../shell/builtin_apps.zig");
+const cmd_shell_instance = @import("../shell/cmd_shell_instance.zig");
 const shell_mui = @import("../strings/shell_mui.zig");
 const explorer_vol_snap = @import("../../../fs/explorer_volume_snapshot.zig");
 const explorer_format = @import("../shell/explorer_format.zig");
@@ -348,6 +349,10 @@ fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_
     if (bisect) @import("../../../rtl/panic_context.zig").setPhase(0x0002_0081);
     display.renderDesktopIcons(w, h, t);
     if (bisect) @import("../../../rtl/panic_context.zig").setPhase(0x0002_0082);
+    
+    // Render CMD shell windows
+    cmd_shell_instance.renderAllCmdInstances(t);
+    
     renderShellWindowsInFocusOrder(w, h, t);
     if (bisect) @import("../../../rtl/panic_context.zig").setPhase(0x0002_0085);
     renderTaskbar(w, h, t, tb_h);
@@ -418,6 +423,8 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
         // 多窗重叠时：整幅壁纸重绘 + 窗口 + 图标 + 任务栏
         renderBackground(w, h);
         renderShellWindowsInFocusOrderDrag(w, h, t, ds);
+        // Render CMD shell windows during drag
+        cmd_shell_instance.renderAllCmdInstances(t);
         // 图标和任务栏无条件重绘（与 renderFullFrame 一致）
         display.renderDesktopIcons(w, h, t);
         if (bisect) @import("../../../rtl/panic_context.zig").setPhase(0x0002_00A0);
@@ -426,6 +433,8 @@ fn renderDragFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, ds: d
         // 单窗拖动：局部 patch 壁纸 + 窗口 + 图标 + 任务栏
         patchDragBackground(w, h);
         renderShellWindowsInFocusOrderDrag(w, h, t, ds);
+        // Render CMD shell windows during drag
+        cmd_shell_instance.renderAllCmdInstances(t);
         // 图标和任务栏在窗口之后绘制，确保不被窗口覆盖
         // 这与 renderFullFrame 的行为一致：图标和任务栏是场景的最上层
         display.renderDesktopIcons(w, h, t);

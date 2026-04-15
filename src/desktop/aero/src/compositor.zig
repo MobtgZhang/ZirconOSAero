@@ -184,6 +184,97 @@ pub fn setFlip3dPreviewEnabled(enabled: bool) void {
     compositor_dirty = true;
 }
 
+/// Aero Peek / Thumbnail preview state
+pub const PeekState = enum {
+    disabled,
+    desktop_peek, // Hover over taskbar right corner: all windows transparent
+    window_peek, // Hover over taskbar thumbnail: only selected window visible
+};
+
+pub var peek_state: PeekState = .disabled;
+pub var peek_window_id: u32 = INVALID_SURFACE;
+pub const peek_transparency: u8 = 30; // Opacity for non-peek windows during Aero Peek
+
+/// Thumbnail configuration
+pub const ThumbnailConfig = struct {
+    max_width: u32 = 200,
+    max_height: u32 = 150,
+    padding: u32 = 8,
+    border_radius: u32 = 4,
+};
+
+pub const thumbnail_config: ThumbnailConfig = .{};
+
+/// Generate downscaled thumbnail from a window surface
+/// Returns the downscaled surface ID, or INVALID_SURFACE on failure
+pub fn generateWindowThumbnail(surface_id: u32) u32 {
+    const surface = getSurface(surface_id) orelse return INVALID_SURFACE;
+
+    // Calculate thumbnail dimensions while preserving aspect ratio
+    const aspect_ratio = @as(f32, @floatFromInt(surface.width)) / @as(f32, @floatFromInt(surface.height));
+    var thumb_width = thumbnail_config.max_width;
+    var thumb_height = @as(u32, @intFromFloat(@as(f32, @floatFromInt(thumb_width)) / aspect_ratio));
+
+    if (thumb_height > thumbnail_config.max_height) {
+        thumb_height = thumbnail_config.max_height;
+        thumb_width = @as(u32, @intFromFloat(@as(f32, @floatFromInt(thumb_height)) * aspect_ratio));
+    }
+
+    // Create new thumbnail surface
+    const thumb_surface_id = createSurface(thumb_width, thumb_height, .{
+        .has_alpha = true,
+        .needs_shadow = false,
+        .is_opaque = false,
+        .is_glass = false,
+    }) orelse return INVALID_SURFACE;
+
+    const thumb_surface = getSurface(thumb_surface_id).?;
+
+    // Bilinear downscaling from source surface to thumbnail
+    renderer.downscaleSurface(surface, thumb_surface, .{ .x = 0, .y = 0, .w = @intCast(surface.width), .h = @intCast(surface.height) }, .{ .x = 0, .y = 0, .w = @intCast(thumb_width), .h = @intCast(thumb_height) });
+
+    // Add thumbnail border
+    renderer.drawRoundedRect(thumb_surface, .{ .x = 0, .y = 0, .w = @intCast(thumb_width), .h = @intCast(thumb_height) }, thumbnail_config.border_radius, theme.getColor(.window_frame_active), 0, // No fill
+        1 // 1px border
+    );
+
+    return thumb_surface_id;
+}
+
+/// Update existing thumbnail with latest window content
+pub fn updateWindowThumbnail(surface_id: u32, thumb_surface_id: u32) bool {
+    const surface = getSurface(surface_id) orelse return false;
+    const thumb_surface = getSurface(thumb_surface_id) orelse return false;
+
+    // Update thumbnail content
+    renderer.downscaleSurface(surface, thumb_surface, .{ .x = 0, .y = 0, .w = @intCast(surface.width), .h = @intCast(surface.height) }, .{ .x = 0, .y = 0, .w = @intCast(thumb_surface.width), .h = @intCast(thumb_surface.height) });
+
+    thumb_surface.markFullDirty();
+    return true;
+}
+
+/// Set Aero Peek state
+pub fn setPeekState(state: PeekState, window_id: u32) void {
+    peek_state = state;
+    peek_window_id = window_id;
+    compositor_dirty = true;
+
+    // Update window opacity based on peek state
+    for (&surfaces) |*s| {
+        if (s.id == INVALID_SURFACE or s.flags.is_desktop or s.flags.is_cursor or s.flags.is_taskbar) continue;
+
+        switch (peek_state) {
+            .disabled => s.alpha = 255,
+            .desktop_peek => s.alpha = peek_transparency,
+            .window_peek => s.alpha = if (s.id == peek_window_id) 255 else peek_transparency,
+        }
+    }
+}
+
+pub fn getPeekState() PeekState {
+    return peek_state;
+}
+
 pub fn isFlip3dPreviewEnabled() bool {
     return flip3d_preview_enabled;
 }

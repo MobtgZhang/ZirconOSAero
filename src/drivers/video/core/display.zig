@@ -49,6 +49,7 @@ const taskbar_ex = desktop_drv.taskbar_ex;
 const drag_state = desktop_drv.drag_state;
 const cursor_plane = @import("cursor_plane.zig");
 const builtin_apps = desktop_drv.builtin_apps;
+const cmd_shell_instance = desktop_drv.cmd_shell_instance;
 const config = @import("../../../config/config.zig");
 const process = @import("../../../ps/process.zig");
 const user32 = @import("../../../subsystems/win32/user32.zig");
@@ -1744,6 +1745,45 @@ pub fn handleClick(x: i32, y: i32) bool {
         }
     }
 
+    // CMD shell窗口点击处理（在其他窗口之前）
+    if (cmd_shell_instance.hitTestCmdWindow(x, y)) |cmd_idx| {
+        // 更新焦点
+        cmd_shell_instance.setFocusedCmdIndex(cmd_idx);
+        
+        // 检查是否点击了关闭按钮
+        if (cmd_shell_instance.hitTestCmdCloseButton(x, y)) |_| {
+            cmd_shell_instance.destroyCmdWindow(cmd_idx);
+            return true;
+        }
+        
+        // 检查是否点击了标题栏
+        if (cmd_shell_instance.hitTestCmdCaption(x, y)) |_| {
+            // 检查标题栏按钮
+            const btn = cmd_shell_instance.handleCaptionClick(cmd_idx);
+            switch (btn) {
+                .minimize => {
+                    cmd_shell_instance.minimizeCmdWindow(cmd_idx);
+                    return true;
+                },
+                .maximize => {
+                    cmd_shell_instance.maximizeCmdWindow(cmd_idx);
+                    return true;
+                },
+                .close => {
+                    cmd_shell_instance.destroyCmdWindow(cmd_idx);
+                    return true;
+                },
+                .none => {
+                    // 开始拖拽
+                    cmd_shell_instance.startCmdWindowDrag(cmd_idx, x, y);
+                    return true;
+                },
+            }
+        }
+        
+        return true;
+    }
+
     if (builtin_apps.handleClick(x, y, w, h, getTaskbarHeight())) {
         setShellKeyboardFocus(.builtin_apps);
         return true;
@@ -2067,6 +2107,12 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
         initTaskMgrPosition(scr_w, scr_h);
         applyTaskMgrDrag(x, y, scr_w, scr_h);
     }
+    
+    // CMD 窗口拖拽处理
+    if (cmd_shell_instance.isCmdWindowDragging()) {
+        cmd_shell_instance.processCmdWindowDrag(x, y);
+    }
+    
     const tb_h_move = getTaskbarHeight();
     const builtin_moved = builtin_apps.onMouseMove(x, y, scr_w, scr_h, tb_h_move);
     const explorer_moved = drag_active and (window_x != wx0 or window_y != wy0);
@@ -2095,6 +2141,9 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
     }
     if (ctx_menu_visible and isInsideContextMenu(x, y)) skip_top_window_caption_hit = true;
 
+    // CMD 窗口悬停跟踪
+    cmd_shell_instance.updateCmdCaptionHover(x, y);
+    
     if (skip_top_window_caption_hit) {
         // 保持 .none，依赖 startmenu / context 局部重绘路径。
     } else if (builtin_apps.captionHoverForTopmost(x, y) != .none) {
@@ -2233,9 +2282,14 @@ pub fn handleMouseRelease() MouseReleasePaintHint {
     taskmgr_drag_active = false;
     explorer_edge_resize = .none;
     taskmgr_edge_resize = .none;
+    
+    // CMD 窗口拖拽结束
+    const was_cmd_drag = cmd_shell_instance.isCmdWindowDragging();
+    cmd_shell_instance.endCmdWindowDrag();
+    
     const was_builtin_drag = builtin_apps.onMouseRelease();
     taskbar_ex.setStartOrbPressed(false);
-    const drag_shell = was_explorer or was_taskmgr or was_builtin_drag;
+    const drag_shell = was_explorer or was_taskmgr or was_builtin_drag or was_cmd_drag;
     if (was_resize or drag_shell) {
         cursor_plane.invalidate();
     }

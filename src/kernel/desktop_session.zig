@@ -129,6 +129,11 @@ fn initDesktopFramebufferFromHandoff(
 
 /// 内核桌面主循环（阶段 **D-D4** 文档锚点）：每轮 `input_hub.pollAll`；`user32.msgPumpThreadsBlockedApprox` 为真时追加输入轮询以缩短 `GetMessage` 阻塞路径上的投递延迟；`idle_streak` 驱动 `display_flip_journal.extraInputPollBudget` 在空闲时仍保持尾部 `poll`；`need_paint` 为假时跳过 `present`。见 [docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md](../docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md)。
 fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
+    const klog_mod = @import("../rtl/klog.zig");
+    // Desktop 模式下隐藏 INFO/DEBUG 日志，只显示 WARNING 及以上
+    klog_mod.setDesktopMode(true);
+    klog_mod.setDesktopMinLevel(.warning);
+
     const drivers = @import("../drivers/mod.zig");
     const display = drivers.video.display;
     const video_root = @import("../drivers/video/root.zig");

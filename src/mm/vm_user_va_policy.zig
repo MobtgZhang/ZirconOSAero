@@ -27,7 +27,7 @@ pub const USER_VA_MIN_X64_NT: u64 = 0x0000_0000_0001_0000;
 /// NT x64 用户空间上界（含）：`0x00007FFFFFFFFFFF`。
 pub const USER_VA_MAX_X64_NT: u64 = USER_VA_MAX_HINT_X86_64;
 
-/// NT6.1 用户 VA 策略上下界（LoongArch64 新世界端口与 x64 **数值**对齐；见 `docs/specs/MemoryManagement_NT61_LoongArch64_NewWorld.md`）。
+/// NT6.1.7601 用户 VA 策略上下界（LoongArch64 新世界端口与 x64 **数值**对齐；见 `docs/specs/MemoryManagement_NT61_LoongArch64_NewWorld.md`）。
 pub const USER_VA_MIN_LA_NT: u64 = USER_VA_MIN_X64_NT;
 pub const USER_VA_MAX_LA_NT: u64 = USER_VA_MAX_X64_NT;
 pub const USER_VA_MIN_NT61: u64 = USER_VA_MIN_X64_NT;
@@ -49,7 +49,7 @@ pub fn userVaRangeAllowedX64(virt_base: u64, size_bytes: u64) bool {
     return true;
 }
 
-/// LoongArch64 NT6.1 端口：与 `USER_VA_{MIN,MAX}_LA_NT` 一致的区间校验（可在任意主机目标调用，供测试覆盖）。
+/// LoongArch64 NT6.1.7601 端口：与 `USER_VA_{MIN,MAX}_LA_NT` 一致的区间校验（可在任意主机目标调用，供测试覆盖）。
 pub fn userVaRangeAllowedLa64(virt_base: u64, size_bytes: u64) bool {
     if (size_bytes == 0) return false;
     if (virt_base < USER_VA_MIN_LA_NT) return false;
@@ -71,7 +71,7 @@ pub fn userVaRangeAllowedMips64(virt_base: u64, size_bytes: u64) bool {
     return true;
 }
 
-/// 当前编译目标架构下的 NT6.1 用户 VA 策略；非 x86_64 / loongarch64 / mips64el 恒 true。
+/// 当前编译目标架构下的 NT6.1.7601 用户 VA 策略；非 x86_64 / loongarch64 / mips64el 恒 true。
 pub fn userVaRangeAllowedNt61(virt_base: u64, size_bytes: u64) bool {
     return switch (builtin.cpu.arch) {
         .x86_64 => userVaRangeAllowedX64(virt_base, size_bytes),

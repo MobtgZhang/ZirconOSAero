@@ -126,13 +126,21 @@ pub fn registerDesktopProcess(
         return true;
     }
 
-    // 添加新条目
-    if (desktop_process_count >= MAX_DESKTOP_PROCESSES) {
+    // 查找可复用的槽位或空槽
+    var slot_index: usize = undefined;
+    if (findReusableSlot(pid)) |idx| {
+        slot_index = idx;
+    } else if (findEmptySlot()) |idx| {
+        slot_index = idx;
+    } else if (desktop_process_count < MAX_DESKTOP_PROCESSES) {
+        slot_index = desktop_process_count;
+        desktop_process_count += 1;
+    } else {
         klog.warn("DesktopProcessTable: full, cannot register PID={}", .{pid});
         return false;
     }
 
-    var entry = &desktop_processes[desktop_process_count];
+    var entry = &desktop_processes[slot_index];
     entry.* = .{
         .pid = pid,
         .name = [_]u8{0} ** 48,
@@ -154,8 +162,6 @@ pub fn registerDesktopProcess(
         entry.window_title_len = @min(window_title.len, 64);
     }
 
-    desktop_process_count += 1;
-    klog.info("DesktopProcessTable: registered PID={} name='{s}'", .{ pid, entry.name[0..entry.name_len] });
     return true;
 }
 
@@ -166,16 +172,50 @@ pub fn unregisterDesktopProcess(pid: u32) void {
             // 标记为不可见而不是删除，保持数组紧凑
             desktop_processes[i].is_visible = false;
             desktop_processes[i].pid = 0;
-            klog.info("DesktopProcessTable: unregistered PID={}", .{pid});
             return;
         }
     }
 }
 
-/// 根据PID查找进程
+/// 根据PID查找进程（只遍历有效条目）
 pub fn findDesktopProcessByPid(pid: u32) ?*DesktopProcessEntry {
-    for (&desktop_processes) |*p| {
-        if (p.pid == pid and p.is_visible) return p;
+    for (0..desktop_process_count) |i| {
+        if (desktop_processes[i].pid == pid and desktop_processes[i].is_visible) {
+            return &desktop_processes[i];
+        }
+    }
+    return null;
+}
+
+/// 根据PID查找已注销但仍占位的条目（用于复用）
+fn findReusableSlot(pid: u32) ?usize {
+    for (0..desktop_process_count) |i| {
+        // 查找已注销的条目（pid=0 或 is_visible=false）
+        if (desktop_processes[i].pid == pid and !desktop_processes[i].is_visible) {
+            return i;
+        }
+    }
+    return null;
+}
+
+/// 在表中查找空槽（is_visible=false 且 pid=0）
+fn findEmptySlot() ?usize {
+    for (0..desktop_process_count) |i| {
+        if (desktop_processes[i].pid == 0 and !desktop_processes[i].is_visible) {
+            return i;
+        }
+    }
+    return null;
+}
+
+/// 根据app_id和pid查找桌面进程
+pub fn findDesktopProcessByAppAndPid(app_id: u16, pid: u32) ?*DesktopProcessEntry {
+    for (0..desktop_process_count) |i| {
+        if (desktop_processes[i].app_id == app_id and 
+            desktop_processes[i].pid == pid and 
+            desktop_processes[i].is_visible) {
+            return &desktop_processes[i];
+        }
     }
     return null;
 }
@@ -222,14 +262,31 @@ pub fn getVisibleProcessCount() usize {
 pub fn getVisibleProcessList() []DesktopProcessEntry {
     var result: [MAX_DESKTOP_PROCESSES]DesktopProcessEntry = undefined;
     var count: usize = 0;
-    for (&desktop_processes) |*p| {
-        if (p.is_visible and p.pid != 0) {
-            result[count] = p.*;
+    for (0..desktop_process_count) |i| {
+        if (desktop_processes[i].is_visible and desktop_processes[i].pid != 0) {
+            result[count] = desktop_processes[i];
             count += 1;
         }
     }
-    // 返回静态切片，需要调用者处理
     return result[0..count];
+}
+
+/// 获取进程条目的PID（用于显示）
+pub fn getProcessPid(index: usize) ?u32 {
+    if (index >= desktop_process_count) return null;
+    const entry = desktop_processes[index];
+    if (!entry.is_visible or entry.pid == 0) return null;
+    return entry.pid;
+}
+
+/// 获取进程条目索引
+pub fn getProcessIndex(pid: u32) ?usize {
+    for (0..desktop_process_count) |i| {
+        if (desktop_processes[i].pid == pid and desktop_processes[i].is_visible) {
+            return i;
+        }
+    }
+    return null;
 }
 
 /// 同步内核进程表到桌面进程表

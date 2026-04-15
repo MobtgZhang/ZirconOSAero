@@ -833,3 +833,112 @@ pub fn tryVirglBlurBoxDelegation(
     if (!virgl_ctx_alive) return false;
     return false;
 }
+
+/// Fill a rectangular region in the scanout buffer with a solid color (hardware accelerated).
+/// Color format is 32-bit ARGB (A=0xff for opaque).
+pub fn fillRect(rx: i32, ry: i32, rw: u32, rh: u32, color: u32) bool {
+    if (!gpu_offload_ready or !scanout_active) return false;
+    const sw = scanout_w;
+    const sh = scanout_h;
+    if (sw == 0 or sh == 0) return false;
+
+    // Clamp rectangle to screen bounds
+    const x0 = std.math.clamp(rx, 0, @as(i32, @intCast(sw - 1)));
+    const y0 = std.math.clamp(ry, 0, @as(i32, @intCast(sh - 1)));
+    const x1 = std.math.clamp(rx + @as(i32, @intCast(rw)), 0, @as(i32, @intCast(sw)));
+    const y1 = std.math.clamp(ry + @as(i32, @intCast(rh)), 0, @as(i32, @intCast(sh)));
+    if (x1 <= x0 or y1 <= y0) return false;
+
+    const ux0: u32 = @intCast(x0);
+    const uy0: u32 = @intCast(y0);
+    const uw: u32 = @intCast(x1 - x0);
+    const uh: u32 = @intCast(y1 - y0);
+
+    var cmd: [spec.resource_fill_req_len]u8 = undefined;
+    spec.writeResourceFill(&cmd, gpu_scanout_res_id, ux0, uy0, uw, uh, color);
+    const rt = submitControl(&cmd, 64) orelse return false;
+    return rt == spec.RESP_OK_NODATA;
+}
+
+/// Copy a rectangular region from source position to destination position in the scanout buffer.
+pub fn copyRect(src_x: i32, src_y: i32, dst_x: i32, dst_y: i32, rw: u32, rh: u32) bool {
+    if (!gpu_offload_ready or !scanout_active) return false;
+    const sw = scanout_w;
+    const sh = scanout_h;
+    if (sw == 0 or sh == 0) return false;
+
+    // Clamp source rectangle to screen bounds
+    const sx0 = std.math.clamp(src_x, 0, @as(i32, @intCast(sw - 1)));
+    const sy0 = std.math.clamp(src_y, 0, @as(i32, @intCast(sh - 1)));
+    const sx1 = std.math.clamp(src_x + @as(i32, @intCast(rw)), 0, @as(i32, @intCast(sw)));
+    const sy1 = std.math.clamp(src_y + @as(i32, @intCast(rh)), 0, @as(i32, @intCast(sh)));
+    if (sx1 <= sx0 or sy1 <= sy0) return false;
+    const uw: u32 = @intCast(sx1 - sx0);
+    const uh: u32 = @intCast(sy1 - sy0);
+
+    // Clamp destination position to screen bounds
+    const dx0 = std.math.clamp(dst_x, 0, @as(i32, @intCast(sw - uw)));
+    const dy0 = std.math.clamp(dst_y, 0, @as(i32, @intCast(sh - uh)));
+    const usx0: u32 = @intCast(sx0);
+    const usy0: u32 = @intCast(sy0);
+    const udx0: u32 = @intCast(dx0);
+    const udy0: u32 = @intCast(dy0);
+
+    var cmd: [spec.resource_copy_req_len]u8 = undefined;
+    spec.writeResourceCopy(&cmd, gpu_scanout_res_id, gpu_scanout_res_id, usx0, usy0, uw, uh, udx0, udy0);
+    const rt = submitControl(&cmd, 64) orelse return false;
+    return rt == spec.RESP_OK_NODATA;
+}
+
+/// Alpha blend a source rectangular region onto destination position using global alpha value.
+/// Alpha value range: 0 (fully transparent) to 255 (fully opaque).
+pub fn blendRect(src_x: i32, src_y: i32, dst_x: i32, dst_y: i32, rw: u32, rh: u32, alpha: u32) bool {
+    if (!gpu_offload_ready or !scanout_active) return false;
+    const sw = scanout_w;
+    const sh = scanout_h;
+    if (sw == 0 or sh == 0) return false;
+    const clamped_alpha = std.math.clamp(alpha, 0, 255);
+
+    // Clamp source rectangle to screen bounds
+    const sx0 = std.math.clamp(src_x, 0, @as(i32, @intCast(sw - 1)));
+    const sy0 = std.math.clamp(src_y, 0, @as(i32, @intCast(sh - 1)));
+    const sx1 = std.math.clamp(src_x + @as(i32, @intCast(rw)), 0, @as(i32, @intCast(sw)));
+    const sy1 = std.math.clamp(src_y + @as(i32, @intCast(rh)), 0, @as(i32, @intCast(sh)));
+    if (sx1 <= sx0 or sy1 <= sy0) return false;
+    const uw: u32 = @intCast(sx1 - sx0);
+    const uh: u32 = @intCast(sy1 - sy0);
+
+    // Clamp destination position to screen bounds
+    const dx0 = std.math.clamp(dst_x, 0, @as(i32, @intCast(sw - uw)));
+    const dy0 = std.math.clamp(dst_y, 0, @as(i32, @intCast(sh - uh)));
+    const usx0: u32 = @intCast(sx0);
+    const usy0: u32 = @intCast(sy0);
+    const udx0: u32 = @intCast(dx0);
+    const udy0: u32 = @intCast(dy0);
+
+    var cmd: [spec.resource_blend_req_len]u8 = undefined;
+    spec.writeResourceBlend(&cmd, gpu_scanout_res_id, gpu_scanout_res_id, usx0, usy0, uw, uh, udx0, udy0, clamped_alpha);
+    const rt = submitControl(&cmd, 64) orelse return false;
+    return rt == spec.RESP_OK_NODATA;
+}
+
+/// Draw a solid line between two points with specified color and line width.
+/// Color format is 32-bit ARGB (A=0xff for opaque).
+pub fn drawLine(x1: i32, y1: i32, x2: i32, y2: i32, color: u32, line_width: u32) bool {
+    if (!gpu_offload_ready or !scanout_active) return false;
+    const sw = scanout_w;
+    const sh = scanout_h;
+    if (sw == 0 or sh == 0) return false;
+
+    // Clamp points to screen bounds
+    const ux1: u32 = @intCast(std.math.clamp(x1, 0, @as(i32, @intCast(sw - 1))));
+    const uy1: u32 = @intCast(std.math.clamp(y1, 0, @as(i32, @intCast(sh - 1))));
+    const ux2: u32 = @intCast(std.math.clamp(x2, 0, @as(i32, @intCast(sw - 1))));
+    const uy2: u32 = @intCast(std.math.clamp(y2, 0, @as(i32, @intCast(sh - 1))));
+    const clamped_width = std.math.clamp(line_width, 1, 64);
+
+    var cmd: [spec.resource_stroke_line_req_len]u8 = undefined;
+    spec.writeResourceStrokeLine(&cmd, gpu_scanout_res_id, ux1, uy1, ux2, uy2, color, clamped_width);
+    const rt = submitControl(&cmd, 64) orelse return false;
+    return rt == spec.RESP_OK_NODATA;
+}

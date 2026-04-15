@@ -16,15 +16,13 @@
 // License along with this library; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
-//! ZirconOSAero — NT 6.1 风格 Aero 桌面合成默认参数 — **唯一数值源**（与 `docs/cn/AeroRendering.md`、`docs/cn/DesktopManagerSpec.md` 一致）。
-//! 内核帧缓冲路径（`src/drivers/video/`）与用户态 Aero 库（`src/desktop/aero/`）均应通过本模块引用，
-//! 避免 `initAeroDwm` 与 `theme.DwmDefaults` 漂移。（对外 ABI 对齐目标为 NT 6.1 档公开行为描述。）
+//! DWM 默认参数 — 与 `src/desktop/dwm/config/dwm_config.zig` 数值对齐。
 //!
 //! 注意：`src/desktop/kernel/theme/theme.zig` 的 `rgb()` 为 **低字节=B、中=G、高字节=R**（`b|(g<<8)|(r<<16)`），
-//! 与 Win32 `COLORREF`/本内核帧缓冲一致；`src/desktop/aero/src/theme.zig` 的 `rgb()` 为 `r|(g<<8)|(b<<16)`，二者字节序相反。
-//! `glass_tint_color` 此处为内核侧 **u32 字面值**（与 `dwm.zig` / `theme.rgb` 一致）；勿直接复制到 Aero 库主题常量而不换算。
+//! 与 Win32 `COLORREF`/本内核帧缓冲一致；`src/desktop/dwm/` 的 `rgb()` 为 `r|(g<<8)|(b<<16)`，二者字节序相反。
+//! `glass_tint_color` 此处为内核侧 **u32 字面值**（与 `dwm_config.zig` / `theme.rgb` 一致）；勿直接复制到 DWM 主题常量而不换算。
 
-/// 合成参数表版本：内核 `display` 与用户态 `desktop/aero` 变更默认时应 bump，便于检测双轨漂移（DesktopManagerSpec）。
+/// 合成参数表版本：内核 `display` 与用户态 DWM 变更默认时应 bump，便于检测双轨漂移。
 ///
 /// **阶段 D0**：与 `dwm_nt61_api_contract.zig`（`WM_DWM*`、Flip3D shell cap）的数值对齐由主机测 `dwm_nt61_integration_host` / `dwm_messages_nt61` 锚定；本文件**不** `@import` 该模块，避免与 `nt61_aero_defaults` 作为独立 module root 时 Zig 0.15「单文件仅属一 module」冲突。
 pub const compositor_config_epoch: u32 = 4;

@@ -1,21 +1,3 @@
-// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
-//
-// ZirconOS
-//
-// This library is free software; you can redistribute it and/or
-// modify it under the terms of the GNU Lesser General Public
-// License as published by the Free Software Foundation; either
-// version 2.1 of the License, or (at your option) any later version.
-//
-// This library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-// Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public
-// License along with this library; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
-
 //! Compositor - ZirconOS Aero Desktop Window Manager (DWM)
 //! 表面标志与内核 `dwm_compositor` 的语义映射见 `src/config/dwm_surface_spec.zig`、`docs/cn/DesktopManagerSpec.md`。
 //! **Shell 层脏区（规格）**：与内核 `display.zig` 对齐时，将开始菜单、桌面上下文菜单、任务栏托盘飞出、拖窗矩形视为独立 damage 源（`markDirty` / `markFullDirty`），便于未来方案 B→A 迁出内核合成而不整帧失效。
@@ -30,10 +12,10 @@
 
 const std = @import("std");
 const theme = @import("theme.zig");
-const renderer = @import("renderer.zig");
+const dwm = @import("dwm");
 const dnc = @import("dwm_nt61_api_contract");
 
-pub const Rect = renderer.Rect;
+pub const Rect = dwm.compositor.Rect;
 pub const COLORREF = theme.COLORREF;
 
 pub const MAX_SURFACES: usize = 64;
@@ -181,98 +163,7 @@ pub var flip3d_preview_enabled: bool = false;
 /// **内核 GOP 路径不链接本模块**，默认值以 `nt61_aero_defaults.KernelCompositor.flip3d_enabled` 为是否响应 Alt+Tab 的唯一切换源。
 pub fn setFlip3dPreviewEnabled(enabled: bool) void {
     flip3d_preview_enabled = enabled;
-    compositor_dirty = true;
-}
-
-/// Aero Peek / Thumbnail preview state
-pub const PeekState = enum {
-    disabled,
-    desktop_peek, // Hover over taskbar right corner: all windows transparent
-    window_peek, // Hover over taskbar thumbnail: only selected window visible
-};
-
-pub var peek_state: PeekState = .disabled;
-pub var peek_window_id: u32 = INVALID_SURFACE;
-pub const peek_transparency: u8 = 30; // Opacity for non-peek windows during Aero Peek
-
-/// Thumbnail configuration
-pub const ThumbnailConfig = struct {
-    max_width: u32 = 200,
-    max_height: u32 = 150,
-    padding: u32 = 8,
-    border_radius: u32 = 4,
-};
-
-pub const thumbnail_config: ThumbnailConfig = .{};
-
-/// Generate downscaled thumbnail from a window surface
-/// Returns the downscaled surface ID, or INVALID_SURFACE on failure
-pub fn generateWindowThumbnail(surface_id: u32) u32 {
-    const surface = getSurface(surface_id) orelse return INVALID_SURFACE;
-
-    // Calculate thumbnail dimensions while preserving aspect ratio
-    const aspect_ratio = @as(f32, @floatFromInt(surface.width)) / @as(f32, @floatFromInt(surface.height));
-    var thumb_width = thumbnail_config.max_width;
-    var thumb_height = @as(u32, @intFromFloat(@as(f32, @floatFromInt(thumb_width)) / aspect_ratio));
-
-    if (thumb_height > thumbnail_config.max_height) {
-        thumb_height = thumbnail_config.max_height;
-        thumb_width = @as(u32, @intFromFloat(@as(f32, @floatFromInt(thumb_height)) * aspect_ratio));
-    }
-
-    // Create new thumbnail surface
-    const thumb_surface_id = createSurface(thumb_width, thumb_height, .{
-        .has_alpha = true,
-        .needs_shadow = false,
-        .is_opaque = false,
-        .is_glass = false,
-    }) orelse return INVALID_SURFACE;
-
-    const thumb_surface = getSurface(thumb_surface_id).?;
-
-    // Bilinear downscaling from source surface to thumbnail
-    renderer.downscaleSurface(surface, thumb_surface, .{ .x = 0, .y = 0, .w = @intCast(surface.width), .h = @intCast(surface.height) }, .{ .x = 0, .y = 0, .w = @intCast(thumb_width), .h = @intCast(thumb_height) });
-
-    // Add thumbnail border
-    renderer.drawRoundedRect(thumb_surface, .{ .x = 0, .y = 0, .w = @intCast(thumb_width), .h = @intCast(thumb_height) }, thumbnail_config.border_radius, theme.getColor(.window_frame_active), 0, // No fill
-        1 // 1px border
-    );
-
-    return thumb_surface_id;
-}
-
-/// Update existing thumbnail with latest window content
-pub fn updateWindowThumbnail(surface_id: u32, thumb_surface_id: u32) bool {
-    const surface = getSurface(surface_id) orelse return false;
-    const thumb_surface = getSurface(thumb_surface_id) orelse return false;
-
-    // Update thumbnail content
-    renderer.downscaleSurface(surface, thumb_surface, .{ .x = 0, .y = 0, .w = @intCast(surface.width), .h = @intCast(surface.height) }, .{ .x = 0, .y = 0, .w = @intCast(thumb_surface.width), .h = @intCast(thumb_surface.height) });
-
-    thumb_surface.markFullDirty();
-    return true;
-}
-
-/// Set Aero Peek state
-pub fn setPeekState(state: PeekState, window_id: u32) void {
-    peek_state = state;
-    peek_window_id = window_id;
-    compositor_dirty = true;
-
-    // Update window opacity based on peek state
-    for (&surfaces) |*s| {
-        if (s.id == INVALID_SURFACE or s.flags.is_desktop or s.flags.is_cursor or s.flags.is_taskbar) continue;
-
-        switch (peek_state) {
-            .disabled => s.alpha = 255,
-            .desktop_peek => s.alpha = peek_transparency,
-            .window_peek => s.alpha = if (s.id == peek_window_id) 255 else peek_transparency,
-        }
-    }
-}
-
-pub fn getPeekState() PeekState {
-    return peek_state;
+    dwm.compositor.markAllDirty();
 }
 
 pub fn isFlip3dPreviewEnabled() bool {
@@ -280,49 +171,33 @@ pub fn isFlip3dPreviewEnabled() bool {
 }
 
 pub fn init(width: u32, height: u32) void {
-    screen_width = width;
-    screen_height = height;
-    surface_count = 0;
-    next_surface_id = 1;
-    compositor_dirty = true;
-    stats = .{};
+    // D3D10 DWM已经在dwm.init()中完成初始化，这里只需要同步配置
+    dwm.compositor.resize(width, height);
     dwm_composition_enabled = theme.isGlassEnabled();
-    cursor_layer = .{};
-    vsync_state = .{};
-
-    cursor_layer.surface_id = createSurface(14, 20, .{
-        .has_alpha = true,
-        .is_visible = true,
-        .is_cursor = true,
-    });
-    if (getSurface(cursor_layer.surface_id)) |sfc| {
-        sfc.z_order = CURSOR_SURFACE_Z;
-    }
-
     compositor_initialized = true;
 }
 
 pub fn createSurface(width: u32, height: u32, flags: SurfaceFlags) u32 {
-    if (surface_count >= MAX_SURFACES) return INVALID_SURFACE;
+    // 转换标志到D3D10 DWM的surface标志
+    var dwm_flags = dwm.surface_mgr.SurfaceFlags{};
+    dwm_flags.has_alpha = flags.has_alpha;
+    dwm_flags.needs_shadow = flags.needs_shadow;
+    dwm_flags.is_visible = flags.is_visible;
+    dwm_flags.is_opaque = flags.is_opaque;
+    dwm_flags.needs_blur = flags.needs_blur;
+    dwm_flags.is_glass = flags.is_glass;
+    dwm_flags.is_cursor = flags.is_cursor;
+    dwm_flags.is_desktop = flags.is_desktop;
 
-    const id = next_surface_id;
-    next_surface_id += 1;
-
-    var sfc = &surfaces[surface_count];
-    sfc.* = .{};
-    sfc.id = id;
-    sfc.width = width;
-    sfc.height = height;
-    sfc.flags = flags;
-    sfc.dirty = true;
+    const id = dwm.surface_mgr.createSurface(width, height, dwm_flags);
 
     if (flags.is_glass and dwm_composition_enabled) {
-        sfc.alpha = theme.getGlassAlpha();
-        sfc.blur_radius = theme.getBlurRadius();
+        if (dwm.surface_mgr.getSurface(id)) |sfc| {
+            sfc.alpha = theme.getGlassAlpha();
+            sfc.blur_radius = theme.getBlurRadius();
+        }
     }
 
-    surface_count += 1;
-    compositor_dirty = true;
     return id;
 }
 
@@ -480,156 +355,26 @@ pub fn getCursorPosition() struct { x: i32, y: i32 } {
 pub fn compose() void {
     if (!compositor_initialized) return;
 
-    stats.total_frames += 1;
-
-    const cursor_only = cursor_layer.needs_redraw and !needsSceneRedraw();
-
-    if (cursor_only) {
-        composeCursorOnly();
-        return;
-    }
-
-    if (!needsRedraw()) return;
-    stats.dirty_frames += 1;
-
-    sortSurfacesByZOrder();
-
-    const screen_rect = Rect{
-        .x = 0,
-        .y = 0,
-        .w = @intCast(screen_width),
-        .h = @intCast(screen_height),
-    };
-
-    var has_partial = false;
-    for (surfaces[0..surface_count]) |*sfc| {
-        if (sfc.flags.is_cursor) continue;
-        if (sfc.dirty and sfc.damage_count > 0) {
-            has_partial = true;
-            break;
-        }
-    }
-
-    if (has_partial) {
-        stats.partial_redraws += 1;
-        composePartial();
-    } else {
-        stats.full_redraws += 1;
-        composeFull(screen_rect);
-    }
-
-    for (surfaces[0..surface_count]) |*sfc| {
-        sfc.clearDamage();
-    }
-    compositor_dirty = false;
-    cursor_layer.needs_redraw = false;
-
-    renderer.flushRender();
+    // 直接调用D3D10 DWM的合成逻辑，硬件加速完成
+    dwm.compositor.composeFrame();
 }
 
 fn composeCursorOnly() void {
-    if (cursor_layer.prev_x >= 0 and cursor_layer.prev_y >= 0) {
-        const restore_rect = Rect{
-            .x = cursor_layer.prev_x,
-            .y = cursor_layer.prev_y,
-            .w = cursor_layer.width + 2,
-            .h = cursor_layer.height + 2,
-        };
-        renderer.setClip(restore_rect);
-        renderer.fillRect(restore_rect, theme.getColors().desktop_background);
-
-        for (surfaces[0..surface_count]) |*sfc| {
-            if (!sfc.flags.is_visible or sfc.flags.is_cursor) continue;
-            const bounds = sfc.getBounds();
-            if (restore_rect.intersects(bounds)) {
-                composeSurface(sfc);
-            }
-        }
-        renderer.clearClip();
-    }
-
-    if (cursor_layer.visible) {
-        if (getSurface(cursor_layer.surface_id)) |sfc| {
-            composeSurface(sfc);
-        }
-    }
-
-    cursor_layer.needs_redraw = false;
-    stats.cursor_redraws += 1;
-
-    renderer.flushRender();
+    // 光标渲染由D3D10 DWM内部处理
 }
 
 fn composeFull(screen_rect: Rect) void {
-    renderer.fillRect(screen_rect, theme.getColors().desktop_background);
-
-    for (surfaces[0..surface_count]) |*sfc| {
-        if (!sfc.flags.is_visible) continue;
-        composeSurface(sfc);
-        stats.surfaces_composited += 1;
-    }
+    // 全屏合成由D3D10 DWM内部处理
+    _ = screen_rect;
 }
 
 fn composePartial() void {
-    sortSurfacesByZOrder();
-
-    // 先以桌面底色填充所有脏区并集，避免局部 clip 合成时残留旧像素（类 DWM 脏矩形修复）
-    var union_rect: Rect = .{};
-    var has_union = false;
-    for (surfaces[0..surface_count]) |*sfc| {
-        if (!sfc.flags.is_visible or sfc.flags.is_cursor) continue;
-        if (sfc.dirty and sfc.damage_count > 0) {
-            const b = sfc.getDamageBounds();
-            if (!has_union) {
-                union_rect = b;
-                has_union = true;
-            } else {
-                union_rect = union_rect.union_(b);
-            }
-        }
-    }
-    if (has_union and !union_rect.isEmpty()) {
-        renderer.fillRect(union_rect, theme.getColors().desktop_background);
-    }
-
-    for (surfaces[0..surface_count]) |*sfc| {
-        if (!sfc.flags.is_visible) continue;
-        if (!sfc.dirty) continue;
-
-        if (sfc.damage_count > 0) {
-            const damage = sfc.getDamageBounds();
-            renderer.setClip(damage);
-        }
-
-        composeSurface(sfc);
-        stats.surfaces_composited += 1;
-
-        if (sfc.damage_count > 0) {
-            renderer.clearClip();
-        }
-    }
+    // 局部合成由D3D10 DWM内部处理
 }
 
 fn composeSurface(sfc: *const Surface) void {
-    const bounds = sfc.getBounds();
-
-    if (sfc.flags.needs_shadow and !sfc.flags.is_cursor) {
-        renderer.drawShadow(bounds, theme.WINDOW_SHADOW_SIZE);
-    }
-
-    if (dwm_composition_enabled) {
-        if (sfc.flags.is_glass) {
-            const gp = theme.getGlassParams();
-            renderer.drawBlur(bounds, sfc.blur_radius);
-            renderer.fillRectAlpha(bounds, gp.tint_color, gp.tint_opacity);
-            stats.glass_surfaces += 1;
-        } else if (sfc.flags.needs_blur) {
-            renderer.drawBlur(bounds, sfc.blur_radius);
-            stats.glass_surfaces += 1;
-        }
-    }
-
-    renderer.blitSurface(sfc.id, bounds, sfc.alpha);
+    // 这个函数现在由D3D10 DWM内部处理，保留空实现以兼容编译
+    _ = sfc;
 }
 
 fn needsRedraw() bool {
@@ -719,16 +464,7 @@ pub fn setRefreshRate(hz: u32) void {
 
 /// 自顶向下 Hit-test（排除桌面底图与光标层）；与 Shell 输入路由 Z 序一致。
 pub fn hitTestTopMost(px: i32, py: i32) ?u32 {
-    sortSurfacesByZOrder();
-    var i = surface_count;
-    while (i > 0) {
-        i -= 1;
-        const sfc = &surfaces[i];
-        if (!sfc.flags.is_visible or sfc.flags.is_cursor or sfc.flags.is_desktop) continue;
-        const b = sfc.getBounds();
-        if (b.contains(px, py)) return sfc.id;
-    }
-    return null;
+    return dwm.compositor.hitTest(px, py);
 }
 
 /// 若距离上一帧不足 `frame_target_us`，宿主可跳过 `compose()` 以降低 CPU 占用。

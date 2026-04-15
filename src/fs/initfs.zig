@@ -397,7 +397,7 @@ fn allocEntry(name: []const u8, is_dir: bool, parent_idx: usize) ?usize {
     initfs_entry_count += 1;
 
     var e = &initfs_entries[idx];
-    e.* = .{};
+    @memset(@as([*]u8, @ptrCast(e))[0..@sizeOf(InitFSFile)], 0);
 
     const copy_len = @min(name.len, e.name.len);
     @memcpy(e.name[0..copy_len], name[0..copy_len]);
@@ -424,8 +424,6 @@ fn createWindowsDirectoryTree() void {
 
     // Create root (will be named by mount prefix)
     _ = allocEntry(ROOT_NAME, true, INITFS_ROOT_PARENT);
-    const root_idx = 0;
-    _ = root_idx;
 
     // Helper to create directory and return its index
     const createDir = struct {
@@ -462,14 +460,14 @@ fn createWindowsDirectoryTree() void {
 
         const acc = createDir(pf, "Accessories");
         {
-            createDir(acc, "Notepad");
-            createDir(acc, "Calculator");
-            createDir(acc, "Paint");
-            createDir(acc, "WordPad");
-            createDir(acc, "System Information");
-            createDir(acc, "Character Map");
-            createDir(acc, "Snipping Tool");
-            createDir(acc, "Remote Desktop Connection");
+            _ = createDir(acc, "Notepad");
+            _ = createDir(acc, "Calculator");
+            _ = createDir(acc, "Paint");
+            _ = createDir(acc, "WordPad");
+            _ = createDir(acc, "System Information");
+            _ = createDir(acc, "Character Map");
+            _ = createDir(acc, "Snipping Tool");
+            _ = createDir(acc, "Remote Desktop Connection");
         }
     }
 
@@ -494,8 +492,7 @@ fn createWindowsDirectoryTree() void {
         // Default user
         const def = createDir(users, "Default");
         {
-            const dd = createDir(def, "Desktop");
-            _ = dd;
+            _ = createDir(def, "Desktop");
             const doc = createDir(def, "Documents");
             createFile(doc, "desktop.ini", "[Desktop Entry]\r\n");
             const appd = createDir(def, "AppData");
@@ -622,7 +619,6 @@ fn createWindowsDirectoryTree() void {
             }
         }
 
-        // SysWOW64
         _ = createDir(windows, "SysWOW64");
 
         // Resources
@@ -664,14 +660,14 @@ fn createWindowsDirectoryTree() void {
 pub fn init() void {
     if (initfs_initialized) return;
 
-    // Initialize entry array
+    // Initialize entry array (use @memset since InitFSFile has non-default-initializable fields)
     for (&initfs_entries) |*e| {
-        e.* = .{};
+        @memset(@as([*]u8, @ptrCast(e))[0..@sizeOf(InitFSFile)], 0);
     }
 
-    // Initialize handles
+    // Initialize handles (use @memset since InitFSHandle has non-default-initializable fields)
     for (&initfs_handles) |*h| {
-        h.* = .{};
+        @memset(@as([*]u8, @ptrCast(h))[0..@sizeOf(InitFSHandle)], 0);
     }
 
     // Create directory tree

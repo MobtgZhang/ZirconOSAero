@@ -30,7 +30,7 @@
 
 const std = @import("std");
 const klog = @import("./rtl/klog.zig");
-const mm = @import("./mm/mm.zig");
+const mm = @import("./mm/vm.zig");
 const ps = @import("./ps/process.zig");
 const io = @import("./io/io.zig");
 const vm = @import("./mm/vm.zig");
@@ -230,14 +230,14 @@ pub fn dispatchShadowSyscall(syscall_num: u32, argc: u64, args: *const [6]u64) i
 }
 
 /// Architecture specific syscall entry point for x86_64
-export fn syscall_entry_x64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) callconv(.C) u64 {
+export fn syscall_entry_x64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) u64 {
     const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
     const status = dispatchSyscall(@intCast(syscall_num), 6, &args);
     return @bitCast(status);
 }
 
 /// Architecture specific syscall entry point for ARM64
-export fn syscall_entry_arm64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64, arg7: u64, arg8: u64) callconv(.C) u64 {
+export fn syscall_entry_arm64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64, arg7: u64, arg8: u64) u64 {
     _ = arg7;
     _ = arg8;
     const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
@@ -246,14 +246,14 @@ export fn syscall_entry_arm64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64,
 }
 
 /// Architecture specific syscall entry point for LoongArch64
-export fn syscall_entry_loongarch64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) callconv(.C) u64 {
+export fn syscall_entry_loongarch64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) u64 {
     const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
     const status = dispatchSyscall(@intCast(syscall_num), 6, &args);
     return @bitCast(status);
 }
 
 /// Architecture specific syscall entry point for RISC-V64
-export fn syscall_entry_riscv64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) callconv(.C) u64 {
+export fn syscall_entry_riscv64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) u64 {
     const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
     const status = dispatchSyscall(@intCast(syscall_num), 6, &args);
     return @bitCast(status);

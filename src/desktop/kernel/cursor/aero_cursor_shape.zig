@@ -16,8 +16,8 @@
 // License along with this library; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
-//! Aero 箭头光标位图（与 `desktop/aero/src/cursor.zig` 中 `aero_cursor_bitmap` 一致）。
-//! 内核帧缓冲路径不加载 SVG，仅使用此数组绘制；修改形状时请与 Aero 库同步。
+//! Aero 箭头光标位图（与 `src/desktop/dwm/compositor/` 中光标定义一致）。
+//! 内核帧缓冲路径不加载 SVG，仅使用此数组绘制；修改形状时请与 DWM 库同步。
 //! 其它形态为壳层命中测试用近似（与 `resources/cursors/*.svg` 语义对应，非 SVG 渲染）。
 //!
 //! 编码：0=透明，1=填充，2=描边，3=玻璃高光，4=内发光

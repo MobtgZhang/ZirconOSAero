@@ -18,7 +18,7 @@
 
 //! Desktop shared root (cross-stack consolidation entry).
 //! 架构分层：
-//! - aero: 用户空间Aero桌面环境（完整DWM合成器、窗口管理器、Shell应用）
+//! - dwm: 新 D3D10 桌面窗口管理器（完整合成器、窗口管理器、Shell应用）
 //! - kernel: 内核空间桌面渲染路径（帧缓冲渲染、内核级UI组件、快速响应路径）
 //! - 公共组件: strings、icons、dwm、events等跨层共享定义
 
@@ -28,5 +28,6 @@ pub const dwm = @import("dwm/root.zig");
 pub const events = @import("events.zig");
 pub const applications = @import("applications/root.zig");
 
-pub const aero = @import("aero/src/root.zig");
+// 桥接层：提供旧 Aero API 兼容
+
 pub const kernel_desktop = @import("kernel/root.zig");

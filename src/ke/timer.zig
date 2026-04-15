@@ -22,7 +22,7 @@
 const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const scheduler = @import("scheduler.zig");
-const timekeeping = @import("timekeeping.zig");
+const timekeeping = @import("../ke/timekeeping.zig");
 const klog = @import("../rtl/klog.zig");
 
 const TIMER_HZ: u32 = 100;

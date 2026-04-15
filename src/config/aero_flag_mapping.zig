@@ -20,7 +20,7 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/config/aero_flag_mapping.zig
-// Purpose: Documented mapping between kernel `KernelCompositorSurfaceFlags` and userland Aero `SurfaceFlags` (single semantic source).
+// Purpose: Documented mapping between kernel `KernelCompositorSurfaceFlags` and userland DWM `SurfaceFlags` (single semantic source).
 //
 // This is an independent clean-room implementation.
 // Reference: https://learn.microsoft.com/windows/win32/learnwin32/the-desktop-window-manager
@@ -32,8 +32,8 @@ const dwm_surface_spec = @import("dwm_surface_spec.zig");
 /// Re-export for tests / 桌面侧避免再挂一层 `dwm_surface_spec` 模块（Zig 15：同文件不可属多 module root）。
 pub const KernelCompositorSurfaceFlags = dwm_surface_spec.KernelCompositorSurfaceFlags;
 
-/// Mirrors **field names and order** of `src/desktop/aero/src/compositor.zig` `SurfaceFlags`.
-/// `compositor.zig` calls `assertUserlandSurfaceFlagsLayout(SurfaceFlags)` so drift fails the desktop build.
+/// Mirrors **field names and order** of `src/desktop/dwm/compositor/` `SurfaceFlags`.
+/// `surface_mgr.zig` calls `assertUserlandSurfaceFlagsLayout(SurfaceFlags)` so drift fails the desktop build.
 pub const UserlandSurfaceFlagsLayout = struct {
     has_alpha: bool = false,
     needs_shadow: bool = false,
@@ -104,7 +104,7 @@ comptime {
     }
 }
 
-/// Map kernel compositor flags → userland logical model (Aero compositor).
+/// Map kernel compositor flags → userland logical model (DWM compositor).
 /// Semantics: DesktopManagerSpec / MS Learn concepts — not a Windows code port.
 pub fn kernelToUserland(kernel: dwm_surface_spec.KernelCompositorSurfaceFlags) UserlandSurfaceFlagsLayout {
     return .{

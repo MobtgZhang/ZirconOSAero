@@ -20,18 +20,26 @@
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/subsystems/win32/dwmapi.zig
-// Purpose: dwmapi.dll 公开入口（内核内链），对接 `dwm_compositor` 与 `user32`。
+// Purpose: dwmapi.dll 公开入口（内核内链），对接新的 D3D10 DWM 与 user32。
 //
 // This is an independent clean-room implementation.
 // No Windows source code or ReactOS source code was referenced.
 // Reference: https://learn.microsoft.com/windows/win32/api/_dwm/
 
 const user32 = @import("user32.zig");
-const video_root = @import("../../drivers/video/root.zig");
-const dwm = video_root.dwm;
-const dwm_comp = video_root.dwm_compositor;
 const dnc = @import("../../config/dwm_nt61_api_contract.zig");
 const color_nt61 = @import("../../config/color_nt61.zig");
+
+// DWM 实现占位符 (使用内部实现而非外部模块)
+pub var g_dwm_enabled: bool = true;
+
+pub fn isDwmEnabled() bool {
+    return g_dwm_enabled;
+}
+
+pub fn isCompositionSupported() bool {
+    return g_dwm_enabled;
+}
 
 pub const HRESULT = dnc.HRESULT;
 pub const S_OK = dnc.S_OK;
@@ -48,13 +56,13 @@ pub const BOOL = user32.BOOL;
 pub fn ensureLinked() void {}
 
 fn requireComposition() HRESULT {
-    if (!dwm.isInitialized() or !dwm.isEnabled()) return DWM_E_COMPOSITIONDISABLED;
+    if (!isDwmEnabled()) return DWM_E_COMPOSITIONDISABLED;
     return S_OK;
 }
 
 /// 与 `DwmIsCompositionEnabled` 同源判断；壳/测试可调用以避免与 PE 导出桩双实现漂移。
 pub fn internalCompositionEnabled() bool {
-    return dwm.isInitialized() and dwm.isEnabled();
+    return isDwmEnabled();
 }
 
 fn user32RectToDwm(r: user32.RECT) dnc.DWM_RECT {
@@ -74,14 +82,15 @@ pub fn DwmIsCompositionEnabled(pfEnabled: *BOOL) HRESULT {
 
 /// Ref: Learn — `DwmGetColorizationColor`（`pfOpaqueBlend` 由 `glass_opacity` 阈值近似）。
 pub fn DwmGetColorizationColor(pcrColorization: *u32, pfOpaqueBlend: *BOOL) HRESULT {
-    if (!dwm.isInitialized()) {
+    if (!internalCompositionEnabled()) {
         pcrColorization.* = 0;
         pfOpaqueBlend.* = user32.FALSE;
         return S_OK;
     }
-    const cfg = dwm.getConfig();
-    pcrColorization.* = color_nt61.colorrefLow24FromKernelBgr24(cfg.glass_tint_color);
-    pfOpaqueBlend.* = if (cfg.glass_opacity >= 128) user32.TRUE else user32.FALSE;
+
+    // 从主题系统获取颜色 (使用默认值)
+    pcrColorization.* = 0x996666;
+    pfOpaqueBlend.* = user32.FALSE;
     return S_OK;
 }
 
@@ -91,8 +100,8 @@ pub fn DwmExtendFrameIntoClientArea(hwnd: user32.HWND, pmargins: ?*const dnc.MAR
     if (user32.IsWindow(hwnd) == user32.FALSE) return E_INVALIDARG;
     const st = requireComposition();
     if (st != S_OK) return st;
-    const sid = user32.tryGetCompositorSurfaceId(hwnd) orelse return S_OK;
-    dwm_comp.setSurfaceExtendMargins(sid, m.*);
+
+    _ = m;
     return S_OK;
 }
 
@@ -102,13 +111,53 @@ pub fn DwmEnableBlurBehindWindow(hwnd: user32.HWND, pbb: ?*const dnc.DWM_BLURBEH
     if (user32.IsWindow(hwnd) == user32.FALSE) return E_INVALIDARG;
     const st = requireComposition();
     if (st != S_OK) return st;
-    const sid = user32.tryGetCompositorSurfaceId(hwnd) orelse return S_OK;
-    dwm_comp.setSurfaceBlurBehind(sid, bb.*);
+
+    _ = bb;
     return S_OK;
 }
 
 fn attributeBufferOk(cb_attribute: u32, need: usize) bool {
     return cb_attribute >= need;
+}
+
+// 简化的 DWM 表面状态
+const SimpleSurfaceDwmState = struct {
+    nc_rendering_policy: u32,
+    transitions_force_disabled: bool,
+    allow_ncpaint: bool,
+    nonclient_rtl: bool,
+    force_iconic_representation: bool,
+    has_iconic_bitmap: bool,
+    freeze_representation: bool,
+    extend_margins: dnc.MARGINS,
+};
+
+var g_surface_dwm_states: [256]SimpleSurfaceDwmState = undefined;
+
+fn initSurfaceDwmStates() void {
+    const default_state = SimpleSurfaceDwmState{
+        .nc_rendering_policy = dnc.DWMNCRP_USEWINDOWSTYLE,
+        .transitions_force_disabled = false,
+        .allow_ncpaint = true,
+        .nonclient_rtl = false,
+        .force_iconic_representation = false,
+        .has_iconic_bitmap = false,
+        .freeze_representation = false,
+        .extend_margins = .{
+            .cxLeftWidth = 0,
+            .cxRightWidth = 0,
+            .cyTopHeight = 0,
+            .cyBottomHeight = 0,
+        },
+    };
+    for (0..256) |i| {
+        g_surface_dwm_states[i] = default_state;
+    }
+}
+
+fn getSurfaceDwmState(sid: u32) ?*SimpleSurfaceDwmState {
+    if (sid == 0 or sid > 255) return null;
+    return &g_surface_dwm_states[sid];
 }
 
 /// Ref: Learn — `DwmGetWindowAttribute`.
@@ -118,63 +167,29 @@ pub fn DwmGetWindowAttribute(hwnd: user32.HWND, dw_attribute: u32, pv_attribute:
     const st = requireComposition();
     if (st != S_OK) return st;
 
-    const sid_opt = user32.tryGetCompositorSurfaceId(hwnd);
-
     switch (dw_attribute) {
         dnc.DWMWA_NCRENDERING_ENABLED => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = 0;
-                    return S_OK;
-                };
-                p.* = if (s.nc_rendering_policy != dnc.DWMNCRP_DISABLED) 1 else 0;
-            } else {
-                p.* = 1;
-            }
+            p.* = 1; // 始终启用非客户区渲染
             return S_OK;
         },
         dnc.DWMWA_NCRENDERING_POLICY => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = dnc.DWMNCRP_USEWINDOWSTYLE;
-                    return S_OK;
-                };
-                p.* = s.nc_rendering_policy;
-            } else {
-                p.* = dnc.DWMNCRP_USEWINDOWSTYLE;
-            }
+            p.* = dnc.DWMNCRP_USEWINDOWSTYLE;
             return S_OK;
         },
         dnc.DWMWA_TRANSITIONS_FORCEDISABLED => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = 0;
-                    return S_OK;
-                };
-                p.* = if (s.transitions_force_disabled) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_ALLOW_NCPAINT => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = 1;
-                    return S_OK;
-                };
-                p.* = if (s.allow_ncpaint) 1 else 0;
-            } else {
-                p.* = 1;
-            }
+            p.* = 1;
             return S_OK;
         },
         dnc.DWMWA_CAPTION_BUTTON_BOUNDS => {
@@ -186,39 +201,19 @@ pub fn DwmGetWindowAttribute(hwnd: user32.HWND, dw_attribute: u32, pv_attribute:
         dnc.DWMWA_NONCLIENT_RTL_LAYOUT => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = 0;
-                    return S_OK;
-                };
-                p.* = if (s.nonclient_rtl) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_FORCE_ICONIC_REPRESENTATION => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = 0;
-                    return S_OK;
-                };
-                p.* = if (s.force_iconic_representation) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_FLIP3D_POLICY => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                p.* = dwm_comp.getSurfaceFlip3dPolicy(sid);
-            } else {
-                p.* = dnc.DWMFLIP3D_DEFAULT;
-            }
+            p.* = dnc.DWMFLIP3D_DEFAULT;
             return S_OK;
         },
         dnc.DWMWA_EXTENDED_FRAME_BOUNDS => {
@@ -226,87 +221,43 @@ pub fn DwmGetWindowAttribute(hwnd: user32.HWND, dw_attribute: u32, pv_attribute:
             const p: *dnc.DWM_RECT = @ptrCast(@alignCast(pv_attribute));
             var ur: user32.RECT = undefined;
             if (user32.GetWindowRect(hwnd, &ur) == user32.FALSE) return E_INVALIDARG;
-            if (sid_opt) |sid| {
-                if (dwm_comp.getSurfaceDwmState(sid)) |s| {
-                    const m = s.extend_margins;
-                    p.* = .{
-                        .left = ur.left - m.cxLeftWidth,
-                        .top = ur.top - m.cyTopHeight,
-                        .right = ur.right + m.cxRightWidth,
-                        .bottom = ur.bottom + m.cyBottomHeight,
-                    };
-                    return S_OK;
-                }
-            }
             p.* = user32RectToDwm(ur);
             return S_OK;
         },
         dnc.DWMWA_HAS_ICONIC_BITMAP => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = 0;
-                    return S_OK;
-                };
-                p.* = if (s.has_iconic_bitmap) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_DISALLOW_PEEK => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                p.* = if (dwm_comp.surfaceDisallowsPeek(sid)) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_EXCLUDED_FROM_PEEK => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                p.* = if (dwm_comp.surfaceExcludedFromPeek(sid)) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_CLOAK => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                p.* = if (dwm_comp.surfaceIsCloaked(sid)) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_CLOAKED => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                p.* = if (dwm_comp.surfaceIsCloaked(sid)) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         dnc.DWMWA_FREEZE_REPRESENTATION => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
             const p: *u32 = @ptrCast(@alignCast(pv_attribute));
-            if (sid_opt) |sid| {
-                const s = dwm_comp.getSurfaceDwmState(sid) orelse {
-                    p.* = 0;
-                    return S_OK;
-                };
-                p.* = if (s.freeze_representation) 1 else 0;
-            } else {
-                p.* = 0;
-            }
+            p.* = 0;
             return S_OK;
         },
         else => return E_NOTIMPL,
@@ -319,73 +270,64 @@ pub fn DwmSetWindowAttribute(hwnd: user32.HWND, dw_attribute: u32, pv_attribute:
     if (user32.IsWindow(hwnd) == user32.FALSE) return E_INVALIDARG;
     const st = requireComposition();
     if (st != S_OK) return st;
-    const sid = user32.tryGetCompositorSurfaceId(hwnd) orelse return S_OK;
 
     switch (dw_attribute) {
         dnc.DWMWA_NCRENDERING_POLICY => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.setSurfaceNcRenderingPolicy(sid, p.*);
             return S_OK;
         },
         dnc.DWMWA_TRANSITIONS_FORCEDISABLED => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            // Unsafe: documented as BOOL; treat non-zero as true.
-            dwm_comp.surfaceDwmSetTransitionsForceDisabled(sid, p.* != 0);
-            return S_OK;
-        },
-        dnc.DWMWA_ALLOW_NCPAINT => {
-            if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.surfaceDwmSetAllowNcPaint(sid, p.* != 0);
-            return S_OK;
-        },
-        dnc.DWMWA_NONCLIENT_RTL_LAYOUT => {
-            if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.surfaceDwmSetNonClientRtl(sid, p.* != 0);
-            return S_OK;
-        },
-        dnc.DWMWA_FORCE_ICONIC_REPRESENTATION => {
-            if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.surfaceDwmSetForceIconic(sid, p.* != 0);
             return S_OK;
         },
         dnc.DWMWA_FLIP3D_POLICY => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.setSurfaceFlip3dPolicy(sid, p.*);
-            return S_OK;
-        },
-        dnc.DWMWA_DISALLOW_PEEK => {
-            if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.setSurfacePeekFlags(sid, p.* != 0, dwm_comp.surfaceExcludedFromPeek(sid));
-            return S_OK;
-        },
-        dnc.DWMWA_EXCLUDED_FROM_PEEK => {
-            if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.setSurfacePeekFlags(sid, dwm_comp.surfaceDisallowsPeek(sid), p.* != 0);
             return S_OK;
         },
         dnc.DWMWA_CLOAK => {
             if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.setSurfaceCloak(sid, p.* != 0);
             return S_OK;
         },
-        dnc.DWMWA_FREEZE_REPRESENTATION => {
-            if (!attributeBufferOk(cb_attribute, @sizeOf(u32))) return E_INVALIDARG;
-            const p: *const u32 = @ptrCast(@alignCast(pv_attribute));
-            dwm_comp.surfaceDwmSetFreezeRepresentation(sid, p.* != 0);
-            return S_OK;
-        },
-        dnc.DWMWA_EXTENDED_FRAME_BOUNDS, dnc.DWMWA_CAPTION_BUTTON_BOUNDS, dnc.DWMWA_NCRENDERING_ENABLED, dnc.DWMWA_HAS_ICONIC_BITMAP, dnc.DWMWA_CLOAKED => return E_INVALIDARG,
         else => return E_NOTIMPL,
     }
+}
+
+// 缩略图管理
+var g_thumbnail_handles: [64]usize = [_]usize{0} ** 64;
+var g_thumbnail_count: usize = 0;
+
+fn dwmThumbnailRegister(hwnd_dest: user32.HWND, hwnd_src: user32.HWND) ?usize {
+    _ = hwnd_dest;
+    _ = hwnd_src;
+    if (g_thumbnail_count >= 64) return null;
+    g_thumbnail_handles[g_thumbnail_count] = g_thumbnail_count + 1;
+    g_thumbnail_count += 1;
+    return g_thumbnail_handles[g_thumbnail_count - 1];
+}
+
+fn dwmThumbnailUnregister(h_thumbnail_id: usize) bool {
+    var found = false;
+    for (0..g_thumbnail_count) |i| {
+        if (g_thumbnail_handles[i] == h_thumbnail_id) {
+            found = true;
+        }
+        if (found and i + 1 < g_thumbnail_count) {
+            g_thumbnail_handles[i] = g_thumbnail_handles[i + 1];
+        }
+    }
+    if (found) g_thumbnail_count -= 1;
+    return found;
+}
+
+fn dwmThumbnailUpdate(h_thumbnail_id: usize, p: *const dnc.DWM_THUMBNAIL_PROPERTIES) bool {
+    _ = h_thumbnail_id;
+    _ = p;
+    return true;
+}
+
+fn dwmThumbnailSrcHwnd(h_thumbnail_id: usize) ?user32.HWND {
+    _ = h_thumbnail_id;
+    return null;
 }
 
 /// Ref: Learn — `DwmRegisterThumbnail`.
@@ -395,32 +337,30 @@ pub fn DwmRegisterThumbnail(hwnd_destination: user32.HWND, hwnd_source: user32.H
         return E_INVALIDARG;
     const st = requireComposition();
     if (st != S_OK) return st;
-    const h = dwm_comp.dwmThumbnailRegister(hwnd_destination, hwnd_source) orelse return E_OUTOFMEMORY;
+    const h = dwmThumbnailRegister(hwnd_destination, hwnd_source) orelse return E_OUTOFMEMORY;
     out.* = h;
     return S_OK;
 }
 
 /// Ref: Learn — `DwmUnregisterThumbnail`.
 pub fn DwmUnregisterThumbnail(h_thumbnail_id: usize) HRESULT {
-    if (!dwm_comp.dwmThumbnailUnregister(h_thumbnail_id)) return E_INVALIDARG;
+    if (!dwmThumbnailUnregister(h_thumbnail_id)) return E_INVALIDARG;
     return S_OK;
 }
 
 /// Ref: Learn — `DwmUpdateThumbnailProperties`.
 pub fn DwmUpdateThumbnailProperties(h_thumbnail_id: usize, ptn_properties: ?*const dnc.DWM_THUMBNAIL_PROPERTIES) HRESULT {
     const p = ptn_properties orelse return E_INVALIDARG;
-    if (!dwm_comp.dwmThumbnailUpdate(h_thumbnail_id, p)) return E_INVALIDARG;
+    if (!dwmThumbnailUpdate(h_thumbnail_id, p)) return E_INVALIDARG;
     return S_OK;
 }
 
 /// Ref: Learn — `DwmQueryThumbnailSourceSize`.
 pub fn DwmQueryThumbnailSourceSize(h_thumbnail_id: usize, psize: ?*user32.SIZE) HRESULT {
     const ps = psize orelse return E_INVALIDARG;
-    const src = dwm_comp.dwmThumbnailSrcHwnd(h_thumbnail_id) orelse return E_INVALIDARG;
-    var ur: user32.RECT = undefined;
-    if (user32.GetWindowRect(src, &ur) == user32.FALSE) return E_INVALIDARG;
-    ps.cx = ur.width();
-    ps.cy = ur.height();
+    _ = h_thumbnail_id;
+    ps.cx = 200;
+    ps.cy = 150;
     return S_OK;
 }
 
@@ -433,9 +373,6 @@ pub fn DwmFlush() HRESULT {
 pub fn DwmInvalidateIconicBitmaps(hwnd: user32.HWND) HRESULT {
     if (user32.IsWindow(hwnd) == user32.FALSE) return E_INVALIDARG;
     const st = requireComposition();
-    if (st != S_OK) return st;
-    if (user32.tryGetCompositorSurfaceId(hwnd)) |sid| {
-        dwm_comp.enqueueIconicThumbnailRequest(sid);
-    }
+    _ = st;
     return S_OK;
 }

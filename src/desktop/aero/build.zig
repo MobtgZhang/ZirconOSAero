@@ -1,21 +1,3 @@
-// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
-//
-// ZirconOS
-//
-// This library is free software; you can redistribute it and/or
-// modify it under the terms of the GNU Lesser General Public
-// License as published by the Free Software Foundation; either
-// version 2.1 of the License, or (at your option) any later version.
-//
-// This library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-// Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public
-// License along with this library; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
-
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -40,6 +22,20 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Add DWM module dependency
+    const dwm_mod = b.createModule(.{
+        .root_source_file = b.path("../dwm/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add image library module dependency
+    const ico_mod = b.createModule(.{
+        .root_source_file = b.path("../../libs/image/ico.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -48,6 +44,8 @@ pub fn build(b: *std.Build) void {
     lib_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
     lib_mod.addImport("aero_flag_mapping", aero_flag_mapping_mod);
     lib_mod.addImport("dwm_nt61_api_contract", dwm_nt61_api_contract_mod);
+    lib_mod.addImport("dwm", dwm_mod);
+    lib_mod.addImport("ico", ico_mod);
 
     // Static library (.lib) — Windows-compatible archive
     const lib = b.addLibrary(.{
@@ -64,6 +62,8 @@ pub fn build(b: *std.Build) void {
     });
     dll_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
     dll_mod.addImport("aero_flag_mapping", aero_flag_mapping_mod);
+    dll_mod.addImport("dwm", dwm_mod);
+    dll_mod.addImport("ico", ico_mod);
 
     // DLL — Windows-compatible dynamic library (PE format when targeting windows)
     const dll = b.addLibrary(.{
@@ -84,6 +84,8 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
     exe_mod.addImport("aero_flag_mapping", aero_flag_mapping_mod);
     exe_mod.addImport("dwm_nt61_api_contract", dwm_nt61_api_contract_mod);
+    exe_mod.addImport("dwm", dwm_mod);
+    exe_mod.addImport("ico", ico_mod);
 
     // EXE — Windows PE-compatible executable
     const exe = b.addExecutable(.{
@@ -100,6 +102,8 @@ pub fn build(b: *std.Build) void {
     test_mod.addImport("nt61_aero_defaults", nt61_aero_defaults_mod);
     test_mod.addImport("aero_flag_mapping", aero_flag_mapping_mod);
     test_mod.addImport("dwm_nt61_api_contract", dwm_nt61_api_contract_mod);
+    test_mod.addImport("dwm", dwm_mod);
+    test_mod.addImport("ico", ico_mod);
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_mod,

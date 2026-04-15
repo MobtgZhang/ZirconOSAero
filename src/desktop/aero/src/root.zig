@@ -1,21 +1,3 @@
-// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
-//
-// ZirconOS
-//
-// This library is free software; you can redistribute it and/or
-// modify it under the terms of the GNU Lesser General Public
-// License as published by the Free Software Foundation; either
-// version 2.1 of the License, or (at your option) any later version.
-//
-// This library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-// Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public
-// License along with this library; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
-
 //! ZirconOS Aero — DWM-composited Glass Desktop Theme
 //! Library root: re-exports all public modules for use by the kernel
 //! display compositor and the standalone desktop shell executable.
@@ -26,8 +8,7 @@
 //! Each layer communicates through the exported Zig API below.
 
 pub const theme = @import("theme.zig");
-pub const dwm = @import("dwm.zig");
-pub const dwm_internal = @import("dwm_internal.zig");
+pub const dwm = @import("dwm");
 pub const desktop = @import("desktop.zig");
 pub const taskbar = @import("taskbar.zig");
 pub const startmenu = @import("startmenu.zig");
@@ -43,16 +24,11 @@ pub const pe_icon_resource = @import("pe_icon_resource.zig");
 pub const pe_icon_loader = @import("pe_icon_loader.zig");
 pub const shell_icons_manifest = @import("shell_icons_manifest.zig");
 pub const font_loader = @import("font_loader.zig");
-pub const window_manager = @import("window_manager.zig");
-pub const compositor = @import("compositor.zig");
-pub const renderer = @import("renderer.zig");
-pub const input = @import("input.zig");
-pub const cursor = @import("cursor.zig");
 
 // ── Theme identity ──
 
 pub const theme_name = "Aero";
-pub const theme_version = "1.3.0";
+pub const theme_version = "1.2.0";
 pub const theme_description = "ZirconAero — glass desktop (Harmony wallpaper, taskbar, tray, gadgets, compositor blur)";
 
 // ── Available theme variants ──

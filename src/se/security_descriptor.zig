@@ -21,9 +21,8 @@
 //! Clean-room implementation based on Microsoft public documentation
 
 const std = @import("std");
-const token = @import("token.zig");
-const SID = token.SID;
-const ACCESS_MASK = @import("../ob/object.zig").ACCESS_MASK;
+const SID = @import("sid.zig").SID;
+const ACCESS_MASK = u32;
 
 /// ACE (Access Control Entry) structure
 /// Compatible with NT61 ACE format
@@ -156,40 +155,46 @@ pub const SECURITY_DESCRIPTOR = struct {
     pub fn initDefault() SECURITY_DESCRIPTOR {
         var sd = SECURITY_DESCRIPTOR{
             .control = .{ .dacl_present = true },
-            .owner = @constCast(&token.SYSTEM_SID),
-            .group = @constCast(&token.SYSTEM_SID),
+            .owner = undefined,
+            .group = undefined,
         };
 
         const dacl = std.heap.page_allocator.create(ACL) catch return sd;
         dacl.* = .{};
 
+        const sid_mod = @import("sid.zig");
         // Full access for SYSTEM
-        _ = dacl.addAce(ACE.initAllowed(0xFFFF_FFFF, token.SYSTEM_SID));
+        _ = dacl.addAce(ACE.initAllowed(0xFFFF_FFFF, sid_mod.SYSTEM_SID));
         // Full access for administrators
-        _ = dacl.addAce(ACE.initAllowed(0xFFFF_FFFF, token.ADMIN_SID));
+        _ = dacl.addAce(ACE.initAllowed(0xFFFF_FFFF, sid_mod.ADMIN_SID));
         // Read/execute access for regular users
-        _ = dacl.addAce(ACE.initAllowed(0x001F_FFF1, token.USER_SID));
+        _ = dacl.addAce(ACE.initAllowed(0x001F_FFF1, sid_mod.USER_SID));
 
+        sd.owner = @constCast(&sid_mod.SYSTEM_SID);
+        sd.group = @constCast(&sid_mod.SYSTEM_SID);
         sd.dacl = dacl;
         return sd;
     }
 
     /// Create a security descriptor with no DACL (full access for everyone)
     pub fn initNullDacl() SECURITY_DESCRIPTOR {
+        const sid_mod = @import("sid.zig");
         return .{
             .control = .{ .dacl_present = false },
-            .owner = @constCast(&token.SYSTEM_SID),
-            .group = @constCast(&token.SYSTEM_SID),
+            .owner = @constCast(&sid_mod.SYSTEM_SID),
+            .group = @constCast(&sid_mod.SYSTEM_SID),
         };
     }
 
     /// Check access to this security descriptor for the given token
-    pub fn checkAccess(self: *const SECURITY_DESCRIPTOR, user_token: *const token.Token, desired_access: ACCESS_MASK) bool {
+    pub fn checkAccess(self: *const SECURITY_DESCRIPTOR, user_token: *const anyopaque, desired_access: ACCESS_MASK) bool {
+        const token_mod = @import("token.zig");
+        const tok: *const token_mod.Token = @ptrCast(@alignCast(user_token));
         // SYSTEM always has full access
-        if (user_token.owner.eql(token.SYSTEM_SID)) return true;
+        if (tok.owner.eql(token_mod.SYSTEM_SID)) return true;
 
         // Elevated tokens get full access
-        if (user_token.is_elevated) return true;
+        if (tok.is_elevated) return true;
 
         // If no DACL present, allow full access
         if (!self.control.dacl_present or self.dacl == null) return true;
@@ -201,7 +206,7 @@ pub const SECURITY_DESCRIPTOR = struct {
         // Process all ACEs in order
         for (dacl.aces[0..dacl.ace_count]) |ace| {
             // Check if ACE applies to this token
-            if (!user_token.owner.eql(ace.sid)) continue;
+            if (!tok.owner.eql(ace.sid)) continue;
 
             switch (ace.type) {
                 .access_denied => {
@@ -243,27 +248,30 @@ pub const ObjectSecurity = struct {
         };
     }
 
-    pub fn checkAccess(self: *const ObjectSecurity, user_token: *const token.Token, desired_access: ACCESS_MASK) bool {
+    pub fn checkAccess(self: *const ObjectSecurity, user_token: *const anyopaque, desired_access: ACCESS_MASK) bool {
         return self.sd.checkAccess(user_token, desired_access);
     }
 };
 
 test "SECURITY_DESCRIPTOR default allows SYSTEM full access" {
+    const token_mod = @import("token.zig");
     const sd = SECURITY_DESCRIPTOR.initDefault();
-    const sys_token = token.createSystemToken();
+    const sys_token = token_mod.createSystemToken();
     try std.testing.expect(sd.checkAccess(&sys_token, 0xFFFF_FFFF));
 }
 
 test "SECURITY_DESCRIPTOR default allows admin full access" {
+    const token_mod = @import("token.zig");
     const sd = SECURITY_DESCRIPTOR.initDefault();
-    var admin_token = token.createUserToken(0);
+    var admin_token = token_mod.createUserToken(0);
     admin_token.is_elevated = true;
     try std.testing.expect(sd.checkAccess(&admin_token, 0xFFFF_FFFF));
 }
 
 test "SECURITY_DESCRIPTOR default allows user read access but denies write" {
+    const token_mod = @import("token.zig");
     const sd = SECURITY_DESCRIPTOR.initDefault();
-    const user_token = token.createUserToken(0);
+    const user_token = token_mod.createUserToken(0);
     // Read access should be allowed
     try std.testing.expect(sd.checkAccess(&user_token, 0x0000_0001));
     // Write/delete access should be denied
@@ -271,7 +279,8 @@ test "SECURITY_DESCRIPTOR default allows user read access but denies write" {
 }
 
 test "Null DACL allows all access" {
+    const token_mod = @import("token.zig");
     const sd = SECURITY_DESCRIPTOR.initNullDacl();
-    const user_token = token.createUserToken(0);
+    const user_token = token_mod.createUserToken(0);
     try std.testing.expect(sd.checkAccess(&user_token, 0xFFFF_FFFF));
 }

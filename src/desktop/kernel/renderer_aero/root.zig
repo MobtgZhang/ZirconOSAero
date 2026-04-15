@@ -16,7 +16,8 @@
 // License along with this library; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
-//! Aero renderer — kernel framebuffer rendering path.
+//! DWM renderer — kernel framebuffer rendering path.
+//! 继承自旧的 Aero 渲染器，现在映射到新的 D3D10 DWM 系统。
 
 pub const renderer_aero = @import("renderer_aero.zig");
 

@@ -1,21 +1,3 @@
-// Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
-//
-// ZirconOS
-//
-// This library is free software; you can redistribute it and/or
-// modify it under the terms of the GNU Lesser General Public
-// License as published by the Free Software Foundation; either
-// version 2.1 of the License, or (at your option) any later version.
-//
-// This library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-// Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public
-// License along with this library; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
-
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ZirconOSAero - NT 6.1 Compatible Kernel
@@ -31,8 +13,7 @@ const std = @import("std");
 const icon_resource_ids = @import("icon_resource_ids.zig");
 const pe_icon_resource = @import("pe_icon_resource.zig");
 const shell_icons_manifest = @import("shell_icons_manifest.zig");
-const ico_lib = @import("../../../libs/image/ico.zig");
-const bmp_lib = @import("../../../libs/image/bmp.zig");
+const ico_lib = @import("ico");
 
 /// Opaque handle for a decoded icon surface (future: DIB/RGBA / PNG decode).
 pub const DecodedIcon = struct {

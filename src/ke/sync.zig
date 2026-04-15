@@ -65,7 +65,7 @@ pub const Event = struct {
     }
 
     pub fn wait(self: *Event) void {
-        const tk = @import("timekeeping.zig");
+        const tk = @import("../ke/timekeeping.zig");
         const deadline = tk.readInterruptTicks() +| 10_000; // 默认 10 秒超时
         while (!self.checkSignaled()) {
             const now = tk.readInterruptTicks();
@@ -82,7 +82,7 @@ pub const Event = struct {
 
     /// 带超时的等待（单位：滴答数）
     pub fn waitWithTimeout(self: *Event, timeout_ticks: u64) bool {
-        const tk = @import("timekeeping.zig");
+        const tk = @import("../ke/timekeeping.zig");
         const deadline = tk.readInterruptTicks() +| timeout_ticks;
         while (!self.checkSignaled()) {
             const now = tk.readInterruptTicks();

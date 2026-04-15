@@ -1302,7 +1302,7 @@ pub fn NtClose(handle: HANDLE) NTSTATUS {
     if (obj_type == .event) recycleEventObject(optr);
     if (obj_type == .mutex) recycleMutexObject(optr);
     if (obj_type == .semaphore) recycleSemaphoreObject(optr);
-    if (obj_type == .token) recycleTokenShadow(optr);
+    // token handles are directly managed via handle table, no shadow needed
     return STATUS_SUCCESS;
 }
 
@@ -2856,19 +2856,8 @@ comptime {
     std.debug.assert(@sizeOf(TOKEN_ELEVATION) == 4);
 }
 
-var g_token_shadow: [8]token.Token = undefined;
-var g_token_shadow_used: [8]bool = [_]bool{false} ** 8;
-
-fn recycleTokenShadow(object_ptr: u64) void {
-    var i: usize = 0;
-    while (i < g_token_shadow.len) : (i += 1) {
-        if (g_token_shadow_used[i] and @intFromPtr(&g_token_shadow[i].header) == object_ptr) {
-            g_token_shadow[i] = .{};
-            g_token_shadow_used[i] = false;
-            return;
-        }
-    }
-}
+/// Token shadow arrays have been removed.
+/// Token handles now directly reference the security token via the handle table.
 
 /// 进程令牌的浅拷贝句柄（静态槽位）；`NtClose` 回收槽位。
 pub fn NtOpenProcessToken(process_handle: HANDLE, desired_access: u32, token_handle: *HANDLE) NTSTATUS {
@@ -2878,24 +2867,17 @@ pub fn NtOpenProcessToken(process_handle: HANDLE, desired_access: u32, token_han
     const asp = proc.address_space orelse return STATUS_INVALID_PARAMETER;
     if (!probe.probeUserMemory(asp, @intFromPtr(token_handle), @sizeOf(HANDLE), true))
         return STATUS_ACCESS_VIOLATION;
-    var i: usize = 0;
-    while (i < g_token_shadow.len) : (i += 1) {
-        if (!g_token_shadow_used[i]) {
-            g_token_shadow_used[i] = true;
-            g_token_shadow[i] = target.security_token;
-            const h = proc.handle_table.allocHandle(
-                @intFromPtr(&g_token_shadow[i].header),
-                ob.GENERIC_READ | ob.SYNCHRONIZE,
-                .token,
-            ) orelse {
-                g_token_shadow_used[i] = false;
-                return STATUS_INSUFFICIENT_RESOURCES;
-            };
-            token_handle.* = h;
-            return STATUS_SUCCESS;
-        }
-    }
-    return STATUS_INSUFFICIENT_RESOURCES;
+    // 直接分配句柄指向令牌，无需 shadow 数组
+    const tok_ptr = @intFromPtr(target.security_token);
+    const h = proc.handle_table.allocHandle(
+        tok_ptr,
+        ob.GENERIC_READ | ob.SYNCHRONIZE,
+        .token,
+    ) orelse {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
+    token_handle.* = h;
+    return STATUS_SUCCESS;
 }
 
 pub fn NtQueryInformationToken(

@@ -25,12 +25,24 @@
 // This is an independent clean-room implementation.
 // Reference: Intel SDM Vol.3 — APIC Timer, LVT; mask 8259 IRQ0 后再改 tick 源。
 
-const klog = @import("../../rtl/klog.zig");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 const madt = @import("madt.zig");
 const lapic_smp = @import("lapic_smp.zig");
 const pic = @import("pic.zig");
 const kpcr = @import("../../ke/kpcr.zig");
+
+// klog 在 freestanding 模式下需要，用于日志输出
+// 在 host 测试模式下使用 no-op 日志
+const KlogStub = struct {
+    pub const DEBUG_MODE = false;
+    pub fn info(comptime _: []const u8, _: anytype) void { _ = KlogStub; }
+    pub fn debug(comptime _: []const u8, _: anytype) void { _ = KlogStub; }
+};
+const klog = if (builtin.os.tag == .freestanding)
+    @import("../../rtl/klog.zig")
+else
+    KlogStub;
 
 /// LVT Timer（Intel SDM Table 10-8）；bit 17 = Periodic。
 const REG_LVT_TIMER: u32 = 0x320;

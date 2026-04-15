@@ -25,24 +25,9 @@
 // **P4-B2**：线程级 `Impersonate*` / 还原令牌的 IRQL 与亲和约束为文档化简化；生产语义见 WDK `SeImpersonateClientEx` 类说明。
 
 const std = @import("std");
-const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
-
-pub const SID = struct {
-    authority: u32 = 0,
-    sub_authorities: [4]u32 = .{ 0, 0, 0, 0 },
-    sub_count: u8 = 0,
-
-    pub fn eql(self: SID, other: SID) bool {
-        if (self.authority != other.authority) return false;
-        if (self.sub_count != other.sub_count) return false;
-        var i: u8 = 0;
-        while (i < self.sub_count) : (i += 1) {
-            if (self.sub_authorities[i] != other.sub_authorities[i]) return false;
-        }
-        return true;
-    }
-};
+const ob = @import("../ob/object.zig");
+const SID = @import("sid.zig").SID;
 
 pub const SYSTEM_SID = SID{ .authority = 5, .sub_authorities = .{ 18, 0, 0, 0 }, .sub_count = 1 };
 pub const ADMIN_SID = SID{ .authority = 5, .sub_authorities = .{ 32, 544, 0, 0 }, .sub_count = 2 };
@@ -59,7 +44,7 @@ pub const PRIV_IMPERSONATE: u64 = 1 << 6;
 pub const PRIV_ALL: u64 = 0xFFFFFFFFFFFFFFFF;
 
 pub const Token = struct {
-    header: ob.ObjectHeader = .{ .obj_type = .token },
+    header_obj_type: u16 = 4, // token type enum value
     owner: SID = SYSTEM_SID,
     primary_group: SID = SYSTEM_SID,
     privileges: u64 = 0,
@@ -79,7 +64,7 @@ pub fn createSystemToken() Token {
     const id = next_token_id;
     next_token_id += 1;
     return .{
-        .header = .{ .obj_type = .token },
+        .header_obj_type = 4, // token type
         .owner = SYSTEM_SID,
         .primary_group = SYSTEM_SID,
         .privileges = PRIV_ALL,
@@ -93,7 +78,7 @@ pub fn createUserToken(session_id: u32) Token {
     const id = next_token_id;
     next_token_id += 1;
     return .{
-        .header = .{ .obj_type = .token },
+        .header_obj_type = 4, // token type
         .owner = USER_SID,
         .primary_group = USER_SID,
         .privileges = 0,
@@ -114,18 +99,19 @@ pub fn checkPrivilege(token: *const Token, priv: u64) bool {
 }
 
 /// NT Phase 3: object access via the process handle table (delegates to `ob.HandleTable.checkAccess`).
-pub fn checkHandleAccess(table: *const ob.HandleTable, handle: ob.Handle, required: ob.ACCESS_MASK) bool {
-    return table.checkAccess(handle, required);
+pub fn checkHandleAccess(table: *const anyopaque, handle: u32, required: u32) bool {
+    const t = @as(*const ob.HandleTable, @ptrCast(@alignCast(table)));
+    return t.checkAccess(handle, required);
 }
 
 /// Whether `desired_access` is allowed for a generic file object (DACs simplified).
-pub fn canOpenFileForAccess(tok: *const Token, desired_access: ob.ACCESS_MASK) bool {
+pub fn canOpenFileForAccess(tok: *const Token, desired_access: u32) bool {
     const object_grants: u32 = ob.GENERIC_READ | ob.GENERIC_WRITE | ob.GENERIC_EXECUTE | ob.SYNCHRONIZE;
     return checkAccess(tok, desired_access, object_grants);
 }
 
 /// 注册表键打开（`ObOpenObjectByName` / `NtOpenKey` 路径）的简化 **Key** 掩码；与文件子集同形直至独立 DACL。
-pub fn seRegistryKeyOpenAllowed(tok: *const Token, desired_access: ob.ACCESS_MASK) bool {
+pub fn seRegistryKeyOpenAllowed(tok: *const Token, desired_access: u32) bool {
     const object_grants: u32 = ob.GENERIC_READ | ob.GENERIC_WRITE | ob.GENERIC_EXECUTE | ob.SYNCHRONIZE;
     return seAccessCheckMask(tok, desired_access, object_grants);
 }
@@ -136,7 +122,7 @@ pub fn seRegistryKeyOpenAllowed(tok: *const Token, desired_access: ob.ACCESS_MAS
 /// `NtOpenKey` / `NtCreateKey`（`\Registry\…`）、`NtCreateFile` / `NtOpenFile`（解析后的对象名）；
 /// 文件侧原有 `canOpenFileForAccess` 仍保留；`NtOpenProcess` / `NtOpenThread` 等走独立 `seProcessOpenAllowed` / `seThreadOpenAllowed`；
 /// `NtDuplicateObject` 为句柄表复制无路径。未列出的未来 `NtOpen*` 须在合入时补测。
-pub fn openNamedObjectAccessCheck(path: []const u8, desired: ob.ACCESS_MASK, tok: *const Token) bool {
+pub fn openNamedObjectAccessCheck(path: []const u8, desired: u32, tok: *const Token) bool {
     const n = ob.normalizeNtObjectPath(path);
     // 受保护内核对象视图：`\KernelObjects\…` 或 `\Registry\…\KernelObjects\…` — 仅 SYSTEM 或 **提升** 令牌。
     if (std.mem.indexOf(u8, n, "\\KernelObjects\\") != null) {
@@ -161,7 +147,7 @@ pub fn openNamedObjectAccessCheck(path: []const u8, desired: ob.ACCESS_MASK, tok
 
 /// 最小 SeAccessCheck 等价路径：`desired` 须由 `object_grants` 掩码完全覆盖（与 WDK 访问掩码语义同构的简化）。
 /// Ref: https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck （行为级；无 Windows 源码）。
-pub fn seAccessCheckMask(tok: *const Token, desired: ob.ACCESS_MASK, object_grants: ob.ACCESS_MASK) bool {
+pub fn seAccessCheckMask(tok: *const Token, desired: u32, object_grants: u32) bool {
     if (tok.owner.eql(SYSTEM_SID)) return true;
     if (tok.is_elevated) return true;
     return (object_grants & desired) == desired;

@@ -31,7 +31,7 @@ comptime {
 }
 
 const std = @import("std");
-const vm = @import("mm/vm.zig");
+const vm = @import("../../src/mm/vm.zig");
 const FrameAllocator = vm.FrameAllocator;
 
 test "duplicateUserMappingsForFork then tryCowWriteFault splits child pfn" {

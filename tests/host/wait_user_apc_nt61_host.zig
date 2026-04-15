@@ -35,7 +35,7 @@ const builtin = @import("builtin");
 const wait = @import("ke/wait.zig");
 const apc = @import("ke/apc.zig");
 const sched = @import("ke/scheduler.zig");
-const ob = @import("ob/object.zig");
+const ob = @import("../../src/ob/object.zig");
 const KeApc = @import("ke/apc_object.zig").KeApc;
 
 test "alertable keWaitForSingleObject returns STATUS_USER_APC when user APC pending" {

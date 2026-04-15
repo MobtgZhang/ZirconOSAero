@@ -20,7 +20,7 @@
 // Host test: MIPS64EL NT6.1 MM VA policy and PTE layout (no freestanding assembly).
 
 const std = @import("std");
-const vm = @import("mm/vm.zig");
+const vm = @import("../../src/mm/vm.zig");
 
 const L0_SHIFT: u6 = 30;
 const L1_SHIFT: u6 = 21;

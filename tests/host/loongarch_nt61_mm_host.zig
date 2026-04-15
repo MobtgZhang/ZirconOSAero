@@ -21,9 +21,9 @@
 // 同时覆盖 LoongArch64 ASID 管理非 freestanding 路径（分配/释放/版本）。
 
 const std = @import("std");
-const vm = @import("mm/vm.zig");
+const vm = @import("../../src/mm/vm.zig");
 
-const tlb_la = @import("hal/loongarch64/tlb_flush.zig");
+const tlb_la = @import("../../src/hal/loongarch64/tlb_flush.zig");
 
 const L0_SHIFT: u6 = 36;
 const L1_SHIFT: u6 = 25;
@@ -219,7 +219,7 @@ test "LoongArch 32MiB block size is 2048 pages" {
 
 test "LoongArch page size constant accessible via arch" {
     // 验证页大小常量在 arch 模块中存在。
-    const arch_mod = @import("arch.zig");
+    const arch_mod = @import("../../src/arch.zig");
     const has_page_size = @hasDecl(arch_mod, "PAGE_SIZE");
     try std.testing.expect(has_page_size);
     // PAGE_SIZE 应该大于 0
@@ -227,7 +227,7 @@ test "LoongArch page size constant accessible via arch" {
 }
 
 // ── VAD 语义测试 ──
-const vad_mod = @import("mm/vad.zig");
+const vad_mod = @import("../../src/mm/vad.zig");
 
 test "VAD VadState enum has reserved and committed states" {
     // VAD 必须有 reserved 和 committed 状态以支持 MEM_RESERVE 语义。
@@ -287,7 +287,7 @@ test "LoongArch tryLazyCommitFault page alignment (16KB)" {
         return;
     }
     // 验证 paging.page_size 为 16KB
-    const arch_mod = @import("arch.zig");
+    const arch_mod = @import("../../src/arch.zig");
     const page_size = arch_mod.PAGE_SIZE;
     try std.testing.expectEqual(@as(usize, 16 * 1024), page_size);
 }
@@ -299,7 +299,7 @@ test "LoongArch 16KB page mask calculation" {
         return;
     }
     // 验证页对齐掩码计算
-    const arch_mod = @import("arch.zig");
+    const arch_mod = @import("../../src/arch.zig");
     const page_size: u64 = @intCast(arch_mod.PAGE_SIZE);
     const page_mask: u64 = ~@as(u64, page_size - 1);
 

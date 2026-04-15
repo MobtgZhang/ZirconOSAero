@@ -26,12 +26,12 @@
 // This is an independent clean-room implementation.
 
 const std = @import("std");
-const vm = @import("mm/vm.zig");
+const vm = @import("../../src/mm/vm.zig");
 const FrameAllocator = vm.FrameAllocator;
 
 test "fork large page walk API exists for x86_64 (forEachUser2MiPresentLeaf)" {
     // 验证大页遍历 API 存在
-    const paging = @import("arch.zig").impl.paging;
+    const paging = @import("../../src/arch.zig").impl.paging;
     const has_api = @hasDecl(paging, "forEachUser2MiPresentLeaf");
     // 在非 x86_64 目标上可能不存在，这是正常的
     _ = has_api;
@@ -39,7 +39,7 @@ test "fork large page walk API exists for x86_64 (forEachUser2MiPresentLeaf)" {
 
 test "fork large page walk API exists for loongarch64 (forEachUser32MiPresentLeaf)" {
     // 验证 LoongArch64 大页遍历 API 存在
-    const paging = @import("arch.zig").impl.paging;
+    const paging = @import("../../src/arch.zig").impl.paging;
     const has_api = @hasDecl(paging, "forEachUser32MiPresentLeaf");
     _ = has_api;
 }

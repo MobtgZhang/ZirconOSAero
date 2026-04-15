@@ -26,9 +26,9 @@ comptime {
 }
 
 const std = @import("std");
-const vm = @import("mm/vm.zig");
-const vad_mod = @import("mm/vad.zig");
-const ssdt = @import("arch/x86_64/ssdt_nt61.zig");
+const vm = @import("../../src/mm/vm.zig");
+const vad_mod = @import("../../src/mm/vad.zig");
+const ssdt = @import("../../src/arch/x86_64/ssdt_nt61.zig");
 
 test "Stage A gate anchor: NtAllocateVirtualMemory ssdt index" {
     try std.testing.expectEqual(@as(u32, 0x18), ssdt.NtAllocateVirtualMemory);

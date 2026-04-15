@@ -25,7 +25,7 @@
 // This is an independent clean-room implementation.
 
 const std = @import("std");
-const ob = @import("ob/object.zig");
+const ob = @import("../../src/ob/object.zig");
 
 var g_section_cleanup_test_ptr: u64 = 0;
 fn sectionCleanupTestHook(p: u64) void {
@@ -73,7 +73,7 @@ test "normalizeNtObjectPathResolveSymlinks follows up to 8 symlink hops" {
 }
 
 test "section last reference invokes cleanup hook" {
-    const hooks = @import("ob/cleanup_hooks.zig");
+    const hooks = @import("../../src/ob/cleanup_hooks.zig");
     g_section_cleanup_test_ptr = 0;
     hooks.section_last_reference = sectionCleanupTestHook;
     defer hooks.section_last_reference = null;

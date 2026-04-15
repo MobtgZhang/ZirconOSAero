@@ -1,0 +1,1 @@
+../tests/host/syscall_numbers_lock_nt61_host.zig

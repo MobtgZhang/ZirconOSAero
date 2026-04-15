@@ -59,10 +59,7 @@ LOONGSON_IGPU ?= false
 endif
 LOONGSON_IGPU_DEFER_PROBE ?= false
 LOONGSON_KMS_EXPERIMENTAL ?= false
-LOONGARCH64_USE_C_STUB ?= 0
-ifeq ($(origin LOONGARCH64_QEMU_MODE),undefined)
-LOONGARCH64_QEMU_MODE := kernel
-endif
+LOONGARCH64_QEMU_MODE ?= uefi
 LOONGARCH64_VIRT_GRAPHICS ?= on
 QEMU_LOONGARCH64_GTK_OPTS ?= $(QEMU_GTK_ZOOM),show-tabs=on
 QEMU_LOONGARCH64_DISPLAY ?= gtk,$(QEMU_LOONGARCH64_GTK_OPTS)
@@ -327,6 +324,19 @@ build-release: $(TMP_DIR) sync-resolution
 		--prefix $(TMP_DIR)/kernel-prefix
 	@cp $(KERNEL_ELF_DEBUG) $(KERNEL_ELF)
 
+# 运行测试套件
+test: $(TMP_DIR) $(TEST_RESULTS_DIR)
+	@zig build test -Darch=$(ARCH) -Ddesktop=$(DESKTOP) -Doptimize=Debug \
+		-Denable_idt=$(ENABLE_IDT) -Ddebug=$(DEBUG_LOG) \
+		2>&1 | tee $(TEST_RESULTS_DIR)/test-results.txt
+	@echo "✅ 所有测试执行完成，结果已保存到 build/test-results/test-results.txt"
+
+# 单独运行Aero桌面模块测试
+test-aero: $(TMP_DIR) $(TEST_RESULTS_DIR)
+	@cd src/desktop/aero && zig build test \
+		2>&1 | tee $(TEST_RESULTS_DIR)/aero-test-results.txt
+	@echo "✅ Aero桌面模块测试执行完成，结果已保存到 build/test-results/aero-test-results.txt"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ESP / UEFI BOOT TARGETS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -445,8 +455,11 @@ run: build build-esp
 			qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) $(QEMU_LOONGARCH64_DEVICES) \
 				-kernel $(KERNEL_ELF); \
 		else \
-			qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) $(QEMU_LOONGARCH64_DEVICES) \
-				-bios $(LOONGARCH64_EFI_CODE); \
+			# 使用 pflash 方式加载 EFI 固件，确保从 ESP 盘启动 \
+			qemu-system-loongarch64 $(QEMU_LOONGARCH64_BASE) \
+				-drive if=pflash,format=raw,readonly=on,file=$(LOONGARCH64_EFI_CODE) \
+				-drive if=pflash,format=raw,file=$(LOONGARCH64_EFI_VARS) \
+				$(QEMU_LOONGARCH64_DEVICES); \
 		fi; \
 	elif [ "$(ARCH)" = "mips64el" ]; then \
 		qemu-system-mips64el -M malta -cpu $(QEMU_MIPS64EL_CPU) -m $(QEMU_MEM) \

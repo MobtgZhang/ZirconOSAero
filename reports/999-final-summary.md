@@ -1,13 +1,13 @@
-# 阶段性最终总结（截至报告 #50）
+# 阶段性最终总结（截至报告 #53）
 
 ## 结论
 
-当前已形成 50 份独立问题报告（`#1`–`#50`），全部已修复。`#1`–`#14` 为上一阶段完成；`#15`–`#45` 为前一阶段新增；`#46`–`#50` 为显示、CMD、桌面输入和 QEMU 指针路由阶段新增。
+当前已形成 53 份独立问题报告（`#1`–`#53`），全部已修复。`#1`–`#14` 为上一阶段完成；`#15`–`#45` 为前一阶段新增；`#46`–`#53` 为显示、CMD、桌面输入、QEMU VNC 指针路由和桌面 CMD 生命周期阶段新增。
 
 ## 状态统计
 
-- 共发现问题：50
-- 已确认并修复：50
+- 共发现问题：53
+- 已确认并修复：53
 - 待验证：0
 - 未修复：0
 
@@ -29,6 +29,8 @@
 - cmd.exe 新增 `ntbackup`、`secedit`、`dxdiag`、`winsat`、`msra`、`slmgr`、`sdbinst`、`sigverif`、`wuauclt`（共 9 个，当前 213 条 dispatch）。
 - cmd.exe 用户空间进程迁移（目标 §6-8）：`boot_generic.zig` 中 `cmd.exe` 注册到进程表（`ps.createSystemProcess`）与 Win32 子系统（`subsys_cmd.registerProcess(.win32_cui)`），交互式 shell 在 `cmd.exe` PID 上下文中运行。
 - cmd.exe 桌面启动修复：`desktop_session.zig` 在 `runDesktopMainLoop()` 前创建 `cmd.exe`（PID=4）、注册 `.win32_cui` 子系统、显示 banner + prompt。QEMU 验证确认 `Process: 'cmd.exe' created (PID=4)` + `csrss: Registered Win32 process PID=4 'cmd.exe'`。
+- QEMU GTK/VNC 指针路由：`reports/051`–`reports/053` 确认 QEMU 10.2.1 GTK 宿主指针到 VirtIO 输入存在路由限制；`make run` 已默认使用 VNC，并在 x86-64 UEFI 机型上设置 `i8042=off`，使 `virtio-tablet-pci` 成为唯一默认指针。QMP 实测 `QEMU Virtio Tablet` 为 `absolute=true, current=true`；VNC 发送 `(1000,500)`、`(400,300)` 后内核队列推进，桌面坐标更新为 `(399,299)`。
+- 桌面 CMD 退出：`reports/052` 修复桌面 CMD `exit` 后窗口不关闭的问题；本地命令桥接会映射 `exiting` 状态并关闭窗口实例。
 
 - Section：页对齐溢出、映射偏移校验、视图计数回绕、视图对象引用生命周期。
 - VM/进程地址空间：释放时回收用户页表与私有叶帧、fork 视图引用、文件后备 CoW 旧帧回收。
@@ -52,7 +54,7 @@
 
 ## 验证记录
 
-- `zig build test`：通过。
+- `make test ARCH=x86_64`：通过（exit 0），测试结果保存于 `build/test-results/test-results.txt`。
 - `make build ARCH=x86_64`：通过。
 - `make build ARCH=aarch64`：通过。
 - `make build ARCH=riscv64`：通过。

@@ -8,7 +8,6 @@ const std = @import("std");
 pub const dwmapi_types = @import("dwmapi_types.zig");
 pub const dwmapi_errors = @import("dwmapi_errors.zig");
 
-
 // ============================================================================
 // Composition State
 // ============================================================================

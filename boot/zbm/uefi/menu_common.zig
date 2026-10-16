@@ -51,7 +51,7 @@ pub const BootEntry = struct {
     is_default: bool,
 };
 
-pub const KERNEL_PATH = "\\boot\\kernel.elf";
+pub const KERNEL_PATH = "\\Windows\\System32\\winload.efi";
 
 /// UEFI Simple Text Input scan codes (see UEFI spec / EDK2 SimpleTextIn.h).
 pub const SCAN_UP = 0x01;

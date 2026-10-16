@@ -117,17 +117,13 @@ pub fn invtlbAll() void {
     // For larger TLBs this is approximate but sufficient for user half release.
     var i: u32 = 0;
     while (i < 64) : (i += 1) {
-        asm volatile (
-            "dmtc0 $zero, $10\n" ++
+        asm volatile ("dmtc0 $zero, $10\n" ++
                 "dmtc0 $zero, $2\n" ++
                 "dmtc0 $zero, $3\n" ++
                 "dmtc0 $zero, $5\n" ++
                 "ehb\n" ++
                 "tlbwr\n" ++
-                "ehb"
-            :
-            :
-        );
+                "ehb");
     }
 }
 
@@ -143,10 +139,7 @@ pub fn invtlbAddrVa(va: u64) void {
         : [o] "=r" (-> i32),
     );
     if (idx < 0) return;
-    asm volatile ("dmtc0 $zero, $10\n\tdmtc0 $zero, $2\n\tdmtc0 $zero, $3\n\tehb\n\ttlbwi"
-        :
-        :
-    );
+    asm volatile ("dmtc0 $zero, $10\n\tdmtc0 $zero, $2\n\tdmtc0 $zero, $3\n\tehb\n\ttlbwi");
 }
 
 /// Switch root page table and flush TLB. Equivalent to x86 CR3 load.
@@ -159,8 +152,7 @@ pub fn loadCr3(pgd_phys: u64) void {
     // page table in software. We store the root pointer in CP0 Context
     // (PTEBase field, bits [63:23]) so the refill handler can find it.
     const pte_base = pgd_phys & 0xFFFFFFFFFF800000;
-    asm volatile (
-        "dmtc0 %[val], $4\n" ++
+    asm volatile ("dmtc0 %[val], $4\n" ++
             "ehb"
         :
         : [val] "r" (pte_base),

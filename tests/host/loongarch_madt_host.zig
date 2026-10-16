@@ -45,10 +45,10 @@ test "MADT RINTC HartID extraction" {
 
     // 模拟 RINTC 数据 (little-endian)
     var rintc_data = [_]u8{
-        34, 16, 0, 0,       // Type=34, Length=16, Reserved=0
-        1, 0, 0, 0,         // Hart ID = 1 (little-endian)
-        0, 0, 0, 0,         // UID = 0
-        1, 0, 0, 0,         // Flags = 1 (enabled)
+        34, 16, 0, 0, // Type=34, Length=16, Reserved=0
+        1, 0, 0, 0, // Hart ID = 1 (little-endian)
+        0, 0, 0, 0, // UID = 0
+        1, 0, 0, 0, // Flags = 1 (enabled)
     };
 
     const hart_id = std.mem.readInt(u32, rintc_data[HART_ID_OFFSET..][0..4], .little);
@@ -60,10 +60,10 @@ test "MADT RINTC Flags extraction" {
     const FLAGS_OFFSET: usize = 12;
 
     var rintc_data = [_]u8{
-        34, 16, 0, 0,       // Type=34, Length=16
-        0, 0, 0, 0,         // Hart ID = 0
-        0, 0, 0, 0,         // UID = 0
-        1, 0, 0, 0,         // Flags = 1 (enabled)
+        34, 16, 0, 0, // Type=34, Length=16
+        0, 0, 0, 0, // Hart ID = 0
+        0, 0, 0, 0, // UID = 0
+        1, 0, 0, 0, // Flags = 1 (enabled)
     };
 
     const flags = std.mem.readInt(u32, rintc_data[FLAGS_OFFSET..][0..4], .little);
@@ -75,10 +75,10 @@ test "MADT RINTC disabled flag" {
     const FLAGS_OFFSET: usize = 12;
 
     var rintc_data = [_]u8{
-        34, 16, 0, 0,       // Type=34, Length=16
-        0, 0, 0, 1,         // Hart ID = 1
-        0, 0, 0, 1,         // UID = 1
-        0, 0, 0, 0,         // Flags = 0 (disabled)
+        34, 16, 0, 0, // Type=34, Length=16
+        0, 0, 0, 1, // Hart ID = 1
+        0, 0, 0, 1, // UID = 1
+        0, 0, 0, 0, // Flags = 0 (disabled)
     };
 
     const flags = std.mem.readInt(u32, rintc_data[FLAGS_OFFSET..][0..4], .little);

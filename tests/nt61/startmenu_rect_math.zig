@@ -57,7 +57,7 @@ test "ease-out starts fast, ends slow" {
     try std.testing.expect(delta1 > delta2);
 }
 
-/// 测试动画进度计算
+// 测试动画进度计算
 test "animation progress increments correctly" {
     var progress: f32 = 0.0;
     const inc = 1.0 / @as(f32, @floatFromInt(ANIM_FRAMES));
@@ -70,7 +70,7 @@ test "animation progress increments correctly" {
     try std.testing.expect(steps <= ANIM_FRAMES);
 }
 
-/// 测试悬停平滑过渡帧数
+// 测试悬停平滑过渡帧数
 test "hover transition completes in expected frames" {
     var progress: f32 = 0.0;
     const inc = 1.0 / @as(f32, @floatFromInt(HOVER_TRANSITION_FRAMES));
@@ -82,7 +82,7 @@ test "hover transition completes in expected frames" {
     try std.testing.expectEqual(HOVER_TRANSITION_FRAMES, steps);
 }
 
-/// 测试子菜单滑动动画
+// 测试子菜单滑动动画
 test "submenu animation completes in expected frames" {
     var progress: f32 = 0.0;
     const inc = 1.0 / @as(f32, @floatFromInt(SUBMENU_ANIM_FRAMES));
@@ -94,7 +94,7 @@ test "submenu animation completes in expected frames" {
     try std.testing.expectEqual(SUBMENU_ANIM_FRAMES, steps);
 }
 
-/// 测试动画高度计算
+// 测试动画高度计算
 test "animated height interpolates correctly" {
     const start_h: i32 = 0;
     const target_h: i32 = 400;
@@ -105,7 +105,7 @@ test "animated height interpolates correctly" {
     try std.testing.expect(@as(i32, @intCast(@as(f32, @floatFromInt(diff)) * 0.5)) > h50);
 }
 
-/// 长按关机阈值测试（500ms）
+// 长按关机阈值测试（500ms）
 test "long press threshold is reasonable" {
     const LONG_PRESS_SHUTDOWN_MS: u32 = 500;
     try std.testing.expect(LONG_PRESS_SHUTDOWN_MS >= 300);

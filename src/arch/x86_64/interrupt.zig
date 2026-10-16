@@ -19,12 +19,12 @@
 //! x86_64：IDT 异常 / PIC IRQ / 系统调用帧处理（`syscall` 经 `isr_common_handler` 进入 `handleSyscall`）
 
 const builtin = @import("builtin");
-const arch = @import("../arch.zig");
-const klog = @import("../rtl/klog.zig");
-const scheduler = @import("scheduler.zig");
-const process = @import("../ps/process.zig");
-const dpc = @import("dpc.zig");
-const irql_mod = @import("irql.zig");
+const arch = @import("../../arch.zig");
+const klog = @import("../../rtl/klog.zig");
+const scheduler = @import("../../ke/scheduler.zig");
+const process = @import("../../ps/process.zig");
+const dpc = @import("../../ke/dpc.zig");
+const irql_mod = @import("../../ke/irql.zig");
 
 pub const InterruptFrame = extern struct {
     r15: u64,
@@ -88,10 +88,10 @@ const EXCEPTION_NAMES = [_][]const u8{
 pub fn handle(frame: *InterruptFrame) void {
     const vector: u8 = @intCast(frame.vector & 0xFF);
 
-    if (vector == @import("../arch/x86_64/isr.zig").ipi_tlb_flush_vector) {
+    if (vector == @import("isr.zig").ipi_tlb_flush_vector) {
         if (builtin.target.cpu.arch == .x86_64) {
-            @import("../hal/x86_64/tlb_broadcast.zig").flushLocal();
-            @import("../hal/x86_64/lapic_smp.zig").sendLocalEoi();
+            @import("../../hal/x86_64/tlb_broadcast.zig").flushLocal();
+            @import("../../hal/x86_64/lapic_smp.zig").sendLocalEoi();
         }
         return;
     }
@@ -127,7 +127,7 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
             if (process.getCurrentProcess()) |proc| {
                 if (proc.address_space) |asp| {
                     const is_write = (frame.error_code & 2) != 0;
-                    if (@import("../mm/vm.zig").handleUserDemandOrCowFault(asp, cr2, is_write)) {
+                    if (@import("../../mm/vm.zig").handleUserDemandOrCowFault(asp, cr2, is_write)) {
                         return;
                     }
                     const pid = proc.pid;
@@ -139,7 +139,7 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
                 }
             }
         }
-        const bc = @import("bugcheck.zig");
+        const bc = @import("../../ke/bugcheck.zig");
         bc.keBugCheckEx(.page_fault_in_nonpaged_area, cr2, frame.rip, frame.error_code, 0);
     }
 
@@ -163,8 +163,8 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
             // J10：AP 在 `apProcessorIdleLoop` 中 `currentThreadIndex()==-1` 时尚无每核 `current_thread`；
             // 仅 BSP（或已绑定调度线程的核）推进全局 `scheduler.tick`，避免 AP 误用 BSP 的 `current_thread`。
             if (builtin.target.cpu.arch == .x86_64) {
-                const madt = @import("../hal/x86_64/madt.zig");
-                const kpcr = @import("kpcr.zig");
+                const madt = @import("../../hal/x86_64/madt.zig");
+                const kpcr = @import("../../ke/kpcr.zig");
                 if (madt.logical_cpu_count > 1 and kpcr.currentThreadIndex() < 0) {
                     klog.notifyTimerTick();
                 } else {
@@ -182,7 +182,7 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         1 => {
             if (builtin.target.cpu.arch == .x86_64) {
                 dpc.requestInputFlushDeferred();
-                const kbd = @import("../drivers/input/kbd.zig");
+                const kbd = @import("../../drivers/input/kbd.zig");
                 kbd.handleIrq();
             } else {
                 arch.handleKeyboardIrq();
@@ -191,8 +191,8 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         12 => {
             if (builtin.target.cpu.arch == .x86_64) {
                 dpc.requestInputFlushDeferred();
-                const virtio_input_pci = @import("../drivers/input/virtio_input_pci.zig");
-                const mouse = @import("../drivers/input/mouse.zig");
+                const virtio_input_pci = @import("../../drivers/input/virtio_input_pci.zig");
+                const mouse = @import("../../drivers/input/mouse.zig");
                 if (!(virtio_input_pci.isActive() and !@import("build_options").ps2_mouse_with_virtio)) {
                     mouse.handleIrq();
                 }
@@ -203,9 +203,9 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
         else => {},
     }
     if (builtin.target.cpu.arch == .x86_64) {
-        const ltt = @import("../hal/x86_64/lapic_timer_tick.zig");
+        const ltt = @import("../../hal/x86_64/lapic_timer_tick.zig");
         if (irq == 0 and ltt.irq0UsesLapicEoi()) {
-            @import("../hal/x86_64/lapic_smp.zig").sendLocalEoi();
+            @import("../../hal/x86_64/lapic_smp.zig").sendLocalEoi();
         } else {
             arch.sendEoi(irq);
         }
@@ -218,10 +218,10 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
 
 fn handleSyscall(frame: *InterruptFrame) void {
     if (@import("build_options").enable_idt) {
-        const smap = @import("../hal/x86_64/smap_user_access.zig");
+        const smap = @import("../../hal/x86_64/smap_user_access.zig");
         smap.syscallEnterAllowUserMemory();
         defer smap.syscallExitRestoreSmap();
-        const syscall = @import("../arch/x86_64/syscall.zig");
+        const syscall = @import("syscall.zig");
         syscall.dispatch(frame);
     }
 }
@@ -229,12 +229,12 @@ fn handleSyscall(frame: *InterruptFrame) void {
 /// **int 0x2E**（WOW64 / 兼容 32 位 NT 调用约定）：EAX=服务号，EDX=指向 stdcall 实参区（u32 槽）的指针。
 fn handleWow64LegacySyscall(frame: *InterruptFrame) void {
     if (!@import("build_options").enable_idt) return;
-    const smap = @import("../hal/x86_64/smap_user_access.zig");
+    const smap = @import("../../hal/x86_64/smap_user_access.zig");
     smap.syscallEnterAllowUserMemory();
     defer smap.syscallExitRestoreSmap();
-    const wow = @import("../arch/x86_64/wow64_syscall.zig");
+    const wow = @import("wow64_syscall.zig");
     wow.dispatchInt2e(frame);
-    @import("apc.zig").deliverKernelApcsForCurrentThread();
+    @import("../../ke/apc.zig").deliverKernelApcsForCurrentThread();
     if (process.getCurrentProcess()) |proc| {
         if (proc.address_space) |asp| asp.activate();
     }

@@ -6,6 +6,7 @@
 // 提供完整的 GPU 加速渲染能力
 
 const std = @import("std");
+const texture = @import("d3d10/texture.zig");
 const d3d10 = @import("d3d10/d3d10.zig");
 const dxgi = @import("dxgi/dxgi.zig");
 const d3d10_types = @import("d3d10/d3d10_types.zig");
@@ -60,6 +61,39 @@ pub const DEFAULT_BLEND_STATE: PipelineState = .{
     .depth_enabled = false,
     .scissor_enabled = false,
 };
+
+fn blendPixel(target: []u8, offset: usize, color: [4]f32) void {
+    const src_a = std.math.clamp(color[3], 0.0, 1.0);
+    const inv_a = 1.0 - src_a;
+    const dst_a = @as(f32, @floatFromInt(target[offset + 3])) / 255.0;
+    const out_a = src_a + dst_a * inv_a;
+
+    if (out_a <= 0.0) {
+        target[offset] = 0;
+        target[offset + 1] = 0;
+        target[offset + 2] = 0;
+        target[offset + 3] = 0;
+        return;
+    }
+
+    inline for (0..3) |channel| {
+        const src_channel = std.math.clamp(color[channel], 0.0, 1.0);
+        const dst_channel = @as(f32, @floatFromInt(target[offset + channel])) / 255.0;
+        target[offset + channel] = @intFromFloat(std.math.clamp(
+            (src_channel * src_a + dst_channel * dst_a * inv_a) / out_a * 255.0 + 0.5,
+            0.0,
+            255.0,
+        ));
+    }
+    target[offset + 3] = @intFromFloat(out_a * 255.0 + 0.5);
+}
+
+fn blitPixel(dst: []u8, dst_offset: usize, src: []const u8, src_offset: usize) void {
+    dst[dst_offset] = src[src_offset];
+    dst[dst_offset + 1] = src[src_offset + 1];
+    dst[dst_offset + 2] = src[src_offset + 2];
+    dst[dst_offset + 3] = src[src_offset + 3];
+}
 
 // ============================================================================
 // 渲染命令
@@ -124,11 +158,13 @@ pub const GPUCompositor = struct {
     height: u32,
     initialized: bool,
     frame_count: u64,
+    active_blend_mode: BlendMode,
 
     pub fn init(self: *GPUCompositor, width: u32, height: u32) !void {
         self.width = width;
         self.height = height;
         self.frame_count = 0;
+        self.active_blend_mode = .Alpha;
 
         // 创建设备
         self.device = try d3d10.CompositorDevice.createCompositorDevice(width, height);
@@ -169,49 +205,83 @@ pub const GPUCompositor = struct {
     }
 
     pub fn drawQuad(self: *GPUCompositor, x: f32, y: f32, width: f32, height: f32, color: [4]f32) void {
-        _ = self;
-        _ = x;
-        _ = y;
-        _ = width;
-        _ = height;
-        _ = color;
-        // 实际实现需要顶点缓冲区和着色器
-        // 这是占位符
+        if (!self.initialized or width <= 0.0 or height <= 0.0) return;
+
+        const surface = self.swap_chain.getBuffer(self.swap_chain.swap_chain.current_buffer) catch return;
+        const left = @max(@as(i32, @intFromFloat(@round(x))), 0);
+        const top = @max(@as(i32, @intFromFloat(@round(y))), 0);
+        const right = @min(@as(i32, @intFromFloat(@round(x + width))), @as(i32, @intCast(self.width)));
+        const bottom = @min(@as(i32, @intFromFloat(@round(y + height))), @as(i32, @intCast(self.height)));
+        if (left >= right or top >= bottom) return;
+
+        var py = top;
+        while (py < bottom) : (py += 1) {
+            var px = left;
+            while (px < right) : (px += 1) {
+                const offset: usize = @intCast(py * @as(i32, @intCast(surface.stride)) + px * 4);
+                blendPixel(surface.buffer, offset, color);
+            }
+        }
+        self.device.drawQuad();
     }
 
     pub fn drawTexturedQuad(self: *GPUCompositor, texture_id: u32, x: f32, y: f32, width: f32, height: f32) void {
-        _ = self;
-        _ = texture_id;
-        _ = x;
-        _ = y;
-        _ = width;
-        _ = height;
-        // 实际实现需要纹理绑定和着色器
-        // 这是占位符
+        if (!self.initialized or texture_id == 0 or width <= 0.0 or height <= 0.0) return;
+        const tex_desc = texture.getTextureDesc(texture_id) orelse return;
+        const tex_data = texture.getTextureData(texture_id) orelse return;
+        if (tex_desc.width == 0 or tex_desc.height == 0) return;
+        if (tex_data.len < tex_desc.width * tex_desc.height * 4) return;
+
+        const surface = self.swap_chain.getBuffer(self.swap_chain.swap_chain.current_buffer) catch return;
+        const left = @max(@as(i32, @intFromFloat(@round(x))), 0);
+        const top = @max(@as(i32, @intFromFloat(@round(y))), 0);
+        const right = @min(@as(i32, @intFromFloat(@round(x + width))), @as(i32, @intCast(self.width)));
+        const bottom = @min(@as(i32, @intFromFloat(@round(y + height))), @as(i32, @intCast(self.height)));
+        if (left >= right or top >= bottom) return;
+
+        var py = top;
+        while (py < bottom) : (py += 1) {
+            var px = left;
+            while (px < right) : (px += 1) {
+                const src_x = @min(
+                    (px - left) * @as(i32, @intCast(tex_desc.width)) /
+                        @as(i32, @intFromFloat(@round(width))),
+                    @as(i32, @intCast(tex_desc.width - 1)),
+                );
+                const src_y = @min(
+                    (py - top) * @as(i32, @intCast(tex_desc.height)) /
+                        @as(i32, @intFromFloat(@round(height))),
+                    @as(i32, @intCast(tex_desc.height - 1)),
+                );
+                const src_offset: usize = @intCast((src_y * @as(i32, @intCast(tex_desc.width)) + src_x) * 4);
+                const dst_offset: usize = @intCast(py * @as(i32, @intCast(surface.stride)) + px * 4);
+                const alpha = @as(f32, @floatFromInt(tex_data[src_offset + 3])) / 255.0;
+
+                if (alpha >= 1.0) {
+                    blitPixel(surface.buffer, dst_offset, tex_data, src_offset);
+                } else if (alpha > 0.0) {
+                    blendPixel(surface.buffer, dst_offset, .{
+                        @as(f32, @floatFromInt(tex_data[src_offset])) / 255.0,
+                        @as(f32, @floatFromInt(tex_data[src_offset + 1])) / 255.0,
+                        @as(f32, @floatFromInt(tex_data[src_offset + 2])) / 255.0,
+                        alpha,
+                    });
+                }
+            }
+        }
+        self.device.drawQuad();
     }
 
     pub fn setViewport(self: *GPUCompositor, x: i32, y: i32, width: u32, height: u32) void {
-        _ = self;
-        _ = x;
-        _ = y;
-        _ = width;
-        _ = height;
-        // 设置视口
+        self.device.setViewport(x, y, width, height);
     }
 
     pub fn setScissor(self: *GPUCompositor, x: i32, y: i32, width: u32, height: u32) void {
-        _ = self;
-        _ = x;
-        _ = y;
-        _ = width;
-        _ = height;
-        // 设置裁剪矩形
+        self.device.setScissorRect(x, y, width, height);
     }
 
     pub fn setBlendMode(self: *GPUCompositor, mode: BlendMode) void {
-        _ = self;
-        _ = mode;
-        // 设置混合模式
+        self.active_blend_mode = mode;
     }
 };
 

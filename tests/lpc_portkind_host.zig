@@ -32,6 +32,6 @@ const PortKind = enum(u8) {
 };
 
 test "LPC PortKind discriminant matches port.zig" {
-    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(PortKind.message));
-    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(PortKind.connection_listener));
+    try std.testing.expectEqual(@as(u8, 0), @backingInt(PortKind.message));
+    try std.testing.expectEqual(@as(u8, 1), @backingInt(PortKind.connection_listener));
 }

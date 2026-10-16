@@ -88,11 +88,11 @@ pub const ThreadApcQueue = struct {
     kernel_apcs: [MAX_KERNEL_APCS_PER_THREAD]ApcObject = .{.{
         .mode = .KernelMode,
         .routine = undefined,
-    }} ** MAX_KERNEL_APCS_PER_THREAD,
+    }} * *MAX_KERNEL_APCS_PER_THREAD,
     user_apcs: [MAX_USER_APCS_PER_THREAD]ApcObject = .{.{
         .mode = .UserMode,
         .routine = undefined,
-    }} ** MAX_USER_APCS_PER_THREAD,
+    }} * *MAX_USER_APCS_PER_THREAD,
     kernel_count: usize = 0,
     user_count: usize = 0,
     apc_pending: bool = false,
@@ -104,14 +104,14 @@ pub const ThreadApcQueue = struct {
 pub const DpcQueue = struct {
     dpcs: [MAX_DPCS_PER_PROCESSOR]DpcObject = .{.{
         .routine = undefined,
-    }} ** MAX_DPCS_PER_PROCESSOR,
+    }} * *MAX_DPCS_PER_PROCESSOR,
     count: usize = 0,
     dpc_pending: bool = false,
     dpc_running: bool = false,
 };
 
 /// Global DPC queues (one per logical processor)
-var dpc_queues: [ps.MAX_PROCESSORS]DpcQueue = [_]DpcQueue{.{}} ** ps.MAX_PROCESSORS;
+var dpc_queues: [ps.MAX_PROCESSORS]DpcQueue = std.mem.zeroes([ps.MAX_PROCESSORS]DpcQueue);
 var apc_initialized: bool = false;
 var dpc_initialized: bool = false;
 

@@ -163,7 +163,7 @@ const RecordType = enum(u16) {
 };
 
 fn recordTypeFromU16(t: u16) RecordType {
-    return @as(RecordType, @enumFromInt(t));
+    return @as(RecordType, @fromBackingInt(@intCast(t)));
 }
 
 /// Metafile playback context.
@@ -282,7 +282,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) mod.ImageError!Wmf
     }
 
     // Parse WMF records
-    var records = std.ArrayListUnmanaged(WmfRecord){};
+    var records = std.ArrayListUnmanaged(WmfRecord).empty;
     errdefer records.deinit(allocator);
 
     var pos = metafile_start;

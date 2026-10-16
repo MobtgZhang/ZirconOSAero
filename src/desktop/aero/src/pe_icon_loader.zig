@@ -41,7 +41,7 @@ pub const IconBitmap = struct {
 };
 
 fn loadIconFromPeBytes(pe: []const u8, resource_id: icon_resource_ids.PeIconId) ?DecodedIcon {
-    const id_u: u32 = @intFromEnum(resource_id);
+    const id_u: u32 = @backingInt(resource_id);
     const blob = pe_icon_resource.resourceDataById(pe, pe_icon_resource.rt_group_icon, id_u) orelse return null;
     if (blob.len < 6) return null;
 

@@ -61,8 +61,10 @@ pub const Calculator = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) Calculator {
         var calc = Calculator{
-            .x = x_pos, .y = y_pos,
-            .width = 300, .height = 400,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 300,
+            .height = 400,
             .visible = true,
             .focused = false,
             .mode = .standard,

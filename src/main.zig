@@ -89,9 +89,21 @@ fn writeHexU32ToConsole(n: u32) void {
     arch.consoleWrite(buf[0..]);
 }
 
-fn panicImpl(msg: []const u8, _: ?usize) noreturn {
+fn writeHexUsizeToConsole(n: usize) void {
+    const hi: u32 = @truncate(n >> 32);
+    const lo: u32 = @truncate(n);
+    writeHexU32ToConsole(hi);
+    writeHexU32ToConsole(lo);
+}
+
+fn panicImpl(msg: []const u8, return_address: ?usize) noreturn {
     arch.consoleWrite("KERNEL PANIC: ");
     arch.consoleWrite(msg);
+    if (return_address) |address| {
+        arch.consoleWrite(" [addr=0x");
+        writeHexUsizeToConsole(address);
+        arch.consoleWrite("]");
+    }
     const phase = @import("rtl/panic_context.zig").getPhase();
     if (phase != 0) {
         arch.consoleWrite(" [phase=0x");
@@ -116,8 +128,5 @@ comptime {
 /// UEFI/汇编以 64 位寄存器传参；首参截断为 u32 供 Multiboot2 magic 比对（与 LoongArch handoff 习惯一致）。
 pub export fn kernel_main(magic_arg: usize, info_addr: usize) callconv(.c) noreturn {
     const magic = @as(u32, @truncate(magic_arg));
-    switch (builtin.target.cpu.arch) {
-        .x86_64 => @import("kernel/boot_x86_64.zig").start(magic, info_addr),
-        else => @import("kernel/boot_generic.zig").start(magic, info_addr),
-    }
+    @import("hal/boot_dispatch.zig").start(magic, info_addr);
 }

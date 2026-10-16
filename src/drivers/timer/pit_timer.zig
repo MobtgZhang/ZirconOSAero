@@ -17,15 +17,15 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! 8254 PIT kernel-mode driver (NT6 HAL timer / profile source)
-//! Exposes the programmed tick rate. Actual hardware is owned by `hal/x86_64/pit.zig`
+//! Exposes the programmed tick rate. Actual hardware is owned by the HAL PIT module.
 //! and must stay consistent with `ke/timer` + scheduler.
 
-const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 
-const pit_hal = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/pit.zig")
+const hal_drv = @import("../../hal.zig");
+const pit_hal = if (hal_drv.hasLegacyPCDevices)
+    @import("../../hal/input.zig").pit
 else
     struct {
         pub fn getProgrammedHz() u32 {
@@ -74,7 +74,7 @@ fn pitDispatch(irp: *io.Irp) io.NTSTATUS {
 }
 
 pub fn init() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal_drv.hasLegacyPCDevices) return;
 
     driver_idx = io.registerDriver("\\Driver\\Pit", pitDispatch) orelse {
         klog.err("PIT: Failed to register driver", .{});
@@ -86,9 +86,11 @@ pub fn init() void {
     };
     driver_initialized = true;
 
+    const programmed_hz = pit_hal.getProgrammedHz();
+    const kernel_hz = ke_timer.getHz();
     klog.info("PIT Driver: \\Device\\Pit0 (HAL=%uHz, kernel timer=%uHz)", .{
-        pit_hal.getProgrammedHz(),
-        ke_timer.getHz(),
+        programmed_hz,
+        kernel_hz,
     });
 }
 

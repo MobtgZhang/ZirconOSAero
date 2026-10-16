@@ -91,10 +91,10 @@ const MAX_KEYS: usize = 64;
 const NO_PARENT: u16 = 0xFFFF;
 
 pub const RegValue = struct {
-    name: [MAX_VALUE_NAME]u8 = [_]u8{0} ** MAX_VALUE_NAME,
+    name: [MAX_VALUE_NAME]u8 = std.mem.zeroes([MAX_VALUE_NAME]u8),
     name_len: u16 = 0,
     value_type: ValueType = .none,
-    data: [MAX_VALUE_DATA]u8 = [_]u8{0} ** MAX_VALUE_DATA,
+    data: [MAX_VALUE_DATA]u8 = std.mem.zeroes([MAX_VALUE_DATA]u8),
     data_len: u16 = 0,
     dword_value: u32 = 0,
 
@@ -116,14 +116,14 @@ pub const RegValue = struct {
 
 pub const RegKey = struct {
     header: ob.ObjectHeader = .{ .obj_type = .key },
-    name: [MAX_KEY_NAME]u8 = [_]u8{0} ** MAX_KEY_NAME,
+    name: [MAX_KEY_NAME]u8 = std.mem.zeroes([MAX_KEY_NAME]u8),
     name_len: u16 = 0,
     hive: HiveType = .hklm,
     has_parent: bool = false,
     parent_idx: u16 = 0,
-    subkey_indices: [MAX_SUBKEYS]u16 = [_]u16{0} ** MAX_SUBKEYS,
+    subkey_indices: [MAX_SUBKEYS]u16 = std.mem.zeroes([MAX_SUBKEYS]u16),
     subkey_count: u16 = 0,
-    values: [MAX_VALUES]RegValue = [_]RegValue{.{}} ** MAX_VALUES,
+    values: [MAX_VALUES]RegValue = std.mem.zeroes([MAX_VALUES]RegValue),
     value_count: u16 = 0,
     active: bool = false,
 
@@ -149,7 +149,7 @@ pub const RegKey = struct {
     }
 };
 
-var keys: [MAX_KEYS]RegKey = [_]RegKey{.{}} ** MAX_KEYS;
+var keys: [MAX_KEYS]RegKey = std.mem.zeroes([MAX_KEYS]RegKey);
 var key_count: usize = 0;
 var initialized: bool = false;
 
@@ -797,7 +797,7 @@ pub fn enumerateValueFull(key_idx: u16, index: u32, buf: []u8, result_len: *u32)
     if (buf.len < need) return ntdll.STATUS_BUFFER_TOO_SMALL;
     @memset(buf[0..data_off_u32], 0);
     writeU32Le(buf[0..4], 0);
-    writeU32Le(buf[4..8], @intFromEnum(val.value_type));
+    writeU32Le(buf[4..8], @backingInt(val.value_type));
     writeU32Le(buf[8..12], data_off_u32);
     writeU32Le(buf[12..16], data_len);
     writeU32Le(buf[16..20], @intCast(name.len));

@@ -19,6 +19,7 @@
 //! PS/2 Keyboard Driver
 //! Translates scan code set 1 to ASCII characters
 //! Uses a ring buffer to queue keypresses for the shell
+const std = @import("std");
 
 const portio = @import("portio.zig");
 const CursorNudge = @import("../../drivers/input/cursor_types.zig").CursorNudge;
@@ -28,7 +29,7 @@ const KB_STATUS_PORT: u16 = 0x64;
 
 const RING_SIZE: usize = 128;
 
-var ring_buf: [RING_SIZE]u8 = [_]u8{0} ** RING_SIZE;
+var ring_buf: [RING_SIZE]u8 = std.mem.zeroes([RING_SIZE]u8);
 var ring_head: usize = 0;
 var ring_tail: usize = 0;
 var shift_held: bool = false;
@@ -53,7 +54,7 @@ var cursor_nudge_dx: i32 = 0;
 var cursor_nudge_dy: i32 = 0;
 
 const scancode_normal: [128]u8 = blk: {
-    var table = [_]u8{0} ** 128;
+    var table: [128]u8 = @splat(0);
     table[0x02] = '1';
     table[0x03] = '2';
     table[0x04] = '3';
@@ -109,7 +110,7 @@ const scancode_normal: [128]u8 = blk: {
 };
 
 const scancode_shift: [128]u8 = blk: {
-    var table = [_]u8{0} ** 128;
+    var table: [128]u8 = @splat(0);
     table[0x02] = '!';
     table[0x03] = '@';
     table[0x04] = '#';

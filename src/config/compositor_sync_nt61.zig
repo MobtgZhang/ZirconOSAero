@@ -35,7 +35,7 @@ pub const KernelDwmNotifyKind = enum(u8) {
 pub fn encodeKernelDwmNotifyV1(out: *[64]u8, kind: KernelDwmNotifyKind, wp: u32, lp: i64) void {
     @memset(out, 0);
     std.mem.writeInt(u32, out[0..4], kernel_dwm_notify_v1_magic_le, .little);
-    out[4] = @intFromEnum(kind);
+    out[4] = @backingInt(kind);
     std.mem.writeInt(u32, out[5..9], wp, .little);
     std.mem.writeInt(i64, out[9..17], lp, .little);
 }
@@ -43,7 +43,12 @@ pub fn encodeKernelDwmNotifyV1(out: *[64]u8, kind: KernelDwmNotifyKind, wp: u32,
 pub fn decodeKernelDwmNotifyV1(data: *const [64]u8) ?struct { kind: KernelDwmNotifyKind, wp: u32, lp: i64 } {
     const m = std.mem.readInt(u32, data[0..4], .little);
     if (m != kernel_dwm_notify_v1_magic_le) return null;
-    const k = std.meta.intToEnum(KernelDwmNotifyKind, data[4]) catch return null;
+    const k: KernelDwmNotifyKind = switch (data[4]) {
+        0 => .composition,
+        1 => .colorization,
+        2 => .nc_rendering,
+        else => return null,
+    };
     const wp = std.mem.readInt(u32, data[5..9], .little);
     const lp = std.mem.readInt(i64, data[9..17], .little);
     return .{ .kind = k, .wp = wp, .lp = lp };

@@ -71,7 +71,7 @@ pub const CPAppletRegistry = struct {
 
     pub fn init() CPAppletRegistry {
         var reg = CPAppletRegistry{
-            .applets = [_]?CPApplet{null} ** 32,
+            .applets = [_]?CPApplet{null} * *32,
             .count = 0,
         };
         reg.registerDefaultApplets();

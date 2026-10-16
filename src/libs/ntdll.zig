@@ -20,7 +20,7 @@
 //! Phase 8 Enhanced: Complete Native API set with file/memory/section/sync APIs,
 //! system information queries, RTL utilities, and debug support.
 //!
-//! ## NT 6.1 x86_64 系统调用约定（里程碑）
+//! ## NT 6.1 系统调用约定（里程碑）
 //! - **独立用户进程 / PE 镜像**：须链接 [`sdk/ntdll_syscall_win64.zig`](../sdk/ntdll_syscall_win64.zig)（`syscall` 指令 + `Ssdt` 索引），**勿**依赖 `int 0x80` 作主路径。
 //! - 本文件为 **内核内联** Native API：直接调用子系统实现，不经 `syscall`；服务号与 `ssdt_nt61` 对齐供文档与 WOW64 对照。
 //! - 用户态经 `syscall` 进入内核时，入口由 `LSTAR` 指向分派；`STAR`/`SFMASK` 见 Intel SDM 与 `syscall_msr.zig`。
@@ -87,7 +87,7 @@ pub const NULL_HANDLE: HANDLE = 0;
 pub const UNICODE_STRING = struct {
     length: u16 = 0,
     maximum_length: u16 = 0,
-    buffer: [260]u8 = [_]u8{0} ** 260,
+    buffer: [260]u8 = std.mem.zeroes([260]u8),
 };
 
 pub const OBJECT_ATTRIBUTES = struct {
@@ -195,7 +195,7 @@ comptime {
 /// 内核静态事件对象池（`NtCreateEvent` / `NtWaitForSingleObject`）；非分页、无堆分配。
 const MAX_KERNEL_EVENTS: usize = 32;
 var g_event_objs: [MAX_KERNEL_EVENTS]ob.ObjectHeader = undefined;
-var g_event_used: [MAX_KERNEL_EVENTS]bool = [_]bool{false} ** MAX_KERNEL_EVENTS;
+var g_event_used: [MAX_KERNEL_EVENTS]bool = std.mem.zeroes([MAX_KERNEL_EVENTS]bool);
 
 fn allocEventObject(initial_state: bool, event_type: u32) ?u64 {
     var i: usize = 0;
@@ -211,6 +211,7 @@ fn allocEventObject(initial_state: bool, event_type: u32) ?u64 {
                 .flags = flags,
                 .signal_state = initial_state,
             };
+            g_event_objs[i].ensureDefaultSecurity();
             return @intFromPtr(&g_event_objs[i]);
         }
     }
@@ -235,11 +236,11 @@ fn recycleEventObject(object_ptr: u64) void {
 /// 内核静态互斥体池（与 `ObjectHeader` + `ke/wait.zig` 同一等待队列）。
 const MAX_KERNEL_MUTEXES: usize = 32;
 var g_mutex_objs: [MAX_KERNEL_MUTEXES]ob.ObjectHeader = undefined;
-var g_mutex_used: [MAX_KERNEL_MUTEXES]bool = [_]bool{false} ** MAX_KERNEL_MUTEXES;
+var g_mutex_used: [MAX_KERNEL_MUTEXES]bool = std.mem.zeroes([MAX_KERNEL_MUTEXES]bool);
 
 const MAX_KERNEL_SEMAPHORES: usize = 32;
 var g_sem_objs: [MAX_KERNEL_SEMAPHORES]ob.ObjectHeader = undefined;
-var g_sem_used: [MAX_KERNEL_SEMAPHORES]bool = [_]bool{false} ** MAX_KERNEL_SEMAPHORES;
+var g_sem_used: [MAX_KERNEL_SEMAPHORES]bool = std.mem.zeroes([MAX_KERNEL_SEMAPHORES]bool);
 
 fn allocMutexObject(initial_owner: bool) ?u64 {
     var i: usize = 0;
@@ -251,6 +252,7 @@ fn allocMutexObject(initial_owner: bool) ?u64 {
                 .signal_state = !initial_owner,
                 .creation_time = 0,
             };
+            g_mutex_objs[i].ensureDefaultSecurity();
             return @intFromPtr(&g_mutex_objs[i]);
         }
     }
@@ -283,6 +285,7 @@ fn allocSemaphoreObject(init_count: i32, max_count: i32) ?u64 {
                 (@as(u64, @as(u32, @bitCast(max_count))) << 32);
             hdr.signal_state = init_count > 0;
             g_sem_objs[i] = hdr;
+            g_sem_objs[i].ensureDefaultSecurity();
             return @intFromPtr(&g_sem_objs[i]);
         }
     }
@@ -318,6 +321,15 @@ fn semaphoreStore(hdr: *ob.ObjectHeader, cur: i32, maxv: i32) void {
     hdr.creation_time = low | high;
     hdr.signal_state = cur > 0;
 }
+
+/// Test-only access to the private synchronization-object pools.
+/// This declaration is empty outside `zig test` builds.
+pub const TestHooks = if (builtin.is_test) struct {
+    pub const allocEventObjectFn = allocEventObject;
+    pub const allocMutexObjectFn = allocMutexObject;
+    pub const allocSemaphoreObjectFn = allocSemaphoreObject;
+    pub const validateEventCreateEventTypeFn = validateEventCreateEventType;
+} else struct {};
 
 pub const KeyBasicInformation: u32 = 0;
 pub const KeyValueFullInformation: u32 = 1;
@@ -497,7 +509,8 @@ pub fn NtCreateUserProcessFromPath(
     const sched_tid = scheduler.createThread(img.entry_point, child.pid) orelse
         return STATUS_NO_MEMORY;
 
-    if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .riscv64) {
+    const hal_nt = @import("../hal.zig");
+    if (hal_nt.hasStandardPebTeb) {
         const peb_nt61 = @import("../sdk/peb_nt61_x64.zig");
         const teb_nt61 = @import("../sdk/teb_nt61_x64.zig");
         const asp = child.address_space orelse return STATUS_NO_MEMORY;
@@ -573,10 +586,9 @@ pub fn NtShutdownSystem(action: u32) NTSTATUS {
     const proc = process.getCurrentProcess() orelse return STATUS_ACCESS_DENIED;
     if (!tok.checkPrivilege(&proc.security_token, tok.PRIV_SHUTDOWN))
         return STATUS_PRIVILEGE_NOT_HELD;
-    if (builtin.target.cpu.arch == .x86_64) {
-        const acpi_pm = @import("../hal/x86_64/acpi_pm.zig");
+    const hal_pwr = @import("../hal.zig");
+    if (hal_pwr.trySystemPowerOff()) {
         const arch_mod = @import("../arch.zig");
-        acpi_pm.trySystemPowerOffAssumingS5Typ();
         arch_mod.shutdown();
     }
     return STATUS_NOT_IMPLEMENTED;
@@ -856,8 +868,7 @@ pub fn NtCreateThreadFull(
         };
     }
 
-    klog.debug("NtCreateThread: created tid=%u (sched=%u) in pid=%u, teb=0x{x}",
-        .{ handle, sched_tid, target_pid, teb_va });
+    klog.debug("NtCreateThread: created tid=%u (sched=%u) in pid=%u, teb=0x{x}", .{ handle, sched_tid, target_pid, teb_va });
 
     return STATUS_SUCCESS;
 }
@@ -922,8 +933,7 @@ pub fn NtTerminateThread(thread_handle: HANDLE, exit_status: NTSTATUS) NTSTATUS 
             scheduler.terminateThread(target_tid);
         }
 
-        klog.debug("NtTerminateThread: tid=%u (sched=%u) terminated with exit_status=0x{x}",
-            .{ thread_handle, target_tid, exit_status });
+        klog.debug("NtTerminateThread: tid=%u (sched=%u) terminated with exit_status=0x{x}", .{ thread_handle, target_tid, exit_status });
         return STATUS_SUCCESS;
     }
 
@@ -1289,15 +1299,6 @@ pub fn NtClose(handle: HANDLE) NTSTATUS {
     const ent = proc.handle_table.lookupMut(h) orelse return STATUS_INVALID_HANDLE;
     const obj_type = ent.obj_type;
     const optr = ent.object_ptr;
-    if (obj_type == .section) {
-        const sec: *section_mm.SectionObject = @ptrFromInt(optr);
-        if (sec.active_view_count != 0) return STATUS_INVALID_PARAMETER;
-    }
-    if (obj_type == .file) {
-        const f: *vfs.FileObject = @ptrFromInt(optr);
-        var irp = io.Irp{ .major_function = .close };
-        _ = vfs.dispatchFileObjectIrp(f, &irp);
-    }
     if (!proc.handle_table.closeHandle(h)) return STATUS_INVALID_HANDLE;
     if (obj_type == .event) recycleEventObject(optr);
     if (obj_type == .mutex) recycleMutexObject(optr);
@@ -1525,19 +1526,28 @@ pub fn NtOpenThread(
 
 pub fn NtCreateEvent(
     event_handle: *HANDLE,
-    _: u32,
+    desired_access: u32,
     _: ?*OBJECT_ATTRIBUTES,
     event_type: u32,
     initial_state: bool,
 ) NTSTATUS {
+    if (validateEventCreateEventType(event_type) != STATUS_SUCCESS)
+        return STATUS_INVALID_PARAMETER;
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const ptr = allocEventObject(initial_state, event_type) orelse return STATUS_NO_MEMORY;
-    const h = proc.handle_table.allocHandle(ptr, ob.GENERIC_ALL | ob.SYNCHRONIZE, .event) orelse {
+    const h = proc.handle_table.allocHandle(ptr, desired_access, .event) orelse {
         forceFreeEventSlot(ptr);
         return STATUS_INSUFFICIENT_RESOURCES;
     };
     event_handle.* = h;
     return STATUS_SUCCESS;
+}
+
+fn validateEventCreateEventType(event_type: u32) NTSTATUS {
+    return if (event_type == NOTIFICATION_EVENT or event_type == SYNCHRONIZATION_EVENT)
+        STATUS_SUCCESS
+    else
+        STATUS_INVALID_PARAMETER;
 }
 
 fn forceFreeEventSlot(object_ptr: u64) void {
@@ -1574,10 +1584,10 @@ pub fn NtResetEvent(ev: HANDLE, prev: ?*u32) NTSTATUS {
     return STATUS_SUCCESS;
 }
 
-pub fn NtCreateMutant(handle: *HANDLE, _: u32, _: ?*OBJECT_ATTRIBUTES, initial_owner: bool) NTSTATUS {
+pub fn NtCreateMutant(handle: *HANDLE, desired_access: u32, _: ?*OBJECT_ATTRIBUTES, initial_owner: bool) NTSTATUS {
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const ptr = allocMutexObject(initial_owner) orelse return STATUS_NO_MEMORY;
-    const h = proc.handle_table.allocHandle(ptr, ob.GENERIC_ALL | ob.SYNCHRONIZE, .mutex) orelse {
+    const h = proc.handle_table.allocHandle(ptr, desired_access, .mutex) orelse {
         recycleMutexObject(ptr);
         return STATUS_INSUFFICIENT_RESOURCES;
     };
@@ -1599,14 +1609,14 @@ pub fn NtReleaseMutant(ev: HANDLE, prev: ?*u32) NTSTATUS {
 
 pub fn NtCreateSemaphore(
     handle: *HANDLE,
-    _: u32,
+    desired_access: u32,
     _: ?*OBJECT_ATTRIBUTES,
     initial_count: i32,
     maximum_count: i32,
 ) NTSTATUS {
     const proc = process.getCurrentProcess() orelse return STATUS_INVALID_HANDLE;
     const ptr = allocSemaphoreObject(initial_count, maximum_count) orelse return STATUS_INVALID_PARAMETER;
-    const h = proc.handle_table.allocHandle(ptr, ob.GENERIC_ALL | ob.SYNCHRONIZE, .semaphore) orelse {
+    const h = proc.handle_table.allocHandle(ptr, desired_access, .semaphore) orelse {
         recycleSemaphoreObject(ptr);
         return STATUS_INSUFFICIENT_RESOURCES;
     };
@@ -2118,7 +2128,7 @@ pub fn NtAllocateVirtualMemory(
     if (base == 0) {
         user_alloc_va_salt = user_alloc_va_salt *% 1664525 +% 1013904223;
         const gran = MEM_ALLOCATION_GRANULARITY;
-        const min_u = vm.USER_VA_MIN_X64_NT;
+        const min_u = vm.USER_VA_MIN_NT61;
         const slide_grans: u64 = @as(u64, user_alloc_va_salt % 4096);
         var cand = std.mem.alignForward(u64, min_u + slide_grans * gran, gran);
         if (!vm.userVaRangeAllowedNt61(cand, size)) {
@@ -2419,7 +2429,8 @@ pub fn NtDeviceIoControlFile(
     if (ent.obj_type != .file) return STATUS_INVALID_PARAMETER;
     _ = @as(*vfs.FileObject, @ptrFromInt(ent.object_ptr));
 
-    if (builtin.cpu.arch == .x86_64) {
+    const hal_rtc = @import("../hal.zig");
+    if (hal_rtc.hasLegacyPCDevices) {
         const rtc_mod = @import("../drivers/timer/rtc.zig");
         if (ioctl_code == rtc_mod.IOCTL_RTC_GET_TIME) {
             if (output_buffer == null or output_length < @sizeOf(u64)) {
@@ -2619,13 +2630,8 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             return_length.* = need;
             if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
             var sample = std.mem.zeroes(SYSTEM_BASIC_INFO);
-            if (builtin.cpu.arch == .x86_64) {
-                const madt = @import("../hal/x86_64/madt.zig");
-                const n = madt.logical_cpu_count;
-                sample.NumberOfProcessors = @truncate(@min(n, 255));
-            } else {
-                sample.NumberOfProcessors = 1;
-            }
+            const hal_cpu = @import("../hal.zig");
+            sample.NumberOfProcessors = @truncate(@min(hal_cpu.logicalCpuCount(), 255));
             @memcpy(buffer[0..need], std.mem.asBytes(&sample));
             return STATUS_SUCCESS;
         },
@@ -2634,13 +2640,7 @@ pub fn NtQuerySystemInformation(info_class: u32, buffer: []u8, return_length: *u
             return_length.* = need;
             if (buffer.len < need) return STATUS_INFO_LENGTH_MISMATCH;
             var inf = SYSTEM_PROCESSOR_INFORMATION_STUB{
-                .ProcessorArchitecture = switch (builtin.cpu.arch) {
-                    .x86_64 => 9, // PROCESSOR_ARCHITECTURE_AMD64 (public winnt.h)
-                    .loongarch64 => 0x6264, // LoongArch64（本项目自定义；无 MS 公开值）
-                    .aarch64 => 12, // PROCESSOR_ARCHITECTURE_ARM64
-                    .riscv64 => 0x5064, // RISC-V 64（本项目自定义；对齐 PE machine type）
-                    else => 0,
-                },
+                .ProcessorArchitecture = @import("../hal.zig").processorArchitectureNumber(),
                 .ProcessorLevel = 6,
                 .ProcessorRevision = 0,
                 .Reserved = 0,
@@ -2858,7 +2858,6 @@ comptime {
 
 /// Token shadow arrays have been removed.
 /// Token handles now directly reference the security token via the handle table.
-
 /// 进程令牌的浅拷贝句柄（静态槽位）；`NtClose` 回收槽位。
 pub fn NtOpenProcessToken(process_handle: HANDLE, desired_access: u32, token_handle: *HANDLE) NTSTATUS {
     _ = desired_access;
@@ -2941,7 +2940,7 @@ fn queryValueKeyPartial(
     if (length < need) return STATUS_BUFFER_TOO_SMALL;
     const out: [*]u8 = @ptrCast(key_value_information orelse return STATUS_INVALID_PARAMETER);
     writeU32(out[0..4], 0);
-    writeU32(out[4..8], @intFromEnum(val.value_type));
+    writeU32(out[4..8], @backingInt(val.value_type));
     writeU32(out[8..12], data_len);
     @memcpy(out[12..][0..data_len], val.data[0..data_len]);
     return STATUS_SUCCESS;
@@ -2969,7 +2968,7 @@ fn queryValueKeyFull(
     const out: [*]u8 = @ptrCast(key_value_information orelse return STATUS_INVALID_PARAMETER);
     @memset(out[0..data_off_u32], 0);
     writeU32(out[0..4], 0);
-    writeU32(out[4..8], @intFromEnum(val.value_type));
+    writeU32(out[4..8], @backingInt(val.value_type));
     writeU32(out[8..12], data_off_u32);
     writeU32(out[12..16], data_len);
     writeU32(out[16..20], @intCast(name.len));

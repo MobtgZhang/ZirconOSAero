@@ -88,8 +88,10 @@ pub const PaintApp = struct {
         @memset(&canvas, 0xFF);
 
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 900, .height = 650,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 900,
+            .height = 650,
             .visible = true,
             .focused = false,
             .canvas_x = 0,
@@ -418,7 +420,7 @@ pub const PaintApp = struct {
         fb.drawHLine(sx, sy, sw, rgb(0xFF, 0xFF, 0xFF));
 
         const tool_names = [_][]const u8{ "Pencil", "Brush", "Eraser", "Fill", "Text", "Line", "Rectangle", "Ellipse" };
-        const tool_name = if (@intFromEnum(p.current_tool) < tool_names.len) tool_names[@intFromEnum(p.current_tool)] else "Unknown";
+        const tool_name = if (@backingInt(p.current_tool) < tool_names.len) tool_names[@backingInt(p.current_tool)] else "Unknown";
         var color_buf: [16]u8 = undefined;
         const color_str = std.fmt.bufPrint(&color_buf, "RGB({d},{d},{d})", .{ p.current_color.r, p.current_color.g, p.current_color.b }) catch "";
         var size_buf: [8]u8 = undefined;

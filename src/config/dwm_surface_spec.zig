@@ -53,20 +53,20 @@ pub const KernelCompositorSurfaceFlags = struct {
 };
 
 comptime {
-    const info = @typeInfo(KernelCompositorSurfaceFlags).@"struct".fields;
+    const info = @typeInfo(KernelCompositorSurfaceFlags).@"struct".field_names;
     const expected: []const []const u8 = &.{
         "topmost",     "layered",         "popup",           "child",
         "has_caption", "dwm_blur_behind", "dwm_ncrendering", "snap_target",
     };
     if (info.len != expected.len) @compileError("KernelCompositorSurfaceFlags: field count drift vs DesktopManagerSpec");
-    for (info, expected) |fld, exp| {
-        if (!std.mem.eql(u8, fld.name, exp))
+    for (info, expected) |field_name, exp| {
+        if (!std.mem.eql(u8, field_name, exp))
             @compileError("KernelCompositorSurfaceFlags: field name/order drift — update dwm_surface_spec + compositor");
     }
 }
 
 test "KernelCompositorSurfaceFlags has eight documented fields" {
-    const n = @typeInfo(KernelCompositorSurfaceFlags).@"struct".fields.len;
+    const n = @typeInfo(KernelCompositorSurfaceFlags).@"struct".field_names.len;
     try std.testing.expectEqual(@as(usize, 8), n);
 }
 

@@ -254,7 +254,7 @@ fn redrawExplorerCaptionBand(win_x: i32, win_y: i32, win_w: i32, aero_tb_h: i32,
     const pair = display.shellExplorerTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
         // 热态刷新每帧全宽 boxBlur 极重；与任务栏一致用 TintOnly。
-        dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, pair.left, .caption);
+        dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, pair.left, .caption);
     } else {
         fb.drawGradientH(win_x, win_y, win_w, aero_tb_h, pair.left, pair.right);
     }
@@ -265,7 +265,7 @@ fn redrawExplorerCaptionBand(win_x: i32, win_y: i32, win_w: i32, aero_tb_h: i32,
 fn redrawTaskMgrCaptionBand(win_x: i32, win_y: i32, tm_w: i32, th: i32, t: *const theme.ThemeColors) void {
     const pair = display.shellTaskMgrTitlebarPair(t);
     if (dwm.isGlassEnabled()) {
-        dwm.renderGlassTintOnly(win_x, win_y, tm_w, th, pair.left, .caption);
+        dwm.renderGlassEffect(win_x, win_y, tm_w, th, pair.left, .caption);
     } else {
         fb.drawGradientH(win_x, win_y, tm_w, th, pair.left, pair.right);
     }
@@ -349,10 +349,10 @@ fn renderFullFrame(w: i32, h: i32, t: *const theme.ThemeColors, tb_h: i32, draw_
     if (bisect) @import("../../../rtl/panic_context.zig").setPhase(0x0002_0081);
     display.renderDesktopIcons(w, h, t);
     if (bisect) @import("../../../rtl/panic_context.zig").setPhase(0x0002_0082);
-    
+
     // Render CMD shell windows
     cmd_shell_instance.renderAllCmdInstances(t);
-    
+
     renderShellWindowsInFocusOrder(w, h, t);
     if (bisect) @import("../../../rtl/panic_context.zig").setPhase(0x0002_0085);
     renderTaskbar(w, h, t, tb_h);
@@ -547,7 +547,7 @@ fn renderExplorerWindowShared(scr_w: i32, scr_h: i32, t: *const theme.ThemeColor
     const ex_pair = .{ .left = rgb(0xE0, 0xEF, 0xFF), .right = rgb(0xC0, 0xD8, 0xF8) };
     if (dwm.isGlassEnabled()) {
         if (hint == .light) {
-            dwm.renderGlassTintOnly(win_x, win_y, win_w, aero_tb_h, ex_pair.left, .caption);
+            dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, ex_pair.left, .caption);
         } else {
             dwm.renderGlassEffect(win_x, win_y, win_w, aero_tb_h, ex_pair.left, .caption);
         }

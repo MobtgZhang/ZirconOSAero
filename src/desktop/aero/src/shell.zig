@@ -34,14 +34,14 @@ pub const ShellState = enum {
 };
 
 pub const OsWindowState = struct {
-    title: [32]u8 = [_]u8{0} ** 32,
+    title: [32]u8 = std.mem.zeroes([32]u8),
     title_len: u8 = 0,
     icon_id: u16 = 0,
     minimized: bool = true,
 };
 
 const MAX_OS_WINDOWS: usize = 8;
-var os_windows: [MAX_OS_WINDOWS]OsWindowState = [_]OsWindowState{.{}} ** MAX_OS_WINDOWS;
+var os_windows: [MAX_OS_WINDOWS]OsWindowState = std.mem.zeroes([MAX_OS_WINDOWS]OsWindowState);
 var os_window_count: usize = 0;
 /// 当前活动窗口索引（用于任务栏高亮同步）
 var active_window_index: usize = 0;

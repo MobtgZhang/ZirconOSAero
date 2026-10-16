@@ -73,7 +73,7 @@ pub const Port = struct {
     owner_pid: u32 = 0,
     state: PortState = .inactive,
     kind: PortKind = .message,
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
     connected_port: u32 = 0,
     /// 与 [LPC_NT61_HANDSHAKE.md](../../docs/cn/LPC_NT61_HANDSHAKE.md) 固定头变更时递增（v2：大消息/超时单一真源演进，载荷仍向后兼容 v1）。
@@ -88,7 +88,7 @@ pub const Port = struct {
             .owner_pid = owner_pid,
             .state = .inactive,
             .kind = .message,
-            .name = [_]u8{0} ** 32,
+            .name = @splat(@as(u8, 0)),
             .name_len = 0,
             .connected_port = 0,
             .handshake_version = 2,
@@ -97,7 +97,7 @@ pub const Port = struct {
     }
 };
 
-var ports: [MAX_PORTS]Port = [_]Port{.{}} ** MAX_PORTS;
+var ports: [MAX_PORTS]Port = std.mem.zeroes([MAX_PORTS]Port);
 var port_count: u32 = 0;
 var port_initialized: bool = false;
 
@@ -143,7 +143,7 @@ fn createPortWithKind(owner_pid: u32, name: []const u8, kind: PortKind) ?*Port {
 
     port_count += 1;
     klog.debug("LPC: Port '%s' created (id=%u, owner=%u, kind=%u)", .{
-        name, id, owner_pid, @intFromEnum(kind),
+        name, id, owner_pid, @backingInt(kind),
     });
     return port;
 }

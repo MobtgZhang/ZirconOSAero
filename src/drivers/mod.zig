@@ -32,11 +32,13 @@
 //!
 //! Each driver registers a `DriverObject` dispatch routine and one or more `DeviceObject`s.
 
-const builtin = @import("builtin");
 const io = @import("../io/io.zig");
 const klog = @import("../rtl/klog.zig");
-
-const is_x86 = (builtin.target.cpu.arch == .x86_64);
+const hal = @import("../hal.zig");
+const has_pc_devices = hal.hasLegacyPCDevices;
+const has_ps2_kbd = hal.hasPS2Keyboard;
+const has_ps2_mouse = hal.hasPS2Mouse;
+const has_loongson_igpu = hal.hasLoongsonIGPU;
 
 comptime {
     _ = @import("storage/block_dev_common.zig").BlockDevVTable;
@@ -50,15 +52,15 @@ pub const bus = struct {
     pub const pcie = @import("bus/pcie.zig");
     pub const i2c = @import("bus/i2c.zig");
     pub const spi = @import("bus/spi.zig");
-    pub const serial_bus = if (is_x86) @import("bus/serial_bus.zig") else serial_bus_stub;
+    pub const serial_bus = if (has_pc_devices) @import("bus/serial_bus.zig") else serial_bus_stub;
 };
 
-pub const timer = if (is_x86) struct {
+pub const timer = if (has_pc_devices) struct {
     pub const pit_timer = @import("timer/pit_timer.zig");
     pub const rtc = @import("timer/rtc.zig");
 } else struct {};
 
-pub const storage = if (is_x86) struct {
+pub const storage = if (has_pc_devices) struct {
     pub const ata = @import("storage/ata.zig");
     pub const virtio_blk_pci = @import("storage/virtio_blk_pci.zig");
     pub const ahci = @import("storage/ahci.zig");
@@ -135,26 +137,32 @@ fn initPcieEnumerateAndVirtioGpu() void {
     }
 }
 
+fn initBootvidDriver() void {
+    const bootvid = @import("video/bootvid.zig");
+    bootvid.registerWithIo();
+}
+
 pub fn init() void {
     klog.info("Drivers: Initializing driver stack...", .{});
 
     initPcieEnumerateAndVirtioGpu();
+    initBootvidDriver();
 
     const bopts_init = @import("build_options");
-    if (builtin.target.cpu.arch == .loongarch64 and bopts_init.loongson_igpu) {
+    if (has_loongson_igpu and bopts_init.loongson_igpu) {
         video.loongson_igpu.init();
     }
-    if (is_x86 and bopts_init.nvidia_gpu) {
+    if (has_pc_devices and bopts_init.nvidia_gpu) {
         video.nvidia_gpu.init();
     }
-    if (is_x86 and bopts_init.amd_igpu) {
+    if (has_pc_devices and bopts_init.amd_igpu) {
         video.amd_igpu.init();
     }
-    if (is_x86 and bopts_init.intel_igpu) {
+    if (has_pc_devices and bopts_init.intel_igpu) {
         video.intel_igpu.init();
     }
 
-    if (is_x86) {
+    if (has_pc_devices) {
         bus.serial_bus.init();
         storage.ata.init();
         if (bus.pcie.supports_pci_config) {
@@ -183,32 +191,29 @@ pub fn init() void {
         if (video.vga.isInitialized()) "yes" else "no",
         if (video.hdmi.isInitialized()) "yes" else "no",
         if (video.display.isInitialized()) "yes" else "no",
-        if (builtin.target.cpu.arch == .loongarch64 and bopts_log.loongson_igpu) blk: {
+        if (has_loongson_igpu and bopts_log.loongson_igpu) blk: {
             if (video.loongson_igpu.isDeferredProbePending()) break :blk "defer";
             if (video.loongson_igpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
-        if (is_x86 and bopts_log.nvidia_gpu)
-        blk: {
+        if (has_pc_devices and bopts_log.nvidia_gpu) blk: {
             if (video.nvidia_gpu.isDeferredProbePending()) break :blk "defer";
             if (video.nvidia_gpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
-        if (is_x86 and bopts_log.amd_igpu)
-        blk: {
+        if (has_pc_devices and bopts_log.amd_igpu) blk: {
             if (video.amd_igpu.isDeferredProbePending()) break :blk "defer";
             if (video.amd_igpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
-        if (is_x86 and bopts_log.intel_igpu)
-        blk: {
+        if (has_pc_devices and bopts_log.intel_igpu) blk: {
             if (video.intel_igpu.isDeferredProbePending()) break :blk "defer";
             if (video.intel_igpu.isActive()) break :blk "yes";
             break :blk "no";
         } else "n/a",
     });
 
-    if (is_x86) {
+    if (has_pc_devices) {
         klog.info("Drivers: Bus/Timer/Storage (PCI=%s, PIT=%s, RTC=%s, ATA=%s, USB=%s)", .{
             if (bus.pcie.isInitialized()) "yes" else "no",
             if (timer.pit_timer.isInitialized()) "yes" else "no",
@@ -225,7 +230,7 @@ pub fn init() void {
 }
 
 pub fn initInputDrivers() void {
-    if (is_x86 or builtin.target.cpu.arch == .loongarch64) {
+    if (has_ps2_kbd) {
         input.kbd.init();
     }
     input.mouse.registerWithIo();
@@ -238,7 +243,7 @@ pub fn initInputDrivers() void {
     });
     klog.info("Input: VirtIO_Input_PCI=%s PS2_hw=%s (initDesktopMode sets pointer bounds)", .{
         if (input.virtio_input_pci.isActive()) "active" else "inactive",
-        if (is_x86)
+        if (has_pc_devices)
             (if (input.mouse.isHardwareInitialized()) "ok" else "no")
         else
             "n/a",
@@ -274,7 +279,7 @@ pub fn applyDesktopResolution(req: *const video.display.DisplaySetModeRequestV1)
 pub fn notifyDisplayGeometryChanged(width: u32, height: u32) void {
     input.mouse.setScreenBounds(@intCast(width), @intCast(height));
     input.virtio_input_pci.resetPointerBaseline();
-    if (is_x86) {
+    if (has_pc_devices) {
         input.mouse.reassertStreamEnable();
     }
     video.display.syncCursorFromMouse();
@@ -301,7 +306,7 @@ pub fn initDesktopMode(fb_addr: usize, width: u32, height: u32, pitch: u32, bpp:
     });
     video.framebuffer.logDesktopPointerDiagnostics(
         input.virtio_input_pci.isActive(),
-        if (is_x86) input.mouse.isHardwareInitialized() else false,
+        if (has_pc_devices) input.mouse.isHardwareInitialized() else false,
     );
 }
 

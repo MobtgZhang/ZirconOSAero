@@ -65,7 +65,7 @@ const default_mmap = [_]mb2.MmapEntry{
     .{
         .base_addr = 0x40000000 + 0x400000,
         .length = 256 * 1024 * 1024 - 0x400000,
-        .type = @intFromEnum(mb2.MmapEntryType.available),
+        .type = @backingInt(mb2.MmapEntryType.available),
         .reserved = 0,
     },
 };

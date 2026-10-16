@@ -72,7 +72,7 @@ pub fn icoBasenameForPeId(id: PeIconId) []const u8 {
 /// Maps logical shell `IconId` (1–25) to PE resource id when both enums use parallel ordering.
 pub fn peIdForLogicalIcon(logical: u16) ?PeIconId {
     if (logical < 1 or logical > 25) return null;
-    return @enumFromInt(@intFromEnum(PeIconId.computer) + (logical - 1));
+    return @fromBackingInt(@intCast(@backingInt(PeIconId.computer) + (logical - 1)));
 }
 
 test "icoBasenameForPeId maps err to error.ico stem" {

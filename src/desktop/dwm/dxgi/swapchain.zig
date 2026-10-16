@@ -73,7 +73,7 @@ pub const SwapChainState = struct {
 };
 
 pub const MAX_SWAPCHAINS: usize = 16;
-pub var g_swapchain_pool: [MAX_SWAPCHAINS]?SwapChainState = [_]?SwapChainState{null} ** MAX_SWAPCHAINS;
+pub var g_swapchain_pool: [MAX_SWAPCHAINS]?SwapChainState = std.mem.zeroes([MAX_SWAPCHAINS]?SwapChainState);
 pub var g_swapchain_count: usize = 0;
 
 // ============================================================================

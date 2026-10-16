@@ -82,8 +82,8 @@ pub const IrpMajorFunction = enum(u8) {
 };
 
 comptime {
-    std.debug.assert(@intFromEnum(IrpMajorFunction.pnp) == 9);
-    std.debug.assert(@intFromEnum(IrpMajorFunction.power) == 10);
+    std.debug.assert(@backingInt(IrpMajorFunction.pnp) == 9);
+    std.debug.assert(@backingInt(IrpMajorFunction.power) == 10);
 }
 
 /// WDK `IRP_MN_*` PnP 子集（公开头文件枚举值；clean-room 仅使用文档化常量）。
@@ -109,7 +109,7 @@ pub const IrpMinorPower = enum(u8) {
     _,
 };
 
-pub const IRP_MJ_COUNT: usize = @intFromEnum(IrpMajorFunction.power) + 1;
+pub const IRP_MJ_COUNT: usize = @backingInt(IrpMajorFunction.power) + 1;
 
 /// 最多注册两层完成例程（LIFO 调用；完整 NT 链为动态分配，见 WDK）。
 pub const MAX_COMPLETION_ROUTINES: usize = 2;
@@ -262,7 +262,7 @@ pub const MAX_DEVICE_EXTENSION: usize = 128;
 
 pub const DeviceObject = struct {
     header: ob.ObjectHeader = .{ .obj_type = .device },
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
     device_type: DeviceType = .unknown,
     flags: u32 = 0,
@@ -284,18 +284,18 @@ pub const MAX_DRIVERS: usize = 24;
 
 pub const DriverObject = struct {
     header: ob.ObjectHeader = .{ .obj_type = .driver },
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
     device_count: usize = 0,
     /// 未注册 `major_dispatch[major]` 时回退到此例程（兼容单入口驱动）。
     dispatch: ?DriverDispatchFn = null,
-    major_dispatch: [IRP_MJ_COUNT]?DriverDispatchFn = .{null} ** IRP_MJ_COUNT,
+    major_dispatch: [IRP_MJ_COUNT]?DriverDispatchFn = std.mem.zeroes([IRP_MJ_COUNT]?DriverDispatchFn),
 };
 
-var devices: [MAX_DEVICES]DeviceObject = [_]DeviceObject{.{}} ** MAX_DEVICES;
+var devices: [MAX_DEVICES]DeviceObject = std.mem.zeroes([MAX_DEVICES]DeviceObject);
 var device_count: usize = 0;
 
-var drivers: [MAX_DRIVERS]DriverObject = [_]DriverObject{.{}} ** MAX_DRIVERS;
+var drivers: [MAX_DRIVERS]DriverObject = std.mem.zeroes([MAX_DRIVERS]DriverObject);
 var driver_count: usize = 0;
 
 var io_initialized: bool = false;
@@ -326,7 +326,7 @@ pub fn registerDriver(name: []const u8, dispatch: ?DriverDispatchFn) ?u32 {
 
 pub fn setDriverMajorDispatch(driver_idx: u32, major: IrpMajorFunction, handler: ?DriverDispatchFn) void {
     if (driver_idx >= driver_count) return;
-    drivers[driver_idx].major_dispatch[@intFromEnum(major)] = handler;
+    drivers[driver_idx].major_dispatch[@backingInt(major)] = handler;
 }
 
 pub fn createDevice(name: []const u8, dev_type: DeviceType, driver_idx: u32) ?u32 {
@@ -349,7 +349,7 @@ pub fn createDevice(name: []const u8, dev_type: DeviceType, driver_idx: u32) ?u3
     }
 
     klog.debug("I/O: Device '%s' created (idx=%u, type=%u)", .{
-        name, idx, @intFromEnum(dev_type),
+        name, idx, @backingInt(dev_type),
     });
     return @intCast(idx);
 }
@@ -372,7 +372,7 @@ pub fn dispatchIrp(device_idx: u32, irp: *Irp) NTSTATUS {
 
     if (dev.driver_idx >= driver_count) return STATUS_INVALID_DEVICE_REQUEST;
     const drv = &drivers[dev.driver_idx];
-    const major = @intFromEnum(irp.major_function);
+    const major = @backingInt(irp.major_function);
     const handler: ?DriverDispatchFn = if (major < IRP_MJ_COUNT)
         drv.major_dispatch[major]
     else
@@ -440,7 +440,7 @@ pub const IoCompletionEntry = struct {
 /// I/O Completion Port structure
 pub const IoCompletionPort = struct {
     header: ob.ObjectHeader = .{ .obj_type = .io_completion_port },
-    entries: [MAX_IO_COMPLETIONS_PER_PORT]IoCompletionEntry = [_]IoCompletionEntry{.{}} ** MAX_IO_COMPLETIONS_PER_PORT,
+    entries: [MAX_IO_COMPLETIONS_PER_PORT]IoCompletionEntry = std.mem.zeroes([MAX_IO_COMPLETIONS_PER_PORT]IoCompletionEntry),
     read_idx: usize = 0,
     write_idx: usize = 0,
     count: usize = 0,
@@ -448,7 +448,7 @@ pub const IoCompletionPort = struct {
 };
 
 /// Global IOCP table
-var io_completion_ports: [MAX_IO_COMPLETION_PORTS]IoCompletionPort = [_]IoCompletionPort{.{}} ** MAX_IO_COMPLETION_PORTS;
+var io_completion_ports: [MAX_IO_COMPLETION_PORTS]IoCompletionPort = std.mem.zeroes([MAX_IO_COMPLETION_PORTS]IoCompletionPort);
 var iocp_count: usize = 0;
 
 /// Create a new I/O completion port
@@ -543,13 +543,13 @@ pub const PnpDeviceState = enum(u8) {
 pub const PnpDeviceInfo = struct {
     device_idx: u32 = 0,
     state: PnpDeviceState = .not_present,
-    instance_id: [64]u8 = [_]u8{0} ** 64,
-    hardware_id: [64]u8 = [_]u8{0} ** 64,
-    compatible_ids: [128]u8 = [_]u8{0} ** 128,
+    instance_id: [64]u8 = std.mem.zeroes([64]u8),
+    hardware_id: [64]u8 = std.mem.zeroes([64]u8),
+    compatible_ids: [128]u8 = std.mem.zeroes([128]u8),
 };
 
 /// Global PnP device info table
-var pnp_devices: [MAX_DEVICES]PnpDeviceInfo = [_]PnpDeviceInfo{.{}} ** MAX_DEVICES;
+var pnp_devices: [MAX_DEVICES]PnpDeviceInfo = std.mem.zeroes([MAX_DEVICES]PnpDeviceInfo);
 
 /// Initialize PnP subsystem
 pub fn pnpInit() void {
@@ -593,7 +593,7 @@ pub fn pnpStartDevice(device_idx: u32) NTSTATUS {
     // Send IRP_MJ_PNP / IRP_MN_START_DEVICE to the device
     var irp: Irp = .{
         .major_function = .pnp,
-        .minor_function = @intFromEnum(IrpMinorPnp.start_device),
+        .minor_function = @backingInt(IrpMinorPnp.start_device),
     };
 
     const status = dispatchIrp(device_idx, &irp);
@@ -615,7 +615,7 @@ pub fn pnpQueryDeviceCapabilities(device_idx: u32, capabilities: *anyopaque) NTS
     // Send IRP_MJ_PNP / IRP_MN_QUERY_CAPABILITIES to the device
     var irp: Irp = .{
         .major_function = .pnp,
-        .minor_function = @intFromEnum(IrpMinorPnp.query_capabilities),
+        .minor_function = @backingInt(IrpMinorPnp.query_capabilities),
     };
 
     return dispatchIrp(device_idx, &irp);
@@ -633,7 +633,7 @@ pub fn pnpRemoveDevice(device_idx: u32) NTSTATUS {
     // Send IRP_MJ_PNP / IRP_MN_REMOVE_DEVICE to the device
     var irp: Irp = .{
         .major_function = .pnp,
-        .minor_function = @intFromEnum(IrpMinorPnp.remove_device),
+        .minor_function = @backingInt(IrpMinorPnp.remove_device),
     };
 
     const status = dispatchIrp(device_idx, &irp);

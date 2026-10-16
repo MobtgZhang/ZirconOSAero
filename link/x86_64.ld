@@ -3,8 +3,8 @@ ENTRY(_start)
 
 SECTIONS
 {
-  /* 32MiB：避免 UEFI 在 ~16MiB 附近无法 AllocateAddress（大内核 PT_LOAD 跨区常见失败） */
-  . = 0x2000000;
+  /* 64MiB：避免 UEFI 在 ~16MiB 附近无法 AllocateAddress（大内核 PT_LOAD 跨区常见失败） */
+  . = 0x4000000;
 
   .multiboot2 : ALIGN(8)
   {

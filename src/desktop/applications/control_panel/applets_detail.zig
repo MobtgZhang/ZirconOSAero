@@ -35,7 +35,10 @@ fn rgb(r: u32, g: u32, b: u32) u32 {
 
 // Appearance and Personalization Applet
 pub const AppearanceApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     selected_theme: i32,
     selected_background: i32,
@@ -43,7 +46,10 @@ pub const AppearanceApplet = struct {
 
     pub fn create() AppearanceApplet {
         return .{
-            .x = 0, .y = 0, .width = 600, .height = 450,
+            .x = 0,
+            .y = 0,
+            .width = 600,
+            .height = 450,
             .visible = true,
             .selected_theme = 0,
             .selected_background = 0,
@@ -87,7 +93,10 @@ pub const AppearanceApplet = struct {
 
 // Display Applet
 pub const DisplayApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     resolution_index: i32,
     orientation: i32,
@@ -95,7 +104,10 @@ pub const DisplayApplet = struct {
 
     pub fn create() DisplayApplet {
         return .{
-            .x = 0, .y = 0, .width = 600, .height = 450,
+            .x = 0,
+            .y = 0,
+            .width = 600,
+            .height = 450,
             .visible = true,
             .resolution_index = 2,
             .orientation = 0,
@@ -139,7 +151,10 @@ pub const DisplayApplet = struct {
 
 // Sound Applet
 pub const SoundApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     selected_device: i32,
     volume: i32,
@@ -147,7 +162,10 @@ pub const SoundApplet = struct {
 
     pub fn create() SoundApplet {
         return .{
-            .x = 0, .y = 0, .width = 600, .height = 450,
+            .x = 0,
+            .y = 0,
+            .width = 600,
+            .height = 450,
             .visible = true,
             .selected_device = 0,
             .volume = 75,
@@ -196,7 +214,10 @@ pub const SoundApplet = struct {
 
 // Mouse Applet
 pub const MouseApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     primary_button: i32,
     double_click_speed: i32,
@@ -205,7 +226,10 @@ pub const MouseApplet = struct {
 
     pub fn create() MouseApplet {
         return .{
-            .x = 0, .y = 0, .width = 600, .height = 450,
+            .x = 0,
+            .y = 0,
+            .width = 600,
+            .height = 450,
             .visible = true,
             .primary_button = 0,
             .double_click_speed = 50,
@@ -255,7 +279,10 @@ pub const MouseApplet = struct {
 
 // Date and Time Applet
 pub const DateTimeApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     day: i32,
     month: i32,
@@ -267,7 +294,10 @@ pub const DateTimeApplet = struct {
 
     pub fn create() DateTimeApplet {
         return .{
-            .x = 0, .y = 0, .width = 500, .height = 400,
+            .x = 0,
+            .y = 0,
+            .width = 500,
+            .height = 400,
             .visible = true,
             .day = 11,
             .month = 4,
@@ -314,13 +344,19 @@ pub const DateTimeApplet = struct {
 
 // User Accounts Applet
 pub const UserAccountsApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     selected_user: i32,
 
     pub fn create() UserAccountsApplet {
         return .{
-            .x = 0, .y = 0, .width = 550, .height = 400,
+            .x = 0,
+            .y = 0,
+            .width = 550,
+            .height = 400,
             .visible = true,
             .selected_user = 0,
         };
@@ -355,12 +391,18 @@ pub const UserAccountsApplet = struct {
 
 // System Applet
 pub const SystemApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
 
     pub fn create() SystemApplet {
         return .{
-            .x = 0, .y = 0, .width = 550, .height = 450,
+            .x = 0,
+            .y = 0,
+            .width = 550,
+            .height = 450,
             .visible = true,
         };
     }
@@ -407,13 +449,19 @@ pub const SystemApplet = struct {
 
 // Power Options Applet
 pub const PowerApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     selected_plan: i32,
 
     pub fn create() PowerApplet {
         return .{
-            .x = 0, .y = 0, .width = 600, .height = 450,
+            .x = 0,
+            .y = 0,
+            .width = 600,
+            .height = 450,
             .visible = true,
             .selected_plan = 0,
         };
@@ -450,14 +498,20 @@ pub const PowerApplet = struct {
 
 // Windows Firewall Applet
 pub const FirewallApplet = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     visible: bool,
     firewall_on: bool,
     blocked_apps_count: i32,
 
     pub fn create() FirewallApplet {
         return .{
-            .x = 0, .y = 0, .width = 550, .height = 400,
+            .x = 0,
+            .y = 0,
+            .width = 550,
+            .height = 400,
             .visible = true,
             .firewall_on = true,
             .blocked_apps_count = 0,

@@ -48,20 +48,20 @@ pub const KernelDwm = struct {
     pub const cursor_lerp_factor: i32 = 255;
     /// 每帧盒式模糊「像素·遍」近似预算（宽×高×pass 累加超过则跳过后续 blur，保留 tint/高光）。
     /// 略低于 12M：高分辨率下减轻壳层交互与全帧叠加之 CPU 占用（仍优先 tint/高光）。
-    pub const blur_budget_pixel_passes_per_frame: u32 = 10_000_000;
+    pub const blur_budget_pixel_passes_per_frame: u32 = 20_000_000;
     /// 0 = 不限制；否则任务栏 `boxBlur` 半径上限（减轻全宽条带成本）。
     pub const taskbar_blur_radius_cap: u8 = 5;
     /// 单块 `boxBlurRect` 面积超过则跳过该次模糊（防全屏条带拖死主循环）。
-    pub const blur_max_single_rect_pixels: u32 = 320_000;
+    pub const blur_max_single_rect_pixels: u32 = 1_500_000;
     /// 每帧最多执行多少次 `boxBlurRect`（与面积上限叠加）。
-    pub const blur_max_rect_calls_per_frame: u32 = 12;
+    pub const blur_max_rect_calls_per_frame: u32 = 20;
     /// 帧像素数 ≥ 此阈值时下调半径/遍数（如 1280×720）。
     pub const blur_resolution_downgrade_pixel_threshold: u32 = 921_600;
     pub const glass_blur_radius_hd_cap: u8 = 5;
     pub const glass_blur_passes_hd_cap: u8 = 2;
     /// LoongArch / QEMU 下 CPU 盒式模糊成本更高，启动后再由 `dwm.applyPlatformAndResolutionTuning` 收紧。
-    pub const glass_blur_radius_loongarch_cap: u8 = 4;
-    pub const glass_blur_passes_loongarch_cap: u8 = 2;
+    pub const glass_blur_radius_la_cap: u8 = 4;
+    pub const glass_blur_passes_la_cap: u8 = 2;
 };
 
 /// 内核 `dwm_compositor.zig`（重定向表面 / 元数据）

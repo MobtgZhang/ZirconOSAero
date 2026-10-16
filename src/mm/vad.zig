@@ -386,6 +386,8 @@ pub const VadTable = struct {
         var tmp: [MAX_NODES]VadEntry = undefined;
         const n = self.collectEntriesInorder(&tmp);
         if (n <= 1) return;
+        var original: [MAX_NODES]VadEntry = undefined;
+        @memcpy(original[0..n], tmp[0..n]);
 
         var out: usize = 0;
         var r: usize = 1;
@@ -434,13 +436,17 @@ pub const VadTable = struct {
             _ = self.deleteByStart(to_delete[i]);
         }
 
-        // 全部重新插入（失败时维持空树状态）
+        // 全部重新插入（失败时恢复原树）
         i = 0;
         while (i < new_len) : (i += 1) {
             const e = tmp[i];
             if (!self.insertEx(e.start, e.end_exclusive, e.state, e.protect, e.is_guard, false)) {
-                // 插入失败，恢复空树状态
                 self.clear();
+                var j: usize = 0;
+                while (j < n) : (j += 1) {
+                    const oe = original[j];
+                    _ = self.insertEx(oe.start, oe.end_exclusive, oe.state, oe.protect, oe.is_guard, false);
+                }
                 return;
             }
         }
@@ -449,7 +455,8 @@ pub const VadTable = struct {
     /// 精确删除 VAD（start 和 end 均匹配）。若需处理中间删除，应使用 removePrefixRange。
     pub fn removeExact(self: *VadTable, start: u64, num_pages: u32) bool {
         const ps: u64 = page_size_bytes;
-        const end = start + @as(u64, num_pages) * ps;
+        const span = std.math.mul(u64, @as(u64, num_pages), ps) catch return false;
+        const end = std.math.add(u64, start, span) catch return false;
         const i = self.findByStart(start) orelse return false;
         const n = self.nodes[i];
         if (n.start == start and n.end_exclusive == end) {
@@ -474,57 +481,62 @@ pub const VadTable = struct {
         return false;
     }
 
+    fn removeSubrange(self: *VadTable, sub_start: u64, sub_end_exclusive: u64) bool {
+        if (sub_start >= sub_end_exclusive) return false;
+        const i = self.floorIndex(sub_start);
+        if (i == NULL_IDX) return false;
+        const n = self.nodes[i];
+        if (sub_start < n.start or sub_end_exclusive > n.end_exclusive) return false;
+        if (n.start == sub_start and n.end_exclusive == sub_end_exclusive) {
+            return self.deleteByStart(n.start);
+        }
+
+        var pieces: usize = 0;
+        if (n.start < sub_start) pieces += 1;
+        if (sub_end_exclusive < n.end_exclusive) pieces += 1;
+        if (@as(usize, self.node_count) - 1 + pieces > MAX_NODES) return false;
+
+        const old_start = n.start;
+        const old_end = n.end_exclusive;
+        const old_state = n.state;
+        const old_protect = n.protect;
+        const old_is_guard = n.is_guard;
+        if (!self.deleteByStart(old_start)) return false;
+
+        if (old_start < sub_start) {
+            if (!self.insertEx(old_start, sub_start, old_state, old_protect, old_is_guard, false)) {
+                _ = self.insertEx(old_start, old_end, old_state, old_protect, old_is_guard, true);
+                return false;
+            }
+        }
+        if (sub_end_exclusive < old_end) {
+            if (!self.insertEx(sub_end_exclusive, old_end, old_state, old_protect, old_is_guard, true)) {
+                _ = self.insertEx(old_start, old_end, old_state, old_protect, old_is_guard, true);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn restoreFromEntries(self: *VadTable, entries: []const VadEntry) void {
+        self.clear();
+        for (entries) |e| {
+            _ = self.insertEx(e.start, e.end_exclusive, e.state, e.protect, e.is_guard, false);
+        }
+    }
+
     /// 按前缀范围删除：删除 [range_start, range_end_exclusive)。
     /// 若 range_start 在某 VAD 内部，自动拆分并保留后半部分。
     pub fn removePrefixRange(self: *VadTable, range_start: u64, range_end_exclusive: u64) bool {
         if (range_start >= range_end_exclusive) return false;
-        const i = self.findByStart(range_start) orelse return false;
-        const n = self.nodes[i];
-        if (n.start == range_start and n.end_exclusive >= range_end_exclusive) {
-            if (n.end_exclusive == range_end_exclusive) {
-                return self.deleteByStart(range_start);
-            }
-            // 范围匹配但需保留后半部分：拆分后删除前缀
-            const ns = range_end_exclusive;
-            const ne = n.end_exclusive;
-            const st = n.state;
-            const pr = n.protect;
-            const ig = n.is_guard;
-            if (!self.deleteByStart(range_start)) return false;
-            return self.insertEx(ns, ne, st, pr, ig, true);
+        var cur = range_start;
+        while (cur < range_end_exclusive) {
+            const e = self.findContaining(cur) orelse return false;
+            const seg_end = @min(range_end_exclusive, e.end_exclusive);
+            if (!self.removeSubrange(cur, seg_end)) return false;
+            cur = seg_end;
         }
-        // range_start 不在节点起始处
-        if (n.start < range_start) {
-            if (n.end_exclusive <= range_end_exclusive) {
-                // 节点完全在删除范围内：删除包含前半部分的节点
-                // 先插入后半部分（如有），再删除原节点
-                const old_end = n.end_exclusive;
-                if (old_end > range_end_exclusive) {
-                    // 节点延伸到删除范围外，保留后半部分
-                    const st = n.state;
-                    const pr = n.protect;
-                    const ig = n.is_guard;
-                    if (!self.deleteByStart(n.start)) return false;
-                    // 插入后半部分
-                    if (!self.insertEx(range_end_exclusive, old_end, st, pr, ig, true)) return false;
-                    return true;
-                }
-                // 节点完全在删除范围内
-                return self.deleteByStart(n.start);
-            }
-            // 中间删除：拆分为 [n.start, range_start) + [range_end_exclusive, n.end_exclusive)
-            const old_start = n.start;
-            const old_end = n.end_exclusive;
-            const st = n.state;
-            const pr = n.protect;
-            const ig = n.is_guard;
-            if (!self.deleteByStart(n.start)) return false;
-            // 先插入前半部分（失败时只丢失前半，保持后半）
-            _ = self.insertEx(old_start, range_start, st, pr, ig, false);
-            // 再插入后半部分
-            return self.insertEx(range_end_exclusive, old_end, st, pr, ig, true);
-        }
-        return false;
+        return true;
     }
 
     pub fn decommitSubrange(self: *VadTable, range_start: u64, range_end_exclusive: u64, no_access_protect: u32) bool {
@@ -655,14 +667,25 @@ pub const VadTable = struct {
         const old_end = e.end_exclusive;
         const old_state = e.state;
         const old_prot = e.protect;
+        var original: [MAX_NODES]VadEntry = undefined;
+        const original_count = self.collectEntriesInorder(&original);
         _ = self.deleteByStart(old_start);
 
         if (old_start < range_start) {
-            if (!self.insert(old_start, range_start, old_state, old_prot, false)) return false;
+            if (!self.insert(old_start, range_start, old_state, old_prot, false)) {
+                self.restoreFromEntries(original[0..original_count]);
+                return false;
+            }
         }
-        if (!self.insert(range_start, range_end_exclusive, old_state, new_protect, false)) return false;
+        if (!self.insert(range_start, range_end_exclusive, old_state, new_protect, false)) {
+            self.restoreFromEntries(original[0..original_count]);
+            return false;
+        }
         if (range_end_exclusive < old_end) {
-            if (!self.insert(range_end_exclusive, old_end, old_state, old_prot, false)) return false;
+            if (!self.insert(range_end_exclusive, old_end, old_state, old_prot, false)) {
+                self.restoreFromEntries(original[0..original_count]);
+                return false;
+            }
         }
         self.coalesceAdjacent();
         return true;
@@ -847,4 +870,34 @@ test "vad avl random insert delete balanced height" {
         _ = t.deleteByStart(inserted[n]);
     }
     try std.testing.expectEqual(@as(u16, 0), t.len());
+}
+
+test "vad removePrefixRange spans multiple nodes" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    try std.testing.expect(t.insert(0x10000, 0x10000 + ps, .committed, 0x04, false));
+    try std.testing.expect(t.insert(0x10000 + ps, 0x10000 + 2 * ps, .committed, 0x04, false));
+    try std.testing.expect(t.insert(0x10000 + 2 * ps, 0x10000 + 4 * ps, .committed, 0x04, false));
+    try std.testing.expect(t.removePrefixRange(0x10000, 0x10000 + 3 * ps));
+    try std.testing.expectEqual(@as(u16, 1), t.len());
+    try std.testing.expectEqual(@as(u64, 0x10000 + 3 * ps), t.findContaining(0x10000 + 3 * ps).?.start);
+}
+
+test "vad coalesce preserves mixed attributes" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    try std.testing.expect(t.insert(0x10000, 0x10000 + ps, .committed, 0x04, false));
+    try std.testing.expect(t.insert(0x10000 + ps, 0x10000 + 2 * ps, .committed, 0x04, false));
+    try std.testing.expect(t.insert(0x10000 + 2 * ps, 0x10000 + 3 * ps, .reserved, 0x04, false));
+    t.coalesceAdjacent();
+    try std.testing.expectEqual(@as(u16, 2), t.len());
+    try std.testing.expectEqual(@as(u64, 0x10000), t.findContaining(0x10000).?.start);
+    try std.testing.expectEqual(@as(u64, 0x10000 + 2 * ps), t.findContaining(0x10000 + 2 * ps).?.start);
+}
+
+test "vad removeExact rejects overflow" {
+    var t: VadTable = .{};
+    const ps: u64 = 4096;
+    try std.testing.expect(t.insert(0x10000, 0x10000 + ps, .committed, 0x04, false));
+    try std.testing.expect(!t.removeExact(0x10000, std.math.maxInt(u32)));
 }

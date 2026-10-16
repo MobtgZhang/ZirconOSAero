@@ -104,7 +104,7 @@ fn scroll() void {
 }
 
 fn makeAttr(fg: Color, bg: Color) u8 {
-    return (@as(u8, @intFromEnum(fg)) & 0x0F) | ((@as(u8, @intFromEnum(bg)) & 0x0F) << 4);
+    return (@as(u8, @backingInt(fg)) & 0x0F) | ((@as(u8, @backingInt(bg)) & 0x0F) << 4);
 }
 
 pub fn setColor(fg: Color, bg: Color) void {

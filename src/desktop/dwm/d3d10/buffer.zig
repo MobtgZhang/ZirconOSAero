@@ -47,7 +47,7 @@ pub const BufferState = struct {
 };
 
 pub const MAX_BUFFERS: usize = 512;
-pub var g_buffer_pool: [MAX_BUFFERS]?BufferState = [_]?BufferState{null} ** MAX_BUFFERS;
+pub var g_buffer_pool: [MAX_BUFFERS]?BufferState = std.mem.zeroes([MAX_BUFFERS]?BufferState);
 pub var g_buffer_count: usize = 0;
 
 // ============================================================================

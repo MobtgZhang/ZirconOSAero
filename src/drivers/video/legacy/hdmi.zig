@@ -24,6 +24,7 @@
 //! or a virtual GPU in QEMU/VirtualBox). This driver provides the HDMI
 //! output abstraction including EDID parsing, mode negotiation, and
 //! audio/video signal control.
+const std = @import("std");
 
 const io = @import("../../../io/io.zig");
 const klog = @import("../../../rtl/klog.zig");
@@ -61,7 +62,7 @@ pub const EDID_SIZE: usize = 128;
 
 pub const EdidInfo = struct {
     valid: bool = false,
-    manufacturer: [4]u8 = [_]u8{0} ** 4,
+    manufacturer: [4]u8 = std.mem.zeroes([4]u8),
     product_code: u16 = 0,
     serial_number: u32 = 0,
     manufacture_year: u16 = 0,
@@ -80,7 +81,7 @@ pub const EdidInfo = struct {
     color_depth: u8 = 0,
     digital_input: bool = false,
 
-    monitor_name: [16]u8 = [_]u8{0} ** 16,
+    monitor_name: [16]u8 = std.mem.zeroes([16]u8),
     monitor_name_len: usize = 0,
 
     pub fn getMonitorName(self: *const EdidInfo) []const u8 {
@@ -141,7 +142,7 @@ pub const DisplayOutput = struct {
 
 // ── Driver State ──
 
-var outputs: [MAX_OUTPUTS]DisplayOutput = [_]DisplayOutput{.{}} ** MAX_OUTPUTS;
+var outputs: [MAX_OUTPUTS]DisplayOutput = std.mem.zeroes([MAX_OUTPUTS]DisplayOutput);
 var output_count: usize = 0;
 var primary_output: usize = 0;
 
@@ -442,7 +443,7 @@ fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
         IOCTL_HDMI_GET_STATUS => {
             const idx = irp.buffer_ptr & 0xFF;
             if (idx < output_count) {
-                irp.complete(io.STATUS_SUCCESS, @intFromEnum(outputs[idx].status));
+                irp.complete(io.STATUS_SUCCESS, @backingInt(outputs[idx].status));
             } else {
                 irp.complete(io.STATUS_INVALID_PARAMETER, 0);
             }

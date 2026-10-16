@@ -1,3 +1,4 @@
+const std = @import("std");
 // Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
 //
 // ZirconOS
@@ -179,7 +180,11 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         const buf_va = userVaFromWow64Ptr32(buf32) orelse return ntdll.STATUS_INVALID_PARAMETER;
         var actual_len: u32 = 0;
         const st = ntdll.NtQueryInformationProcess(
-            proc_h, info_class, @ptrFromInt(buf_va), buf_len, &actual_len,
+            proc_h,
+            info_class,
+            @ptrFromInt(buf_va),
+            buf_len,
+            &actual_len,
         );
         if (ret_len32 != 0) {
             const ret_va = userVaFromWow64Ptr32(ret_len32) orelse return ntdll.STATUS_INVALID_PARAMETER;
@@ -199,7 +204,11 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         const buf_va = userVaFromWow64Ptr32(buf32) orelse return ntdll.STATUS_INVALID_PARAMETER;
         var actual_len: u32 = 0;
         const st = ntdll.NtQueryInformationThread(
-            thread_h, info_class, @ptrFromInt(buf_va), buf_len, &actual_len,
+            thread_h,
+            info_class,
+            @ptrFromInt(buf_va),
+            buf_len,
+            &actual_len,
         );
         if (ret_len32 != 0) {
             const ret_va = userVaFromWow64Ptr32(ret_len32) orelse return ntdll.STATUS_INVALID_PARAMETER;
@@ -239,7 +248,11 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         const buf_va = userVaFromWow64Ptr32(buf32) orelse return ntdll.STATUS_INVALID_PARAMETER;
         var bytes_read: usize = 0;
         const st = ntdll.NtReadVirtualMemory(
-            proc_h, @as(u64, base_addr32), @as([*]u8, @ptrFromInt(buf_va)), size, &bytes_read,
+            proc_h,
+            @as(u64, base_addr32),
+            @as([*]u8, @ptrFromInt(buf_va)),
+            size,
+            &bytes_read,
         );
         if (args.len > 4 and args[4] != 0) {
             const out_va = userVaFromWow64Ptr32(args[4]) orelse return ntdll.STATUS_INVALID_PARAMETER;
@@ -258,7 +271,11 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         const buf_va = userVaFromWow64Ptr32(buf32) orelse return ntdll.STATUS_INVALID_PARAMETER;
         var bytes_written: usize = 0;
         const st = ntdll.NtWriteVirtualMemory(
-            proc_h, @as(u64, base_addr32), @as([*]const u8, @ptrFromInt(buf_va)), size, &bytes_written,
+            proc_h,
+            @as(u64, base_addr32),
+            @as([*]const u8, @ptrFromInt(buf_va)),
+            size,
+            &bytes_written,
         );
         if (args.len > 4 and args[4] != 0) {
             const out_va = userVaFromWow64Ptr32(args[4]) orelse return ntdll.STATUS_INVALID_PARAMETER;
@@ -277,7 +294,12 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
 
         const buf_va = userVaFromWow64Ptr32(buf32) orelse return ntdll.STATUS_INVALID_PARAMETER;
         return ntdll.NtQueryVirtualMemory(
-            proc_h, @as(u64, base_addr32), info_class, @ptrFromInt(buf_va), buf_len, null,
+            proc_h,
+            @as(u64, base_addr32),
+            info_class,
+            @ptrFromInt(buf_va),
+            buf_len,
+            null,
         );
     }
 
@@ -292,7 +314,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var section_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
 
         return ntdll.NtCreateSection(&section_h, desired_access, oa, null, page_attribs, section_attribs, file_h);
     }
@@ -338,7 +361,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
 
         const st = ntdll.NtOpenProcess(&new_h, desired_access, oa, client_id_ptr);
         @as(*volatile ntdll.HANDLE, @ptrFromInt(proc_h_ptr)).* = new_h;
@@ -355,7 +379,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
 
         const st = ntdll.NtOpenThread(&new_h, desired_access, oa, client_id_ptr);
         @as(*volatile ntdll.HANDLE, @ptrFromInt(thread_h_ptr)).* = new_h;
@@ -373,7 +398,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
         var ios: ntdll.IO_STATUS_BLOCK = .{};
 
         const st = ntdll.NtOpenFile(&new_h, desired_access, oa, &ios, options, 0);
@@ -396,7 +422,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
         var ios: ntdll.IO_STATUS_BLOCK = .{};
 
         const st = ntdll.NtCreateFile(&new_h, desired_access, oa, &ios, @as(u64, alloc_size), file_attribs, 0, create_disp, create_opts, null, 0);
@@ -416,7 +443,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
 
         const st = ntdll.NtCreateEvent(&new_h, desired_access, oa, event_type, initial_state);
         @as(*volatile ntdll.HANDLE, @ptrFromInt(event_h_ptr)).* = new_h;
@@ -456,7 +484,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
 
         const st = ntdll.NtCreateThreadFull(&new_h, desired_access, @ptrCast(oa), proc_h, null, 0);
         @as(*volatile ntdll.HANDLE, @ptrFromInt(thread_h_ptr)).* = new_h;
@@ -503,7 +532,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
 
         const st = ntdll.NtOpenKey(&new_h, desired_access, oa);
         @as(*volatile ntdll.HANDLE, @ptrFromInt(key_h_ptr)).* = new_h;
@@ -515,7 +545,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         const key_h = @as(u64, args[0]);
         const value_name_ptr32: ?*const ntdll.UNICODE_STRING = if (args[1] != 0)
             @ptrFromInt(userVaFromWow64Ptr32(args[1]) orelse return ntdll.STATUS_INVALID_PARAMETER)
-        else null;
+        else
+            null;
         const info_class = args[2];
         const buf32 = args[3];
         const buf_len = args[4];
@@ -524,7 +555,12 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         const buf_va = @as(?*anyopaque, @ptrFromInt(userVaFromWow64Ptr32(buf32) orelse return ntdll.STATUS_INVALID_PARAMETER));
         var actual_len: u32 = 0;
         const st = ntdll.NtQueryValueKey(
-            key_h, value_name_ptr32, info_class, buf_va, buf_len, &actual_len,
+            key_h,
+            value_name_ptr32,
+            info_class,
+            buf_va,
+            buf_len,
+            &actual_len,
         );
         if (ret_len32 != 0) {
             const ret_va = userVaFromWow64Ptr32(ret_len32) orelse return ntdll.STATUS_INVALID_PARAMETER;
@@ -538,7 +574,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         const key_h = @as(u64, args[0]);
         const value_name_ptr32: ?*const ntdll.UNICODE_STRING = if (args[1] != 0)
             @ptrFromInt(userVaFromWow64Ptr32(args[1]) orelse return ntdll.STATUS_INVALID_PARAMETER)
-        else null;
+        else
+            null;
         const info_class = args[2];
         const buf32 = args[3];
         const buf_len = args[4];
@@ -561,7 +598,8 @@ pub fn dispatchWow64Stub(wow: *types.Wow64Process, syscall_num: u32, args: []con
         var new_h: ntdll.HANDLE = 0;
         const oa = if (obj_attrs_ptr32 != 0)
             @as(?*ntdll.OBJECT_ATTRIBUTES, @ptrFromInt(userVaFromWow64Ptr32(obj_attrs_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER))
-        else null;
+        else
+            null;
         var disp_out: u32 = 0;
 
         const st = ntdll.NtCreateKey(&new_h, desired_access, oa, title_index, null, options, &disp_out);
@@ -847,7 +885,7 @@ pub const CONTEXT64 = extern struct {
     ss_ext: u16 = 0,
 
     // 浮点/向量状态
-    float_save: [512]u8 = [_]u8{0} ** 512,
+    float_save: [512]u8 = std.mem.zeroes([512]u8),
 };
 
 comptime {
@@ -886,12 +924,12 @@ pub fn convertContext32to64(ctx32: *const types.CONTEXT32, ctx64: *CONTEXT64) vo
     ctx64.rsp = ctx32.esp;
 
     // 段寄存器（WOW64 恒定值）
-    ctx64.cs = 0x23;    // 32位用户代码段
-    ctx64.ds = 0x23;    // 32位用户数据段
+    ctx64.cs = 0x23; // 32位用户代码段
+    ctx64.ds = 0x23; // 32位用户数据段
     ctx64.es = 0x23;
-    ctx64.fs = 0x3B;    // TEB 段（与 NT 一致）
+    ctx64.fs = 0x3B; // TEB 段（与 NT 一致）
     ctx64.gs = 0x23;
-    ctx64.ss = 0x2B;    // 32位用户栈段
+    ctx64.ss = 0x2B; // 32位用户栈段
 
     // 调试寄存器
     ctx64.dr0 = ctx32.dr0;

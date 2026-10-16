@@ -345,7 +345,7 @@ fn compositeFrame(
             const canvas_offset = canvas_y * @as(usize, canvas_width) * 4 + gx * 4;
 
             if (transparent_index == null or transparent_index.? != color_idx) {
-                const color = if (color_idx < color_table.len) color_table[color_idx] else .{'X', 'X', 'X'};
+                const color = if (color_idx < color_table.len) color_table[color_idx] else .{ 'X', 'X', 'X' };
                 canvas[canvas_offset] = color[0];
                 canvas[canvas_offset + 1] = color[1];
                 canvas[canvas_offset + 2] = color[2];
@@ -373,10 +373,10 @@ fn indexedToRgba(
             const idx = indexed[y * @as(usize, width) + x];
             const out_offset = y * @as(usize, row_pitch) + x * 4;
             if (transparent_index == null or transparent_index.? != idx) {
-                const color = if (idx < color_table.len) color_table[idx] else .{'X', 'X', 'X'};
-                output[out_offset..out_offset + 4].* = .{ color[0], color[1], color[2], 0xFF };
+                const color = if (idx < color_table.len) color_table[idx] else .{ 'X', 'X', 'X' };
+                output[out_offset .. out_offset + 4].* = .{ color[0], color[1], color[2], 0xFF };
             } else {
-                output[out_offset..out_offset + 4].* = .{ 0, 0, 0, 0 };
+                output[out_offset .. out_offset + 4].* = .{ 0, 0, 0, 0 };
             }
         }
     }
@@ -417,7 +417,7 @@ fn deinterlace(allocator: std.mem.Allocator, indexed: []const u8, width: u16, he
         while (y < height) : (y += pass.step) {
             const src_row = @as(usize, y) * @as(usize, row_size);
             const dst_row = @as(usize, write_row) * @as(usize, row_size);
-            @memcpy(deint[dst_row..dst_row + @as(usize, row_size)], indexed[src_row..src_row + @as(usize, row_size)]);
+            @memcpy(deint[dst_row .. dst_row + @as(usize, row_size)], indexed[src_row .. src_row + @as(usize, row_size)]);
             write_row += 1;
         }
     }
@@ -482,10 +482,10 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) mod.ImageError!mod
 
                 const img_desc = ImageDescriptor{
                     .separator = 0x2C,
-                    .left = std.mem.readIntLittle(u16, data[pos..pos + 2]),
-                    .top = std.mem.readIntLittle(u16, data[pos + 2..pos + 4]),
-                    .width = std.mem.readIntLittle(u16, data[pos + 4..pos + 6]),
-                    .height = std.mem.readIntLittle(u16, data[pos + 6..pos + 8]),
+                    .left = std.mem.readIntLittle(u16, data[pos .. pos + 2]),
+                    .top = std.mem.readIntLittle(u16, data[pos + 2 .. pos + 4]),
+                    .width = std.mem.readIntLittle(u16, data[pos + 4 .. pos + 6]),
+                    .height = std.mem.readIntLittle(u16, data[pos + 6 .. pos + 8]),
                     .flags = data[pos + 8],
                 };
                 pos += 9;
@@ -506,14 +506,14 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) mod.ImageError!mod
                 pos += 1;
 
                 // Read sub-blocks
-                var lzw_data = std.ArrayListUnmanaged(u8){};
+                var lzw_data = std.ArrayListUnmanaged(u8).empty;
                 defer lzw_data.deinit(allocator);
                 while (pos < data.len) {
                     const block_size = data[pos];
                     pos += 1;
                     if (block_size == 0) break;
                     if (pos + @as(usize, block_size) > data.len) break;
-                    try lzw_data.appendSlice(allocator, data[pos..pos + @as(usize, block_size)]);
+                    try lzw_data.appendSlice(allocator, data[pos .. pos + @as(usize, block_size)]);
                     pos += @as(usize, block_size);
                 }
 
@@ -555,13 +555,13 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) mod.ImageError!mod
                     pos += 1; // Block size (should be 4)
                     if (pos + 3 > data.len) break;
                     const gce_packed = data[pos];
-                    const disposal = @as(DisposalMethod, @enumFromInt((gce_packed >> 2) & 0x07));
+                    const disposal = @as(DisposalMethod, @fromBackingInt(@intCast((gce_packed >> 2) & 0x07)));
                     const user_input = (gce_packed & 0x02) != 0;
                     const transparent_flag = (gce_packed & 0x01) != 0;
-                    const delay = std.mem.readIntLittle(u16, data[pos + 1..pos + 3]);
+                    const delay = std.mem.readIntLittle(u16, data[pos + 1 .. pos + 3]);
                     const tci = data[pos + 3];
                     gce = .{
-                        .disposal_method = @intFromEnum(disposal),
+                        .disposal_method = @backingInt(disposal),
                         .user_input_flag = user_input,
                         .transparent_color_flag = transparent_flag,
                         .delay_time = delay,
@@ -635,7 +635,7 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
 
     var pos = ct_start;
     var gce: ?GraphicControlExtension = null;
-    var frames = std.ArrayListUnmanaged(mod.AnimationFrame){};
+    var frames = std.ArrayListUnmanaged(mod.AnimationFrame).empty;
     errdefer {
         for (frames.items) |*frame| frame.pixels.free(allocator);
         frames.deinit(allocator);
@@ -652,10 +652,10 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
                 if (pos + 9 > data.len) break;
                 const img_desc = ImageDescriptor{
                     .separator = 0x2C,
-                    .left = std.mem.readIntLittle(u16, data[pos..pos + 2]),
-                    .top = std.mem.readIntLittle(u16, data[pos + 2..pos + 4]),
-                    .width = std.mem.readIntLittle(u16, data[pos + 4..pos + 6]),
-                    .height = std.mem.readIntLittle(u16, data[pos + 6..pos + 8]),
+                    .left = std.mem.readIntLittle(u16, data[pos .. pos + 2]),
+                    .top = std.mem.readIntLittle(u16, data[pos + 2 .. pos + 4]),
+                    .width = std.mem.readIntLittle(u16, data[pos + 4 .. pos + 6]),
+                    .height = std.mem.readIntLittle(u16, data[pos + 6 .. pos + 8]),
                     .flags = data[pos + 8],
                 };
                 pos += 9;
@@ -673,14 +673,14 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
                 const min_code_size = data[pos];
                 pos += 1;
 
-                var lzw_data = std.ArrayListUnmanaged(u8){};
+                var lzw_data = std.ArrayListUnmanaged(u8).empty;
                 defer lzw_data.deinit(allocator);
                 while (pos < data.len) {
                     const block_size = data[pos];
                     pos += 1;
                     if (block_size == 0) break;
                     if (pos + @as(usize, block_size) > data.len) break;
-                    try lzw_data.appendSlice(allocator, data[pos..pos + @as(usize, block_size)]);
+                    try lzw_data.appendSlice(allocator, data[pos .. pos + @as(usize, block_size)]);
                     pos += @as(usize, block_size);
                 }
 
@@ -710,7 +710,7 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
                 try frames.append(allocator, .{
                     .pixels = pixels,
                     .delay_ms = delay_ms,
-                    .disposal = @intFromEnum(@as(DisposalMethod, @enumFromInt(gce_val.disposal_method))),
+                    .disposal = @backingInt(@as(DisposalMethod, @fromBackingInt(@intCast(gce_val.disposal_method)))),
                     .transparent_index = tidx,
                 });
 
@@ -726,13 +726,13 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
                     pos += 1;
                     if (pos + 3 > data.len) break;
                     const gce_packed = data[pos];
-                    const disposal = @as(DisposalMethod, @enumFromInt((gce_packed >> 2) & 0x07));
+                    const disposal = @as(DisposalMethod, @fromBackingInt(@intCast((gce_packed >> 2) & 0x07)));
                     const user_input = (gce_packed & 0x02) != 0;
                     const transparent_flag = (gce_packed & 0x01) != 0;
-                    const delay = std.mem.readIntLittle(u16, data[pos + 1..pos + 3]);
+                    const delay = std.mem.readIntLittle(u16, data[pos + 1 .. pos + 3]);
                     const tci = data[pos + 3];
                     gce = .{
-                        .disposal_method = @intFromEnum(disposal),
+                        .disposal_method = @backingInt(disposal),
                         .user_input_flag = user_input,
                         .transparent_color_flag = transparent_flag,
                         .delay_time = delay,
@@ -741,8 +741,11 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
                     pos += 5;
                 } else if (ext_label == 0xFF) {
                     pos += 1;
-                    if (pos + 10 > data.len) { pos += 1; continue; }
-                    const app_id = data[pos..pos + 8];
+                    if (pos + 10 > data.len) {
+                        pos += 1;
+                        continue;
+                    }
+                    const app_id = data[pos .. pos + 8];
                     pos += 11;
                     // NETSCAPE looping extension
                     if (std.mem.eql(u8, app_id[0..8], &.{ 'N', 'E', 'T', 'S', 'C', 'A', 'P', 'E' })) {
@@ -752,7 +755,7 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
                             if (block_size == 0) break;
                             if (block_size >= 3 and pos + 3 <= data.len) {
                                 if (data[pos] == 1) { // Sub-block ID for loop count
-                                    loop_count = std.mem.readIntLittle(u16, data[pos + 1..pos + 3]);
+                                    loop_count = std.mem.readIntLittle(u16, data[pos + 1 .. pos + 3]);
                                 }
                             }
                             pos += @as(usize, block_size);
@@ -795,6 +798,6 @@ pub fn decodeAnimation(allocator: std.mem.Allocator, data: []const u8) mod.Image
 pub const gifDecoder: mod.Decoder = .{
     .signature = &[4]u8{ 0x47, 0x49, 0x46, 0x38 },
     .name = "GIF",
-    .extensions = &.{ ".gif" },
+    .extensions = &.{".gif"},
     .decodeFn = decode,
 };

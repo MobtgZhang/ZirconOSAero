@@ -103,7 +103,7 @@ pub const GPUScheduler = struct {
     }
 
     pub fn submit(self: *GPUScheduler, priority: PriorityLevel, packet: CommandPacket) bool {
-        const queue_idx = @as(i32, @intFromEnum(priority)) + 2;
+        const queue_idx = @as(i32, @backingInt(priority)) + 2;
         const idx: usize = @intCast(@as(i32, @max(0, @min(3, queue_idx))));
         return self.queues[idx].enqueue(packet);
     }

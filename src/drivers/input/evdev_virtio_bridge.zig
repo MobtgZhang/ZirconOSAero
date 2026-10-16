@@ -58,6 +58,18 @@ const KEY_UP: u16 = 103;
 const KEY_LEFT: u16 = 105;
 const KEY_RIGHT: u16 = 106;
 const KEY_DOWN: u16 = 108;
+const KEY_COMMA: u16 = 51;
+const KEY_DOT: u16 = 52;
+const KEY_SLASH: u16 = 53;
+const KEY_SEMICOLON: u16 = 39;
+const KEY_APOSTROPHE: u16 = 40;
+const KEY_LEFTBRACE: u16 = 26;
+const KEY_RIGHTBRACE: u16 = 27;
+const KEY_BACKSLASH: u16 = 43;
+const KEY_GRAVE: u16 = 41;
+const KEY_DELETE: u16 = 111;
+const KEY_HOME: u16 = 102;
+const KEY_END: u16 = 107;
 
 const ARROW_NUDGE: i32 = 12;
 
@@ -182,6 +194,24 @@ pub fn handleEvKey(code: u16, val: i32) void {
         else => {
             mapLetter(code, press);
             mapDigitRow(code, press);
+            mapPunctuation(code, press);
         },
+    }
+}
+
+fn mapPunctuation(code: u16, press: bool) void {
+    if (!press) return;
+    const sh = shiftHeld();
+    switch (code) {
+        KEY_COMMA => pushChar(if (sh) '<' else ','),
+        KEY_DOT => pushChar(if (sh) '>' else '.'),
+        KEY_SLASH => pushChar(if (sh) '?' else '/'),
+        KEY_SEMICOLON => pushChar(if (sh) ':' else ';'),
+        KEY_APOSTROPHE => pushChar(if (sh) '"' else '\''),
+        KEY_LEFTBRACE => pushChar(if (sh) '{' else '['),
+        KEY_RIGHTBRACE => pushChar(if (sh) '}' else ']'),
+        KEY_BACKSLASH => pushChar(if (sh) '|' else '\\'),
+        KEY_GRAVE => pushChar(if (sh) '~' else '`'),
+        else => {},
     }
 }

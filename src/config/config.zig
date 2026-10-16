@@ -110,16 +110,9 @@ pub fn getArch() []const u8 {
     return getNtProductArch();
 }
 
-/// 本内核映像的编译目标 CPU（`builtin.cpu.arch`），用于日志与诊断。
+/// 本内核映像的编译目标 CPU 名称，用于日志与诊断（HAL 封装）。
 pub fn hostCpuArchName() []const u8 {
-    return switch (builtin.cpu.arch) {
-        .x86_64 => "x86_64",
-        .aarch64 => "aarch64",
-        .riscv64 => "riscv64",
-        .loongarch64 => "loongarch64",
-        .mips64el => "mips64el",
-        else => @tagName(builtin.cpu.arch),
-    };
+    return @import("../hal.zig").targetArchName();
 }
 
 pub fn getMaxCpus() u64 {
@@ -402,7 +395,7 @@ pub fn isPresentFullFlipEnabled() bool {
     return desktop_config.getBoolOr("display", "present_full_flip", true);
 }
 
-/// x86_64：`present()` 与 vsync 策略联用时，按调度 tick 限制最小 present 间隔（毫秒，0=关闭）。非硬件 vblank，仅减轻无同步 flip 的撕裂感。
+/// `present()` 与 vsync 策略联用时，按调度 tick 限制最小 present 间隔（毫秒，0=关闭）。非硬件 vblank，仅减轻无同步 flip 的撕裂感。
 pub fn getPresentCoarseFramePacingMs() u32 {
     const v = desktop_config.getIntOr("display", "present_coarse_frame_pacing_ms", 0);
     if (v <= 0) return 0;

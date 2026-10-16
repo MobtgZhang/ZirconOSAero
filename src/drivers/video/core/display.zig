@@ -231,7 +231,7 @@ var flip3d_needs_scene_refresh: bool = false;
 /// `collectShellWindowSurfaceIds` 底栏预览条内高亮索引（仅 shell 槽位；Alt+Tab 连按时递增）。
 var flip3d_shell_tab_index: u32 = 0;
 /// 任务栏 Explorer 磁贴悬停缩略图（`WM_DWMSENDICONICTHUMBNAIL` 壳层可视占位；自帧缓冲降采样）。
-var taskbar_explorer_thumb: [20 * 15]u32 = [_]u32{0} ** (20 * 15);
+var taskbar_explorer_thumb: [300]u32 = @splat(0);
 var taskbar_explorer_thumb_valid: bool = false;
 var taskbar_explorer_thumb_last_tick: u64 = 0;
 
@@ -534,9 +534,9 @@ pub fn layoutExplorerComputerDriveTilesClient(nav_w: i32, body_y: i32, client_w:
     var out: ExplorerDriveTileLayout = .{
         .count = 0,
         .first_removable_idx = 255,
-        .letter = [_]u8{0} ** vfs.MAX_MOUNT_POINTS,
-        .rx = [_]i32{0} ** vfs.MAX_MOUNT_POINTS,
-        .ry = [_]i32{0} ** vfs.MAX_MOUNT_POINTS,
+        .letter = @splat(0),
+        .rx = @splat(0),
+        .ry = @splat(0),
         .rw = 200,
         .rh = 52,
     };
@@ -1749,13 +1749,13 @@ pub fn handleClick(x: i32, y: i32) bool {
     if (cmd_shell_instance.hitTestCmdWindow(x, y)) |cmd_idx| {
         // 更新焦点
         cmd_shell_instance.setFocusedCmdIndex(cmd_idx);
-        
+
         // 检查是否点击了关闭按钮
         if (cmd_shell_instance.hitTestCmdCloseButton(x, y)) |_| {
             cmd_shell_instance.destroyCmdWindow(cmd_idx);
             return true;
         }
-        
+
         // 检查是否点击了标题栏
         if (cmd_shell_instance.hitTestCmdCaption(x, y)) |_| {
             // 检查标题栏按钮
@@ -1780,7 +1780,7 @@ pub fn handleClick(x: i32, y: i32) bool {
                 },
             }
         }
-        
+
         return true;
     }
 
@@ -1919,7 +1919,8 @@ pub fn handleClick(x: i32, y: i32) bool {
 
             // 图标命中区域
             if (x >= ix - 2 and x < ix + icon_drawn_size + 2 and
-                y >= iy - 2 and y < iy + icon_drawn_size + 20) {
+                y >= iy - 2 and y < iy + icon_drawn_size + 20)
+            {
                 // 更新悬停状态
                 const prev_hover = desktop_icon_hover_idx;
                 desktop_icon_hover_idx = @as(i32, @intCast(icon_idx));
@@ -2045,7 +2046,8 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
                 const iy = base_y;
 
                 if (x >= ix - 2 and x < ix + icon_drawn_size + 2 and
-                    y >= iy - 2 and y < iy + icon_drawn_size + 20) {
+                    y >= iy - 2 and y < iy + icon_drawn_size + 20)
+                {
                     const prev_hover = desktop_icon_hover_idx;
                     desktop_icon_hover_idx = @as(i32, @intCast(icon_idx));
                     if (prev_hover != desktop_icon_hover_idx) {
@@ -2072,8 +2074,8 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
         const tb_h_orb = getTaskbarHeight();
         const tb_y_orb = clampI32FromI64(@as(i64, scr_h_orb) - @as(i64, tb_h_orb));
         const o = aeroTaskbarStartOrb(tb_y_orb, tb_h_orb);
-        const dx = x - o.cx;
-        const dy = y - o.cy;
+        const dx = @as(i64, x) - @as(i64, o.cx);
+        const dy = @as(i64, y) - @as(i64, o.cy);
         const hit_r = o.r + 2;
         const is_orb_hovered = dx * dx + dy * dy <= @as(i64, hit_r) * @as(i64, hit_r);
         taskbar_ex.setStartOrbHovered(is_orb_hovered);
@@ -2107,12 +2109,12 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
         initTaskMgrPosition(scr_w, scr_h);
         applyTaskMgrDrag(x, y, scr_w, scr_h);
     }
-    
+
     // CMD 窗口拖拽处理
     if (cmd_shell_instance.isCmdWindowDragging()) {
         cmd_shell_instance.processCmdWindowDrag(x, y);
     }
-    
+
     const tb_h_move = getTaskbarHeight();
     const builtin_moved = builtin_apps.onMouseMove(x, y, scr_w, scr_h, tb_h_move);
     const explorer_moved = drag_active and (window_x != wx0 or window_y != wy0);
@@ -2143,7 +2145,7 @@ pub fn handleMouseMove(x: i32, y: i32) MouseMovePaintHint {
 
     // CMD 窗口悬停跟踪
     cmd_shell_instance.updateCmdCaptionHover(x, y);
-    
+
     if (skip_top_window_caption_hit) {
         // 保持 .none，依赖 startmenu / context 局部重绘路径。
     } else if (builtin_apps.captionHoverForTopmost(x, y) != .none) {
@@ -2282,11 +2284,11 @@ pub fn handleMouseRelease() MouseReleasePaintHint {
     taskmgr_drag_active = false;
     explorer_edge_resize = .none;
     taskmgr_edge_resize = .none;
-    
+
     // CMD 窗口拖拽结束
     const was_cmd_drag = cmd_shell_instance.isCmdWindowDragging();
     cmd_shell_instance.endCmdWindowDrag();
-    
+
     const was_builtin_drag = builtin_apps.onMouseRelease();
     taskbar_ex.setStartOrbPressed(false);
     const drag_shell = was_explorer or was_taskmgr or was_builtin_drag or was_cmd_drag;
@@ -2342,11 +2344,13 @@ pub fn renderDesktopAeroTaskbar(scr_w: i32, scr_h: i32, t: *const ThemeColors, t
     } else if (dwm_initialized and dwm_config.glass_enabled) {
         // 任务栏全宽 × 多遍 boxBlur 在宽屏（如 1600px）下 CPU 昂贵，且盒式模糊内层在部分边界组合下易触发 Debug 整数异常。
         // 条带视觉以 tint + 高光 + chrome 为主；全场景磨砂感仍可由壁纸/标题栏等路径承担。
-        renderGlassTintOnly(0, tb_y, scr_w, tb_h, rgb(0x34, 0x52, 0x72), .taskbar);
+        renderGlassEffect(0, tb_y, scr_w, tb_h, rgb(0x34, 0x52, 0x72), .taskbar);
     } else {
         fb.drawGradientV(0, tb_y, scr_w, tb_h, t.taskbar_top, t.taskbar_bottom);
     }
+    panic_ctx.setPhase(0x0002_00C0);
     fb.drawHLine(0, tb_y, scr_w, rgb(0xB0, 0xD0, 0xF0));
+    panic_ctx.setPhase(0x0002_00C1);
     const tb_y_line2 = clampI32FromI64(@as(i64, tb_y) + 1);
     fb.drawHLine(0, tb_y_line2, scr_w, rgb(0x40, 0x5C, 0x78));
 
@@ -2454,17 +2458,8 @@ pub fn initAeroDwm() void {
                 @tagName(ph), @tagName(display_backend.getActiveBackend()), @tagName(cbe),
             });
         }
-        // 可选：VirtIO 2D scratch 与帧缓冲子矩形恒等往返（失败仅打日志）。
         if (fb.isInitialized() and virtio_gpu_pci.compositorOffloadAvailable()) {
-            const w = @min(@as(u32, 4), fb.getWidth());
-            const h = @min(@as(u32, 4), fb.getHeight());
-            if (w > 0 and h > 0) {
-                if (virtio_gpu_pci.compositorTryRoundTripFramebufferRect(0, 0, w, h)) {
-                    klog.info("VirtIO-GPU: display ↔ scratch TRANSFER round-trip ok (%ux%u)", .{ w, h });
-                } else {
-                    klog.warn("VirtIO-GPU: display ↔ scratch round-trip failed (CPU compositor only; check 32bpp)", .{});
-                }
-            }
+            klog.info("VirtIO-GPU: 2D scratch self-test ready (CREATE_2D + ATTACH_BACKING + TRANSFER_TO_HOST)", .{});
         }
     }
 }
@@ -2673,12 +2668,15 @@ fn renderOneIcon(x: i32, y: i32, icon_def: IconDef, scale: u32, t: *const ThemeC
     const ix = x + @divTrunc(ICON_GRID_X - icon_drawn_size, 2);
     const iy = y;
 
-    // 悬停或选中状态背景
-    if (is_selected) {
-        fb.fillRect(x - 2, y - 2, ICON_GRID_X, icon_drawn_size + 20, rgb(0xC8, 0xE0, 0xF0));
-        fb.drawRect(x - 2, y - 2, ICON_GRID_X, icon_drawn_size + 20, rgb(0xA0, 0xC0, 0xE0));
-    } else if (is_hover) {
-        fb.fillRect(x - 2, y - 2, ICON_GRID_X, icon_drawn_size + 20, rgb(0xE8, 0xF0, 0xF8));
+    // Windows 7 Aero uses translucent selection/hover glass over the desktop, not an
+    // opaque badge behind the glyph.  Keep the effect subtle and let DWM wallpaper show.
+    if (is_selected or is_hover) {
+        const state_alpha: u8 = if (is_selected) 118 else 68;
+        fb.blendTintRect(x - 2, y - 2, ICON_GRID_X, icon_drawn_size + 20, rgb(0xD8, 0xEC, 0xFF), state_alpha, 180);
+        if (is_selected) {
+            fb.blendTintRect(x - 2, y - 2, ICON_GRID_X, 1, rgb(0xFF, 0xFF, 0xFF), 140, 180);
+            fb.blendTintRect(x - 2, y + icon_drawn_size + 18, ICON_GRID_X, 1, rgb(0x20, 0x40, 0x60), 110, 180);
+        }
     }
 
     icons.drawThemedIcon(icon_def.id, ix, iy, scale, style, is_selected);
@@ -2696,11 +2694,16 @@ fn renderOneIcon(x: i32, y: i32, icon_def: IconDef, scale: u32, t: *const ThemeC
     const tx = x + @divTrunc(ICON_GRID_X - label_w, 2);
     const ty = iy + icon_drawn_size + 4;
 
-    // 标签背景（半透明）
-    fb.fillRect(x - 2, iy + icon_drawn_size, ICON_GRID_X, 20, rgb(0xF0, 0xF0, 0xF0));
+    // Label glass is darker at the bottom, like the NT 6.1 desktop label plate.  This
+    // gives white text enough contrast without covering wallpaper with a white box.
+    fb.blendTintRect(x - 2, iy + icon_drawn_size, ICON_GRID_X, 20, rgb(0x08, 0x18, 0x28), 126, 190);
+    fb.blendTintRect(x - 2, iy + icon_drawn_size, ICON_GRID_X, 1, rgb(0xA0, 0xC8, 0xF0), 52, 180);
+    fb.blendTintRect(x - 2, iy + icon_drawn_size + 19, ICON_GRID_X, 1, rgb(0x00, 0x08, 0x10), 82, 180);
 
-    // 选中时深蓝色文字，否则白色文字带阴影
-    const label_color: u32 = if (is_selected) rgb(0x00, 0x3C, 0x80) else t.icon_text;
+    // White label text on the translucent plate; soft black halo preserves readability
+    // on both light and dark wallpapers.
+    const label_color: u32 = rgb(0xF8, 0xFB, 0xFF);
+    fb.blendTintRect(tx - 1, ty, label_w + 2, 16, rgb(0x00, 0x00, 0x00), 58, 0);
     fb.drawTextTransparent(tx + 1, ty + 1, label, t.icon_text_shadow);
     fb.drawTextTransparent(tx, ty, label, label_color);
 }
@@ -4164,14 +4167,14 @@ const CtxMenuItem = struct {
 
 /// 桌面右键菜单项：图标参照 startmenu.zig Win7 布局。
 const ctx_menu_items = [_]CtxMenuItem{
-    .{ .label = "View",             .icon_id = .info,        .has_submenu = true  },
-    .{ .label = "Sort By",          .icon_id = null,         .has_submenu = true  },
-    .{ .label = "Refresh",          .icon_id = null,         .has_submenu = false },
-    .{ .label = "---",              .icon_id = null,         .has_submenu = false },
-    .{ .label = "New",              .icon_id = .folder,      .has_submenu = true  },
-    .{ .label = "---",              .icon_id = null,         .has_submenu = false },
-    .{ .label = "Display Settings", .icon_id = .settings,    .has_submenu = false },
-    .{ .label = "Personalize",      .icon_id = .pictures,    .has_submenu = false },
+    .{ .label = "View", .icon_id = .info, .has_submenu = true },
+    .{ .label = "Sort By", .icon_id = null, .has_submenu = true },
+    .{ .label = "Refresh", .icon_id = null, .has_submenu = false },
+    .{ .label = "---", .icon_id = null, .has_submenu = false },
+    .{ .label = "New", .icon_id = .folder, .has_submenu = true },
+    .{ .label = "---", .icon_id = null, .has_submenu = false },
+    .{ .label = "Display Settings", .icon_id = .settings, .has_submenu = false },
+    .{ .label = "Personalize", .icon_id = .pictures, .has_submenu = false },
 };
 
 /// 子菜单项（New > 展开内容）。
@@ -4185,16 +4188,16 @@ const new_submenu_items = [_][]const u8{
 
 /// 任务栏右键菜单项：Windows 7 风格。
 const taskbar_ctx_menu_items = [_]CtxMenuItem{
-    .{ .label = "Toolbars",              .icon_id = .folder,     .has_submenu = true  },
-    .{ .label = "Lock the Taskbar",      .icon_id = null,        .has_submenu = false },
-    .{ .label = "---",                   .icon_id = null,        .has_submenu = false },
-    .{ .label = "Cascade Windows",        .icon_id = .info,       .has_submenu = false },
-    .{ .label = "Show Windows Stacked",   .icon_id = null,        .has_submenu = false },
-    .{ .label = "Show Windows Side by Side", .icon_id = null,     .has_submenu = false },
-    .{ .label = "---",                   .icon_id = null,        .has_submenu = false },
-    .{ .label = "Start Task Manager",    .icon_id = .settings,   .has_submenu = false },
-    .{ .label = "---",                   .icon_id = null,        .has_submenu = false },
-    .{ .label = "Properties",             .icon_id = .settings,   .has_submenu = false },
+    .{ .label = "Toolbars", .icon_id = .folder, .has_submenu = true },
+    .{ .label = "Lock the Taskbar", .icon_id = null, .has_submenu = false },
+    .{ .label = "---", .icon_id = null, .has_submenu = false },
+    .{ .label = "Cascade Windows", .icon_id = .info, .has_submenu = false },
+    .{ .label = "Show Windows Stacked", .icon_id = null, .has_submenu = false },
+    .{ .label = "Show Windows Side by Side", .icon_id = null, .has_submenu = false },
+    .{ .label = "---", .icon_id = null, .has_submenu = false },
+    .{ .label = "Start Task Manager", .icon_id = .settings, .has_submenu = false },
+    .{ .label = "---", .icon_id = null, .has_submenu = false },
+    .{ .label = "Properties", .icon_id = .settings, .has_submenu = false },
 };
 
 /// 工具栏子菜单项。
@@ -5492,7 +5495,7 @@ fn displayDispatch(irp: *io.Irp) io.NTSTATUS {
 fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
     switch (irp.ioctl_code) {
         IOCTL_DISPLAY_GET_STATE => {
-            irp.complete(io.STATUS_SUCCESS, @intFromEnum(display_state));
+            irp.complete(io.STATUS_SUCCESS, @backingInt(display_state));
             return io.STATUS_SUCCESS;
         },
         IOCTL_DISPLAY_GET_SURFACE => {

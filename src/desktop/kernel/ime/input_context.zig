@@ -30,17 +30,17 @@ const klog = @import("../../../rtl/klog.zig");
 /// IME mode
 pub const ImeMode = enum {
     disabled,
-    ime,        // IME enabled
-    native,     // Native mode (full-width characters)
+    ime, // IME enabled
+    native, // Native mode (full-width characters)
     alphanumeric, // Alphanumeric mode (half-width)
 };
 
 /// Composition state
 pub const CompositionState = enum {
-    none,           // No composition in progress
-    composing,      // User is typing pinyin
-    candidates,     // Showing candidate list
-    committed,      // Just committed a character
+    none, // No composition in progress
+    composing, // User is typing pinyin
+    candidates, // Showing candidate list
+    committed, // Just committed a character
 };
 
 /// Input context - stores per-window input state
@@ -84,12 +84,12 @@ pub const InputContext = struct {
             .hwnd = hwnd,
             .mode = .ime,
             .composition_state = .none,
-            .pinyin_buffer = [_]u8{0} ** 64,
+            .pinyin_buffer = [_]u8{0} * *64,
             .pinyin_len = 0,
-            .composition_string = [_]u8{0} ** 64,
+            .composition_string = [_]u8{0} * *64,
             .composition_len = 0,
             .caret_pos = 0,
-            .composition_attr = [_]u8{0} ** 64,
+            .composition_attr = [_]u8{0} * *64,
             .cursor_x = 0,
             .cursor_y = 0,
             .is_enabled = true,
@@ -154,9 +154,9 @@ pub const InputContext = struct {
     /// Clear composition
     pub fn clearComposition(ctx: *InputContext) void {
         ctx.pinyin_len = 0;
-        ctx.pinyin_buffer = [_]u8{0} ** 64;
+        ctx.pinyin_buffer = [_]u8{0} * *64;
         ctx.composition_len = 0;
-        ctx.composition_string = [_]u8{0} ** 64;
+        ctx.composition_string = [_]u8{0} * *64;
         ctx.composition_state = .none;
     }
 

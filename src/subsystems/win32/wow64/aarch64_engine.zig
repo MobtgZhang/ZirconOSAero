@@ -159,7 +159,7 @@ pub const X86RegToA64Map = struct {
             5 => .w4,
             6 => .w5,
             7 => .w6,
-            8...15 => @as(A64_REG, @enumFromInt(@as(u8, reg + 16))),
+            8...15 => @as(A64_REG, @fromBackingInt(@intCast(@as(u8, reg + 16)))),
             else => .wzr,
         };
     }
@@ -174,7 +174,7 @@ pub const X86RegToA64Map = struct {
             5 => .x4,
             6 => .x5,
             7 => .x6,
-            8...15 => @as(A64_REG, @enumFromInt(@as(u8, reg + 8))),
+            8...15 => @as(A64_REG, @fromBackingInt(@intCast(@as(u8, reg + 8)))),
             else => .xzr,
         };
     }

@@ -476,8 +476,8 @@ pub const AmlResource = union(AmlResourceTag) {
 pub const AmlExecutionContext = struct {
     scope: *AmlDevice,
     stack: std.ArrayList(AmlValue),
-    locals: [8]AmlValue = [_]AmlValue{.uninitialized} ** 8,
-    args: [7]AmlValue = [_]AmlValue{.uninitialized} ** 7,
+    locals: [8]AmlValue = std.mem.zeroes([8]AmlValue),
+    args: [7]AmlValue = std.mem.zeroes([7]AmlValue),
     pc: usize = 0,
     return_value: AmlValue = .uninitialized,
 };
@@ -559,7 +559,7 @@ pub fn amlExecuteMethod(device: *AmlDevice, method_name: []const u8, args: []con
         const opcode = method.code[ctx.pc];
         ctx.pc += 1;
 
-        switch (@as(AmlOpcode, @enumFromInt(opcode))) {
+        switch (@as(AmlOpcode, @fromBackingInt(@intCast(opcode)))) {
             .zero_op => try ctx.stack.append(.{ .integer = 0 }),
             .one_op => try ctx.stack.append(.{ .integer = 1 }),
             .return_op => {
@@ -614,7 +614,7 @@ fn parseAmlNamespace(scope: *AmlDevice, code: []const u8, offset: *usize, max_le
         offset.* += 1;
 
         switch (opcode) {
-            @intFromEnum(AmlOpcode.scope_op) => {
+            @backingInt(AmlOpcode.scope_op) => {
                 // Scope声明，创建子Scope节点
                 const name_len = if (code[offset.*] == 0x5C or code[offset.*] == 0x5E) 1 else 4;
                 const scope_name = code[offset.* .. offset.* + name_len];
@@ -638,7 +638,7 @@ fn parseAmlNamespace(scope: *AmlDevice, code: []const u8, offset: *usize, max_le
                 // 递归解析Scope内容
                 try parseAmlNamespace(scope_dev, code, offset, end_offset);
             },
-            @intFromEnum(AmlOpcode.device_op) => {
+            @backingInt(AmlOpcode.device_op) => {
                 // Device声明，创建设备节点
                 const name_len = if (code[offset.*] == 0x5C or code[offset.*] == 0x5E) 1 else 4;
                 const dev_name = code[offset.* .. offset.* + name_len];
@@ -692,7 +692,7 @@ fn parseAmlNamespace(scope: *AmlDevice, code: []const u8, offset: *usize, max_le
                     }
                 }
             },
-            @intFromEnum(AmlOpcode.method_op) => {
+            @backingInt(AmlOpcode.method_op) => {
                 // Method声明，注册方法到当前设备
                 const name_len = if (code[offset.*] == 0x5C or code[offset.*] == 0x5E) 1 else 4;
                 const method_name = code[offset.* .. offset.* + name_len];
@@ -719,7 +719,7 @@ fn parseAmlNamespace(scope: *AmlDevice, code: []const u8, offset: *usize, max_le
                 try scope.methods.put(method_name, method);
                 klog.debug("ACPI: Registered method {s}.{s}, {d} args\n", .{ scope.path, method_name, method.args_count });
             },
-            @intFromEnum(AmlOpcode.name_op) => {
+            @backingInt(AmlOpcode.name_op) => {
                 // Name声明，跳过，后续需要时再解析具体值
                 offset.* += 4; // Name路径
                 const pkg_len = amlParsePkgLength(code, offset);

@@ -128,7 +128,7 @@ fn parseInfoHeader(data: []const u8) mod.ImageError!BitmapInfoHeader {
         .height = std.mem.readIntLittle(u32, data[8..12]),
         .planes = std.mem.readIntLittle(u16, data[12..14]),
         .bit_count = std.mem.readIntLittle(u16, data[14..16]),
-        .compression = @as(CompressionType, @enumFromInt(comp_val)),
+        .compression = @as(CompressionType, @fromBackingInt(@intCast(comp_val))),
         .image_size = if (header_size >= 36) std.mem.readIntLittle(u32, data[20..24]) else 0,
         .x_pels_per_meter = if (header_size >= 36) std.mem.readIntLittle(i32, data[24..28]) else 0,
         .y_pels_per_meter = if (header_size >= 36) std.mem.readIntLittle(i32, data[28..32]) else 0,

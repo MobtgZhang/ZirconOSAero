@@ -119,40 +119,40 @@ pub fn getIconTotalSize(scale: u32) i32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn getSvgIconData(id: IconId) IconDataPtr {
-    const v = @intFromEnum(id);
+    const v = @backingInt(id);
     return switch (v) {
-        1 => IconDataPtr{ .rgba = svg_data.ic_01_computer.ptr,        .w = svg_data.ic_01_computer_w,        .h = svg_data.ic_01_computer_h        },
-        2 => IconDataPtr{ .rgba = svg_data.ic_02_documents.ptr,       .w = svg_data.ic_02_documents_w,       .h = svg_data.ic_02_documents_h       },
-        3 => IconDataPtr{ .rgba = svg_data.ic_03_recycle_bin.ptr,     .w = svg_data.ic_03_recycle_bin_w,     .h = svg_data.ic_03_recycle_bin_h     },
-        4 => IconDataPtr{ .rgba = svg_data.ic_04_terminal.ptr,        .w = svg_data.ic_04_terminal_w,        .h = svg_data.ic_04_terminal_h        },
-        5 => IconDataPtr{ .rgba = svg_data.ic_05_network.ptr,         .w = svg_data.ic_05_network_w,         .h = svg_data.ic_05_network_h         },
-        6 => IconDataPtr{ .rgba = svg_data.ic_06_browser.ptr,         .w = svg_data.ic_06_browser_w,         .h = svg_data.ic_06_browser_h         },
-        7 => IconDataPtr{ .rgba = svg_data.ic_07_settings.ptr,       .w = svg_data.ic_07_settings_w,       .h = svg_data.ic_07_settings_h       },
-        8 => IconDataPtr{ .rgba = svg_data.ic_08_calculator.ptr,     .w = svg_data.ic_08_calculator_w,     .h = svg_data.ic_08_calculator_h     },
-        9 => IconDataPtr{ .rgba = svg_data.ic_09_text_editor.ptr,    .w = svg_data.ic_09_text_editor_w,    .h = svg_data.ic_09_text_editor_h    },
-        10 => IconDataPtr{ .rgba = svg_data.ic_10_pictures.ptr,        .w = svg_data.ic_10_pictures_w,        .h = svg_data.ic_10_pictures_h        },
-        11 => IconDataPtr{ .rgba = svg_data.ic_11_music.ptr,           .w = svg_data.ic_11_music_w,           .h = svg_data.ic_11_music_h           },
-        12 => IconDataPtr{ .rgba = svg_data.ic_12_folder.ptr,          .w = svg_data.ic_12_folder_w,          .h = svg_data.ic_12_folder_h          },
-        13 => IconDataPtr{ .rgba = svg_data.ic_13_control_panel.ptr,  .w = svg_data.ic_13_control_panel_w,  .h = svg_data.ic_13_control_panel_h  },
-        14 => IconDataPtr{ .rgba = svg_data.ic_14_file.ptr,           .w = svg_data.ic_14_file_w,           .h = svg_data.ic_14_file_h           },
-        15 => IconDataPtr{ .rgba = svg_data.ic_15_user.ptr,           .w = svg_data.ic_15_user_w,           .h = svg_data.ic_15_user_h           },
-        16 => IconDataPtr{ .rgba = svg_data.ic_16_lock.ptr,           .w = svg_data.ic_16_lock_w,           .h = svg_data.ic_16_lock_h           },
-        17 => IconDataPtr{ .rgba = svg_data.ic_17_shutdown.ptr,        .w = svg_data.ic_17_shutdown_w,        .h = svg_data.ic_17_shutdown_h        },
+        1 => IconDataPtr{ .rgba = svg_data.ic_01_computer.ptr, .w = svg_data.ic_01_computer_w, .h = svg_data.ic_01_computer_h },
+        2 => IconDataPtr{ .rgba = svg_data.ic_02_documents.ptr, .w = svg_data.ic_02_documents_w, .h = svg_data.ic_02_documents_h },
+        3 => IconDataPtr{ .rgba = svg_data.ic_03_recycle_bin.ptr, .w = svg_data.ic_03_recycle_bin_w, .h = svg_data.ic_03_recycle_bin_h },
+        4 => IconDataPtr{ .rgba = svg_data.ic_04_terminal.ptr, .w = svg_data.ic_04_terminal_w, .h = svg_data.ic_04_terminal_h },
+        5 => IconDataPtr{ .rgba = svg_data.ic_05_network.ptr, .w = svg_data.ic_05_network_w, .h = svg_data.ic_05_network_h },
+        6 => IconDataPtr{ .rgba = svg_data.ic_06_browser.ptr, .w = svg_data.ic_06_browser_w, .h = svg_data.ic_06_browser_h },
+        7 => IconDataPtr{ .rgba = svg_data.ic_07_settings.ptr, .w = svg_data.ic_07_settings_w, .h = svg_data.ic_07_settings_h },
+        8 => IconDataPtr{ .rgba = svg_data.ic_08_calculator.ptr, .w = svg_data.ic_08_calculator_w, .h = svg_data.ic_08_calculator_h },
+        9 => IconDataPtr{ .rgba = svg_data.ic_09_text_editor.ptr, .w = svg_data.ic_09_text_editor_w, .h = svg_data.ic_09_text_editor_h },
+        10 => IconDataPtr{ .rgba = svg_data.ic_10_pictures.ptr, .w = svg_data.ic_10_pictures_w, .h = svg_data.ic_10_pictures_h },
+        11 => IconDataPtr{ .rgba = svg_data.ic_11_music.ptr, .w = svg_data.ic_11_music_w, .h = svg_data.ic_11_music_h },
+        12 => IconDataPtr{ .rgba = svg_data.ic_12_folder.ptr, .w = svg_data.ic_12_folder_w, .h = svg_data.ic_12_folder_h },
+        13 => IconDataPtr{ .rgba = svg_data.ic_13_control_panel.ptr, .w = svg_data.ic_13_control_panel_w, .h = svg_data.ic_13_control_panel_h },
+        14 => IconDataPtr{ .rgba = svg_data.ic_14_file.ptr, .w = svg_data.ic_14_file_w, .h = svg_data.ic_14_file_h },
+        15 => IconDataPtr{ .rgba = svg_data.ic_15_user.ptr, .w = svg_data.ic_15_user_w, .h = svg_data.ic_15_user_h },
+        16 => IconDataPtr{ .rgba = svg_data.ic_16_lock.ptr, .w = svg_data.ic_16_lock_w, .h = svg_data.ic_16_lock_h },
+        17 => IconDataPtr{ .rgba = svg_data.ic_17_shutdown.ptr, .w = svg_data.ic_17_shutdown_w, .h = svg_data.ic_17_shutdown_h },
         18 => IconDataPtr{ .rgba = svg_data.ic_18_recycle_bin_full.ptr, .w = svg_data.ic_18_recycle_bin_full_w, .h = svg_data.ic_18_recycle_bin_full_h },
-        19 => IconDataPtr{ .rgba = svg_data.ic_19_drive_fixed.ptr,    .w = svg_data.ic_19_drive_fixed_w,    .h = svg_data.ic_19_drive_fixed_h    },
+        19 => IconDataPtr{ .rgba = svg_data.ic_19_drive_fixed.ptr, .w = svg_data.ic_19_drive_fixed_w, .h = svg_data.ic_19_drive_fixed_h },
         20 => IconDataPtr{ .rgba = svg_data.ic_20_drive_removable.ptr, .w = svg_data.ic_20_drive_removable_w, .h = svg_data.ic_20_drive_removable_h },
-        21 => IconDataPtr{ .rgba = svg_data.ic_21_drive_optical.ptr,   .w = svg_data.ic_21_drive_optical_w,   .h = svg_data.ic_21_drive_optical_h   },
-        22 => IconDataPtr{ .rgba = svg_data.ic_22_printer.ptr,         .w = svg_data.ic_22_printer_w,         .h = svg_data.ic_22_printer_h         },
-        23 => IconDataPtr{ .rgba = svg_data.ic_23_info.ptr,            .w = svg_data.ic_23_info_w,            .h = svg_data.ic_23_info_h            },
-        24 => IconDataPtr{ .rgba = svg_data.ic_24_warning.ptr,         .w = svg_data.ic_24_warning_w,         .h = svg_data.ic_24_warning_h         },
-        25 => IconDataPtr{ .rgba = svg_data.ic_25_err.ptr,             .w = svg_data.ic_25_err_w,             .h = svg_data.ic_25_err_h             },
-        26 => IconDataPtr{ .rgba = svg_data.ic_26_favorites.ptr,       .w = svg_data.ic_26_favorites_w,       .h = svg_data.ic_26_favorites_h       },
-        27 => IconDataPtr{ .rgba = svg_data.ic_27_shell_desktop.ptr,    .w = svg_data.ic_27_shell_desktop_w,    .h = svg_data.ic_27_shell_desktop_h    },
-        28 => IconDataPtr{ .rgba = svg_data.ic_28_downloads.ptr,       .w = svg_data.ic_28_downloads_w,       .h = svg_data.ic_28_downloads_h       },
-        29 => IconDataPtr{ .rgba = svg_data.ic_29_recent_places.ptr,   .w = svg_data.ic_29_recent_places_w,   .h = svg_data.ic_29_recent_places_h   },
-        30 => IconDataPtr{ .rgba = svg_data.ic_30_library_root.ptr,    .w = svg_data.ic_30_library_root_w,    .h = svg_data.ic_30_library_root_h    },
-        31 => IconDataPtr{ .rgba = svg_data.ic_31_videos.ptr,          .w = svg_data.ic_31_videos_w,          .h = svg_data.ic_31_videos_h          },
-        32 => IconDataPtr{ .rgba = svg_data.ic_32_homegroup.ptr,       .w = svg_data.ic_32_homegroup_w,       .h = svg_data.ic_32_homegroup_h       },
+        21 => IconDataPtr{ .rgba = svg_data.ic_21_drive_optical.ptr, .w = svg_data.ic_21_drive_optical_w, .h = svg_data.ic_21_drive_optical_h },
+        22 => IconDataPtr{ .rgba = svg_data.ic_22_printer.ptr, .w = svg_data.ic_22_printer_w, .h = svg_data.ic_22_printer_h },
+        23 => IconDataPtr{ .rgba = svg_data.ic_23_info.ptr, .w = svg_data.ic_23_info_w, .h = svg_data.ic_23_info_h },
+        24 => IconDataPtr{ .rgba = svg_data.ic_24_warning.ptr, .w = svg_data.ic_24_warning_w, .h = svg_data.ic_24_warning_h },
+        25 => IconDataPtr{ .rgba = svg_data.ic_25_err.ptr, .w = svg_data.ic_25_err_w, .h = svg_data.ic_25_err_h },
+        26 => IconDataPtr{ .rgba = svg_data.ic_26_favorites.ptr, .w = svg_data.ic_26_favorites_w, .h = svg_data.ic_26_favorites_h },
+        27 => IconDataPtr{ .rgba = svg_data.ic_27_shell_desktop.ptr, .w = svg_data.ic_27_shell_desktop_w, .h = svg_data.ic_27_shell_desktop_h },
+        28 => IconDataPtr{ .rgba = svg_data.ic_28_downloads.ptr, .w = svg_data.ic_28_downloads_w, .h = svg_data.ic_28_downloads_h },
+        29 => IconDataPtr{ .rgba = svg_data.ic_29_recent_places.ptr, .w = svg_data.ic_29_recent_places_w, .h = svg_data.ic_29_recent_places_h },
+        30 => IconDataPtr{ .rgba = svg_data.ic_30_library_root.ptr, .w = svg_data.ic_30_library_root_w, .h = svg_data.ic_30_library_root_h },
+        31 => IconDataPtr{ .rgba = svg_data.ic_31_videos.ptr, .w = svg_data.ic_31_videos_w, .h = svg_data.ic_31_videos_h },
+        32 => IconDataPtr{ .rgba = svg_data.ic_32_homegroup.ptr, .w = svg_data.ic_32_homegroup_w, .h = svg_data.ic_32_homegroup_h },
         else => IconDataPtr{
             .rgba = svg_data.ic_01_computer.ptr,
             .w = svg_data.ic_01_computer_w,
@@ -201,8 +201,8 @@ fn drawAeroIconHover(id: IconId, screen_x: i32, screen_y: i32, scale: u32) void 
 }
 
 test "IconId logical 1..=32 matches SVG icon data" {
-    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(IconId.computer));
-    try std.testing.expectEqual(@as(u8, 32), @intFromEnum(IconId.homegroup));
+    try std.testing.expectEqual(@as(u8, 1), @backingInt(IconId.computer));
+    try std.testing.expectEqual(@as(u8, 32), @backingInt(IconId.homegroup));
 }
 
 /// 绘制开始 Orb — 支持悬停发光和按压缩下动画。

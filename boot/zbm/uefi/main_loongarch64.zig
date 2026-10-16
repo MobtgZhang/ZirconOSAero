@@ -72,7 +72,7 @@ const EfiHandoff = extern struct {
     fb_width: u32 = 0,
     fb_height: u32 = 0,
     fb_bpp: u8 = 0,
-    _pad: [3]u8 = [_]u8{0} ** 3,
+    _pad: [3]u8 = std.mem.zeroes([3]u8),
     mmap_count: u32 = 0,
     mmap_entry_size: u32 = 0,
     mmap_off_from_handoff: u32 = 0,
@@ -98,10 +98,10 @@ noinline fn efiToKernelMmapTypeU32(mt: u32) u32 {
     asm volatile (""
         : [m] "+r" (m),
     );
-    if (m == @intFromEnum(MT.conventional_memory)) return 1;
-    if (m == @intFromEnum(MT.acpi_reclaim_memory)) return 3;
-    if (m == @intFromEnum(MT.unusable_memory)) return 5;
-    if (m == @intFromEnum(MT.reserved_memory_type)) return 5;
+    if (m == @backingInt(MT.conventional_memory)) return 1;
+    if (m == @backingInt(MT.acpi_reclaim_memory)) return 3;
+    if (m == @backingInt(MT.unusable_memory)) return 5;
+    if (m == @backingInt(MT.reserved_memory_type)) return 5;
     return 2;
 }
 
@@ -299,7 +299,7 @@ fn runBootManager(st: *uefi.tables.SystemTable) uefi.Status {
 
     puts(out, "\r\n");
     puts(out, "  [!!] Failed to load kernel image.\r\n");
-    puts(out, "  [!!] Verify ESP:\\EFI\\BOOT\\BOOTLOONGARCH64.EFI and \\boot\\kernel.elf.\r\n");
+    puts(out, "  [!!] Verify ESP:\\EFI\\Microsoft\\Boot\\bootmgfw.efi and \\Windows\\System32\\winload.efi.\r\n");
     puts(out, "  [!!] System halted.\r\n");
     haltLa();
 }
@@ -384,10 +384,10 @@ fn gopModeIs32bppLinear(mi: *const uefi.protocol.GraphicsOutput.Mode.Info) bool 
 /// 同分辨率下优先 RGB、其次 BGR、再 bit_mask（部分固件 bit_mask 与扫描线对齐异常）。
 fn gopPixelFormatRank(f: uefi.protocol.GraphicsOutput.PixelFormat) u8 {
     const PF = uefi.protocol.GraphicsOutput.PixelFormat;
-    const v = @intFromEnum(f);
-    if (v == @intFromEnum(PF.red_green_blue_reserved_8_bit_per_color)) return 0;
-    if (v == @intFromEnum(PF.blue_green_red_reserved_8_bit_per_color)) return 1;
-    if (v == @intFromEnum(PF.bit_mask)) return 2;
+    const v = @backingInt(f);
+    if (v == @backingInt(PF.red_green_blue_reserved_8_bit_per_color)) return 0;
+    if (v == @backingInt(PF.blue_green_red_reserved_8_bit_per_color)) return 1;
+    if (v == @backingInt(PF.bit_mask)) return 2;
     return 255;
 }
 
@@ -399,7 +399,7 @@ fn printGopModeDiag(out: anytype, mid: u32, mi: *const uefi.protocol.GraphicsOut
     puts(out, "x");
     printDecimal(out, mi.vertical_resolution);
     puts(out, " fmt=");
-    printDecimal(out, @as(u32, @intFromEnum(mi.pixel_format)));
+    printDecimal(out, @as(u32, @backingInt(mi.pixel_format)));
     puts(out, " ppsl=");
     printDecimal(out, mi.pixels_per_scan_line);
     puts(out, "\r\n");
@@ -418,11 +418,11 @@ fn trySetLinearGopMode(out: anytype, gop: *uefi.protocol.GraphicsOutput) void {
         .bit_mask,
     };
     inline for (prefer_order) |want_pf| {
-        const want_v = @intFromEnum(want_pf);
+        const want_v = @backingInt(want_pf);
         var mid: u32 = 0;
         while (mid < gop.mode.max_mode) : (mid += 1) {
             const mi = gop.queryMode(mid) catch continue;
-            if (@intFromEnum(mi.pixel_format) != want_v) continue;
+            if (@backingInt(mi.pixel_format) != want_v) continue;
             gop.setMode(mid) catch continue;
             const after = gop.queryMode(mid) catch return;
             puts(out, "    [*] GOP: selected linear 32bpp mode idx=");
@@ -569,9 +569,9 @@ fn queryGopFramebufferInto(out: anytype, bs: *uefi.tables.BootServices, out_ok: 
 
     const PF = uefi.protocol.GraphicsOutput.PixelFormat;
     var bpp: u8 = 0;
-    if (pf == @intFromEnum(PF.red_green_blue_reserved_8_bit_per_color)) bpp = 32;
-    if (pf == @intFromEnum(PF.blue_green_red_reserved_8_bit_per_color)) bpp = 32;
-    if (pf == @intFromEnum(PF.bit_mask)) bpp = 32;
+    if (pf == @backingInt(PF.red_green_blue_reserved_8_bit_per_color)) bpp = 32;
+    if (pf == @backingInt(PF.blue_green_red_reserved_8_bit_per_color)) bpp = 32;
+    if (pf == @backingInt(PF.bit_mask)) bpp = 32;
 
     if (bpp == 0) {
         puts(out, "    [!] GOP pixel format unsupported for framebuffer\r\n");
@@ -579,9 +579,9 @@ fn queryGopFramebufferInto(out: anytype, bs: *uefi.tables.BootServices, out_ok: 
     }
 
     var pixel_bgr: u8 = 1;
-    if (pf == @intFromEnum(PF.blue_green_red_reserved_8_bit_per_color)) pixel_bgr = 1;
-    if (pf == @intFromEnum(PF.bit_mask)) pixel_bgr = 1;
-    if (pf == @intFromEnum(PF.red_green_blue_reserved_8_bit_per_color)) pixel_bgr = 0;
+    if (pf == @backingInt(PF.blue_green_red_reserved_8_bit_per_color)) pixel_bgr = 1;
+    if (pf == @backingInt(PF.bit_mask)) pixel_bgr = 1;
+    if (pf == @backingInt(PF.red_green_blue_reserved_8_bit_per_color)) pixel_bgr = 0;
 
     const pitch = ppsl * (@as(u32, bpp) / 8);
 
@@ -622,11 +622,11 @@ fn openProtocolByHandleNoLdx(
         null,
         uefi.tables.OpenProtocolAttributes.by_handle_protocol,
     );
-    const sv = @intFromEnum(st);
-    if (sv == @intFromEnum(uefi.Status.success)) return ptr;
-    if (sv == @intFromEnum(uefi.Status.unsupported)) return null;
-    if (sv == @intFromEnum(uefi.Status.access_denied)) return error.AccessDenied;
-    if (sv == @intFromEnum(uefi.Status.already_started)) return error.AlreadyStarted;
+    const sv = @backingInt(st);
+    if (sv == @backingInt(uefi.Status.success)) return ptr;
+    if (sv == @backingInt(uefi.Status.unsupported)) return null;
+    if (sv == @backingInt(uefi.Status.access_denied)) return error.AccessDenied;
+    if (sv == @backingInt(uefi.Status.already_started)) return error.AlreadyStarted;
     return uefi.unexpectedStatus(st);
 }
 
@@ -664,11 +664,11 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices, selec
         .read,
         .{},
     ) catch {
-        puts(out, "    [!!] kernel.elf not found on ESP\r\n");
+        puts(out, "    [!!] winload.efi not found on ESP\r\n");
         return;
     };
 
-    puts(out, "    [*] kernel.elf opened\r\n");
+    puts(out, "    [*] winload.efi opened\r\n");
 
     var info_buf: [256]u8 align(8) = undefined;
     const file_info = kernel_file.getInfo(.file, @as([]align(8) u8, &info_buf)) catch {
@@ -717,7 +717,7 @@ fn loadAndBootLoongArchKernel(out: anytype, bs: *uefi.tables.BootServices, selec
         puts(out, "    [!!] Not a 64-bit ELF\r\n");
         return;
     }
-    if (ehdr.e_machine != @intFromEnum(elf.EM.LOONGARCH)) {
+    if (ehdr.e_machine != @backingInt(elf.EM.LOONGARCH)) {
         puts(out, "    [!!] Not a LoongArch ELF\r\n");
         return;
     }

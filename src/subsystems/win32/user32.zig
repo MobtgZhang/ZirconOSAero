@@ -141,17 +141,17 @@ pub const WM_MOUSEWHEEL: u32 = 0x020A;
 pub const WM_XBUTTONDOWN: u32 = 0x020B;
 pub const WM_XBUTTONUP: u32 = 0x020C;
 pub const WM_XBUTTONDBLCLK: u32 = 0x020D;
-pub const WM_MOUSEHWHEEL: u32 = 0x020E;  // 水平滚轮
+pub const WM_MOUSEHWHEEL: u32 = 0x020E; // 水平滚轮
 
 /// 鼠标滚轮常量
-pub const WHEEL_DELTA: i16 = 120;  // 一个滚轮刻度的 delta 值（120 = 3 行 @ 40 pixels/行）
-pub const WHEEL_PAGESCROLL: u16 = 0xFFFF;  // 页面滚动标记
+pub const WHEEL_DELTA: i16 = 120; // 一个滚轮刻度的 delta 值（120 = 3 行 @ 40 pixels/行）
+pub const WHEEL_PAGESCROLL: u16 = 0xFFFF; // 页面滚动标记
 pub const WM_USER: u32 = 0x0400;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_SYSCOMMAND: u32 = 0x0112;
 pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
 pub const WM_EXITSIZEMOVE: u32 = 0x0232;
-pub const WM_MENUCHAR: u32 = 0x0120;  // 菜单字符消息
+pub const WM_MENUCHAR: u32 = 0x0120; // 菜单字符消息
 pub const WM_ENTERMENULOOP: u32 = 0x0211;
 pub const WM_EXITMENULOOP: u32 = 0x0212;
 
@@ -344,9 +344,9 @@ pub const WNDCLASSA = struct {
     icon: HICON = 0,
     cursor: HCURSOR = 0,
     background: HBRUSH = 0,
-    menu_name: [64]u8 = [_]u8{0} ** 64,
+    menu_name: [64]u8 = std.mem.zeroes([64]u8),
     menu_name_len: usize = 0,
-    class_name: [64]u8 = [_]u8{0} ** 64,
+    class_name: [64]u8 = std.mem.zeroes([64]u8),
     class_name_len: usize = 0,
 };
 
@@ -360,9 +360,9 @@ pub const WNDCLASSEXA = struct {
     icon: HICON = 0,
     cursor: HCURSOR = 0,
     background: HBRUSH = 0,
-    menu_name: [64]u8 = [_]u8{0} ** 64,
+    menu_name: [64]u8 = std.mem.zeroes([64]u8),
     menu_name_len: usize = 0,
-    class_name: [64]u8 = [_]u8{0} ** 64,
+    class_name: [64]u8 = std.mem.zeroes([64]u8),
     class_name_len: usize = 0,
     icon_sm: HICON = 0,
 };
@@ -373,7 +373,7 @@ pub const PAINTSTRUCT = struct {
     paint_rect: RECT = .{},
     restore: BOOL = FALSE,
     inc_update: BOOL = FALSE,
-    reserved: [32]u8 = [_]u8{0} ** 32,
+    reserved: [32]u8 = std.mem.zeroes([32]u8),
 };
 
 /// `min=max=0` 时 **不过滤**（含 `WM_DWMCOMPOSITIONCHANGED` 等 DWM 广播）；否则为半开区间 `[min,max]`。
@@ -388,7 +388,7 @@ const ThreadPostedSlot = struct {
     used: bool = false,
     m: MSG = .{},
 };
-var thread_posted: [MAX_THREAD_POSTED]ThreadPostedSlot = [_]ThreadPostedSlot{.{}} ** MAX_THREAD_POSTED;
+var thread_posted: [MAX_THREAD_POSTED]ThreadPostedSlot = std.mem.zeroes([MAX_THREAD_POSTED]ThreadPostedSlot);
 
 /// 调度线程 `tid`（`scheduler.getCurrentThreadId()`，小于 32）在 `GetMessage` 空队列上阻塞时的等待位（与 `wakeOneMsgWaiter` 配对）。
 var msg_wait_mask: u32 = 0;
@@ -483,9 +483,9 @@ pub const CREATESTRUCTA = struct {
     y: i32 = 0,
     x: i32 = 0,
     style: DWORD = 0,
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
-    class_name: [64]u8 = [_]u8{0} ** 64,
+    class_name: [64]u8 = std.mem.zeroes([64]u8),
     class_name_len: usize = 0,
     ex_style: DWORD = 0,
 };
@@ -493,7 +493,7 @@ pub const CREATESTRUCTA = struct {
 // ── Internal Window Object ──
 
 /// 生产环境窗口数量限制：从 64 扩充到 4096 以支持复杂桌面应用
-const MAX_WINDOWS: usize = 4096;
+const MAX_WINDOWS: usize = 256;
 /// 窗口类数量限制：从 32 扩充到 256 以支持更多自定义类
 const MAX_WINDOW_CLASSES: usize = 256;
 /// 单窗口消息队列深度：从 256 扩充到 512 以支持高消息量场景
@@ -517,14 +517,14 @@ const Window = struct {
     parent: HWND = 0,
     rect: RECT = .{},
     client_rect: RECT = .{},
-    title: [128]u8 = [_]u8{0} ** 128,
+    title: [128]u8 = std.mem.zeroes([128]u8),
     title_len: usize = 0,
     instance: HINSTANCE = 0,
     menu: HMENU = 0,
     user_data: u64 = 0,
     wndproc_id: u32 = 0,
     needs_paint: bool = false,
-    msg_queue: [MAX_MSG_QUEUE]MSG = [_]MSG{.{}} ** MAX_MSG_QUEUE,
+    msg_queue: [MAX_MSG_QUEUE]MSG = std.mem.zeroes([MAX_MSG_QUEUE]MSG),
     msg_head: usize = 0,
     msg_tail: usize = 0,
     msg_count: usize = 0,
@@ -542,8 +542,7 @@ const Window = struct {
 
     pub fn postMessage(self: *Window, msg: u32, wparam: WPARAM, lparam: LPARAM) bool {
         if (self.msg_count >= MAX_MSG_QUEUE) {
-            klog.warn("user32: Window 0x{x} message queue full (count={}), dropping WM 0x{x}",
-                .{ self.hwnd, self.msg_count, msg });
+            klog.warn("user32: Window 0x{x} message queue full (count={}), dropping WM 0x{x}", .{ self.hwnd, self.msg_count, msg });
             return false;
         }
         self.msg_queue[self.msg_tail] = .{
@@ -604,7 +603,7 @@ const Window = struct {
 const WindowClass = struct {
     is_registered: bool = false,
     style: u32 = 0,
-    class_name: [64]u8 = [_]u8{0} ** 64,
+    class_name: [64]u8 = std.mem.zeroes([64]u8),
     class_name_len: usize = 0,
     wndproc_id: u32 = 0,
     background: HBRUSH = 0,
@@ -620,11 +619,11 @@ const WindowClass = struct {
 
 // ── Global State ──
 
-var windows: [MAX_WINDOWS]Window = [_]Window{.{}} ** MAX_WINDOWS;
+var windows: [MAX_WINDOWS]Window = std.mem.zeroes([MAX_WINDOWS]Window);
 var window_count: usize = 0;
 var next_hwnd: HWND = 0x10000;
 
-var window_classes: [MAX_WINDOW_CLASSES]WindowClass = [_]WindowClass{.{}} ** MAX_WINDOW_CLASSES;
+var window_classes: [MAX_WINDOW_CLASSES]WindowClass = std.mem.zeroes([MAX_WINDOW_CLASSES]WindowClass);
 var class_count: usize = 0;
 var next_atom: ATOM = 0xC000;
 
@@ -649,8 +648,8 @@ var foreground_hwnd: HWND = 0;
 
 /// 内核侧 **WndProc 子集**：`RegisterClass*` 的 `wndproc_id` 非 0 时，在此表登记则 `DispatchMessageA` 优先调用（矩阵 §5；非用户 VA 函数指针）。
 const max_kernel_wndproc: usize = 8;
-var kernel_wndproc_ids: [max_kernel_wndproc]u32 = [_]u32{0} ** max_kernel_wndproc;
-var kernel_wndproc_fns: [max_kernel_wndproc]?KernelWndProcFn = [_]?KernelWndProcFn{null} ** max_kernel_wndproc;
+var kernel_wndproc_ids: [max_kernel_wndproc]u32 = std.mem.zeroes([max_kernel_wndproc]u32);
+var kernel_wndproc_fns: [max_kernel_wndproc]?KernelWndProcFn = std.mem.zeroes([max_kernel_wndproc]?KernelWndProcFn);
 var kernel_wndproc_count: usize = 0;
 
 pub const KernelWndProcFn = *const fn (HWND, u32, WPARAM, LPARAM) callconv(.c) LRESULT;
@@ -1484,12 +1483,8 @@ pub fn getMessageAWithYield(msg: *MSG, hwnd: HWND, min: u32, max: u32) BOOL {
                 sched_mod.blockThread(sched_tid);
             }
             sched_mod.yield();
-        } else if (builtin.target.cpu.arch == .x86_64) {
-            asm volatile ("pause" ::: .{ .memory = true });
-        } else if (builtin.target.cpu.arch == .loongarch64) {
-            asm volatile ("idle 0" ::: .{ .memory = true });
-        } else if (builtin.target.cpu.arch == .aarch64) {
-            asm volatile ("yield" ::: .{ .memory = true });
+        } else {
+            @import("../../arch.zig").spinCpuRelax();
         }
     }
     if (sched_tid < 32) clearMsgWaitBit(sched_tid);
@@ -1680,7 +1675,7 @@ pub fn TranslateMessage(_: *const MSG) BOOL {
 /// 简单的扫描码到 ASCII 转换表（基本 US 键盘布局）
 /// 实际实现需要更复杂的键盘布局映射和 shift/ctrl/alt 修饰键处理
 const vk_to_ascii: [256]u8 = blk: {
-    var table: [256]u8 = .{0} ** 256;
+    var table: [256]u8 = std.mem.zeroes([256]u8);
     // 字母键 (扫描码转 ASCII)
     table[0x1E] = 'a'; // A
     table[0x30] = 'b'; // B
@@ -1914,7 +1909,7 @@ const TimerEntry = struct {
 };
 
 /// 全局计时器表（支持多计时器，而非每窗口一个）
-var global_timers: [MAX_GLOBAL_TIMERS]TimerEntry = [_]TimerEntry{.{}} ** MAX_GLOBAL_TIMERS;
+var global_timers: [MAX_GLOBAL_TIMERS]TimerEntry = std.mem.zeroes([MAX_GLOBAL_TIMERS]TimerEntry);
 
 pub fn SetTimer(hwnd: HWND, id: u32, interval: u32, _: u64) u32 {
     _ = findWindow(hwnd) orelse return 0;
@@ -2280,8 +2275,8 @@ pub fn DefWindowProcA(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) LRES
 const MAX_CURSORS: usize = 16;
 const MAX_ICONS: usize = 16;
 
-var cursor_cache: [MAX_CURSORS]?[*]u8 = [_]?[*]u8{null} ** MAX_CURSORS;
-var icon_cache: [MAX_ICONS]?[*]u8 = [_]?[*]u8{null} ** MAX_ICONS;
+var cursor_cache: [MAX_CURSORS]?[*]u8 = std.mem.zeroes([MAX_CURSORS]?[*]u8);
+var icon_cache: [MAX_ICONS]?[*]u8 = std.mem.zeroes([MAX_ICONS]?[*]u8);
 
 /// LoadCursorA: 加载标准系统光标
 /// hInstance 必须为 NULL，lpCursorName 为系统光标 ID（IDC_*）
@@ -2293,7 +2288,7 @@ pub fn LoadCursorA(_: HINSTANCE, lpCursorName: u32) HCURSOR {
     // 验证是否为有效系统光标 ID
     const valid_cursors = [_]u32{
         IDC_ARROW, IDC_IBEAM, IDC_WAIT, IDC_CROSS, IDC_UPARROW,
-        IDC_SIZE, IDC_ICON, IDC_HAND, IDC_HELP, IDC_APPSTARTING,
+        IDC_SIZE,  IDC_ICON,  IDC_HAND, IDC_HELP,  IDC_APPSTARTING,
     };
 
     for (valid_cursors) |id| {
@@ -2315,8 +2310,8 @@ pub fn LoadIconA(_: HINSTANCE, lpIconName: u32) HICON {
 
     // 验证是否为有效系统图标 ID
     const valid_icons = [_]u32{
-        IDI_APPLICATION, IDI_WARNING, IDI_ERROR, IDI_INFORMATION,
-        IDI_QUESTION, IDI_WINLOGO, IDI_SHIELD,
+        IDI_APPLICATION, IDI_WARNING, IDI_ERROR,  IDI_INFORMATION,
+        IDI_QUESTION,    IDI_WINLOGO, IDI_SHIELD,
     };
 
     for (valid_icons) |id| {
@@ -2364,7 +2359,7 @@ const MAX_MENU_ITEMS: usize = 64;
 /// 菜单项结构
 const MenuItem = struct {
     id: u32 = 0,
-    text: [64]u8 = [_]u8{0} ** 64,
+    text: [64]u8 = std.mem.zeroes([64]u8),
     text_len: usize = 0,
     flags: u32 = 0,
     submenu: ?HMENU = null,
@@ -2373,12 +2368,12 @@ const MenuItem = struct {
 /// 菜单结构
 const Menu = struct {
     handle: HMENU = 0,
-    items: [MAX_MENU_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_MENU_ITEMS,
+    items: [MAX_MENU_ITEMS]MenuItem = std.mem.zeroes([MAX_MENU_ITEMS]MenuItem),
     item_count: usize = 0,
     is_popup: bool = false,
 };
 
-var menus: [MAX_MENUS]Menu = [_]Menu{.{}} ** MAX_MENUS;
+var menus: [MAX_MENUS]Menu = std.mem.zeroes([MAX_MENUS]Menu);
 var menu_count: usize = 0;
 var next_hmenu: HMENU = 1;
 
@@ -2556,14 +2551,14 @@ pub const WH_MAXyy: i32 = 11;
 /// 钩子结构
 const Hook = struct {
     hook_type: i32 = 0,
-    hook_proc: ?*const fn(i32, WPARAM, LPARAM) LRESULT = null,
+    hook_proc: ?*const fn (i32, WPARAM, LPARAM) LRESULT = null,
     thread_id: u32 = 0,
     hook_id: u64 = 0,
     next: ?*Hook = null,
 };
 
 const MAX_HOOKS: usize = 32;
-var hooks: [MAX_HOOKS]Hook = [_]Hook{.{}} ** MAX_HOOKS;
+var hooks: [MAX_HOOKS]Hook = std.mem.zeroes([MAX_HOOKS]Hook);
 var hook_count: usize = 0;
 var next_hook_id: u64 = 1;
 
@@ -2576,7 +2571,7 @@ fn findHookById(id: u64) ?*Hook {
 }
 
 /// SetWindowsHookExA: 安装线程或全局钩子
-pub fn SetWindowsHookExA(hook_type: i32, hook_proc: ?*const fn(i32, WPARAM, LPARAM) LRESULT, _: HINSTANCE, thread_id: u32) HHOOK {
+pub fn SetWindowsHookExA(hook_type: i32, hook_proc: ?*const fn (i32, WPARAM, LPARAM) LRESULT, _: HINSTANCE, thread_id: u32) HHOOK {
     if (hook_count >= MAX_HOOKS) return 0;
     if (hook_type < WH_MIN or hook_type > WH_MAX) return 0;
 
@@ -2911,8 +2906,14 @@ pub fn CreateWindowExW(
         utf8_class[0..class_len],
         utf8_title[0..title_len],
         style,
-        x, y, width, height,
-        parent, menu, instance, param,
+        x,
+        y,
+        width,
+        height,
+        parent,
+        menu,
+        instance,
+        param,
     );
 }
 
@@ -3050,7 +3051,7 @@ const MAX_CLIPBOARD_DATA: usize = 65536;
 
 var clipboard_open: bool = false;
 var clipboard_owner: u32 = 0;
-var clipboard_data: [MAX_CLIPBOARD_DATA]u8 = [_]u8{0} ** MAX_CLIPBOARD_DATA;
+var clipboard_data: [MAX_CLIPBOARD_DATA]u8 = std.mem.zeroes([MAX_CLIPBOARD_DATA]u8);
 var clipboard_size: usize = 0;
 var clipboard_format: u32 = 1;
 

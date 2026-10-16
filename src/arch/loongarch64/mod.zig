@@ -55,6 +55,13 @@ pub fn consoleWrite(s: []const u8) void {
     uart.write(s);
 }
 
+pub fn consoleWriteScreen(s: []const u8) void {
+    const bootvid_console = @import("../../rtl/bootvid_console.zig");
+    if (bootvid_console.isActive() and framebuffer.isReady()) {
+        framebuffer.write(s);
+    }
+}
+
 pub fn consoleClear() void {}
 
 pub fn initSerial() void {

@@ -94,7 +94,7 @@ const COL_PATH: i32 = 200;
 
 pub fn initDetailColumns() void {
     detail_column_count = 0;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .name,
         .label = "Name",
@@ -103,7 +103,7 @@ pub fn initDetailColumns() void {
         .sort_order = 0,
     };
     detail_column_count += 1;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .size,
         .label = "Size",
@@ -112,7 +112,7 @@ pub fn initDetailColumns() void {
         .sort_order = 0,
     };
     detail_column_count += 1;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .item_type,
         .label = "Item type",
@@ -121,7 +121,7 @@ pub fn initDetailColumns() void {
         .sort_order = 0,
     };
     detail_column_count += 1;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .date_modified,
         .label = "Date modified",
@@ -130,7 +130,7 @@ pub fn initDetailColumns() void {
         .sort_order = 0,
     };
     detail_column_count += 1;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .date_created,
         .label = "Date created",
@@ -139,7 +139,7 @@ pub fn initDetailColumns() void {
         .sort_order = 0,
     };
     detail_column_count += 1;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .attributes,
         .label = "Attributes",
@@ -148,7 +148,7 @@ pub fn initDetailColumns() void {
         .sort_order = 0,
     };
     detail_column_count += 1;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .author,
         .label = "Author",
@@ -157,7 +157,7 @@ pub fn initDetailColumns() void {
         .sort_order = 0,
     };
     detail_column_count += 1;
-    
+
     detail_columns[detail_column_count] = .{
         .kind = .title,
         .label = "Title",
@@ -222,7 +222,7 @@ pub fn sortDetailsByColumn(kind: DetailColumnKind) void {
         sort_column = kind;
         sort_ascending = true;
     }
-    
+
     // Update sort order indicators
     for (0..detail_column_count) |i| {
         detail_columns[i].sort_order = 0;
@@ -230,7 +230,7 @@ pub fn sortDetailsByColumn(kind: DetailColumnKind) void {
             detail_columns[i].sort_order = if (sort_ascending) 1 else 2;
         }
     }
-    
+
     // Sync with explorer state
     const field: explorer_state.ExplorerSortField = switch (kind) {
         .name => .name,
@@ -267,12 +267,12 @@ const GROUP_EXPAND_W: i32 = 16;
 fn renderGroupHeader(x: i32, y: i32, width: i32, group_name: []const u8, item_count: usize, expanded: bool) void {
     fb.fillRect(x, y, width, GROUP_HEADER_H, rgb(0xEE, 0xEE, 0xEE));
     fb.drawHLine(x, y + GROUP_HEADER_H - 1, width, rgb(0xCC, 0xCC, 0xCC));
-    
+
     const chevron = if (expanded) "▼" else "▶";
     fb.drawTextTransparent(x + 4, y + (GROUP_HEADER_H - 14) / 2, chevron, rgb(0x50, 0x50, 0x50));
-    
+
     fb.drawTextTransparent(x + 20, y + (GROUP_HEADER_H - 14) / 2, group_name, rgb(0x18, 0x18, 0x18));
-    
+
     var count_buf: [32]u8 = undefined;
     const count_text = std.fmt.bufPrint(&count_buf, " ({d} items)", .{item_count}) catch " (0 items)";
     fb.drawTextTransparent(x + 20 + @as(i32, @intCast(group_name.len * 7)), y + (GROUP_HEADER_H - 14) / 2, count_text, rgb(0x70, 0x70, 0x70));
@@ -294,40 +294,40 @@ fn renderDetailRow(
     row_idx: usize,
 ) void {
     const h = ROW_H;
-    
+
     if (row_idx % 2 == 1) {
         fb.fillRect(x, y, width, h, rgb(0xF8, 0xF8, 0xFA));
     }
-    
+
     if (is_selected) {
         fb.fillRect(x, y, width, h, rgb(0xC8, 0xE0, 0xF0));
     }
-    
+
     if (is_focus) {
         fb.drawRect(x + 1, y + 1, width - 2, h - 2, rgb(0x50, 0x50, 0x50));
     }
-    
+
     var col_x: i32 = x + ROW_PADDING + ROW_ICON_SIZE + 4;
     const icon_x = x + ROW_PADDING;
     const icon_y = y + (h - ROW_ICON_SIZE) / 2;
-    
+
     // Render each column
     for (0..detail_column_count) |ci| {
         const col = detail_columns[ci];
         const col_w = col.width;
         const text_y = y + (h - 14) / 2;
-        
+
         switch (col.kind) {
             .name => {
                 // Icon
                 icons.drawThemedIcon(entry.icon, icon_x, icon_y, 1, .aero, is_selected);
-                
+
                 // Name
                 const name_color: u32 = if (entry.is_directory)
                     rgb(0x18, 0x18, 0x80)
                 else
                     rgb(0x18, 0x18, 0x18);
-                
+
                 const name_len = @min(entry.name_len, 40);
                 fb.drawTextTransparent(col_x, text_y, entry.name[0..name_len], name_color);
             },
@@ -373,7 +373,7 @@ fn renderDetailRow(
                 fb.drawTextTransparent(col_x, text_y, "", rgb(0x50, 0x50, 0x50));
             },
         }
-        
+
         fb.drawVLine(col_x + col_w - 1, y, h, rgb(0xDD, 0xDD, 0xDD));
         col_x += col_w;
     }
@@ -382,7 +382,7 @@ fn renderDetailRow(
 fn getExtensionFromName(name: []const u8, buf: []u8) []const u8 {
     for (name, 0..) |c, idx| {
         if (c == '.') {
-            const ext = name[idx + 1..];
+            const ext = name[idx + 1 ..];
             const len = @min(ext.len, buf.len - 1);
             @memcpy(buf[0..len], ext[0..len]);
             buf[len] = 0;
@@ -404,29 +404,29 @@ const HEADER_H: i32 = 22;
 fn renderDetailsHeader(x: i32, y: i32, width: i32) void {
     fb.drawGradientH(x, y, width, HEADER_H, rgb(0xEE, 0xEE, 0xEE), rgb(0xE0, 0xE0, 0xE8));
     fb.drawHLine(x, y + HEADER_H - 1, width, rgb(0xAA, 0xAA, 0xAA));
-    
+
     var col_x: i32 = x;
-    
+
     for (0..detail_column_count) |ci| {
         const col = detail_columns[ci];
         const col_w = col.width;
         const is_hover = (@as(i32, @intCast(ci)) == header_hover_col);
         const is_sort = col.sort_order != 0;
-        
+
         if (is_hover) {
             fb.fillRect(col_x, y + 1, col_w, HEADER_H - 2, rgb(0xDD, 0xDD, 0xDD));
         }
-        
+
         const arrow = if (col.sort_order == 1) "▲" else if (col.sort_order == 2) "▼" else "";
-        
+
         fb.drawTextTransparent(col_x + 4, y + (HEADER_H - 14) / 2, col.label, rgb(0x18, 0x18, 0x18));
-        
+
         if (is_sort) {
             fb.drawTextTransparent(col_x + col_w - 14, y + (HEADER_H - 14) / 2, arrow, rgb(0x40, 0x40, 0x40));
         }
-        
+
         fb.drawVLine(col_x + col_w - 1, y, HEADER_H, rgb(0xAA, 0xAA, 0xAA));
-        
+
         col_x += col_w;
     }
 }
@@ -459,14 +459,14 @@ pub fn renderDetailsView(
     if (expanded_group_count == 0) {
         initExpandedGroups();
     }
-    
+
     renderDetailsHeader(x, y, width);
-    
+
     const content_y = y + HEADER_H;
     const content_h = height - HEADER_H;
-    
+
     var row_y: i32 = content_y - scroll_offset;
-    
+
     for (entries, 0..) |entry, ei| {
         if (row_y >= content_y and row_y + ROW_H <= content_y + content_h) {
             const is_selected = for (selected_indices) |si| {
@@ -483,29 +483,29 @@ pub fn renderDetailsView(
 pub fn hitTestDetailsHeader(px: i32, py: i32, header_x: i32, header_y: i32, header_w: i32) ?usize {
     if (py < header_y or py >= header_y + HEADER_H) return null;
     if (px < header_x or px >= header_x + header_w) return null;
-    
+
     var col_x: i32 = header_x;
-    
+
     for (0..detail_column_count) |ci| {
         const col_w = detail_columns[ci].width;
-        
+
         if (px >= col_x + col_w - 5 and px <= col_x + col_w + 3) {
             return ci;
         }
-        
+
         if (px < col_x + col_w - 5) {
             return ci;
         }
-        
+
         col_x += col_w;
     }
-    
+
     return null;
 }
 
 pub fn isInHeaderResizeZone(px: i32, header_x: i32) bool {
     var col_x: i32 = header_x;
-    
+
     for (0..detail_column_count) |ci| {
         const col_w = detail_columns[ci].width;
         if (px >= col_x + col_w - 5 and px <= col_x + col_w + 3) {
@@ -513,17 +513,17 @@ pub fn isInHeaderResizeZone(px: i32, header_x: i32) bool {
         }
         col_x += col_w;
     }
-    
+
     return false;
 }
 
 pub fn getDetailRowAtPoint(px: i32, py: i32, content_x: i32, content_y: i32, content_h: i32, scroll_offset: i32) ?usize {
     if (px < content_x) return null;
     if (py < content_y or py >= content_y + content_h) return null;
-    
+
     const row_relative = py - content_y + scroll_offset - HEADER_H;
     if (row_relative < 0) return null;
-    
+
     return @as(usize, @intCast(row_relative / ROW_H));
 }
 

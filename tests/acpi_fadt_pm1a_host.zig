@@ -28,7 +28,7 @@
 const std = @import("std");
 
 test "FADT FACP PM1a control block port at byte offset 64" {
-    var tbl: [120]u8 = [_]u8{0} ** 120;
+    var tbl: [120]u8 = std.mem.zeroes([120]u8);
     @memcpy(tbl[0..4], "FACP");
     std.mem.writeInt(u32, tbl[4..8], 120, .little);
     std.mem.writeInt(u32, tbl[64..68], 0xB004, .little);

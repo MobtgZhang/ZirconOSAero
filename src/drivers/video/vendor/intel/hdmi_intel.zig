@@ -22,5 +22,5 @@ const hdmi = @import("../../legacy/hdmi.zig");
 const types = @import("types.zig");
 
 pub fn syncConnectorFromIntel(device_id: u16, gen: types.IntelGpuGeneration) void {
-    hdmi.syncIntelIgpuConnector(device_id, @intFromEnum(gen));
+    hdmi.syncIntelIgpuConnector(device_id, @backingInt(gen));
 }

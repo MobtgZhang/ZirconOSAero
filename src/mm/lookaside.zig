@@ -28,6 +28,7 @@
 // PagedPool 仍须 **APC_LEVEL 以下**（由 `ex_pool` + `ke/irql` 守卫，非 DISPATCH）。
 
 const std = @import("std");
+const arch = @import("../arch.zig");
 const percpu = @import("percpu_index.zig");
 
 pub const SLOT_COUNT: usize = 6;
@@ -51,6 +52,9 @@ fn cpuSlot() usize {
 
 pub fn tryPop(slot: usize) ?*ListNode {
     if (slot >= SLOT_COUNT) return null;
+    const interrupts_enabled = arch.saveAndDisableInterrupts();
+    defer arch.restoreInterrupts(interrupts_enabled);
+
     const c = cpuSlot();
     const h = heads[c][slot] orelse return null;
     heads[c][slot] = h.next;
@@ -60,6 +64,9 @@ pub fn tryPop(slot: usize) ?*ListNode {
 
 pub fn tryPush(slot: usize, node: *ListNode) bool {
     if (slot >= SLOT_COUNT) return false;
+    const interrupts_enabled = arch.saveAndDisableInterrupts();
+    defer arch.restoreInterrupts(interrupts_enabled);
+
     const c = cpuSlot();
     if (depths[c][slot] >= MAX_DEPTH) return false;
     node.next = heads[c][slot];

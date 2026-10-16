@@ -33,6 +33,7 @@ import struct
 import subprocess
 import sys
 import json
+import tempfile
 from datetime import datetime
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'build', 'test-results')
@@ -157,9 +158,86 @@ def test_zbm_iso_helper(project_root, result):
     print("\n=== ZBM UEFI ISO helper ===")
     script = os.path.join(project_root, "scripts", "build", "mkiso-uefi-zbm.sh")
     if os.path.isfile(script):
-        result.ok("mkiso-uefi-zbm.sh present")
+        if os.access(script, os.X_OK):
+            result.ok("mkiso-uefi-zbm.sh present and executable")
+        else:
+            result.fail("mkiso-uefi-zbm.sh is not executable")
     else:
         result.fail("mkiso-uefi-zbm.sh missing")
+
+    for target in ("iso", "iso-debug", "iso-release"):
+        proc = subprocess.run(
+            ["make", "-n", target, "ARCH=x86_64", "BOOT_METHOD=uefi", "BOOTLOADER=zbm"],
+            capture_output=True, text=True, timeout=15, cwd=project_root,
+        )
+        if proc.returncode == 0:
+            result.ok(f"make {target}: target resolves")
+        else:
+            result.fail(f"make {target}: target does not resolve", proc.stderr[:200])
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="zirconos-iso-test-") as temp_dir:
+            fake_bin = os.path.join(temp_dir, "bin")
+            os.makedirs(fake_bin)
+            fake_xorriso = os.path.join(fake_bin, "xorriso")
+            with open(fake_xorriso, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    "printf '%s\\n' \"$@\" > \"$XR_ARGS\"\n"
+                    "boot_image=''\noutput=''\ntree=''\n"
+                    "while (($#)); do\n"
+                    "  case \"$1\" in\n"
+                    "    -e) boot_image=$2; shift 2 ;;\n"
+                    "    -o) output=$2; shift 2 ;;\n"
+                    "    *) tree=$1; shift ;;\n"
+                    "  esac\n"
+                    "done\n"
+                    "cp \"$tree/$boot_image\" \"$output\"\n"
+                )
+            os.chmod(fake_xorriso, 0o755)
+
+            esp_path = os.path.join(temp_dir, "esp.img")
+            output_path = os.path.join(temp_dir, "out.iso")
+            args_path = os.path.join(temp_dir, "xorriso-args.txt")
+            partition_offset = 2048 * 512
+            partition_data = b"FAT-ESP-TEST" + bytes(1024 * 1024 - 12)
+            with open(esp_path, "wb") as stream:
+                stream.write(bytes(partition_offset))
+                stream.write(partition_data)
+
+            env = os.environ.copy()
+            env["PATH"] = fake_bin + os.pathsep + env.get("PATH", "")
+            env["XR_ARGS"] = args_path
+            proc = subprocess.run(
+                ["bash", script, output_path, esp_path],
+                capture_output=True, text=True, timeout=15, env=env,
+            )
+            if proc.returncode != 0:
+                result.fail("ISO helper fake-tool integration", proc.stderr[:200])
+            else:
+                with open(output_path, "rb") as stream:
+                    output_bytes = stream.read()
+                with open(args_path, encoding="utf-8") as stream:
+                    xorriso_args = stream.read().splitlines()
+                if output_bytes == partition_data and "-no-emul-boot" in xorriso_args:
+                    result.ok("ISO helper extracts FAT ESP and requests no-emulation UEFI boot")
+                else:
+                    result.fail("ISO helper boot image or xorriso flags are incorrect")
+
+            missing_env = env.copy()
+            missing_env["PATH"] = fake_bin + os.pathsep + os.defpath
+            os.remove(fake_xorriso)
+            missing = subprocess.run(
+                ["bash", script, output_path, esp_path],
+                capture_output=True, text=True, timeout=15, env=missing_env,
+            )
+            if missing.returncode != 0 and "xorriso 未找到" in missing.stderr:
+                result.ok("ISO helper reports missing xorriso explicitly")
+            else:
+                result.fail("ISO helper did not reject missing xorriso", missing.stderr[:200])
+    except (OSError, subprocess.TimeoutExpired) as error:
+        result.fail("ISO helper integration test could not run", str(error))
 
 
 # ── Test: build artifacts structure ──

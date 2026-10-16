@@ -19,11 +19,11 @@
 //! MC146818-compatible RTC / CMOS driver (NT6: \Device\Rtc, interrupt-time profile)
 //! BCD time read; no periodic interrupt handling here (scheduler uses PIT).
 
-const builtin = @import("builtin");
+const hal_drv = @import("../../hal.zig");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 
-const rtc_cmos = @import("../../hal/x86_64/rtc_cmos.zig");
+const rtc_cmos = @import("../../hal/input.zig").rtcCmos;
 
 pub const RtcTime = rtc_cmos.RtcTime;
 
@@ -67,7 +67,7 @@ fn rtcDispatch(irp: *io.Irp) io.NTSTATUS {
 }
 
 pub fn init() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal_drv.hasLegacyPCDevices) return;
 
     driver_idx = io.registerDriver("\\Driver\\Rtc", rtcDispatch) orelse {
         klog.err("RTC: Failed to register driver", .{});

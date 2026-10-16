@@ -91,7 +91,7 @@ var material_initialized: bool = false;
 /// 模糊缓存：记录最近一次模糊的矩形区域和配置
 /// 避免在同一区域重复模糊，提升性能
 const BLUR_CACHE_SIZE: usize = 4;
-var blur_cache: [BLUR_CACHE_SIZE]BlurCacheEntry = [_]BlurCacheEntry{.{}} ** BLUR_CACHE_SIZE;
+var blur_cache: [BLUR_CACHE_SIZE]BlurCacheEntry = std.mem.zeroes([BLUR_CACHE_SIZE]BlurCacheEntry);
 
 /// 模糊缓存条目
 const BlurCacheEntry = struct {

@@ -19,8 +19,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Desktop session: theme, framebuffer handoff, main loop, ZBM-style menu.
 const std = @import("std");
-const builtin = @import("builtin");
 const arch = @import("../arch.zig");
+const hal = @import("../hal.zig");
 const klog = @import("../rtl/klog.zig");
 
 pub fn desktopThemeFromBuildDefault(s: []const u8) @import("../arch.zig").impl.boot.DesktopTheme {
@@ -57,63 +57,21 @@ fn initDesktopFramebufferFromHandoff(
     const fb_addr = @as(usize, @truncate(use_fb.addr));
 
     if (extended_scanout_setup) {
-        if (builtin.target.cpu.arch == .loongarch64) {
-            const vm = @import("../mm/vm.zig");
-            const ramfb_la = @import("../hal/loongarch64/ramfb.zig");
-            const fb_bytes = @as(usize, use_fb.pitch) * @as(usize, use_fb.height);
-            if (vm.remapIdentityRangeUncached(fb_addr, fb_bytes)) {
-                klog.info("VM: LoongArch scanout FB 0x%x size 0x%x → MAT_WUC (GOP/ramfb scanout)", .{
-                    fb_addr, fb_bytes,
-                });
-            } else {
-                klog.warn("VM: LoongArch framebuffer uncached remap failed — desktop may not scan out", .{});
-            }
-            if (ramfb_la.pointRamfbToGuestPhys(
-                use_fb.addr,
+        const fb_bytes = @as(usize, use_fb.pitch) * @as(usize, use_fb.height);
+        if (hal.remapFramebufferUncached(fb_addr, fb_bytes)) {
+            klog.info("VM: scanout FB 0x%x size 0x%x → uncached (GOP/ramfb scanout)", .{ fb_addr, fb_bytes });
+        } else {
+            klog.warn("VM: framebuffer uncached remap failed — desktop may not scan out", .{});
+        }
+        if (hal.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
+            klog.info("ramfb: pointed QEMU scanout to guest phys 0x%x (%ux%u stride %u)", .{
+                @as(usize, @truncate(use_fb.addr)),
                 use_fb.width,
                 use_fb.height,
                 use_fb.pitch,
-            )) {
-                klog.info("ramfb: pointed QEMU scanout to GOP phys 0x%x (%ux%u stride %u)", .{
-                    @as(usize, @truncate(use_fb.addr)),
-                    use_fb.width,
-                    use_fb.height,
-                    use_fb.pitch,
-                });
-            } else if (klog.DEBUG_MODE) {
-                klog.info("ramfb: pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
-            }
-        }
-        if (builtin.target.cpu.arch == .aarch64) {
-            const a64r = @import("../hal/aarch64/ramfb.zig");
-            if (a64r.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
-                klog.info("ramfb(a64): QEMU scanout → guest phys 0x%x", .{@as(usize, @truncate(use_fb.addr))});
-            } else if (klog.DEBUG_MODE) {
-                klog.info("ramfb(a64): pointRamfbToGuestPhys skipped", .{});
-            }
-        }
-        if (builtin.target.cpu.arch == .riscv64) {
-            const rvr = @import("../hal/riscv64/ramfb.zig");
-            if (rvr.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
-                klog.info("ramfb(rv): QEMU scanout → guest phys 0x%x", .{@as(usize, @truncate(use_fb.addr))});
-            } else if (klog.DEBUG_MODE) {
-                klog.info("ramfb(rv): pointRamfbToGuestPhys skipped", .{});
-            }
-        }
-        // x86_64: 当 QEMU 同时启用 -device ramfb 和固件 GOP 时,将 ramfb 扫描输出指向 GOP 物理地址,
-        // 避免 QEMU GTK 窗口仍绑定到默认 ramfb 区域(0x0D000000)而 GOP 区域无像素更新导致黑屏.
-        if (builtin.target.cpu.arch == .x86_64) {
-            const ramfb_x86 = @import("../hal/x86_64/ramfb.zig");
-            if (ramfb_x86.pointRamfbToGuestPhys(use_fb.addr, use_fb.width, use_fb.height, use_fb.pitch)) {
-                klog.info("ramfb(x86_64): QEMU scanout → GOP phys 0x%x (%ux%u stride %u)", .{
-                    @as(usize, @truncate(use_fb.addr)),
-                    use_fb.width,
-                    use_fb.height,
-                    use_fb.pitch,
-                });
-            } else if (klog.DEBUG_MODE) {
-                klog.info("ramfb(x86_64): pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
-            }
+            });
+        } else if (klog.DEBUG_MODE) {
+            klog.info("ramfb: pointRamfbToGuestPhys skipped (no etc/ramfb — OK if no -device ramfb)", .{});
         }
     }
 
@@ -129,11 +87,6 @@ fn initDesktopFramebufferFromHandoff(
 
 /// 内核桌面主循环（阶段 **D-D4** 文档锚点）：每轮 `input_hub.pollAll`；`user32.msgPumpThreadsBlockedApprox` 为真时追加输入轮询以缩短 `GetMessage` 阻塞路径上的投递延迟；`idle_streak` 驱动 `display_flip_journal.extraInputPollBudget` 在空闲时仍保持尾部 `poll`；`need_paint` 为假时跳过 `present`。见 [docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md](../docs/cn/PHASE_D_WIN32_MSG_PUMP_DWM.md)。
 fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
-    const klog_mod = @import("../rtl/klog.zig");
-    // Desktop 模式下隐藏 INFO/DEBUG 日志，只显示 WARNING 及以上
-    klog_mod.setDesktopMode(true);
-    klog_mod.setDesktopMinLevel(.warning);
-
     const drivers = @import("../drivers/mod.zig");
     const display = drivers.video.display;
     const video_root = @import("../drivers/video/root.zig");
@@ -150,9 +103,11 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
     var idle_streak: u32 = 0;
     var last_draw_cx: i32 = mouse.getX();
     var last_draw_cy: i32 = mouse.getY();
-    // x86_64 及其他架构默认 16 次额外轮询; LoongArch64 在 QEMU virtio-input 路径上
+    // 默认 16 次额外轮询; LoongArch 在 QEMU virtio-input 路径上
     // 事件延迟可能更高,因此分配 32 次以确保输入不丢帧.
-    const desktop_extra_input_polls: u32 = if (builtin.target.cpu.arch == .loongarch64) 32 else 16;
+    const desktop_extra_input_polls: u32 = if (@import("../hal.zig").hasLoongsonIGPU) 32 else 16;
+
+    klog.info("Desktop: main loop enter", .{});
 
     // 每帧调用 panic_ctx.setPhase 仅在 bisect 调试模式有意义; Release 构建下 Comptime 消除以降低开销.
     const panic_ctx = @import("../rtl/panic_context.zig");
@@ -256,6 +211,7 @@ fn runDesktopMainLoop(comptime bisect_log_prefix: []const u8) noreturn {
             display.present();
             last_draw_cx = mouse.getX();
             last_draw_cy = mouse.getY();
+            mouse.clearCursorMoved();
             idle_streak = 0;
         } else {
             idle_streak +|= 1;
@@ -325,44 +281,26 @@ pub fn enterDesktopSession(
         }
     }
 
+    // Desktop 模式下隐藏 INFO/DEBUG 日志，只显示 WARNING 及以上。
+    // 首帧渲染前必须停用 BootVID，避免启动日志残留在桌面首帧。
+    klog.setDesktopMode(true);
+    klog.setDesktopMinLevel(.warning);
+    @import("../drivers/video/bootvid.zig").deactivate();
+
+    klog.info("Desktop: render enter", .{});
     display.renderAeroDesktop();
+    klog.info("Desktop: render done, present enter", .{});
     display.present();
-    // LoongArch/AArch64 + ramfb：部分 QEMU 组合在首帧像素落盘后再 point 一次 fw_cfg，主窗更易绑定到实际扫描缓冲。
-    if (extended_scanout and builtin.target.cpu.arch == .loongarch64) {
+    klog.info("Desktop: present done", .{});
+    if (extended_scanout) {
         const fb_drv = drivers.video.framebuffer;
         const gaddr = fb_drv.getAddress();
         fb_drv.fenceScanoutVisibleWrites();
-        const ramfb_la = @import("../hal/loongarch64/ramfb.zig");
         const gw = fb_drv.getWidth();
         const gh = fb_drv.getHeight();
         const gp = fb_drv.getPitch();
         if (gw > 0 and gh > 0 and gp > 0) {
-            _ = ramfb_la.pointRamfbToGuestPhys(@as(u64, @truncate(gaddr)), gw, gh, gp);
-        }
-    }
-    if (extended_scanout and builtin.target.cpu.arch == .aarch64) {
-        const fb_drv = drivers.video.framebuffer;
-        const gaddr = fb_drv.getAddress();
-        fb_drv.fenceScanoutVisibleWrites();
-        const a64r = @import("../hal/aarch64/ramfb.zig");
-        const gw = fb_drv.getWidth();
-        const gh = fb_drv.getHeight();
-        const gp = fb_drv.getPitch();
-        if (gw > 0 and gh > 0 and gp > 0) {
-            _ = a64r.pointRamfbToGuestPhys(@as(u64, @truncate(gaddr)), gw, gh, gp);
-        }
-    }
-    // x86_64: 首帧 ramfb 重指向 GOP 物理地址(与 LoongArch64/AArch64 相同的 extended_scanout 逻辑).
-    if (extended_scanout and builtin.target.cpu.arch == .x86_64) {
-        const fb_drv = drivers.video.framebuffer;
-        const gaddr = fb_drv.getAddress();
-        fb_drv.fenceScanoutVisibleWrites();
-        const ramfb_x86 = @import("../hal/x86_64/ramfb.zig");
-        const gw = fb_drv.getWidth();
-        const gh = fb_drv.getHeight();
-        const gp = fb_drv.getPitch();
-        if (gw > 0 and gh > 0 and gp > 0) {
-            _ = ramfb_x86.pointRamfbToGuestPhys(@as(u64, @truncate(gaddr)), gw, gh, gp);
+            _ = hal.pointRamfbToGuestPhys(@as(u64, @truncate(gaddr)), gw, gh, gp);
         }
     }
     drivers.video.framebuffer.logFramebufferMemorySummary();
@@ -371,10 +309,27 @@ pub fn enterDesktopSession(
     @import("../drivers/input/mouse.zig").syncFromRegistry();
     display.dwm_mod.syncPolicyFromRegistry();
 
+    // CMD.EXE 用户空间进程（目标 §6-8）：在桌面主循环前启动。
+    const ps_proc_cmd = @import("../ps/process.zig");
+    const cmd_mod = @import("../subsystems/win32/cmd.zig");
+    const subsys_cmd = @import("../subsystems/win32/subsystem.zig");
+    if (ps_proc_cmd.createSystemProcess(alloc, "cmd.exe")) |cmd_proc| {
+        ps_proc_cmd.setCurrentProcess(cmd_proc.pid);
+        _ = subsys_cmd.registerProcess(cmd_proc.pid, .win32_cui, "cmd.exe", 0);
+        if (!cmd_mod.isInitialized()) {
+            cmd_mod.init();
+        }
+        cmd_mod.getShell().showBanner();
+        cmd_mod.getShell().showPrompt();
+        klog.info("Desktop: cmd.exe started (PID=%u)", .{cmd_proc.pid});
+    } else {
+        klog.warn("Desktop: cmd.exe creation failed (table full?)", .{});
+    }
+
     runDesktopMainLoop(bisect_prefix);
 }
 
-// ── ZBM 串口菜单（与 boot/zbm/uefi/main_loongarch64.zig 样式对齐：箭头、边框、描述、ENTER/ESC）──
+// ── ZBM 串口菜单（与 boot/zbm/uefi/main 样式对齐：箭头、边框、描述、ENTER/ESC）──
 pub fn showZbmStyleBootMenu() void {
     const sys_config = @import("../config/config.zig");
     const COUNTDOWN_SEC: u32 = 10;
@@ -422,7 +377,7 @@ pub fn showZbmStyleBootMenu() void {
             klog.info("", .{});
             klog.info("  ENTER=Choose  |  ESC=Advanced Options  |  F1=Help                          ", .{});
             klog.info("", .{});
-            klog.info("    Architecture: %s  |  Boot: kernel direct (-kernel)", .{@tagName(builtin.target.cpu.arch)});
+            klog.info("    Architecture: %s  |  Boot: kernel direct (-kernel)", .{@import("../hal.zig").targetArchName()});
             need_full_redraw = false;
         }
         if (countdown == 0) break;

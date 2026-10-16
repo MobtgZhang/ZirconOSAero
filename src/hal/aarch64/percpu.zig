@@ -38,8 +38,7 @@ pub fn setTpidrEl1(cpu: *PerCpu) void {
     asm volatile ("msr tpidr_el1, %[v]"
         :
         : [v] "r" (@intFromPtr(cpu)),
-        : .{ .memory = true }
-    );
+        : .{ .memory = true });
 }
 
 /// Read TPIDR_EL1.

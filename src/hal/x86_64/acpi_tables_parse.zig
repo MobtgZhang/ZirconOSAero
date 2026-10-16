@@ -158,7 +158,7 @@ pub fn parseHpetMmioPhys(h: [*]align(1) const u8, len: u32) ?u64 {
 }
 
 test "ACPI standard header checksum byte at offset 9" {
-    var t: [40]u8 = [_]u8{0} ** 40;
+    var t: [40]u8 = std.mem.zeroes([40]u8);
     @memcpy(t[0..4], "TEST");
     std.mem.writeInt(u32, t[4..8], 40, .little);
     t[8] = 1; // revision
@@ -195,7 +195,7 @@ test "RSDP v1 20-byte checksum" {
 }
 
 test "FACP legacy PM1a_CNT parse with valid table checksum" {
-    var facp: [140]u8 = [_]u8{0} ** 140;
+    var facp: [140]u8 = std.mem.zeroes([140]u8);
     @memcpy(facp[0..4], "FACP");
     std.mem.writeInt(u32, facp[4..8], 140, .little);
     facp[8] = 2;
@@ -207,7 +207,7 @@ test "FACP legacy PM1a_CNT parse with valid table checksum" {
 }
 
 test "HPET table GAS MMIO base" {
-    var ht: [56]u8 = [_]u8{0} ** 56;
+    var ht: [56]u8 = std.mem.zeroes([56]u8);
     @memcpy(ht[0..4], "HPET");
     std.mem.writeInt(u32, ht[4..8], 56, .little);
     ht[8] = 1;
@@ -219,7 +219,7 @@ test "HPET table GAS MMIO base" {
 }
 
 test "MCFG first segment parse" {
-    var mc: [64]u8 = [_]u8{0} ** 64;
+    var mc: [64]u8 = std.mem.zeroes([64]u8);
     @memcpy(mc[0..4], "MCFG");
     std.mem.writeInt(u32, mc[4..8], 64, .little);
     std.mem.writeInt(u64, mc[44..52], 0xE000_0000, .little);

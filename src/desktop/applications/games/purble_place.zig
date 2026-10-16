@@ -21,7 +21,7 @@
 // ZirconOSAero - NT 6.1 Compatible Kernel
 // Module: src/desktop/applications/games/purble_place.zig
 // Purpose: Purble Place - Children's game suite (3 mini-games)
-// 
+//
 // This is an independent clean-room implementation.
 
 const std = @import("std");
@@ -34,9 +34,9 @@ fn rgb(r: u32, g: u32, b: u32) u32 {
 
 /// Game types in Purble Place
 pub const MiniGame = enum {
-    purble_shop,    // Match items to customer orders
-    rubber_duck,    // Find the duck among duplicates
-    grid_pattern,   // Complete the pattern
+    purble_shop, // Match items to customer orders
+    rubber_duck, // Find the duck among duplicates
+    grid_pattern, // Complete the pattern
 };
 
 /// Purble Shop item types
@@ -63,28 +63,28 @@ pub const PurblePlaceGame = struct {
     height: i32,
     visible: bool,
     caption_hover: CaptionButtonType,
-    
+
     current_game: MiniGame,
     score: u32,
     level: u8,
     game_over: bool,
     show_menu: bool,
-    
+
     // Purble Shop state
     customer_order: CustomerOrder,
     selected_items: [4]bool,
     customer_x: i32,
-    
+
     // Rubber Duck state
     duck_position: u8,
     guess_count: u8,
     max_guesses: u8,
-    
+
     // Grid Pattern state
     pattern: [16]bool,
     grid_selections: [16]bool,
     pattern_size: u8,
-    
+
     hover_new: bool,
     hover_shop: bool,
     hover_duck: bool,
@@ -98,12 +98,17 @@ pub const PurblePlaceGame = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) PurblePlaceGame {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 560, .height = 420,
-            .visible = true, .caption_hover = .none,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 560,
+            .height = 420,
+            .visible = true,
+            .caption_hover = .none,
             .current_game = .purble_shop,
-            .score = 0, .level = 1,
-            .game_over = false, .show_menu = true,
+            .score = 0,
+            .level = 1,
+            .game_over = false,
+            .show_menu = true,
             .customer_order = .{ .hat = false, .glasses = false, .bow_tie = false, .flower = false },
             .selected_items = .{ false, false, false, false },
             .customer_x = 300,
@@ -113,10 +118,14 @@ pub const PurblePlaceGame = struct {
             .pattern = .{ false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false },
             .grid_selections = .{ false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false },
             .pattern_size = 4,
-            .hover_new = false, .hover_shop = false,
-            .hover_duck = false, .hover_grid = false,
-            .hover_1 = false, .hover_2 = false,
-            .hover_3 = false, .hover_4 = false,
+            .hover_new = false,
+            .hover_shop = false,
+            .hover_duck = false,
+            .hover_grid = false,
+            .hover_1 = false,
+            .hover_2 = false,
+            .hover_3 = false,
+            .hover_4 = false,
         };
     }
 
@@ -125,7 +134,7 @@ pub const PurblePlaceGame = struct {
         pp.level = 1;
         pp.game_over = false;
         pp.show_menu = true;
-        
+
         switch (pp.current_game) {
             .purble_shop => pp.initShopLevel(),
             .rubber_duck => pp.initDuckLevel(),
@@ -174,10 +183,10 @@ pub const PurblePlaceGame = struct {
 
     pub fn submitShopOrder(pp: *PurblePlaceGame) void {
         const correct = pp.selected_items[0] == pp.customer_order.hat and
-                        pp.selected_items[1] == pp.customer_order.glasses and
-                        pp.selected_items[2] == pp.customer_order.bow_tie and
-                        pp.selected_items[3] == pp.customer_order.flower;
-        
+            pp.selected_items[1] == pp.customer_order.glasses and
+            pp.selected_items[2] == pp.customer_order.bow_tie and
+            pp.selected_items[3] == pp.customer_order.flower;
+
         if (correct) {
             pp.score += @as(u32, pp.level) * 100;
             pp.level += 1;
@@ -190,9 +199,9 @@ pub const PurblePlaceGame = struct {
 
     pub fn handleDuckClick(pp: *PurblePlaceGame, duck_idx: u8) void {
         if (pp.guess_count >= pp.max_guesses) return;
-        
+
         pp.guess_count += 1;
-        
+
         if (duck_idx == pp.duck_position) {
             pp.score += @as(u32, pp.max_guesses - pp.guess_count + 1) * 50;
             pp.level += 1;
@@ -212,7 +221,7 @@ pub const PurblePlaceGame = struct {
                 break;
             }
         }
-        
+
         if (correct) {
             pp.score += @as(u32, pp.level) * 150;
             pp.level += 1;
@@ -257,7 +266,7 @@ pub const PurblePlaceGame = struct {
         var buf: [32]u8 = undefined;
         const score_str = std.fmt.bufPrint(&buf, "Score: {d}", .{pp.score}) catch "";
         fb.drawTextTransparent(wx + 8, wy + 38, score_str, rgb(0x50, 0x40, 0x60));
-        
+
         var level_buf: [16]u8 = undefined;
         const level_str = std.fmt.bufPrint(&level_buf, "Level: {d}", .{pp.level}) catch "";
         fb.drawTextTransparent(wx + ww - 80, wy + 38, level_str, rgb(0x50, 0x40, 0x60));
@@ -288,14 +297,14 @@ pub const PurblePlaceGame = struct {
     fn renderMenu(pp: *PurblePlaceGame, wx: i32, wy: i32, ww: i32, wh: i32) void {
         _ = wh;
         // Title
-        fb.drawTextTransparent(wx + ww/2 - 60, wy + 60, "Choose a Game!", rgb(0x60, 0x40, 0x80));
-        
+        fb.drawTextTransparent(wx + ww / 2 - 60, wy + 60, "Choose a Game!", rgb(0x60, 0x40, 0x80));
+
         const btn_w: i32 = 140;
         const btn_h: i32 = 80;
         const spacing: i32 = 20;
         const total_w = 3 * btn_w + 2 * spacing;
         const start_x = wx + (ww - total_w) / 2;
-        
+
         // Purble Shop button
         const shop_y = wy + 120;
         const shop_color = if (pp.hover_shop) rgb(0xC0, 0x90, 0xE0) else rgb(0xA0, 0x70, 0xD0);
@@ -325,13 +334,13 @@ pub const PurblePlaceGame = struct {
         // Customer area
         fb.fillRect(wx + 50, wy + 60, 200, 200, rgb(0xFF, 0xF0, 0xE0));
         fb.draw3DRect(wx + 50, wy + 60, 200, 200, rgb(0xE0, 0xD0, 0xC0), rgb(0xFF, 0xFF, 0xFF));
-        
+
         // Draw customer (simplified Purble character)
         const cx = wx + 150;
         const cy = wy + 160;
         fb.fillEllipse(cx, cy, 50, 60, rgb(0xFF, 0xA0, 0xC0)); // Body
         fb.fillEllipse(cx, cy - 70, 40, 40, rgb(0xFF, 0xC0, 0xD0)); // Head
-        
+
         // Draw requested items
         var item_x: i32 = 60;
         if (pp.customer_order.hat) {
@@ -359,7 +368,7 @@ pub const PurblePlaceGame = struct {
             .{ .x = wx + 220, .hover = pp.hover_3, .name = "Bow Tie" },
             .{ .x = wx + 300, .hover = pp.hover_4, .name = "Flower" },
         };
-        
+
         var i: usize = 0;
         for (items) |item| {
             const item_color = if (pp.selected_items[i]) rgb(0x80, 0xFF, 0x80) else if (item.hover) rgb(0xE0, 0xE0, 0xFF) else rgb(0xD0, 0xD0, 0xE0);
@@ -380,29 +389,29 @@ pub const PurblePlaceGame = struct {
         // Instructions
         var buf: [64]u8 = undefined;
         const instr = std.fmt.bufPrint(&buf, "Find the duck! Guesses: {d}/{d}", .{ pp.guess_count, pp.max_guesses }) catch "";
-        fb.drawTextTransparent(wx + ww/2 - 150, wy + 60, instr, rgb(0x40, 0x60, 0x40));
-        
+        fb.drawTextTransparent(wx + ww / 2 - 150, wy + 60, instr, rgb(0x40, 0x60, 0x40));
+
         // Duck grid (3x3)
         const grid_size: i32 = 80;
         const gap: i32 = 10;
         const total_grid = 3 * grid_size + 2 * gap;
         const grid_x = wx + (ww - total_grid) / 2;
         const grid_y = wy + 100;
-        
+
         var row: u8 = 0;
         while (row < 3) : (row += 1) {
             var col: u8 = 0;
             while (col < 3) : (col += 1) {
                 const cell_x = grid_x + @as(i32, @intCast(col)) * (grid_size + gap);
                 const cell_y = grid_y + @as(i32, @intCast(row)) * (grid_size + gap);
-                
+
                 fb.fillRect(cell_x, cell_y, grid_size, grid_size, rgb(0xE8, 0xF0, 0x98));
                 fb.draw3DRect(cell_x, cell_y, grid_size, grid_size, rgb(0xC0, 0xC8, 0x78), rgb(0xFF, 0xFF, 0xFF));
-                
+
                 // Draw duck or placeholder
                 const duck_x = cell_x + grid_size / 2;
                 const duck_y = cell_y + grid_size / 2;
-                
+
                 // Duck body
                 fb.fillEllipse(duck_x, duck_y + 10, 25, 20, rgb(0xFF, 0xFF, 0x00));
                 // Duck head
@@ -417,18 +426,18 @@ pub const PurblePlaceGame = struct {
 
     fn renderGrid(pp: *PurblePlaceGame, wx: i32, wy: i32, ww: i32, wh: i32) void {
         // Instructions
-        fb.drawTextTransparent(wx + ww/2 - 100, wy + 60, "Complete the pattern!", rgb(0x40, 0x50, 0x60));
-        
+        fb.drawTextTransparent(wx + ww / 2 - 100, wy + 60, "Complete the pattern!", rgb(0x40, 0x50, 0x60));
+
         // Pattern display (top)
         const pattern_y = wy + 90;
         const cell_size: i32 = 30;
         const pattern_x = wx + 60;
-        
+
         var pi: usize = 0;
         while (pi < 16) : (pi += 1) {
             const px = pattern_x + @as(i32, @intCast(pi % 4)) * cell_size;
             const py = pattern_y + @as(i32, @intCast(pi / 4)) * cell_size;
-            
+
             const pcolor = if (pp.pattern[pi]) rgb(0x80, 0xC0, 0xE0) else rgb(0xD0, 0xD0, 0xD8);
             fb.fillRect(px, py, cell_size, cell_size, pcolor);
             fb.drawRect(px, py, cell_size, cell_size, rgb(0xA0, 0xA0, 0xB0));
@@ -437,12 +446,12 @@ pub const PurblePlaceGame = struct {
         // User input grid (bottom)
         const input_y = wy + 200;
         const input_x = wx + 60;
-        
+
         var ii: usize = 0;
         while (ii < 16) : (ii += 1) {
             const ix = input_x + @as(i32, @intCast(ii % 4)) * cell_size;
             const iy = input_y + @as(i32, @intCast(ii / 4)) * cell_size;
-            
+
             const icolor = if (pp.grid_selections[ii]) rgb(0x80, 0xC0, 0xE0) else rgb(0xD8, 0xE8, 0xF0);
             fb.fillRect(ix, iy, cell_size, cell_size, icolor);
             fb.draw3DRect(ix, iy, cell_size, cell_size, rgb(0xA0, 0xB0, 0xC0), rgb(0xFF, 0xFF, 0xFF));

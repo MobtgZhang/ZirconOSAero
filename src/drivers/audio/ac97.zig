@@ -19,28 +19,12 @@
 //! AC’97 audio miniport (NT6: portcls + AC97 miniport stack, IOCTL surface)
 //! Intel-compatible NAM/NABM programming: PCM, mixer, reset.
 //! Registers `\\Driver\\AC97` / `\\Device\\Audio0`. See Intel AC’97 spec Rev 2.3.
+const std = @import("std");
 
-const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
-const portio = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/portio.zig")
-else
-    struct {
-        pub fn outb(_: u16, _: u8) void {}
-        pub fn outw(_: u16, _: u16) void {}
-        pub fn outl(_: u16, _: u32) void {}
-        pub fn inb(_: u16) u8 {
-            return 0;
-        }
-        pub fn inw(_: u16) u16 {
-            return 0;
-        }
-        pub fn inl(_: u16) u32 {
-            return 0;
-        }
-        pub fn ioWait() void {}
-    };
+const hal_drv = @import("../../hal.zig");
+const portio = hal_drv.portio;
 
 pub const AC97_VENDOR_ID: u16 = 0x8086;
 pub const AC97_DEVICE_ID: u16 = 0x2415;
@@ -115,7 +99,7 @@ pub const AC97State = struct {
 };
 
 var state: AC97State = .{};
-var buffer_descriptors: [MAX_BUFFER_DESCRIPTORS]BufferDescriptor = [_]BufferDescriptor{.{}} ** MAX_BUFFER_DESCRIPTORS;
+var buffer_descriptors: [MAX_BUFFER_DESCRIPTORS]BufferDescriptor = std.mem.zeroes([MAX_BUFFER_DESCRIPTORS]BufferDescriptor);
 var descriptor_count: usize = 0;
 
 var driver_idx: u32 = 0;

@@ -17,15 +17,16 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! PS/2 keyboard class driver (NT6: i8042prt / keyboard class)
-//! IRP dispatch over the HAL ring buffer in `hal/x86_64/keyboard.zig` (IRQ1).
+//! IRP dispatch over the HAL keyboard ring buffer (platform IRQ).
 
-const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 
-const hal_kbd = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/keyboard.zig")
-else if (builtin.target.cpu.arch == .loongarch64)
+const hal = @import("../../hal.zig");
+const hal_input = @import("../../hal/input.zig");
+const hal_kbd = if (hal.hasLegacyPCDevices)
+    hal_input.keyboard
+else if (hal.hasLoongsonIGPU)
     @import("evdev_virtio_bridge.zig")
 else
     struct {
@@ -83,7 +84,7 @@ fn kbdDispatch(irp: *io.Irp) io.NTSTATUS {
 }
 
 pub fn init() void {
-    if (builtin.target.cpu.arch != .x86_64 and builtin.target.cpu.arch != .loongarch64) return;
+    if (!hal.hasPS2Keyboard) return;
 
     driver_idx = io.registerDriver("\\Driver\\Kbdclass", kbdDispatch) orelse {
         klog.err("Kbdclass: Failed to register driver", .{});
@@ -95,7 +96,7 @@ pub fn init() void {
     };
     driver_initialized = true;
     klog.info("Keyboard Driver: \\Device\\KeyboardClass0 (%s)", .{
-        if (builtin.target.cpu.arch == .x86_64) "PS/2" else "VirtIO evdev",
+        if (hal.hasLegacyPCDevices) "PS/2" else "VirtIO evdev",
     });
 }
 

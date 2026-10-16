@@ -135,7 +135,7 @@ fn parseRateChunk(allocator: std.mem.Allocator, data: []const u8) mod.ImageError
 
 /// Parses a LIST/fram container to extract individual .cur images.
 fn parseFramList(data: []const u8, num_frames: u32, allocator: std.mem.Allocator) mod.ImageError![]AniFrame {
-    var frames = std.ArrayListUnmanaged(AniFrame){};
+    var frames = std.ArrayListUnmanaged(AniFrame).empty;
     errdefer {
         for (frames.items) |frame| allocator.free(frame.cur_data);
         frames.deinit(allocator);

@@ -24,6 +24,7 @@
 
 const std = @import("std");
 const Build = std.Build;
+const Io = std.Io;
 
 pub const PreferredFbDims = struct {
     w: u32,
@@ -55,15 +56,16 @@ pub fn parseResolutionFromBuildConfText(text: []const u8) !PreferredFbDims {
 }
 
 pub fn tryReadPreferredFbFromBuildConf(b: *Build) ?PreferredFbDims {
-    var conf_dir = std.fs.cwd().openDir("src/config", .{ .iterate = true }) catch return null;
-    defer conf_dir.close();
+    const io = b.graph.io;
+    var conf_dir = Io.Dir.cwd().openDir(io, "src/config", .{ .iterate = true }) catch return null;
+    defer conf_dir.close(io);
 
     var iter = conf_dir.iterate();
-    while (iter.next() catch return null) |entry| {
+    while (iter.next(io) catch return null) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".conf")) continue;
 
-        const content = conf_dir.readFileAlloc(b.allocator, entry.name, 1 << 16) catch continue;
+        const content = conf_dir.readFileAlloc(io, entry.name, b.allocator, .limited(1 << 16)) catch continue;
         defer b.allocator.free(content);
 
         var lines = std.mem.splitAny(u8, content, "\r\n");
@@ -80,14 +82,16 @@ pub fn tryReadPreferredFbFromBuildConf(b: *Build) ?PreferredFbDims {
 }
 
 pub fn readPreferredFbFromSyncArtifact(b: *Build) ?PreferredFbDims {
-    const content = std.fs.cwd().readFileAlloc(b.allocator, "build/tmp/kernel_pref_fb_wh.txt", 1 << 12) catch return null;
+    const io = b.graph.io;
+    const content = Io.Dir.cwd().readFileAlloc(io, "build/tmp/kernel_pref_fb_wh.txt", b.allocator, .limited(1 << 12)) catch return null;
     defer b.allocator.free(content);
     return parseResolutionFromBuildConfText(content) catch return null;
 }
 
 pub fn ensureWallpaperPngAssetsPresent(b: *Build) void {
+    const io = b.graph.io;
     for (wallpaper_png_inputs) |path| {
-        std.fs.cwd().access(path, .{}) catch {
+        Io.Dir.cwd().access(io, path, .{}) catch {
             std.debug.print("Missing wallpaper asset: {s}\nRunning placeholder generator...\n", .{path});
             const run_gen = b.addSystemCommand(&.{ "python3", "scripts/fetch/gen_wallpaper_placeholders.py" });
             run_gen.step.name = "generate wallpaper placeholders";

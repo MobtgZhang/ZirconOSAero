@@ -156,7 +156,7 @@ pub const X86RegToLA64Map = struct {
             5 => .r22,
             6 => .r23,
             7 => .r24,
-            8...15 => @as(LA64_REG, @enumFromInt(@as(u8, reg + 8))),
+            8...15 => @as(LA64_REG, @fromBackingInt(@intCast(@as(u8, reg + 8)))),
             else => .r0,
         };
     }
@@ -166,7 +166,7 @@ pub const X86RegToLA64Map = struct {
     }
 
     pub fn la64Index(reg: LA64_REG) u5 {
-        return @as(u5, @intFromEnum(reg));
+        return @as(u5, @backingInt(reg));
     }
 };
 

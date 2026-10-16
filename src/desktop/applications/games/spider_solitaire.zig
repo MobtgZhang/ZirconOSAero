@@ -40,9 +40,19 @@ pub const Suit = enum(u8) {
 };
 
 pub const CardValue = enum(u8) {
-    ace = 1, two = 2, three = 3, four = 4, five = 5,
-    six = 6, seven = 7, eight = 8, nine = 9, ten = 10,
-    jack = 11, queen = 12, king = 13,
+    ace = 1,
+    two = 2,
+    three = 3,
+    four = 4,
+    five = 5,
+    six = 6,
+    seven = 7,
+    eight = 8,
+    nine = 9,
+    ten = 10,
+    jack = 11,
+    queen = 12,
+    king = 13,
 };
 
 pub const Card = struct {
@@ -75,17 +85,24 @@ pub const SpiderSolitaireGame = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) SpiderSolitaireGame {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 900, .height = 600,
-            .visible = true, .caption_hover = .none,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 900,
+            .height = 600,
+            .visible = true,
+            .caption_hover = .none,
             .tableaus = undefined,
-            .tableau_counts = [_]u8{0} ** 10,
-            .stock_count = [_]u8{5} ** 5,
-            .foundations = [_]u8{0} ** 8,
-            .moves = 0, .score = 500, .game_won = false,
-            .selected_tableau = -1, .selected_card_index = -1,
+            .tableau_counts = [_]u8{0} * *10,
+            .stock_count = [_]u8{5} * *5,
+            .foundations = [_]u8{0} * *8,
+            .moves = 0,
+            .score = 500,
+            .game_won = false,
+            .selected_tableau = -1,
+            .selected_card_index = -1,
             .difficulty = 1,
-            .hover_new = false, .hover_deal = false,
+            .hover_new = false,
+            .hover_deal = false,
         };
     }
 
@@ -112,8 +129,8 @@ pub const SpiderSolitaireGame = struct {
                 var copies: u8 = 0;
                 while (copies < 8) : (copies += 1) {
                     deck[deck_idx] = .{
-                        .suit = @enumFromInt(suit_count),
-                        .value = @enumFromInt(v),
+                        .suit = @fromBackingInt(@intCast(suit_count)),
+                        .value = @fromBackingInt(@intCast(v)),
                         .face_up = true,
                     };
                     deck_idx += 1;
@@ -170,7 +187,7 @@ pub const SpiderSolitaireGame = struct {
     fn canMoveToTableau(card: Card, target: Card) bool {
         if (!target.face_up) return false;
         if (isRed(card.suit) == isRed(target.suit)) return false;
-        return @intFromEnum(card.value) == @intFromEnum(target.value) + 1;
+        return @backingInt(card.value) == @backingInt(target.value) + 1;
     }
 
     fn isSequence(tableau: []const Card, start_idx: usize, count: u8) bool {
@@ -204,8 +221,8 @@ pub const SpiderSolitaireGame = struct {
                     for (0..10) |col| {
                         if (sg.tableau_counts[col] < 20) {
                             sg.tableaus[col][sg.tableau_counts[col]] = .{
-                                .suit = @enumFromInt(i),
-                                .value = @enumFromInt((sg.stock_count[i] % 13) + 1),
+                                .suit = @fromBackingInt(@intCast(i)),
+                                .value = @fromBackingInt(@intCast((sg.stock_count[i] % 13) + 1)),
                                 .face_up = true,
                             };
                             sg.tableau_counts[col] += 1;
@@ -238,7 +255,7 @@ pub const SpiderSolitaireGame = struct {
                         const sel_idx = @as(usize, @intCast(sg.selected_card_index));
                         if (sg.tableau_counts[sel_col] > sel_idx) {
                             const card = sg.tableaus[sel_col][sel_idx];
-                            if (@intFromEnum(card.value) == 13) {
+                            if (@backingInt(card.value) == 13) {
                                 const count = sg.tableau_counts[sel_col] - sel_idx;
                                 var j: usize = 0;
                                 while (j < count) : (j += 1) {
@@ -305,11 +322,11 @@ pub const SpiderSolitaireGame = struct {
             if (sg.tableau_counts[col] >= 13) {
                 const last_idx = sg.tableau_counts[col] - 1;
                 var is_king_to_ace = true;
-                const king_int: u8 = @intFromEnum(CardValue.king);
+                const king_int: u8 = @backingInt(CardValue.king);
                 for (0..12) |i| {
                     const card = sg.tableaus[col][last_idx - 12 + i];
                     const expected_value: u8 = king_int - @as(u8, @intCast(i));
-                    if (@intFromEnum(card.value) != expected_value) {
+                    if (@backingInt(card.value) != expected_value) {
                         is_king_to_ace = false;
                         break;
                     }
@@ -442,8 +459,8 @@ pub const SpiderSolitaireGame = struct {
         if (sg.game_won) {
             fb.fillRect(wx + 200, wy + 200, ww - 400, 150, rgb(0xE0, 0xF0, 0xE0));
             fb.draw3DRect(wx + 200, wy + 200, ww - 400, 150, rgb(0xA0, 0xC0, 0xA0), rgb(0xFF, 0xFF, 0xFF));
-            fb.drawTextTransparent(wx + ww/2 - 80, wy + 240, "Congratulations!", rgb(0x00, 0x80, 0x00));
-            fb.drawTextTransparent(wx + ww/2 - 100, wy + 280, "You won Spider Solitaire!", rgb(0x40, 0x60, 0x40));
+            fb.drawTextTransparent(wx + ww / 2 - 80, wy + 240, "Congratulations!", rgb(0x00, 0x80, 0x00));
+            fb.drawTextTransparent(wx + ww / 2 - 100, wy + 280, "You won Spider Solitaire!", rgb(0x40, 0x60, 0x40));
         }
     }
 

@@ -253,4 +253,3 @@ pub fn initSmpTopology() void {
 pub fn isBsp() bool {
     return readHartId() == 0;
 }
-

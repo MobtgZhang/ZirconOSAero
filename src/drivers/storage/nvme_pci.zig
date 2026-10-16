@@ -27,7 +27,7 @@
 // Reference: NVM Express Base Specification — registers, Admin/IO SQ/CQE, Identify, NVM Read.
 
 const std = @import("std");
-const builtin = @import("builtin");
+const hal_drv = @import("../../hal.zig");
 const pcie = @import("../bus/pcie.zig");
 const pci_bind = @import("../bus/pci_driver_bind.zig");
 const klog = @import("../../rtl/klog.zig");
@@ -142,7 +142,7 @@ var g_bar: usize = 0;
 var g_db_stride: u32 = 4;
 var g_storage_ready: bool = false;
 var g_nsid: u32 = NSID_FIRST;
-var g_sector0: [512]u8 = [_]u8{0} ** 512;
+var g_sector0: [512]u8 = std.mem.zeroes([512]u8);
 var g_partition_start_lba: u64 = 0;
 
 var g_asq_phys: u64 = 0;
@@ -206,8 +206,8 @@ fn waitCstsRdy(bar: usize, want: bool) bool {
     while (i < 2_000_000) : (i += 1) {
         const rdy = (mmioR32(bar, REG_CSTS) & CSTS_RDY) != 0;
         if (rdy == want) return true;
-        if (builtin.target.cpu.arch == .x86_64) {
-            asm volatile ("pause" ::: .{ .memory = true });
+        if (hal_drv.hasLegacyPCDevices) {
+            hal_drv.cpuRelax();
         }
     }
     return false;
@@ -221,7 +221,7 @@ fn pollAdminCompletion(bar: usize) bool {
         const dw3 = physR32(g_acq_phys + cqe_off + 12);
         const phase = @as(u1, @truncate(dw3 >> 16));
         if (phase != g_admin_cq_phase) {
-            if (builtin.target.cpu.arch == .x86_64) asm volatile ("pause" ::: .{ .memory = true });
+            hal_drv.cpuRelax();
             continue;
         }
         const sts = (dw3 >> 17) & 0x3FFF;
@@ -248,7 +248,7 @@ fn submitAdminRaw(bar: usize, sqe: *const [64]u8) bool {
 }
 
 fn adminIdentify(bar: usize, cns: u32, nsid: u32, prp1: u64) bool {
-    var sqe: [64]u8 = [_]u8{0} ** 64;
+    var sqe: [64]u8 = std.mem.zeroes([64]u8);
     sqe[0] = OPC_IDENTIFY;
     std.mem.writeInt(u16, sqe[2..4], g_admin_cid, .little);
     g_admin_cid +%= 1;
@@ -261,7 +261,7 @@ fn adminIdentify(bar: usize, cns: u32, nsid: u32, prp1: u64) bool {
 fn adminCreateIoCq(bar: usize, prp1: u64) bool {
     const cdw10 = ((IO_Q_DEPTH - 1) << 16) | IO_QID;
     const cdw11: u32 = 1;
-    var sqe: [64]u8 = [_]u8{0} ** 64;
+    var sqe: [64]u8 = std.mem.zeroes([64]u8);
     sqe[0] = OPC_CREATE_CQ;
     std.mem.writeInt(u16, sqe[2..4], g_admin_cid, .little);
     g_admin_cid +%= 1;
@@ -274,7 +274,7 @@ fn adminCreateIoCq(bar: usize, prp1: u64) bool {
 fn adminCreateIoSq(bar: usize, prp1: u64) bool {
     const cdw10 = ((IO_Q_DEPTH - 1) << 16) | IO_QID;
     const cdw11: u32 = IO_QID | (@as(u32, 1) << 17);
-    var sqe: [64]u8 = [_]u8{0} ** 64;
+    var sqe: [64]u8 = std.mem.zeroes([64]u8);
     sqe[0] = OPC_CREATE_SQ;
     std.mem.writeInt(u16, sqe[2..4], g_admin_cid, .little);
     g_admin_cid +%= 1;
@@ -292,7 +292,7 @@ fn pollIoCompletion(bar: usize) bool {
         const dw3 = physR32(g_iocq_phys + cqe_off + 12);
         const phase = @as(u1, @truncate(dw3 >> 16));
         if (phase != g_io_cq_phase) {
-            if (builtin.target.cpu.arch == .x86_64) asm volatile ("pause" ::: .{ .memory = true });
+            hal_drv.cpuRelax();
             continue;
         }
         const sts = (dw3 >> 17) & 0x3FFF;
@@ -310,7 +310,7 @@ fn pollIoCompletion(bar: usize) bool {
 }
 
 fn nvmeReadSector(bar: usize, lba: u64, out_phys: u64) bool {
-    var sqe: [64]u8 = [_]u8{0} ** 64;
+    var sqe: [64]u8 = std.mem.zeroes([64]u8);
     sqe[0] = OPC_NVM_READ;
     std.mem.writeInt(u16, sqe[2..4], g_io_cid, .little);
     g_io_cid +%= 1;
@@ -329,7 +329,7 @@ fn nvmeReadSector(bar: usize, lba: u64, out_phys: u64) bool {
 
 /// NVM Write (OPC 0x01)：将一个 LBA (512B) 写入 `in_phys` 物理缓冲。
 fn nvmeWriteSector(bar: usize, lba: u64, in_phys: u64) bool {
-    var sqe: [64]u8 = [_]u8{0} ** 64;
+    var sqe: [64]u8 = std.mem.zeroes([64]u8);
     sqe[0] = OPC_NVM_WRITE;
     std.mem.writeInt(u16, sqe[2..4], g_io_cid, .little);
     g_io_cid +%= 1;
@@ -348,7 +348,7 @@ fn nvmeWriteSector(bar: usize, lba: u64, in_phys: u64) bool {
 
 /// Flush (OPC 0x00)：将所有挂起的写数据刷新到非易失性存储。
 fn nvmeFlush(bar: usize) bool {
-    var sqe: [64]u8 = [_]u8{0} ** 64;
+    var sqe: [64]u8 = std.mem.zeroes([64]u8);
     sqe[0] = OPC_FLUSH;
     std.mem.writeInt(u16, sqe[2..4], g_io_cid, .little);
     g_io_cid +%= 1;
@@ -492,7 +492,7 @@ pub fn mountVfsProbeIfReady() void {
 
 /// 复位控制器、建 Admin/IO 队列、Identify、读 LBA0、解析分区；供启动盘优先于 AHCI。
 pub fn tryInitMvpBlockPath(max_bus: u8) void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal_drv.hasLegacyPCDevices) return;
     if (!pcie.supports_pci_config) return;
     if (g_storage_ready) return;
 
@@ -608,7 +608,7 @@ fn mmioW64(bar: usize, off: usize, phys: u64) void {
 /// 兼容旧调用点：若尚未 `tryInitMvpBlockPath`，仅映射并打印 CAP。
 pub fn tryMapBar0AndLogCap(max_bus: u8) void {
     if (g_storage_ready) return;
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal_drv.hasLegacyPCDevices) return;
     if (!pcie.supports_pci_config) return;
     var buf: [4]NvmePciDev = undefined;
     const c = collectNvmePci(buf[0..], max_bus);

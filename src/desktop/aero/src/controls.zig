@@ -16,7 +16,7 @@ pub const Button = struct {
     y: i32 = 0,
     width: i32 = 80,
     height: i32 = 24,
-    label: [32]u8 = [_]u8{0} ** 32,
+    label: [32]u8 = std.mem.zeroes([32]u8),
     label_len: u8 = 0,
     state: ControlState = .rest,
     is_default: bool = false,
@@ -57,7 +57,7 @@ pub const TextBox = struct {
     y: i32 = 0,
     width: i32 = 160,
     height: i32 = 22,
-    text: [256]u8 = [_]u8{0} ** 256,
+    text: [256]u8 = std.mem.zeroes([256]u8),
     text_len: u16 = 0,
     focused: bool = false,
 

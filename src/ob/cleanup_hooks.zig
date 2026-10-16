@@ -27,6 +27,13 @@
 /// 最后一道引用释放且对象类型为 Section 时由 `HandleTable.closeHandle` 调用。
 pub var section_last_reference: ?*const fn (object_ptr: u64) void = null;
 
+/// 最后一道引用释放且对象类型为 File 时由 `HandleTable.closeHandle` 调用。
+pub var file_last_reference: ?*const fn (object_ptr: u64) void = null;
+
 pub fn invokeSectionLastReference(object_ptr: u64) void {
     if (section_last_reference) |cb| cb(object_ptr);
+}
+
+pub fn invokeFileLastReference(object_ptr: u64) void {
+    if (file_last_reference) |cb| cb(object_ptr);
 }

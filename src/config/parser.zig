@@ -19,6 +19,7 @@
 //! INI-style configuration parser for ZirconOS.
 //! Parses `[section]` headers and `key = value` pairs from embedded config data.
 //! Designed for freestanding environments — no allocator required.
+const std = @import("std");
 
 const klog = @import("../rtl/klog.zig");
 
@@ -28,11 +29,11 @@ pub const MAX_VALUE_LEN = 128;
 pub const MAX_SECTION_LEN = 32;
 
 pub const Entry = struct {
-    section: [MAX_SECTION_LEN]u8 = .{0} ** MAX_SECTION_LEN,
+    section: [MAX_SECTION_LEN]u8 = std.mem.zeroes([MAX_SECTION_LEN]u8),
     section_len: usize = 0,
-    key: [MAX_KEY_LEN]u8 = .{0} ** MAX_KEY_LEN,
+    key: [MAX_KEY_LEN]u8 = std.mem.zeroes([MAX_KEY_LEN]u8),
     key_len: usize = 0,
-    value: [MAX_VALUE_LEN]u8 = .{0} ** MAX_VALUE_LEN,
+    value: [MAX_VALUE_LEN]u8 = std.mem.zeroes([MAX_VALUE_LEN]u8),
     value_len: usize = 0,
 
     pub fn sectionSlice(self: *const Entry) []const u8 {
@@ -54,7 +55,7 @@ pub const Config = struct {
 
     pub fn parse(self: *Config, data: []const u8) void {
         self.count = 0;
-        var current_section: [MAX_SECTION_LEN]u8 = .{0} ** MAX_SECTION_LEN;
+        var current_section: [MAX_SECTION_LEN]u8 = std.mem.zeroes([MAX_SECTION_LEN]u8);
         var current_section_len: usize = 0;
 
         var line_start: usize = 0;

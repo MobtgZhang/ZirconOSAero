@@ -60,7 +60,7 @@ pub const CharMapWindow = struct {
             .selected_index = 0,
             .font_name = .segoe,
             .char_grid = undefined,
-            .recent_chars = [_]u32{0} ** 16,
+            .recent_chars = [_]u32{0} * *16,
         };
         for (&cm.char_grid, 0..) |*cell, i| {
             cell.* = 0x20 + @as(u32, @intCast(i));
@@ -136,12 +136,10 @@ pub const CharMapWindow = struct {
             const selected = (i == cm.selected_index);
             const bg = if (selected) rgb(0x3D, 0x7E, 0xCB) else rgb(0xF8, 0xFC, 0xFF);
             fb.fillRect(cx, cy, cell_w, cell_h, bg);
-            fb.draw3DRect(cx, cy, cell_w, cell_h,
-                if (selected) rgb(0x2A, 0x5C, 0xA8) else rgb(0xC0, 0xC8, 0xD8),
-                if (selected) rgb(0x4A, 0x8E, 0xDB) else rgb(0xFF, 0xFF, 0xFF));
+            fb.draw3DRect(cx, cy, cell_w, cell_h, if (selected) rgb(0x2A, 0x5C, 0xA8) else rgb(0xC0, 0xC8, 0xD8), if (selected) rgb(0x4A, 0x8E, 0xDB) else rgb(0xFF, 0xFF, 0xFF));
 
             if (char >= 0x20 and char <= 0x7E) {
-                const char_str = [_]u8{ @as(u8, @intCast(char)) };
+                const char_str = [_]u8{@as(u8, @intCast(char))};
                 fb.drawTextTransparent(cx + 8, cy + 8, &char_str, if (selected) rgb(0xFF, 0xFF, 0xFF) else rgb(0x20, 0x20, 0x30));
             } else if (char > 0xFF) {
                 var buf: [8]u8 = undefined;

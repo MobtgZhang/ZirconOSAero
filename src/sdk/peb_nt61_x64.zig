@@ -35,7 +35,7 @@ pub const PebNt61X64 = extern struct {
     BeingDebugged: u8 = 0,
     BitField: u8 = 0,
     /// 对齐到 `HANDLE Mutant`（8 字节）。
-    _pad0: [4]u8 = [_]u8{0} ** 4,
+    _pad0: [4]u8 = std.mem.zeroes([4]u8),
     Mutant: u64 = 0,
     ImageBaseAddress: u64 = 0,
     Ldr: u64 = 0,

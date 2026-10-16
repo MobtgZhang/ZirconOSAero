@@ -19,6 +19,7 @@
 //! kernel32 - Win32 Base API Subset
 //! Phase 8-9 Enhanced: Complete Win32 Base API layer with file search,
 //! module management, thread sync, virtual memory, environment, and DLL loading.
+const std = @import("std");
 
 const ntdll = @import("ntdll.zig");
 const kernelbase = @import("kernelbase.zig");
@@ -108,7 +109,7 @@ pub const THREAD_PRIORITY_ERROR_RETURN: i32 = 2147483647; // MAXLONG
 /// clean-room 实现，与 Windows 内部表无关。
 pub fn win32RelativePriorityToKernel(relative: i32, base_priority: u8) u8 {
     switch (relative) {
-        THREAD_PRIORITY_IDLE => return 1,           // 最低
+        THREAD_PRIORITY_IDLE => return 1, // 最低
         THREAD_PRIORITY_BELOW_NORMAL => return if (base_priority > 1) base_priority - 1 else 1,
         THREAD_PRIORITY_NORMAL => return base_priority,
         THREAD_PRIORITY_ABOVE_NORMAL => return @min(base_priority + 1, 31),
@@ -122,13 +123,13 @@ pub fn win32RelativePriorityToKernel(relative: i32, base_priority: u8) u8 {
 /// clean-room 实现，与 Windows 内部表无关。
 pub fn win32PriorityClassToKernel(class: DWORD) u8 {
     switch (class) {
-        IDLE_PRIORITY_CLASS => return 0,           // 0
-        BELOW_NORMAL_PRIORITY_CLASS => return 1,   // 1
-        NORMAL_PRIORITY_CLASS => return 2,         // 2
-        ABOVE_NORMAL_PRIORITY_CLASS => return 3,   // 3
-        HIGH_PRIORITY_CLASS => return 4,           // 4
-        REALTIME_PRIORITY_CLASS => return 7,       // 7 (最高)
-        else => return 2,                          // 默认为 NORMAL
+        IDLE_PRIORITY_CLASS => return 0, // 0
+        BELOW_NORMAL_PRIORITY_CLASS => return 1, // 1
+        NORMAL_PRIORITY_CLASS => return 2, // 2
+        ABOVE_NORMAL_PRIORITY_CLASS => return 3, // 3
+        HIGH_PRIORITY_CLASS => return 4, // 4
+        REALTIME_PRIORITY_CLASS => return 7, // 7 (最高)
+        else => return 2, // 默认为 NORMAL
     }
 }
 pub const CREATE_NEW_CONSOLE: DWORD = 0x10;
@@ -160,8 +161,8 @@ pub const PROCESS_INFORMATION = struct {
 
 pub const STARTUPINFOA = struct {
     cb: DWORD = @sizeOf(STARTUPINFOA),
-    desktop: [64]u8 = [_]u8{0} ** 64,
-    title: [64]u8 = [_]u8{0} ** 64,
+    desktop: [64]u8 = std.mem.zeroes([64]u8),
+    title: [64]u8 = std.mem.zeroes([64]u8),
     x: DWORD = 0,
     y: DWORD = 0,
     x_size: DWORD = 0,
@@ -351,22 +352,22 @@ pub const WIN32_FIND_DATAA = struct {
     last_write_time_high: DWORD = 0,
     file_size_high: DWORD = 0,
     file_size_low: DWORD = 0,
-    file_name: [MAX_PATH]u8 = [_]u8{0} ** MAX_PATH,
+    file_name: [MAX_PATH]u8 = std.mem.zeroes([MAX_PATH]u8),
     file_name_len: usize = 0,
-    alternate_name: [14]u8 = [_]u8{0} ** 14,
+    alternate_name: [14]u8 = std.mem.zeroes([14]u8),
 };
 
 const MAX_FIND_HANDLES: usize = 16;
 
 const FindHandleState = struct {
     is_active: bool = false,
-    pattern: [MAX_PATH]u8 = [_]u8{0} ** MAX_PATH,
+    pattern: [MAX_PATH]u8 = std.mem.zeroes([MAX_PATH]u8),
     pattern_len: usize = 0,
     current_index: usize = 0,
     drive: u8 = 'C',
 };
 
-var find_handles: [MAX_FIND_HANDLES]FindHandleState = [_]FindHandleState{.{}} ** MAX_FIND_HANDLES;
+var find_handles: [MAX_FIND_HANDLES]FindHandleState = std.mem.zeroes([MAX_FIND_HANDLES]FindHandleState);
 
 pub fn FindFirstFileA(pattern: []const u8, find_data: *WIN32_FIND_DATAA) HANDLE {
     var handle_idx: usize = 0;
@@ -772,7 +773,7 @@ pub fn GetEnvironmentVariableA(name: []const u8, buffer: []u8) DWORD {
         .{ .key = "COMPUTERNAME", .value = "ZIRCONOS" },
         .{ .key = "USERNAME", .value = "System" },
         .{ .key = "OS", .value = "ZirconOSAero_NT61" },
-        .{ .key = "PROCESSOR_ARCHITECTURE", .value = "AMD64" },
+        .{ .key = "PROCESSOR_ARCHITECTURE", .value = @import("../hal.zig").processorArchitectureName() },
         .{ .key = "NUMBER_OF_PROCESSORS", .value = "1" },
         .{ .key = "COMSPEC", .value = "C:\\Windows\\System32\\cmd.exe" },
         .{ .key = "PATHEXT", .value = ".COM;.EXE;.BAT;.CMD" },
@@ -920,7 +921,7 @@ pub const OSVERSIONINFOA = struct {
     minor_version: DWORD = 1,
     build_number: DWORD = 7601,
     platform_id: DWORD = 2,
-    csd_version: [128]u8 = [_]u8{0} ** 128,
+    csd_version: [128]u8 = std.mem.zeroes([128]u8),
 };
 
 pub const OSVERSIONINFOEXA = struct {
@@ -929,7 +930,7 @@ pub const OSVERSIONINFOEXA = struct {
     minor_version: DWORD = 1,
     build_number: DWORD = 7601,
     platform_id: DWORD = 2,
-    csd_version: [128]u8 = [_]u8{0} ** 128,
+    csd_version: [128]u8 = std.mem.zeroes([128]u8),
     service_pack_major: u16 = 1,
     service_pack_minor: u16 = 0,
     suite_mask: u16 = 0x0100,

@@ -82,7 +82,7 @@ pub const DownloadManager = struct {
         // Extract filename from URL
         const lastSlash = std.mem.lastIndexOfScalar(u8, url, '/');
         if (lastSlash) |idx| {
-            const name_part = url[idx + 1..];
+            const name_part = url[idx + 1 ..];
             item.filename_len = @min(name_part.len, item.filename.len - 1);
             @memcpy(&item.filename, name_part[0..item.filename_len]);
             item.filename[item.filename_len] = 0;

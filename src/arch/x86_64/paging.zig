@@ -569,10 +569,19 @@ pub fn forEachUser2MiPresentLeaf(
             var p2: usize = 0;
             while (p2 < 512) : (p2 += 1) {
                 const pde = &pd.entries[p2];
-                if (!pde.isPresent()) { p2 += 1; continue; }
+                if (!pde.isPresent()) {
+                    p2 += 1;
+                    continue;
+                }
                 const pde_raw = @as(u64, @bitCast(pde.*));
-                if ((pde_raw & LargePage) == 0) { p2 += 1; continue; }
-                if (!pde.user) { p2 += 1; continue; }
+                if ((pde_raw & LargePage) == 0) {
+                    p2 += 1;
+                    continue;
+                }
+                if (!pde.user) {
+                    p2 += 1;
+                    continue;
+                }
                 const virt = (@as(u64, @intCast(p4)) << 39) |
                     (@as(u64, @intCast(p3)) << 30) |
                     (@as(u64, @intCast(p2)) << 21);

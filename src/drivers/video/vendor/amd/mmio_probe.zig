@@ -27,7 +27,7 @@ pub fn logHandoffDiagnostics(family: types.AmdGpuFamily, mmio_virt: usize, kms_e
     if (family == .unknown) return;
     if (klog.DEBUG_MODE) {
         klog.info("AMD MMIO probe: family=%u mmio_virt=0x%x (handoff-only; no MMIO reads)", .{
-            @intFromEnum(family),
+            @backingInt(family),
             mmio_virt,
         });
     }

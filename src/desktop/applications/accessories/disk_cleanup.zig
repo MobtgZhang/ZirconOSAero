@@ -58,7 +58,7 @@ pub const DiskCleanupWindow = struct {
             .caption_hover = .none,
             .total_size = 53687091200,
             .free_size = 21474836480,
-            .selected_items = [_]bool{true} ** 12,
+            .selected_items = [_]bool{true} * *12,
             .analysis_complete = false,
             .cleaning = false,
             .clean_progress = 0,
@@ -143,8 +143,8 @@ pub const DiskCleanupWindow = struct {
         };
         const size_labels = [_][]const u8{
             "0.01 MB", "45.2 MB", "3.5 MB", "120 MB",
-            "250 MB", "180 MB", "0 MB", "2.5 GB",
-            "45 MB", "0.5 MB", "12 MB", "800 MB",
+            "250 MB",  "180 MB",  "0 MB",   "2.5 GB",
+            "45 MB",   "0.5 MB",  "12 MB",  "800 MB",
         };
 
         for (categories, 0..) |cat, i| {

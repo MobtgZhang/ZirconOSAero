@@ -288,8 +288,8 @@ pub const BcdStore = struct {
         var obj = &self.objects[self.object_count];
         obj.object_type = .os_loader;
         obj.element_count = 0;
-        obj.identifier = [_]u8{0} ** 16;
-        obj.description = [_]u8{0} ** 64;
+        obj.identifier = [_]u8{0} * *16;
+        obj.description = [_]u8{0} * *64;
 
         const copy_len = if (description.len < 64) description.len else 63;
         for (0..copy_len) |i| {
@@ -301,8 +301,8 @@ pub const BcdStore = struct {
             var elem = &obj.elements[obj.element_count];
             elem.element_type = .path;
             elem.data_type = .string;
-            elem.data = .{ .string = [_]u8{0} ** 128 };
-            const path = "/boot/kernel.elf";
+            elem.data = .{ .string = [_]u8{0} * *128 };
+            const path = "\\Windows\\System32\\winload.efi";
             for (path, 0..) |c, i| {
                 elem.data.string[i] = c;
             }
@@ -314,7 +314,7 @@ pub const BcdStore = struct {
             var elem = &obj.elements[obj.element_count];
             elem.element_type = .safe_boot;
             elem.data_type = .integer;
-            elem.data = .{ .integer = @intFromEnum(mode) };
+            elem.data = .{ .integer = @backingInt(mode) };
             obj.element_count += 1;
         }
 
@@ -323,7 +323,7 @@ pub const BcdStore = struct {
             var elem = &obj.elements[obj.element_count];
             elem.element_type = .kernel_path;
             elem.data_type = .string;
-            elem.data = .{ .string = [_]u8{0} ** 128 };
+            elem.data = .{ .string = [_]u8{0} * *128 };
             const copy_cmd = if (cmdline.len < 128) cmdline.len else 127;
             for (0..copy_cmd) |i| {
                 elem.data.string[i] = cmdline[i];
@@ -351,7 +351,7 @@ pub const BcdStore = struct {
     pub fn getBootMode(self: *const BcdStore, index: usize) BootMode {
         if (self.getEntry(index)) |obj| {
             if (obj.findElement(.safe_boot)) |elem| {
-                return @enumFromInt(@as(u8, @truncate(elem.data.integer)));
+                return @fromBackingInt(@intCast(@as(u8, @truncate(elem.data.integer))));
             }
         }
         return .normal;
@@ -399,14 +399,16 @@ pub fn loadFromFile(
     store: *BcdStore,
     root: anytype,
 ) bool {
-    const BCD_FILE_PATH = "/EFI/ZirconOS/bcd.dat";
+    const BCD_FILE_PATH = "/EFI/Microsoft/Boot/BCD";
 
     const file = root.open(
         BCD_FILE_PATH,
         .read,
         .{},
     ) catch return false;
-    defer { _ = file.close(); }
+    defer {
+        _ = file.close();
+    }
 
     // 读取文件头
     var header_buf: [@sizeOf(BcdFileHeader)]u8 align(8) = undefined;
@@ -518,7 +520,7 @@ pub fn saveToFile(
     store: *const BcdStore,
     root: anytype,
 ) bool {
-    const BCD_FILE_PATH = "/EFI/ZirconOS/bcd.dat";
+    const BCD_FILE_PATH = "/EFI/Microsoft/Boot/BCD";
     const BCD_BACKUP_PATH = "/EFI/ZirconOS/bcd.bak";
 
     // 先备份旧文件
@@ -538,7 +540,9 @@ pub fn saveToFile(
         .write,
         .{ .create = true, .truncate = true },
     ) catch return false;
-    defer { _ = file.close(); }
+    defer {
+        _ = file.close();
+    }
 
     // 写入文件头
     var header: BcdFileHeader = .{
@@ -574,7 +578,7 @@ fn serializeBcdData(store: *const BcdStore, dest: []u8) usize {
         const obj = &store.objects[i];
 
         // 写入对象类型
-        std.mem.writeInt(u32, dest[offset..][0..4], @intFromEnum(obj.object_type), .little);
+        std.mem.writeInt(u32, dest[offset..][0..4], @backingInt(obj.object_type), .little);
         offset += 4;
 
         // 写入 GUID（全零）
@@ -598,10 +602,10 @@ fn serializeBcdData(store: *const BcdStore, dest: []u8) usize {
             // 检查空间
             if (offset + 8 > dest.len) break;
 
-            std.mem.writeInt(u32, dest[offset..][0..4], @intFromEnum(elem.element_type), .little);
+            std.mem.writeInt(u32, dest[offset..][0..4], @backingInt(elem.element_type), .little);
             offset += 4;
 
-            dest[offset] = @intFromEnum(elem.data_type);
+            dest[offset] = @backingInt(elem.data_type);
             offset += 1;
 
             // 填充

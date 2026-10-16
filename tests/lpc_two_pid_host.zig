@@ -97,7 +97,7 @@ test "LPC request-reply routing uses server owner pid not client pid" {
     const server_owner_pid: u32 = 10;
     const client_pid: u32 = 20;
     const opcode: u32 = 0x4242;
-    var payload: [MSG_DATA_SIZE]u8 = [_]u8{0} ** MSG_DATA_SIZE;
+    var payload: [MSG_DATA_SIZE]u8 = std.mem.zeroes([MSG_DATA_SIZE]u8);
     payload[0] = 0x11;
 
     // Client → server queue (owner_pid)

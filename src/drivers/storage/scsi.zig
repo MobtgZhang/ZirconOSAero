@@ -307,7 +307,7 @@ pub const ScsiCommandResult = struct {
 pub const ScsiParser = struct {
     /// 解析SCSI命令，返回命令类型和相关参数
     pub fn parse(cdb: *const ScsiCDB) !ScsiOpCode {
-        const opcode = @as(ScsiOpCode, @enumFromInt(cdb.bytes[0]));
+        const opcode = @as(ScsiOpCode, @fromBackingInt(@intCast(cdb.bytes[0])));
 
         // 验证命令长度合法性
         switch (opcode) {
@@ -398,9 +398,9 @@ pub const ScsiParser = struct {
         var resp: ScsiRequestSenseData = std.mem.zeroes(ScsiRequestSenseData);
         resp.response_code = 0x70; // 当前错误固定格式
         resp.valid = 1;
-        resp.sense_key = @intFromEnum(sense_key);
+        resp.sense_key = @backingInt(sense_key);
         resp.additional_sense_length = 0x0A; // 10字节附加数据
-        resp.asc = @intFromEnum(asc);
+        resp.asc = @backingInt(asc);
         resp.ascq = ascq;
         return resp;
     }
@@ -530,7 +530,7 @@ pub const ScsiCommandQueue = struct {
         var insert_pos: ?*std.TailQueue(ScsiCommand).Node = null;
 
         while (current) |curr| : (current = curr.next) {
-            if (@intFromEnum(curr.data.priority) < @intFromEnum(cmd.priority)) {
+            if (@backingInt(curr.data.priority) < @backingInt(cmd.priority)) {
                 insert_pos = curr;
                 break;
             }

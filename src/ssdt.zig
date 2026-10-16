@@ -58,14 +58,14 @@ pub const SsdtEntry = struct {
 
 /// System Service Descriptor Table structure
 pub const Ssdt = struct {
-    entries: [MAX_SYSCALLS]SsdtEntry = [_]SsdtEntry{.{}} ** MAX_SYSCALLS,
+    entries: [MAX_SYSCALLS]SsdtEntry = std.mem.zeroes([MAX_SYSCALLS]SsdtEntry),
     count: usize = 0,
     max: usize = MAX_SYSCALLS,
 };
 
 /// Shadow SSDT for Win32k GUI syscalls
 pub const ShadowSsdt = struct {
-    entries: [MAX_SHADOW_SYSCALLS]SsdtEntry = [_]SsdtEntry{.{}} ** MAX_SHADOW_SYSCALLS,
+    entries: [MAX_SHADOW_SYSCALLS]SsdtEntry = std.mem.zeroes([MAX_SHADOW_SYSCALLS]SsdtEntry),
     count: usize = 0,
     max: usize = MAX_SHADOW_SYSCALLS,
 };
@@ -229,33 +229,8 @@ pub fn dispatchShadowSyscall(syscall_num: u32, argc: u64, args: *const [6]u64) i
     return entry.handler.?(argc, args);
 }
 
-/// Architecture specific syscall entry point for x86_64
-export fn syscall_entry_x64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) u64 {
-    const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
-    const status = dispatchSyscall(@intCast(syscall_num), 6, &args);
-    return @bitCast(status);
-}
-
-/// Architecture specific syscall entry point for ARM64
-export fn syscall_entry_arm64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64, arg7: u64, arg8: u64) u64 {
-    _ = arg7;
-    _ = arg8;
-    const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
-    const status = dispatchSyscall(@intCast(syscall_num), 6, &args);
-    return @bitCast(status);
-}
-
-/// Architecture specific syscall entry point for LoongArch64
-export fn syscall_entry_loongarch64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) u64 {
-    const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
-    const status = dispatchSyscall(@intCast(syscall_num), 6, &args);
-    return @bitCast(status);
-}
-
-/// Architecture specific syscall entry point for RISC-V64
-export fn syscall_entry_riscv64(syscall_num: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, arg6: u64) u64 {
-    const args: [6]u64 = .{ arg1, arg2, arg3, arg4, arg5, arg6 };
-    const status = dispatchSyscall(@intCast(syscall_num), 6, &args);
+/// Convert an NTSTATUS returned by a dispatch table into an ABI result.
+pub fn entryResult(status: io.NTSTATUS) u64 {
     return @bitCast(status);
 }
 
@@ -1154,7 +1129,7 @@ fn NtGetValueKeyStub(argc: u64, args: *const [6]u64) io.NTSTATUS {
     // Write type if requested
     if (value_type_ptr != 0) {
         const dst_type: *u32 = @ptrFromInt(value_type_ptr);
-        dst_type.* = @intFromEnum(value.value_type);
+        dst_type.* = @backingInt(value.value_type);
     }
 
     // Write data length if requested

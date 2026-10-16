@@ -27,7 +27,7 @@
 // 全 syscall 覆盖须与 docs/cn/NT61_CONTRACT_MATRIX.md、MVT 中「用户指针探测」行同步审计。
 // 里程碑（K1.5）：新增 Native API 时须在 `arch/*/syscall*.zig` 入口对用户指针做 `probeUserMemory` / `probeUserUnicodeString`；审计清单见 [NT61_CONTRACT_MATRIX.md](../../docs/cn/NT61_CONTRACT_MATRIX.md)（与 P5 门禁一致）。
 
-const builtin = @import("builtin");
+const hal = @import("../hal.zig");
 const arch = @import("../arch.zig");
 const paging = arch.impl.paging;
 const vm = @import("vm.zig");
@@ -46,11 +46,7 @@ pub fn probeForWrite(space: *vm.AddressSpace, va: u64, len: u64) bool {
 pub fn probeUserMemory(space: *vm.AddressSpace, va: u64, len: u64, writable: bool) bool {
     if (len == 0) return true;
     if (va +% len < va) return false;
-    if (builtin.cpu.arch == .x86_64) {
-        const last = va +% len -% 1;
-        if (va > vm.USER_VA_MAX_HINT_X86_64 or last > vm.USER_VA_MAX_HINT_X86_64)
-            return false;
-    }
+    if (!hal.userVaRangeAllowed(va, len)) return false;
     const ps: u64 = @intCast(paging.page_size);
     var page = va & ~@as(u64, ps - 1);
     const end_incl = va +% len -% 1;

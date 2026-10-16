@@ -120,7 +120,7 @@ pub const MonitorLayoutNt61 = struct {
 };
 
 const MAX_MONITORS_NT61: usize = 4;
-var monitor_layouts: [MAX_MONITORS_NT61]MonitorLayoutNt61 = [_]MonitorLayoutNt61{.{}} ** MAX_MONITORS_NT61;
+var monitor_layouts: [MAX_MONITORS_NT61]MonitorLayoutNt61 = std.mem.zeroes([MAX_MONITORS_NT61]MonitorLayoutNt61);
 var monitor_layout_count: u32 = 0;
 
 fn syncMonitorLayoutsFromPrimary() void {
@@ -198,7 +198,7 @@ fn pixelByteOffset(x: u32, y: u32, bytes_pp: u32) usize {
 
 const MAX_DIRTY_RECTS: usize = 128;
 
-var dirty_rects: [MAX_DIRTY_RECTS]Rect = [_]Rect{.{}} ** MAX_DIRTY_RECTS;
+var dirty_rects: [MAX_DIRTY_RECTS]Rect = std.mem.zeroes([MAX_DIRTY_RECTS]Rect);
 var dirty_count: usize = 0;
 
 fn dirtyRectUnion2(a: Rect, b: Rect) Rect {
@@ -1053,6 +1053,14 @@ fn clampRectSizeI64(v: i64) i32 {
     return @intCast(@min(v, @as(i64, std.math.maxInt(i32))));
 }
 
+fn putPixelSafeI32(x: i32, y: i32, color: u32) void {
+    if (x < 0 or y < 0) return;
+    const ux: u32 = @intCast(x);
+    const uy: u32 = @intCast(y);
+    if (ux >= fb_config.width or uy >= fb_config.height) return;
+    putPixel32(ux, uy, color);
+}
+
 pub fn drawRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
     if (w <= 0 or h <= 0) return;
     drawHLine(x, y, w, color);
@@ -1061,20 +1069,13 @@ pub fn drawRect(x: i32, y: i32, w: i32, h: i32, color: u32) void {
     drawVLine(clampDrawCoordI64(@as(i64, x) + @as(i64, w) - 1), y, h, color);
 }
 
-/// SDF 抗锯齿圆角矩形边框（Wu's algorithm 等效）
-/// 使用符号距离场算法实现边缘平滑过渡
+/// 圆角矩形边框。圆角使用整数圆弧绘制，避免内核依赖浮点辅助例程。
 pub fn drawRoundedRectAA(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32) void {
     if (w <= 0 or h <= 0 or radius <= 0) return;
     const effective_r = @min(radius, @min(@divTrunc(w, 2), @divTrunc(h, 2)));
     if (effective_r <= 0) return;
 
     const r = effective_r;
-    const aa_scale: f32 = 1.5;
-
-    // 提取颜色分量
-    const r_ch = (color >> 16) & 0xFF;
-    const g_ch = (color >> 8) & 0xFF;
-    const b_ch = color & 0xFF;
 
     // 绘制四条边（矩形部分，不包括圆角区域）
     const edge_x0 = x + r;
@@ -1092,61 +1093,28 @@ pub fn drawRoundedRectAA(x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32
         drawVLine(x + w - 1, y + r, edge_h, color);
     }
 
-    // 绘制四个圆角弧（SDF 抗锯齿）
-    // 四个角的位置：左上、右上、左下、右下
-    const corners = [_]struct { cx: i32, cy: i32 }{
-        .{ .cx = x + r, .cy = y + r },
-        .{ .cx = x + w - r, .cy = y + r },
-        .{ .cx = x + r, .cy = y + h - r },
-        .{ .cx = x + w - r, .cy = y + h - r },
-    };
+    // Bresenham 圆弧：以四个角心为圆心，分别绘制外向 90° 弧。
+    var d = 1 - r;
+    var dx_i: i32 = 0;
+    var dy_i = r;
+    while (dx_i <= dy_i) : (dx_i += 1) {
+        putPixelSafeI32(x + r - dy_i, y + r - dx_i, color);
+        putPixelSafeI32(x + r - dx_i, y + r - dy_i, color);
+        putPixelSafeI32(x + w - r + dx_i, y + r - dy_i, color);
+        putPixelSafeI32(x + w - r + dy_i, y + r - dx_i, color);
+        putPixelSafeI32(x + r - dy_i, y + h - r + dx_i, color);
+        putPixelSafeI32(x + r - dx_i, y + h - r + dy_i, color);
+        putPixelSafeI32(x + w - r + dx_i, y + h - r + dy_i, color);
+        putPixelSafeI32(x + w - r + dy_i, y + h - r + dx_i, color);
 
-    for (corners) |corner| {
-        var dy: i32 = 0;
-        while (dy <= r) : (dy += 1) {
-            var dx: i32 = 0;
-            while (dx <= r) : (dx += 1) {
-                const cdx = @as(f32, @floatFromInt(dx));
-                const cdy = @as(f32, @floatFromInt(dy));
-                const dist_sq = cdx * cdx + cdy * cdy;
-                const r_f = @as(f32, @floatFromInt(r));
-
-                // 仅在边界附近绘制
-                if (dist_sq > r_f * r_f + r_f * 2.0) continue;
-
-                const dist = @sqrt(dist_sq);
-                const edge_dist = @abs(dist - r_f);
-
-                // 抗锯齿透明度计算
-                var alpha: u8 = 255;
-                if (edge_dist > 0) {
-                    const t = @min(edge_dist / aa_scale, 1.0);
-                    alpha = @intFromFloat(@round((1.0 - t) * 255.0));
-                }
-
-                if (alpha < 255) {
-                    const px = corner.cx + dx;
-                    const py = corner.cy + dy;
-
-                    if (px >= 0 and px < @as(i32, @intCast(fb_config.width)) and
-                        py >= 0 and py < @as(i32, @intCast(fb_config.height)))
-                    {
-                        const existing = getPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)));
-                        const er = (existing >> 16) & 0xFF;
-                        const eg = (existing >> 8) & 0xFF;
-                        const eb = existing & 0xFF;
-
-                        const inv_alpha: u32 = 255 - @as(u32, alpha);
-                        const out_r = (@as(u32, r_ch) * @as(u32, alpha) + @as(u32, er) * inv_alpha) / 255;
-                        const out_g = (@as(u32, g_ch) * @as(u32, alpha) + @as(u32, eg) * inv_alpha) / 255;
-                        const out_b = (@as(u32, b_ch) * @as(u32, alpha) + @as(u32, eb) * inv_alpha) / 255;
-
-                        putPixel32(@as(u32, @intCast(px)), @as(u32, @intCast(py)), (out_r << 16) | (out_g << 8) | out_b);
-                    }
-                }
-            }
+        if (d < 0) {
+            d += 2 * dx_i + 1;
+        } else {
+            d += 2 * (dx_i - dy_i) + 1;
+            dy_i -= 1;
         }
     }
+    addDirtyRect(.{ .x = x, .y = y, .w = w, .h = h });
 }
 
 /// Wu's anti-aliased line algorithm（抗锯齿线段）
@@ -1730,9 +1698,9 @@ pub fn draw3DRect(x: i32, y: i32, w: i32, h: i32, highlight: u32, shadow: u32) v
 // 每像素内层循环随 radius 增长；中长期可改滑动窗口累和或降采样 blur 再上采样（自研，见 DesktopManagerSpec §8）。
 
 const BLUR_MAX_LINE: usize = 4096;
-var blur_line: [BLUR_MAX_LINE]u32 = [_]u32{0} ** BLUR_MAX_LINE;
+var blur_line: [BLUR_MAX_LINE]u32 = std.mem.zeroes([BLUR_MAX_LINE]u32);
 /// 水平 pass 临时结果缓冲区（避免同缓冲区读写导致垂直 pass 基于错误数据计算）。
-var blur_line_h: [BLUR_MAX_LINE]u32 = [_]u32{0} ** BLUR_MAX_LINE;
+var blur_line_h: [BLUR_MAX_LINE]u32 = std.mem.zeroes([BLUR_MAX_LINE]u32);
 
 // ── Blur Performance Configuration ──
 
@@ -2058,7 +2026,7 @@ fn boxBlurRectCoreSIMD(x0: u32, y0: u32, rw: u32, rh: u32, radius: u32, passes: 
             }
 
             // SIMD 优化的滑动窗口求和
-            if (builtin.target.cpu.arch == .x86_64 and builtin.target.cpu.features.isEnabled(@intFromEnum(std.Target.x86.Feature.sse4_1))) {
+            if (builtin.target.cpu.arch == .x86_64 and builtin.target.cpu.features.isEnabled(@backingInt(std.Target.x86.Feature.sse4_1))) {
                 @setRuntimeSafety(false);
 
                 // 初始化窗口和
@@ -2128,7 +2096,7 @@ fn boxBlurRectCoreSIMD(x0: u32, y0: u32, rw: u32, rh: u32, radius: u32, passes: 
                 blur_line[j] = blur_line_h[j];
             }
 
-            if (builtin.target.cpu.arch == .x86_64 and builtin.target.cpu.features.isEnabled(@intFromEnum(std.Target.x86.Feature.sse4_1))) {
+            if (builtin.target.cpu.arch == .x86_64 and builtin.target.cpu.features.isEnabled(@backingInt(std.Target.x86.Feature.sse4_1))) {
                 @setRuntimeSafety(false);
                 // 垂直方向滑动窗口求和
                 var sr: u64 = 0;
@@ -2787,8 +2755,8 @@ pub const VirtioBackingMemEntry = struct {
     length: u32,
 };
 
-/// 将屏前缓冲（`fb_config.address`，与 `getFrontBufferPhysContiguousForVirtio` 同一可见面）按 **guest 物理连续段** 切分为多枚 mem_entry。
-/// 每段长度不超过 `u32::MAX`；段数写入 `out` 前缀，返回段数；不满足 32bpp / 紧密 pitch / 长度页对齐等条件时返回 `null`。
+/// 将屏前缓冲（`fb_config.address`，与 `getFrontBufferPhysContiguousForVirtio` 同一可见面）按 guest 物理连续区间切分为多枚 mem_entry。
+/// 每段长度不超过 `u32::MAX`；段数写入 `out` 前缀，返回段数；不满足 32bpp / 紧密 pitch 等条件时返回 `null`。
 pub fn fillFrontBufferVirtioBackingEntries(out: []VirtioBackingMemEntry) ?usize {
     if (!config_ready or fb_config.address == 0) return null;
     if (fb_config.bpp != 32) return null;
@@ -2800,25 +2768,17 @@ pub fn fillFrontBufferVirtioBackingEntries(out: []VirtioBackingMemEntry) ?usize 
     if (pitch_u != need_pitch) return null;
     const len: u64 = pitch_u * @as(u64, h);
     if (len == 0 or len > 64 * 1024 * 1024) return null;
-    const page: u64 = 4096;
-    if (len % page != 0) return null;
 
-    const base: usize = fb_config.address;
+    // The GOP framebuffer address handed off by the bootloader is already a
+    // guest physical address.  Translating it through the kernel page table
+    // fails when the scanout range is not identity-mapped as normal RAM.
+    const base: u64 = fb_config.address;
     var off: u64 = 0;
     var count: usize = 0;
     while (off < len) {
-        const pa0: u64 = @intCast(vm.kernelVirtToPhys(base + @as(usize, @intCast(off))));
-        var pages: u64 = 0;
-        while (off + pages * page < len) : (pages += 1) {
-            const page_off = off + pages * page;
-            const p: u64 = @intCast(vm.kernelVirtToPhys(base + @as(usize, @intCast(page_off))));
-            if (p != pa0 + pages * page) break;
-        }
-        if (pages == 0) return null;
-        const nbytes: u64 = pages * page;
-        if (nbytes > std.math.maxInt(u32)) return null;
+        const nbytes: u64 = @min(len - off, std.math.maxInt(u32));
         if (count >= out.len) return null;
-        out[count] = .{ .addr = pa0, .length = @intCast(nbytes) };
+        out[count] = .{ .addr = base + off, .length = @intCast(nbytes) };
         count += 1;
         off += nbytes;
     }
@@ -2872,20 +2832,7 @@ pub fn getFrontBufferPhysContiguousForVirtio() ?struct { base: u64, len: u64 } {
     const len: u64 = pitch_u * @as(u64, h);
     if (len == 0) return null;
     if (len > 64 * 1024 * 1024) return null; // 单 attach `length` u32 上限内保守 cap
-    const page: u64 = 4096;
-    if (len % page != 0) return null;
-    var off: u64 = 0;
-    var prev_phys: ?u64 = null;
-    while (off < len) {
-        const va = fb_config.address + off;
-        const pa: u64 = @intCast(vm.kernelVirtToPhys(va));
-        if (prev_phys) |pp| {
-            if (pa != pp + page) return null;
-        }
-        prev_phys = pa;
-        off += page;
-    }
-    const base: u64 = @intCast(vm.kernelVirtToPhys(fb_config.address));
+    const base: u64 = fb_config.address;
     return .{ .base = base, .len = len };
 }
 

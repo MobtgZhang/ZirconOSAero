@@ -23,7 +23,7 @@ const builtin = @import("builtin");
 const uefi = std.os.uefi;
 
 fn statusOk(st: uefi.Status) bool {
-    return @intFromEnum(st) == @intFromEnum(uefi.Status.success);
+    return @backingInt(st) == @backingInt(uefi.Status.success);
 }
 
 pub fn locateSimpleTextInputEx(bs: *uefi.tables.BootServices) ?*uefi.protocol.SimpleTextInputEx {
@@ -112,8 +112,8 @@ pub fn getMemoryMapInfoThin(self: *const uefi.tables.BootServices) ?uefi.tables.
     var info: uefi.tables.MemoryMapInfo = undefined;
     info.len = 0;
     const st = self._getMemoryMap(&info.len, null, &info.key, &info.descriptor_size, &info.descriptor_version);
-    const sv = @intFromEnum(st);
-    if (sv != @intFromEnum(uefi.Status.success) and sv != @intFromEnum(uefi.Status.buffer_too_small)) return null;
+    const sv = @backingInt(st);
+    if (sv != @backingInt(uefi.Status.success) and sv != @backingInt(uefi.Status.buffer_too_small)) return null;
     info.len = @divExact(info.len, info.descriptor_size);
     return info;
 }

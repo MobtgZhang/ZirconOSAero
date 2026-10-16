@@ -1,3 +1,4 @@
+const std = @import("std");
 // Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
 //
 // ZirconOS
@@ -27,7 +28,7 @@
 // Reference: https://learn.microsoft.com/windows/win32/dwm/dwm-overview
 
 const MAX_DWM_LISTENERS: usize = 8;
-var dwm_listener_tids: [MAX_DWM_LISTENERS]u32 = [_]u32{0} ** MAX_DWM_LISTENERS;
+var dwm_listener_tids: [MAX_DWM_LISTENERS]u32 = std.mem.zeroes([MAX_DWM_LISTENERS]u32);
 var dwm_listener_count: usize = 0;
 
 /// Register `tid` for `PostThreadMessage` delivery on DWM policy broadcasts (deduplicated, capped).

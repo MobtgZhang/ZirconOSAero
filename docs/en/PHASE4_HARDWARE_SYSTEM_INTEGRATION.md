@@ -17,7 +17,7 @@
 ### Phase4-Plus (Optional; not confused with Core)
 
 - **VirGL / `CMD_SUBMIT_3D` non-empty payload**: self-authored command stream (do not copy Mesa source); user-mode submission boundary: [MM_Section_Roadmap.md](../cn/MM_Section_Roadmap.md).
-- **GPU-assisted blur**: only when `tryVirglBlurBoxDelegation` etc. **truly returns true** does `dwm` reduce CPU box blur; otherwise keep `dwm_blur_budget` model.
+- **GPU-assisted blur**: only when the VirGL path **truly returns true** does `dwm` reduce CPU box blur; otherwise keep the `dwm_blur_budget` model.
 
 ## 6–8 Week Milestone Table (Suggested Order)
 

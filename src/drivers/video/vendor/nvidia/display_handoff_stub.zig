@@ -32,7 +32,7 @@ pub fn initForFamily(family: types.NvidiaGpuFamily, mmio_virt: usize, kms_experi
         }
         if (klog.DEBUG_MODE) {
             klog.info("NVIDIA: nvidia_kms_experimental — no engine writes; handoff only (family=%u)", .{
-                @intFromEnum(family),
+                @backingInt(family),
             });
         }
     }

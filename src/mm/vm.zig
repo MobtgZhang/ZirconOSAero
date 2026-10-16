@@ -26,6 +26,7 @@ const build_options = @import("build_options");
 const klog = @import("../rtl/klog.zig");
 const arch = @import("../arch.zig");
 const paging = arch.impl.paging;
+const hal_memory = @import("../hal/memory_map.zig");
 pub const FrameAllocator = @import("frame.zig").FrameAllocator;
 const heap = @import("heap.zig");
 const vad_mod = @import("vad.zig");
@@ -47,65 +48,14 @@ pub fn setPagingAllocPhysCeilingExclusive(ceiling_exclusive: ?u64) void {
     if (ceiling_exclusive == null) g_paging_alloc_low_mem_logged = false;
 }
 
-/// `mapIdentityByteRange` 统计：x86_64 填 `x86_huge_2m`，LoongArch 填 `la_blocks_32m`，其余为 `leaf_pages`。
-pub const IdentityMapStats = struct {
-    x86_huge_2m: usize = 0,
-    la_blocks_32m: usize = 0,
-    leaf_pages: usize = 0,
-};
+pub const IdentityMapStats = hal_memory.IdentityMapStats;
 
-/// 按架构快速建立 **identity** 映射 `[range_start, range_start+range_len)`（`virt==phys`）。
-/// - x86_64：优先 2MiB 大页，头尾不足 2MiB 用 4KiB（`mapPage` 遇大页会按需拆分）。
-/// - LoongArch：优先 32MiB 整块填第三级表（2048×16KiB），余量逐 `mapPage`。
-/// - 其它架构：逐叶映射。
 pub fn mapIdentityByteRange(space: *AddressSpace, range_start: u64, range_len: u64, flags: MapFlags) ?IdentityMapStats {
     if (range_len == 0) return IdentityMapStats{};
     if (range_start > std.math.maxInt(u64) - range_len) return null;
     if (klog.DEBUG_MODE and builtin.os.tag == .freestanding)
         klog.debug("VM: identity map begin start=0x%x len=0x%x", .{ range_start, range_len });
-    const ps: u64 = @intCast(paging.page_size);
-    var va = range_start & ~(ps - 1);
-    const range_end = range_start + range_len;
-    var st = IdentityMapStats{};
-    const pflags = flags.toPagingFlags();
-    var progress: usize = 0;
-
-    while (va < range_end) {
-        if (build_options.debug and builtin.mode == .Debug) {
-            progress +%= 1;
-            if ((progress & 0x3FFF) == 0) {
-                klog.info("VM: identity map progress va=0x%x / end=0x%x", .{ va, range_end });
-            }
-        }
-        if ((builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) and @hasDecl(paging, "map2MiBPage") and @hasDecl(paging, "HUGE_PAGE_SIZE")) {
-            const huge: u64 = paging.HUGE_PAGE_SIZE;
-            if ((va % huge) == 0 and va <= std.math.maxInt(u64) - huge and va + huge <= range_end) {
-                if (paging.map2MiBPage(space.pml4_phys, va, va, pflags, allocFrameCb, space.allocator)) {
-                    st.x86_huge_2m += 1;
-                    va += huge;
-                    continue;
-                }
-            }
-        }
-        if ((builtin.cpu.arch == .loongarch64 or builtin.cpu.arch == .mips64el) and
-            @hasDecl(paging, "mapIdentity32MiBlock") and
-            @hasDecl(paging, "identity_bulk_bytes"))
-        {
-            const blk: u64 = paging.identity_bulk_bytes;
-            if ((va % blk) == 0 and va <= std.math.maxInt(u64) - blk and va + blk <= range_end) {
-                if (paging.mapIdentity32MiBlock(space.pml4_phys, va, pflags, allocFrameCb, space.allocator)) {
-                    st.la_blocks_32m += 1;
-                    va += blk;
-                    continue;
-                }
-            }
-        }
-        if (!space.mapPage(va, va, flags)) return null;
-        st.leaf_pages += 1;
-        if (va > std.math.maxInt(u64) - ps) return null;
-        va += ps;
-    }
-    return st;
+    return hal_memory.mapIdentityByteRange(space, range_start, range_len, flags, allocFrameCb);
 }
 
 pub const MapFlags = struct {
@@ -124,20 +74,10 @@ pub const MapFlags = struct {
     }
 };
 
-const user_va_policy = @import("vm_user_va_policy.zig");
-pub const USER_VA_MAX_HINT_X86_64 = user_va_policy.USER_VA_MAX_HINT_X86_64;
-pub const USER_VA_MIN_X64_NT = user_va_policy.USER_VA_MIN_X64_NT;
-pub const USER_VA_MAX_X64_NT = user_va_policy.USER_VA_MAX_X64_NT;
-pub const USER_VA_MIN_LA_NT = user_va_policy.USER_VA_MIN_LA_NT;
-pub const USER_VA_MAX_LA_NT = user_va_policy.USER_VA_MAX_LA_NT;
+const user_va_policy = @import("../hal/user_va_policy.zig");
 pub const USER_VA_MIN_NT61 = user_va_policy.USER_VA_MIN_NT61;
 pub const USER_VA_MAX_NT61 = user_va_policy.USER_VA_MAX_NT61;
-pub const userVaRangeAllowedX64 = user_va_policy.userVaRangeAllowedX64;
-pub const userVaRangeAllowedLa64 = user_va_policy.userVaRangeAllowedLa64;
-pub const userVaRangeAllowedMips64 = user_va_policy.userVaRangeAllowedMips64;
 pub const userVaRangeAllowedNt61 = user_va_policy.userVaRangeAllowedNt61;
-pub const USER_VA_MIN_MIPS64_NT = user_va_policy.USER_VA_MIN_MIPS64_NT;
-pub const USER_VA_MAX_MIPS64_NT = user_va_policy.USER_VA_MAX_MIPS64_NT;
 
 /// NT 6.1 虚拟分配阶段（公开文档：`ZwAllocateVirtualMemory` / `VirtualAlloc` 的 MEM_RESERVE vs MEM_COMMIT）。
 /// - **Reserved**：VA 区间计入地址空间，无页表 Present / 无物理页。
@@ -176,50 +116,38 @@ pub fn kernelAddressSpace() ?*AddressSpace {
 /// LoongArch64：复制 PGD **[kernel_linked_l0_begin, 2048)**（见 `docs/specs/MemoryManagement_NT61_LoongArch64_NewWorld.md`）。
 pub fn linkKernelHalfMappings(dst: *AddressSpace) bool {
     const ks = kernelAddressSpace() orelse return false;
-    if (builtin.cpu.arch == .x86_64) {
-        // 恒等映射下 PML4 物理页可解引用（与 `unmapPage` / `translateVirtualToPhysical` 路径一致）。
-        const dst_pml4: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
-        const src_pml4: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
-        var i: usize = 256;
-        while (i < 512) : (i += 1) {
-            dst_pml4.entries[i] = src_pml4.entries[i];
-        }
-        return true;
-    }
-    if (builtin.cpu.arch == .loongarch64) {
-        const dst_pgd: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
-        const src_pgd: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
-        var i: usize = paging.kernel_linked_l0_begin;
-        while (i < 2048) : (i += 1) {
-            dst_pgd.entries[i] = src_pgd.entries[i];
-        }
-        return true;
-    }
-    if (builtin.cpu.arch == .aarch64) {
-        const dst_pgd: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
-        const src_pgd: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
-        var i: usize = paging.kernel_linked_l0_begin;
-        while (i < 512) : (i += 1) {
-            dst_pgd.entries[i] = src_pgd.entries[i];
-        }
-        return true;
-    }
-    if (builtin.cpu.arch == .mips64el) {
-        const dst_pgd: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
-        const src_pgd: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
-        var i: usize = paging.kernel_linked_l0_begin;
-        while (i < 512) : (i += 1) {
-            dst_pgd.entries[i] = src_pgd.entries[i];
-        }
-        return true;
-    }
-    return true;
+    return hal_memory.linkKernelHalfMappings(dst, ks);
 }
 
 fn freeFrameForRelease(ctx: ?*anyopaque, phys: u64) void {
     const a = ctx orelse return;
     const fa: *FrameAllocator = @ptrCast(@alignCast(a));
+    fa.releaseShareCount(phys);
     fa.free(phys);
+}
+
+fn retainSectionViewReferencesForFork(space: *AddressSpace) bool {
+    const section = @import("section.zig");
+    var i: u8 = 0;
+    while (i < space.section_view_count) : (i += 1) {
+        const sec = @as(*section.SectionObject, @ptrFromInt(space.section_view_obj[i]));
+        if (sec.active_view_count == std.math.maxInt(u32)) return false;
+        sec.header.addRef();
+        sec.active_view_count += 1;
+    }
+    return true;
+}
+
+fn releaseSectionViewReferences(space: *AddressSpace) void {
+    const section = @import("section.zig");
+    var i: u8 = 0;
+    while (i < space.section_view_count) : (i += 1) {
+        const sec = @as(*section.SectionObject, @ptrFromInt(space.section_view_obj[i]));
+        if (sec.active_view_count > 0) sec.active_view_count -= 1;
+        if (sec.header.release()) {
+            section.releaseSectionObject(sec);
+        }
+    }
 }
 
 /// 释放进程 **用户半区** 页表子树与叶帧，并 `free` 顶层 PML4；调用方须将 `AddressSpace` 置为不再使用且 **不得** 再以该 CR3 运行。
@@ -231,6 +159,7 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     space.reserved_count = 0;
     @memset(&space.reserved_base, 0);
     @memset(&space.reserved_pages, 0);
+    releaseSectionViewReferences(space);
     space.section_view_count = 0;
     @memset(&space.section_view_base, 0);
     @memset(&space.section_view_pages, 0);
@@ -244,6 +173,9 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     @memset(&space.vma_pages, 0);
     @memset(&space.vma_user, false);
     @memset(&space.vma_writable, false);
+    if (@hasDecl(paging, "releaseUserHalfAddressSpace")) {
+        paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, space.allocator);
+    }
     space.allocator.free(space.pml4_phys);
     // Note: TLB flush operations are architecture-specific and handled in the kernel build
     // These host tests don't need actual TLB operations
@@ -257,7 +189,7 @@ fn vmaOverlaps(a0: u64, a1: u64, b0: u64, b1: u64) bool {
     return !(a1 <= b0 or b1 <= a0);
 }
 
-/// Win32 `PAGE_*` → 当前 `arch.impl.paging` 叶 PTE 标志（用户页；x86 与 LoongArch 符号名对齐）。未覆盖的组合返回 `null`。
+/// Win32 `PAGE_*` → 当前 `arch.impl.paging` 叶 PTE 标志（用户页）。未覆盖的组合返回 `null`。
 fn ntProtectToPteFlags(prot: u32) ?u64 {
     const base = paging.Present | paging.User | paging.Accessed;
     return switch (prot) {
@@ -494,7 +426,7 @@ pub const MEM_IMAGE: u32 = 0x1000000;
 
 pub const AddressSpace = struct {
     pml4_phys: u64,
-    /// LoongArch64 ASID（CSR 0x5）；0 表示未分配；仅在 freestanding + loongarch64 时有效。
+    /// 平台地址空间标签（如 LoongArch ASID）；0 表示未分配。
     asid: u8 = 0,
     /// 记录 ASID 分配时的全局版本号，用于检测版本回绕导致 ASID 陈旧。
     last_asid_version: u32 = 0,
@@ -1018,43 +950,7 @@ const fork_dup_status_no_memory: i32 = -1073741801;
 const fork_dup_status_not_supported: i32 = -1073741822;
 
 fn forkDupChildPteFlags(pte_raw: u64) u64 {
-    return switch (builtin.cpu.arch) {
-        .x86_64 => blk: {
-            const pe = @as(paging.PageTableEntry, @bitCast(pte_raw));
-            var f: u64 = paging.Present | paging.Accessed;
-            if (pe.user) f |= paging.User;
-            if (pe.write_through) f |= paging.WriteThrough;
-            if (pe.cache_disable) f |= paging.CacheDisable;
-            if (pe.global) f |= paging.Global;
-            if (pe.dirty) f |= paging.Dirty;
-            if (pe.no_execute) f |= paging.NoExecute;
-            break :blk f;
-        },
-        .loongarch64 => blk: {
-            // LoongArch64: CoW 复制页标志
-            // - 清除 D 位使页不可写，触发 CoW
-            // - 保留 NX 位（代码页的可执行性）
-            // - 保留 NR 位（可能的安全标志）
-            // - 保留 PLV_USER 使用户态可访问
-            var f: u64 = pte_raw;
-            f &= ~@as(u64, paging.D); // 清除 D 位（不可写 → CoW）
-            f &= ~@as(u64, paging.NR); // 清除 NR 位（如有设置）
-            // 确保 Present 和 Accessed 标志存在
-            f |= paging.Present;
-            break :blk f;
-        },
-        .mips64el => pte_raw & ~@as(u64, paging.D_BIT),
-        .aarch64 => blk: {
-            // Preserve all flags except make read-only for CoW:
-            // Clear AP[1] (bit 7) to remove EL0 write → AP=0b00 (EL1 RW only)
-            // Keep Valid, AF, SH, AttrIdx, User, NoExecute etc.
-            var f: u64 = pte_raw & ~@as(u64, paging.Write);
-            // Ensure present and accessed
-            f |= paging.Present | paging.Accessed;
-            break :blk f;
-        },
-        else => pte_raw,
-    };
+    return hal_memory.forkDupChildPteFlags(pte_raw);
 }
 
 const DupForkWalkCtx = struct {
@@ -1088,7 +984,7 @@ const DupForkLargePageWalkCtx = struct {
     inner: *DupForkWalkCtx,
 };
 
-/// 遍历大页中每个小页（x86_64: 2MiB 中每 4KiB；LoongArch64: 32MiB 中每 16KiB）
+/// 遍历大页中每个小页（粒度由平台 HAL 决定）
 fn duplicateForkLargePageSubCb(ctx_raw: ?*anyopaque, virt: u64, phys: u64, pte_raw: u64) bool {
     _ = pte_raw;
     const c = @as(*DupForkLargePageWalkCtx, @ptrCast(@alignCast(ctx_raw.?)));
@@ -1164,11 +1060,12 @@ fn copyUserSideMetadataForFork(dst: *AddressSpace, src: *const AddressSpace) boo
     @memcpy(&dst.vma_pages, &src.vma_pages);
     @memcpy(&dst.vma_user, &src.vma_user);
     @memcpy(&dst.vma_writable, &src.vma_writable);
+    if (!retainSectionViewReferencesForFork(dst)) return false;
     return true;
 }
 
-/// fork 子集：将 `src` 用户半区 **用户叶**（x86 为 4KiB，LoongArch 为 16KiB；API 名 `forEachUser4KiPresentLeaf` 沿用）复制到 `dst`（`notePageShared`、子侧 PTE **不可写**），并复制 VAD / `reserved_*` / `section_view_*` / VMA。
-/// - **大页**（x86 2MiB / LoongArch 32MiB）：先按小叶粒度逐页 fork（CoW），避免拆分大页表项。
+/// fork 子集：将 `src` 用户半区 **用户叶**复制到 `dst`（`notePageShared`、子侧 PTE **不可写**），并复制 VAD / `reserved_*` / `section_view_*` / VMA。
+/// - **大页**：先按小叶粒度逐页 fork（CoW），避免拆分大页表项。
 /// - 若 `dst` 某 VA 已有映射（如 `kuser_shared`），跳过该 VA，保留子侧原页。
 /// - 要求：`dst` 在复制前 **无** VAD / 保留区 / 段视图 / VMA 元数据（与 `createProcess` + `kuser` 后状态一致）。
 pub fn duplicateUserMappingsForFork(dst: *AddressSpace, src: *const AddressSpace) i32 {
@@ -1184,7 +1081,7 @@ pub fn duplicateUserMappingsForFork(dst: *AddressSpace, src: *const AddressSpace
         return walk.status;
     }
 
-    // 大页 fork（x86 2MiB / LoongArch 32MiB）：拆分为小叶逐个 fork（CoW）
+    // 大页 fork：拆分为小叶逐个 fork（CoW）
     if (@hasDecl(paging, "forEachUser2MiPresentLeaf")) {
         if (!paging.forEachUser2MiPresentLeaf(src.pml4_phys, @ptrCast(&walk), duplicateForkLargePageWalkCb)) {
             return walk.status;
@@ -1214,7 +1111,7 @@ pub fn tryCowWriteFault(space: *AddressSpace, fault_va: u64) bool {
 
     // 分配新帧
     const new_phys = space.allocator.alloc() orelse return false;
-    defer if (old_share_count == 0) space.allocator.free(new_phys);
+    errdefer space.allocator.free(new_phys);
 
     if (old_share_count > 0) {
         // 标准 CoW：复制物理页内容
@@ -1241,6 +1138,8 @@ pub fn tryCowWriteFault(space: *AddressSpace, fault_va: u64) bool {
     }
     if (old_share_count > 0) {
         space.allocator.releaseShareCount(old_phys);
+    } else {
+        space.allocator.free(old_phys);
     }
     return true;
 }

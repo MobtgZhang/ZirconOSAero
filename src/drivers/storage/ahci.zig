@@ -27,7 +27,7 @@
 // Milestone: docs/cn/PHASE4_HARDWARE_SYSTEM_INTEGRATION.md — 存储总线枚举。
 
 const std = @import("std");
-const builtin = @import("builtin");
+const hal_drv = @import("../../hal.zig");
 const pcie = @import("../bus/pcie.zig");
 const pci_bind = @import("../bus/pci_driver_bind.zig");
 const klog = @import("../../rtl/klog.zig");
@@ -198,9 +198,7 @@ fn waitPortNotBusy(abar: usize, port: u32, max_iter: u32) bool {
     while (i < max_iter) : (i += 1) {
         const tfd = portR(abar, port, REG_PXTFD);
         if ((tfd & ATA_STS_BSY) == 0) return true;
-        if (builtin.target.cpu.arch == .x86_64) {
-            asm volatile ("pause" ::: .{ .memory = true });
-        }
+        hal_drv.cpuRelax();
     }
     return false;
 }
@@ -208,8 +206,8 @@ fn waitPortNotBusy(abar: usize, port: u32, max_iter: u32) bool {
 var g_abar_va: usize = 0;
 var g_active_port: u32 = 0;
 var g_storage_ready: bool = false;
-var g_identify_model: [40]u8 = [_]u8{0} ** 40;
-var g_sector0: [512]u8 = [_]u8{0} ** 512;
+var g_identify_model: [40]u8 = std.mem.zeroes([40]u8);
+var g_sector0: [512]u8 = std.mem.zeroes([512]u8);
 /// 首个数据分区起始 LBA（MBR 首项或 GPT 首项）；无分区表或未解析时为 0。
 var g_partition_start_lba: u64 = 0;
 var g_ahci_blk_ctx: u8 = 0;
@@ -267,9 +265,7 @@ fn waitPxCiClear(abar: usize, port: u32, max_iter: u32) bool {
     var i: u32 = 0;
     while (i < max_iter) : (i += 1) {
         if ((portR(abar, port, 0x38) & 1) == 0) return true;
-        if (builtin.target.cpu.arch == .x86_64) {
-            asm volatile ("pause" ::: .{ .memory = true });
-        }
+        hal_drv.cpuRelax();
     }
     return false;
 }
@@ -317,7 +313,7 @@ fn runIdentifyDevice(abar: usize, port: u32, fa: *frame.FrameAllocator) bool {
     cl[2] = @truncate(ct_phys);
     cl[3] = @truncate(ct_phys >> 32);
 
-    asm volatile ("" ::: .{ .memory = true });
+    hal_drv.compilerMemoryBarrier();
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
@@ -383,7 +379,7 @@ fn runReadSectorLba28(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *fram
     cl[2] = @truncate(ct_phys);
     cl[3] = @truncate(ct_phys >> 32);
 
-    asm volatile ("" ::: .{ .memory = true });
+    hal_drv.compilerMemoryBarrier();
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
@@ -444,7 +440,7 @@ fn runReadSectorDmaExt(abar: usize, port: u32, lba: u64, out_phys: u64, fa: *fra
     cl[2] = @truncate(ct_phys);
     cl[3] = @truncate(ct_phys >> 32);
 
-    asm volatile ("" ::: .{ .memory = true });
+    hal_drv.compilerMemoryBarrier();
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
@@ -502,7 +498,7 @@ fn runWriteSectorLba28(abar: usize, port: u32, lba: u64, in_phys: u64, fa: *fram
     cl[2] = @truncate(ct_phys);
     cl[3] = @truncate(ct_phys >> 32);
 
-    asm volatile ("" ::: .{ .memory = true });
+    hal_drv.compilerMemoryBarrier();
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
@@ -562,7 +558,7 @@ fn runWriteSectorDmaExt(abar: usize, port: u32, lba: u64, in_phys: u64, fa: *fra
     cl[2] = @truncate(ct_phys);
     cl[3] = @truncate(ct_phys >> 32);
 
-    asm volatile ("" ::: .{ .memory = true });
+    hal_drv.compilerMemoryBarrier();
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
@@ -643,7 +639,7 @@ fn runFlushCache(abar: usize, port: u32, fa: *frame.FrameAllocator) bool {
     cl[2] = @truncate(ct_phys);
     cl[3] = @truncate(ct_phys >> 32);
 
-    asm volatile ("" ::: .{ .memory = true });
+    hal_drv.compilerMemoryBarrier();
     portW(abar, port, 0x10, 0xFFFF_FFFF);
     portW(abar, port, 0x38, 1);
 
@@ -705,7 +701,7 @@ pub fn storageReady() bool {
 
 /// 映射 ABAR、复位 HBA、对首个实现端口发 IDENTIFY 与 LBA0 读；成功则 `g_storage_ready=true`。
 pub fn tryInitMmioDmaPath(max_bus: u8) void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal_drv.hasLegacyPCDevices) return;
     if (!pcie.supports_pci_config) return;
     if (g_storage_ready) return;
 

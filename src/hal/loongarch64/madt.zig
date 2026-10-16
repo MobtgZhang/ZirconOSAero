@@ -54,7 +54,7 @@ pub var liointc_mmio_phys: u32 = 0;
 /// 已发现 HartID 列表（APIC ID 对 LoongArch 即 Hart ID）。
 pub const MAX_HART_LIST: usize = 64;
 pub var hart_id_count: u32 = 0;
-pub var hart_ids: [MAX_HART_LIST]u32 = [_]u32{0} ** MAX_HART_LIST;
+pub var hart_ids: [MAX_HART_LIST]u32 = std.mem.zeroes([MAX_HART_LIST]u32);
 
 /// 启发式 BSP：首个 flags.enabled 的 Processor 条目的 Hart ID。
 pub var bsp_hart_id: u32 = 0;

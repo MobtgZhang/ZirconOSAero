@@ -85,11 +85,11 @@ fn parseAqsQuery(input: []const u8) AqsQuery {
         .date_from = null,
         .date_to = null,
     };
-    
+
     var i: usize = 0;
     while (i < input.len) {
         // Check for size: operator
-        if (i + 6 <= input.len and std.mem.eql(u8, input[i..i+6], "size:>")) {
+        if (i + 6 <= input.len and std.mem.eql(u8, input[i .. i + 6], "size:>")) {
             i += 6;
             // Parse size value (e.g., "1MB", "1GB")
             const size_start = i;
@@ -102,8 +102,8 @@ fn parseAqsQuery(input: []const u8) AqsQuery {
             result.size_specified = true;
             continue;
         }
-        
-        if (i + 6 <= input.len and std.mem.eql(u8, input[i..i+6], "size:<")) {
+
+        if (i + 6 <= input.len and std.mem.eql(u8, input[i .. i + 6], "size:<")) {
             i += 6;
             const size_start = i;
             while (i < input.len and input[i] != ' ' and input[i] != '\t') {
@@ -115,9 +115,9 @@ fn parseAqsQuery(input: []const u8) AqsQuery {
             result.size_specified = true;
             continue;
         }
-        
+
         // Check for type: operator
-        if (i + 6 <= input.len and std.mem.eql(u8, input[i..i+6], "type:")) {
+        if (i + 6 <= input.len and std.mem.eql(u8, input[i .. i + 6], "type:")) {
             i += 6;
             const type_start = i;
             while (i < input.len and input[i] != ' ' and input[i] != '\t') {
@@ -126,41 +126,41 @@ fn parseAqsQuery(input: []const u8) AqsQuery {
             result.type_filter = input[type_start..i];
             continue;
         }
-        
+
         i += 1;
     }
-    
+
     return result;
 }
 
 fn parseSizeString(s: []const u8) u64 {
     if (s.len == 0) return 0;
-    
+
     var multiplier: u64 = 1;
     var num_str = s;
-    
+
     // Check suffix
     const last = std.ascii.toLower(s[s.len - 1]);
     switch (last) {
         'k' => {
             multiplier = 1024;
-            num_str = s[0..s.len-1];
+            num_str = s[0 .. s.len - 1];
         },
         'm' => {
             multiplier = 1024 * 1024;
-            num_str = s[0..s.len-1];
+            num_str = s[0 .. s.len - 1];
         },
         'g' => {
             multiplier = 1024 * 1024 * 1024;
-            num_str = s[0..s.len-1];
+            num_str = s[0 .. s.len - 1];
         },
         'b' => {
             multiplier = 1;
-            num_str = s[0..s.len-1];
+            num_str = s[0 .. s.len - 1];
         },
         else => {},
     }
-    
+
     // Parse number
     var value: u64 = 0;
     for (num_str) |c| {
@@ -168,7 +168,7 @@ fn parseSizeString(s: []const u8) u64 {
             value = value * 10 + @as(u64, c - '0');
         }
     }
-    
+
     return value * multiplier;
 }
 
@@ -182,43 +182,43 @@ pub fn filterEntriesBySearch(
         search_filtered_count = 0;
         return 0;
     }
-    
+
     const aqs = parseAqsQuery(query);
     search_filtered_count = 0;
-    
+
     for (entries, 0..) |entry, idx| {
         if (search_filtered_count >= 256) break;
-        
+
         // Text filter
         const name = entry.name[0..entry.name_len];
         if (aqs.text_filter.len > 0 and !containsIgnoreCase(name, aqs.text_filter)) {
             continue;
         }
-        
+
         // Size filter
         if (aqs.size_specified) {
             const file_size = entry.file_size;
             if (aqs.size_min > 0 and file_size < aqs.size_min) continue;
             if (aqs.size_max > 0 and file_size > aqs.size_max) continue;
         }
-        
+
         // Type filter
         if (aqs.type_filter.len > 0) {
             const entry_type = getEntryType(entry.name[0..entry.name_len]);
             if (!containsIgnoreCase(entry_type, aqs.type_filter)) continue;
         }
-        
+
         search_filtered_indices[search_filtered_count] = idx;
         search_filtered_count += 1;
     }
-    
+
     return search_filtered_count;
 }
 
 fn getEntryType(name: []const u8) []const u8 {
     for (name, 0..) |c, idx| {
         if (c == '.') {
-            return name[idx + 1..];
+            return name[idx + 1 ..];
         }
     }
     return "";
@@ -226,7 +226,7 @@ fn getEntryType(name: []const u8) []const u8 {
 
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (needle.len > haystack.len) return false;
-    
+
     var i: usize = 0;
     while (i <= haystack.len - needle.len) {
         var j: usize = 0;
@@ -254,11 +254,12 @@ pub fn getFilteredCount() usize {
 
 pub fn addToSearchHistory(query: []const u8) void {
     if (query.len == 0) return;
-    
+
     // Check if already exists
     for (0..search_history_count) |i| {
         if (search_history_lens[i] == query.len and
-            std.mem.eql(u8, search_history[i][0..query.len], query)) {
+            std.mem.eql(u8, search_history[i][0..query.len], query))
+        {
             // Move to front
             var j = i;
             while (j > 0) : (j -= 1) {
@@ -270,17 +271,17 @@ pub fn addToSearchHistory(query: []const u8) void {
             return;
         }
     }
-    
+
     // Add to front
     var i = search_history_count;
     while (i > 0) : (i -= 1) {
         search_history[i] = search_history[i - 1];
         search_history_lens[i] = search_history_lens[i - 1];
     }
-    
+
     @memcpy(search_history[0][0..query.len], query);
     search_history_lens[0] = query.len;
-    
+
     if (search_history_count < MAX_SEARCH_HISTORY) {
         search_history_count += 1;
     }
@@ -375,32 +376,32 @@ pub fn renderSearchBox(x: i32, y: i32, w: i32, h: i32) void {
         rgb(0xFF, 0xFF, 0xFF)
     else
         rgb(0xF8, 0xF8, 0xF8);
-    
+
     const border_color: u32 = if (search_focused)
         rgb(0x00, 0x51, 0x9E)
     else if (search_hover)
         rgb(0x70, 0x7A, 0x8C)
     else
         rgb(0xA0, 0xA4, 0xAE);
-    
+
     // Background
     fb.fillRect(x, y, w, h, bg_color);
-    
+
     // Border
     fb.drawRect(x, y, w, h, border_color);
-    
+
     // Search icon (magnifying glass)
     const icon_x = x + 4;
     const icon_y = y + (h - SEARCH_ICON_SIZE) / 2;
     renderSearchIcon(icon_x, icon_y);
-    
+
     // Text or placeholder
     const text_x = x + SEARCH_PADDING_X;
     const text_y = y + (h - 14) / 2;
-    
+
     if (search_len > 0) {
         fb.drawTextTransparent(text_x, text_y, search_text[0..search_len], rgb(0x18, 0x18, 0x18));
-        
+
         // Cursor
         if (search_focused) {
             const cursor_x = text_x + fb.textWidth(search_text[0..search_cursor_pos]);
@@ -410,14 +411,14 @@ pub fn renderSearchBox(x: i32, y: i32, w: i32, h: i32) void {
         const placeholder = "Search";
         fb.drawTextTransparent(text_x, text_y, placeholder, rgb(0xA0, 0xA0, 0xA0));
     }
-    
+
     // Clear button (X) when there's text
     if (search_len > 0) {
         const clear_x = x + w - 20;
         const clear_y = y + (h - 16) / 2;
         renderClearButton(clear_x, clear_y);
     }
-    
+
     // Dropdown arrow
     const arrow_x = x + w - 16;
     const arrow_y = y + (h - 12) / 2;
@@ -438,19 +439,19 @@ fn renderClearButton(x: i32, y: i32) void {
 
 pub fn renderSearchHistoryDropdown(x: i32, y: i32, w: i32) void {
     if (search_history_count == 0) return;
-    
+
     const item_h: i32 = 22;
     const dropdown_h = @as(i32, @intCast(search_history_count)) * item_h + 2;
-    
+
     // Background
     fb.fillRect(x, y, w, dropdown_h, rgb(0xFF, 0xFF, 0xFF));
     fb.drawRect(x, y, w, dropdown_h, rgb(0xA0, 0xA4, 0xAE));
-    
+
     // Items
     for (0..search_history_count) |i| {
         const item_y = y + 1 + @as(i32, @intCast(i)) * item_h;
         fb.drawTextTransparent(x + 8, item_y + 4, search_history[i][0..search_history_lens[i]], rgb(0x18, 0x18, 0x18));
-        
+
         // Separator
         if (i < search_history_count - 1) {
             fb.drawHLine(x + 1, item_y + item_h - 1, w - 2, rgb(0xEE, 0xEE, 0xEE));
@@ -472,14 +473,14 @@ pub fn isInClearButton(px: i32, py: i32, sb_x: i32, sb_y: i32, sb_w: i32, sb_h: 
 
 pub fn hitTestSearchHistory(px: i32, py: i32, sh_x: i32, sh_y: i32, sh_w: i32) ?usize {
     const item_h: i32 = 22;
-    
+
     if (py < sh_y or py >= sh_y + @as(i32, @intCast(search_history_count)) * item_h) {
         return null;
     }
     if (px < sh_x or px >= sh_x + sh_w) {
         return null;
     }
-    
+
     const idx = @as(usize, @intCast((py - sh_y) / item_h));
     if (idx < search_history_count) {
         return idx;

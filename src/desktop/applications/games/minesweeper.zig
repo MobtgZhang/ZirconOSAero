@@ -74,9 +74,21 @@ pub const MinesweeperGame = struct {
         var h: u32 = 9;
         var mines: u32 = 10;
         switch (diff) {
-            .beginner => { w = 9; h = 9; mines = 10; },
-            .intermediate => { w = 16; h = 16; mines = 40; },
-            .expert => { w = 30; h = 16; mines = 99; },
+            .beginner => {
+                w = 9;
+                h = 9;
+                mines = 10;
+            },
+            .intermediate => {
+                w = 16;
+                h = 16;
+                mines = 40;
+            },
+            .expert => {
+                w = 30;
+                h = 16;
+                mines = 99;
+            },
         }
         const cell_count = w * h;
         var cells: [900]Cell = undefined;
@@ -85,7 +97,8 @@ pub const MinesweeperGame = struct {
             if (i < mines) c.is_mine = true;
         }
         return .{
-            .x = x_pos, .y = y_pos,
+            .x = x_pos,
+            .y = y_pos,
             .width = @as(i32, @intCast(w)) * 20 + 20,
             .height = @as(i32, @intCast(h)) * 20 + 60,
             .visible = true,
@@ -110,9 +123,21 @@ pub const MinesweeperGame = struct {
         var h: u32 = 9;
         var mines: u32 = 10;
         switch (ms.difficulty) {
-            .beginner => { w = 9; h = 9; mines = 10; },
-            .intermediate => { w = 16; h = 16; mines = 40; },
-            .expert => { w = 30; h = 16; mines = 99; },
+            .beginner => {
+                w = 9;
+                h = 9;
+                mines = 10;
+            },
+            .intermediate => {
+                w = 16;
+                h = 16;
+                mines = 40;
+            },
+            .expert => {
+                w = 30;
+                h = 16;
+                mines = 99;
+            },
         }
         ms.grid_width = w;
         ms.grid_height = h;

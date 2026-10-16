@@ -28,6 +28,7 @@
 const ob = @import("../ob/object.zig");
 const scheduler = @import("scheduler.zig");
 const arch = @import("../arch.zig");
+const std = @import("std");
 
 pub const Event = struct {
     header: ob.ObjectHeader = .{ .obj_type = .event },
@@ -183,31 +184,25 @@ pub const Semaphore = struct {
     }
 
     pub fn acquire(self: *Semaphore) bool {
-        // 使用原子操作读取当前计数
-        const current = @atomicLoad(i32, &self.count, .seq_cst);
-        if (current <= 0) return false;
-        // 使用原子操作尝试递减
-        const new_val = @atomicRmw(i32, &self.count, .sub, 1, .seq_cst);
-        // 如果递减前 <= 0，说明另一个线程已经取走了，撤销操作
-        if (new_val <= 0) {
-            @atomicStore(i32, &self.count, new_val, .seq_cst);
-            return false;
+        var current = @atomicLoad(i32, &self.count, .seq_cst);
+        while (current > 0) {
+            if (@cmpxchgStrong(i32, &self.count, current, current - 1, .seq_cst, .seq_cst) == null) {
+                return true;
+            }
+            current = @atomicLoad(i32, &self.count, .seq_cst);
         }
-        return true;
+        return false;
     }
 
     pub fn release(self: *Semaphore) bool {
-        // 使用原子操作读取当前计数
-        const current = @atomicLoad(i32, &self.count, .seq_cst);
-        if (current >= self.max_count) return false;
-        // 使用原子操作尝试递增
-        const new_val = @atomicRmw(i32, &self.count, .add, 1, .seq_cst);
-        // 如果递增前 >= max_count，说明另一个线程已经达到了最大值，撤销操作
-        if (new_val >= self.max_count) {
-            @atomicStore(i32, &self.count, new_val, .seq_cst);
-            return false;
+        var current = @atomicLoad(i32, &self.count, .seq_cst);
+        while (current < self.max_count) {
+            if (@cmpxchgStrong(i32, &self.count, current, current + 1, .seq_cst, .seq_cst) == null) {
+                return true;
+            }
+            current = @atomicLoad(i32, &self.count, .seq_cst);
         }
-        return true;
+        return false;
     }
 
     pub fn isSignaled(self: *const Semaphore) bool {
@@ -217,6 +212,7 @@ pub const Semaphore = struct {
 
 pub const SpinLock = struct {
     locked: bool = false,
+    lock_guard: std.atomic.Value(u32) = .init(0),
     owner_tid: u32 = 0,
     recursion_count: u32 = 0,
     saved_if: bool = false,
@@ -227,6 +223,9 @@ pub const SpinLock = struct {
         // 检测递归锁：同一线程重复获取会导致 saved_if 被覆盖
         if (self.locked and self.owner_tid == tid) {
             @panic("SpinLock: recursive acquisition by same thread");
+        }
+        while (self.lock_guard.cmpxchgStrong(0, 1, .acquire, .monotonic) != null) {
+            arch.spinCpuRelax();
         }
         self.saved_if = arch.saveAndDisableInterrupts();
         self.locked = true;
@@ -244,6 +243,7 @@ pub const SpinLock = struct {
         if (self.recursion_count == 0) {
             self.owner_tid = 0;
             self.locked = false;
+            self.lock_guard.store(0, .release);
         }
         arch.restoreInterrupts(self.saved_if);
     }

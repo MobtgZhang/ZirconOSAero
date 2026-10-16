@@ -84,10 +84,10 @@ pub const DosHeader = extern struct {
     e_cs: u16 align(1) = 0,
     e_lfarlc: u16 align(1) = 0,
     e_ovno: u16 align(1) = 0,
-    e_res: [4]u16 align(1) = .{0} ** 4,
+    e_res: [4]u16 align(1) = std.mem.zeroes([4]u16),
     e_oemid: u16 align(1) = 0,
     e_oeminfo: u16 align(1) = 0,
-    e_res2: [10]u16 align(1) = .{0} ** 10,
+    e_res2: [10]u16 align(1) = std.mem.zeroes([10]u16),
     e_lfanew: u32 align(1) = 0,
 };
 
@@ -136,11 +136,11 @@ pub const OptionalHeader64 = extern struct {
     size_of_heap_commit: u64 align(1) = 0x1000,
     loader_flags: u32 align(1) = 0,
     number_of_rva_and_sizes: u32 align(1) = IMAGE_NUM_DIRECTORIES,
-    data_directory: [IMAGE_NUM_DIRECTORIES]DataDirectory align(1) = [_]DataDirectory{.{}} ** IMAGE_NUM_DIRECTORIES,
+    data_directory: [IMAGE_NUM_DIRECTORIES]DataDirectory align(1) = std.mem.zeroes([IMAGE_NUM_DIRECTORIES]DataDirectory),
 };
 
 pub const SectionHeader = extern struct {
-    name: [8]u8 align(1) = [_]u8{0} ** 8,
+    name: [8]u8 align(1) = std.mem.zeroes([8]u8),
     virtual_size: u32 align(1) = 0,
     virtual_address: u32 align(1) = 0,
     size_of_raw_data: u32 align(1) = 0,
@@ -406,7 +406,7 @@ pub const OptionalHeader32 = extern struct {
     size_of_heap_commit: u32 align(1) = 0x1000,
     loader_flags: u32 align(1) = 0,
     number_of_rva_and_sizes: u32 align(1) = IMAGE_NUM_DIRECTORIES,
-    data_directory: [IMAGE_NUM_DIRECTORIES]DataDirectory align(1) = [_]DataDirectory{.{}} ** IMAGE_NUM_DIRECTORIES,
+    data_directory: [IMAGE_NUM_DIRECTORIES]DataDirectory align(1) = std.mem.zeroes([IMAGE_NUM_DIRECTORIES]DataDirectory),
 };
 
 // ── PEB/TEB ──
@@ -439,28 +439,28 @@ pub const TEB = struct {
     stack_limit: u64 = 0,
     last_error: u32 = 0,
     last_status: i32 = 0,
-    tls_slots: [64]u64 = [_]u64{0} ** 64,
+    tls_slots: [64]u64 = std.mem.zeroes([64]u64),
     tls_expansion_slots: u64 = 0,
     locale_id: u32 = 0,
 };
 
 pub const ProcessParameters = struct {
-    image_path: [260]u8 = [_]u8{0} ** 260,
+    image_path: [260]u8 = std.mem.zeroes([260]u8),
     image_path_len: usize = 0,
-    command_line: [260]u8 = [_]u8{0} ** 260,
+    command_line: [260]u8 = std.mem.zeroes([260]u8),
     command_line_len: usize = 0,
-    current_directory: [260]u8 = [_]u8{0} ** 260,
+    current_directory: [260]u8 = std.mem.zeroes([260]u8),
     current_dir_len: usize = 0,
-    dll_path: [260]u8 = [_]u8{0} ** 260,
+    dll_path: [260]u8 = std.mem.zeroes([260]u8),
     dll_path_len: usize = 0,
     environment_ptr: u64 = 0,
     environment_size: u32 = 0,
     std_input: u64 = 0,
     std_output: u64 = 0,
     std_error: u64 = 0,
-    window_title: [64]u8 = [_]u8{0} ** 64,
+    window_title: [64]u8 = std.mem.zeroes([64]u8),
     window_title_len: usize = 0,
-    desktop_info: [32]u8 = [_]u8{0} ** 32,
+    desktop_info: [32]u8 = std.mem.zeroes([32]u8),
     desktop_info_len: usize = 0,
     flags: u32 = 0,
     show_window: u16 = 0,
@@ -470,9 +470,9 @@ pub const LdrDataTableEntry = struct {
     dll_base: u64 = 0,
     entry_point: u64 = 0,
     size_of_image: u32 = 0,
-    full_dll_name: [128]u8 = [_]u8{0} ** 128,
+    full_dll_name: [128]u8 = std.mem.zeroes([128]u8),
     full_dll_name_len: usize = 0,
-    base_dll_name: [64]u8 = [_]u8{0} ** 64,
+    base_dll_name: [64]u8 = std.mem.zeroes([64]u8),
     base_dll_name_len: usize = 0,
     flags: u32 = 0,
     load_count: u16 = 0,
@@ -487,21 +487,21 @@ const MAX_IMPORTS: usize = 16;
 const MAX_EXPORTS: usize = 64;
 
 pub const ExportEntry = struct {
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
     ordinal: u16 = 0,
     rva: u32 = 0,
 };
 
 pub const ImportEntry = struct {
-    dll_name: [64]u8 = [_]u8{0} ** 64,
+    dll_name: [64]u8 = std.mem.zeroes([64]u8),
     dll_name_len: usize = 0,
     func_count: u32 = 0,
     is_resolved: bool = false,
 };
 
 pub const SectionInfo = struct {
-    name: [8]u8 = [_]u8{0} ** 8,
+    name: [8]u8 = std.mem.zeroes([8]u8),
     virtual_address: u32 = 0,
     virtual_size: u32 = 0,
     raw_data_offset: u32 = 0,
@@ -530,16 +530,16 @@ pub const LoadedImage = struct {
     is_dll: bool = false,
     is_loaded: bool = false,
     is_mapped: bool = false,
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
-    full_path: [260]u8 = [_]u8{0} ** 260,
+    full_path: [260]u8 = std.mem.zeroes([260]u8),
     full_path_len: usize = 0,
     section_count: usize = 0,
-    sections: [MAX_SECTIONS]SectionInfo = [_]SectionInfo{.{}} ** MAX_SECTIONS,
+    sections: [MAX_SECTIONS]SectionInfo = std.mem.zeroes([MAX_SECTIONS]SectionInfo),
     import_count: usize = 0,
-    imports: [MAX_IMPORTS]ImportEntry = [_]ImportEntry{.{}} ** MAX_IMPORTS,
+    imports: [MAX_IMPORTS]ImportEntry = std.mem.zeroes([MAX_IMPORTS]ImportEntry),
     export_count: usize = 0,
-    exports: [MAX_EXPORTS]ExportEntry = [_]ExportEntry{.{}} ** MAX_EXPORTS,
+    exports: [MAX_EXPORTS]ExportEntry = std.mem.zeroes([MAX_EXPORTS]ExportEntry),
     peb: PEB = .{},
     teb: TEB = .{},
     params: ProcessParameters = .{},
@@ -622,7 +622,7 @@ pub const LoadedImage = struct {
     }
 };
 
-var loaded_images: [MAX_LOADED_IMAGES]LoadedImage = [_]LoadedImage{.{}} ** MAX_LOADED_IMAGES;
+var loaded_images: [MAX_LOADED_IMAGES]LoadedImage = std.mem.zeroes([MAX_LOADED_IMAGES]LoadedImage);
 var image_count: usize = 0;
 
 pub const LoadStatus = enum {
@@ -1267,7 +1267,7 @@ pub fn LdrLoadDll(dll_path: ?[*]const u16, flags: ?*u32, module_name: *const ob.
     // 临时：模拟加载成功
     const result = loadDll(dll_name, 0x180000000); // 模拟DLL基址
     if (result.status != .success and result.status != .already_loaded) {
-        klog.err("PE Loader: LdrLoadDll failed, status=%d", .{@intFromEnum(result.status)});
+        klog.err("PE Loader: LdrLoadDll failed, status=%d", .{@backingInt(result.status)});
         return 0xC0000135; // STATUS_DLL_NOT_FOUND
     }
 

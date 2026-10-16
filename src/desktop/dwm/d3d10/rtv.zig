@@ -17,6 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! D3D10 RenderTargetView and ShaderResourceView Implementation
+const std = @import("std");
 
 const d3d10_types = @import("d3d10_types.zig");
 const d3d10_errors = @import("d3d10_errors.zig");
@@ -169,10 +170,10 @@ pub const D3D10_TEXCUBE_ARRAY_SRV = extern struct {
 pub const MAX_RTVS: usize = 16;
 pub const MAX_SRVS: usize = 128;
 
-pub var g_rtv_pool: [MAX_RTVS]?*anyopaque = [_]?*anyopaque{null} ** MAX_RTVS;
+pub var g_rtv_pool: [MAX_RTVS]?*anyopaque = std.mem.zeroes([MAX_RTVS]?*anyopaque);
 pub var g_rtv_count: usize = 0;
 
-pub var g_srv_pool: [MAX_SRVS]?*anyopaque = [_]?*anyopaque{null} ** MAX_SRVS;
+pub var g_srv_pool: [MAX_SRVS]?*anyopaque = std.mem.zeroes([MAX_SRVS]?*anyopaque);
 pub var g_srv_count: usize = 0;
 
 pub fn createRenderTargetView(

@@ -26,6 +26,7 @@
 // No Windows source code or ReactOS source code was referenced.
 // Reference: https://learn.microsoft.com/windows/win32/api/_dwm/
 
+const std = @import("std");
 const user32 = @import("user32.zig");
 const dnc = @import("../../config/dwm_nt61_api_contract.zig");
 const color_nt61 = @import("../../config/color_nt61.zig");
@@ -293,7 +294,7 @@ pub fn DwmSetWindowAttribute(hwnd: user32.HWND, dw_attribute: u32, pv_attribute:
 }
 
 // 缩略图管理
-var g_thumbnail_handles: [64]usize = [_]usize{0} ** 64;
+var g_thumbnail_handles: [64]usize = std.mem.zeroes([64]usize);
 var g_thumbnail_count: usize = 0;
 
 fn dwmThumbnailRegister(hwnd_dest: user32.HWND, hwnd_src: user32.HWND) ?usize {

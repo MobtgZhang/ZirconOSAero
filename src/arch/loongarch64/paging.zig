@@ -90,7 +90,8 @@ fn invtlbAddrVa(virt: u64) void {
     const asid = @import("../../hal/loongarch64/tlb_flush.zig").getCurrentAsid();
     asm volatile ("invtlb 0x6, %[asid], %[va]"
         :
-        : [va] "r" (virt), [asid] "r" (asid)
+        : [va] "r" (virt),
+          [asid] "r" (asid),
         : .{ .memory = true });
 }
 
@@ -587,10 +588,10 @@ const CSR_DMW0: comptime_int = 0x180;
 const CSR_DMW1: comptime_int = 0x181;
 
 /// DMW 字段助记
-const DMW_P: u64 = 1 << 4;  // 窗口使能
-const DMW_MAT_SUC: u64 = 0 << 5;  // 强非缓存
-const DMW_MAT_CC: u64 = 1 << 5;   // 一致可缓存
-pub const DMW_MAT_WUC: u64 = 2 << 5;  // 弱非缓存（MMIO 常用）
+const DMW_P: u64 = 1 << 4; // 窗口使能
+const DMW_MAT_SUC: u64 = 0 << 5; // 强非缓存
+const DMW_MAT_CC: u64 = 1 << 5; // 一致可缓存
+pub const DMW_MAT_WUC: u64 = 2 << 5; // 弱非缓存（MMIO 常用）
 /// SEG = 0: 1GiB 窗口；SEG = 1: 2GiB 窗口
 /// VFN = phys >> 12，故 phys 必须 4KiB 对齐
 const DMW_SEG_1GB: u64 = 0 << 7;

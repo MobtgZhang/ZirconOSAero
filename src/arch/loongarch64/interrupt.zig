@@ -18,9 +18,9 @@
 
 //! LoongArch64：CPU 异常入口经 `arch/loongarch64/traps.zig` 转入此处（ESTAT.EXC = 64 + INT_*）。
 
-const arch = @import("../arch.zig");
-const klog = @import("../rtl/klog.zig");
-const scheduler = @import("scheduler.zig");
+const arch = @import("../../arch.zig");
+const klog = @import("../../rtl/klog.zig");
+const scheduler = @import("../../ke/scheduler.zig");
 
 /// Linux `arch/loongarch/include/asm/loongarch.h` INT_* 编号
 pub const INT_TI: u32 = 11;
@@ -74,14 +74,14 @@ pub fn dispatchHardwareInterrupts(exc: u32, ew: u32) void {
         scheduler.tick();
         // 真抢占须在保存完整 GPR 后调用 `loongarch_switch_context`（`thread_switch.zig`）；当前与 x86 一致为逻辑切换索引。
         klog.notifyTimerTick();
-        const hub = @import("../drivers/input/input_hub.zig");
+        const hub = @import("../../drivers/input/input_hub.zig");
         hub.pollAll();
         return;
     }
     if (intnum >= INT_HWI0 and intnum <= INT_HWI7) {
-        const hub = @import("../drivers/input/input_hub.zig");
+        const hub = @import("../../drivers/input/input_hub.zig");
         hub.pollAll();
-        const liointc = @import("../hal/loongarch64/liointc.zig");
+        const liointc = @import("../../hal/loongarch64/liointc.zig");
         liointc.ackPchPending();
         return;
     }
@@ -96,10 +96,10 @@ pub fn handleTlbPageFault(exc: u32) void {
     );
     const is_write = (exc == 2 or exc == 4);
 
-    const process = @import("../ps/process.zig");
+    const process = @import("../../ps/process.zig");
     if (process.getCurrentProcess()) |proc| {
         if (proc.address_space) |asp| {
-            const vm = @import("../mm/vm.zig");
+            const vm = @import("../../mm/vm.zig");
             if (vm.handleUserDemandOrCowFault(asp, badv, is_write)) {
                 return;
             }
@@ -112,7 +112,7 @@ pub fn handleTlbPageFault(exc: u32) void {
         }
     }
 
-    const bc = @import("bugcheck.zig");
+    const bc = @import("../../ke/bugcheck.zig");
     bc.keBugCheckEx(.page_fault_in_nonpaged_area, badv, 0, exc, 0);
 }
 

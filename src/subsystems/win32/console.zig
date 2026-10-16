@@ -19,6 +19,7 @@
 //! Console Runtime Subsystem
 //! Manages console windows, input/output buffers, and console API dispatch.
 //! Implements NT-compatible console hosting and driver model.
+const std = @import("std");
 
 const arch = @import("../../arch.zig");
 const klog = @import("../../rtl/klog.zig");
@@ -64,13 +65,13 @@ pub const Console = struct {
     id: u32 = 0,
     process_id: u32 = 0,
     is_active: bool = false,
-    title: [64]u8 = [_]u8{0} ** 64,
+    title: [64]u8 = std.mem.zeroes([64]u8),
     title_len: usize = 0,
     attrs: ConsoleAttributes = .{},
-    input_buffer: [INPUT_BUFFER_SIZE]u8 = [_]u8{0} ** INPUT_BUFFER_SIZE,
+    input_buffer: [INPUT_BUFFER_SIZE]u8 = std.mem.zeroes([INPUT_BUFFER_SIZE]u8),
     input_len: usize = 0,
     input_pos: usize = 0,
-    output_buffer: [OUTPUT_BUFFER_SIZE]u8 = [_]u8{0} ** OUTPUT_BUFFER_SIZE,
+    output_buffer: [OUTPUT_BUFFER_SIZE]u8 = std.mem.zeroes([OUTPUT_BUFFER_SIZE]u8),
     output_len: usize = 0,
 
     pub fn writeOutput(self: *Console, data: []const u8) usize {
@@ -134,7 +135,7 @@ pub const Console = struct {
     }
 };
 
-var consoles: [MAX_CONSOLES]Console = [_]Console{.{}} ** MAX_CONSOLES;
+var consoles: [MAX_CONSOLES]Console = std.mem.zeroes([MAX_CONSOLES]Console);
 var console_count: u32 = 0;
 var active_console: u32 = 0;
 var console_initialized: bool = false;

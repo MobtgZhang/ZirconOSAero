@@ -141,7 +141,7 @@ fn readIFDValue(
     allocator: std.mem.Allocator,
 ) mod.ImageError![]u8 {
     _ = h;
-    const t = @as(TiffType, @enumFromInt(entry.type));
+    const t = @as(TiffType, @fromBackingInt(@intCast(entry.type)));
     const type_size = typeSize(t);
     const total_bytes = @as(u64, type_size) * entry.count;
 
@@ -164,7 +164,7 @@ fn readIFDValue(
 fn readTagValueU16(h: *const TiffHeader, data: []const u8, entry: *const IFDEntry) u16 {
     _ = h;
     _ = data;
-    const t = @as(TiffType, @enumFromInt(entry.type));
+    const t = @as(TiffType, @fromBackingInt(@intCast(entry.type)));
     switch (t) {
         .SHORT => {
             if (entry.count == 1) {
@@ -179,7 +179,7 @@ fn readTagValueU16(h: *const TiffHeader, data: []const u8, entry: *const IFDEntr
 fn readTagValueU32(h: *const TiffHeader, data: []const u8, entry: *const IFDEntry) u32 {
     _ = data;
     _ = h;
-    const t = @as(TiffType, @enumFromInt(entry.type));
+    const t = @as(TiffType, @fromBackingInt(@intCast(entry.type)));
     switch (t) {
         .LONG => return entry.value_offset,
         .SHORT => {
@@ -276,12 +276,12 @@ fn parseIFD(
     if (tags.get(273)) |entry| { // StripOffsets
         const count = entry.count;
         dir.strip_offsets = try allocator.alloc(u32, @as(usize, count));
-        if (entry.type == @intFromEnum(TiffType.SHORT) and count <= 2) {
+        if (entry.type == @backingInt(TiffType.SHORT) and count <= 2) {
             const shorts: [2]u16 = @bitCast(entry.value_offset);
             for (0..@as(usize, count)) |j| {
                 dir.strip_offsets[j] = shorts[j];
             }
-        } else if (entry.type == @intFromEnum(TiffType.LONG)) {
+        } else if (entry.type == @backingInt(TiffType.LONG)) {
             for (0..@as(usize, count)) |j| {
                 const off = entry.value_offset + @as(u32, @as(u16, @truncate(j))) * 4;
                 dir.strip_offsets[j] = readU32(h, data, off);
@@ -291,12 +291,12 @@ fn parseIFD(
     if (tags.get(279)) |entry| { // StripByteCounts
         const count = entry.count;
         dir.strip_byte_counts = try allocator.alloc(u32, @as(usize, count));
-        if (entry.type == @intFromEnum(TiffType.SHORT) and count <= 2) {
+        if (entry.type == @backingInt(TiffType.SHORT) and count <= 2) {
             const shorts: [2]u16 = @bitCast(entry.value_offset);
             for (0..@as(usize, count)) |j| {
                 dir.strip_byte_counts[j] = shorts[j];
             }
-        } else if (entry.type == @intFromEnum(TiffType.LONG)) {
+        } else if (entry.type == @backingInt(TiffType.LONG)) {
             for (0..@as(usize, count)) |j| {
                 const off = entry.value_offset + @as(u32, @as(u16, @truncate(j))) * 4;
                 dir.strip_byte_counts[j] = readU32(h, data, off);
@@ -337,7 +337,7 @@ fn decodeUncompressedStrips(
     allocator: std.mem.Allocator,
 ) mod.ImageError![]u8 {
     _ = h;
-    var strip_data = std.ArrayListUnmanaged(u8){};
+    var strip_data = std.ArrayListUnmanaged(u8).empty;
     defer strip_data.deinit(allocator);
 
     for (0..dir.strip_offsets.len) |i| {
@@ -358,7 +358,7 @@ fn decodeLzwStrips(
 ) mod.ImageError![]u8 {
     _ = h;
     // Gather all compressed strip data
-    var compressed = std.ArrayListUnmanaged(u8){};
+    var compressed = std.ArrayListUnmanaged(u8).empty;
     defer compressed.deinit(allocator);
 
     for (0..dir.strip_offsets.len) |i| {
@@ -371,7 +371,7 @@ fn decodeLzwStrips(
     // Minimal LZW decompression (TIFF uses TIFF-LZW with clear code = 256)
     // This is a simplified LZW for TIFF
     const min_code_size = 8; // TIFF LZW always starts with 8
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     defer out.deinit(allocator);
 
     var code_size: u6 = 9;
@@ -570,7 +570,7 @@ fn decodeAllPagesInternal(allocator: std.mem.Allocator, data: []const u8) mod.Im
 
     const header = try parseHeader(data);
     var ifd_offset = header.ifd_offset;
-    var pages = std.ArrayListUnmanaged(mod.TiffPage){};
+    var pages = std.ArrayListUnmanaged(mod.TiffPage).empty;
     var page_num: u32 = 0;
 
     while (ifd_offset != 0 and pages.items.len < 256) {

@@ -114,7 +114,7 @@ fn readHartId() u32 {
     // CPUCFG 指令: cpucfg rd, rj
     // rj=0 时读取 PRID
     const prid: u64 = asm volatile ("cpucfg %[o], %[i]"
-        : [o] "=r" (-> u64)
+        : [o] "=r" (-> u64),
         : [i] "r" (@as(u64, 0)),
     );
 
@@ -353,7 +353,7 @@ pub fn wakeApplicationProcessorsStub() void {
 
         // 检查 Guard Page 是否映射成功
         if (!ap_guard_mapped[cpu_index]) {
-            klog.warn("LoongArch SMP: guard page not mapped for cpu_index %u, skipping", .{ cpu_index });
+            klog.warn("LoongArch SMP: guard page not mapped for cpu_index %u, skipping", .{cpu_index});
             failed_count += 1;
             continue;
         }
@@ -397,7 +397,7 @@ pub fn wakeApplicationProcessorsStub() void {
 
             // 检查 Guard Page 是否映射成功
             if (!ap_guard_mapped[cpu_index]) {
-                klog.warn("LoongArch SMP: guard page not mapped for cpu_index %u, skipping", .{ cpu_index });
+                klog.warn("LoongArch SMP: guard page not mapped for cpu_index %u, skipping", .{cpu_index});
                 failed_count += 1;
                 continue;
             }
@@ -534,4 +534,3 @@ pub fn initSmpTopology() void {
 pub fn isBsp() bool {
     return readHartId() == 0;
 }
-

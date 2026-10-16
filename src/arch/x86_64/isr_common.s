@@ -180,3 +180,14 @@ isr_common:
 load_idt:
     lidt (%rdi)
     ret
+
+# SMAP helpers: stac/clac (Zig 0.18 x86_64 encoder cannot encode these)
+.global x86_smap_stac
+x86_smap_stac:
+    stac
+    ret
+
+.global x86_smap_clac
+x86_smap_clac:
+    clac
+    ret

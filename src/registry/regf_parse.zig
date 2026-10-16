@@ -124,7 +124,7 @@ pub fn vkDwordValueFixture(slice: []const u8, vk_cell_off: u32) ?u32 {
 }
 
 test "regf magic and hbin offset" {
-    var buf: [8192]u8 = [_]u8{0} ** 8192;
+    var buf: [8192]u8 = std.mem.zeroes([8192]u8);
     @memcpy(buf[0..4], regf_magic);
     @memcpy(buf[0x1000..][0..4], hbin_magic);
     try std.testing.expect(regfHeaderOk(&buf));
@@ -132,25 +132,25 @@ test "regf magic and hbin offset" {
 }
 
 test "cell size magnitude" {
-    var cell: [32]u8 = [_]u8{0} ** 32;
+    var cell: [32]u8 = std.mem.zeroes([32]u8);
     std.mem.writeInt(i32, cell[0..4], -32, .little);
     try std.testing.expectEqual(@as(?u32, 32), cellSizeMagnitude(&cell, 0));
 }
 
 test "nk / vk sig at +4" {
-    var nk: [24]u8 = [_]u8{0} ** 24;
+    var nk: [24]u8 = std.mem.zeroes([24]u8);
     std.mem.writeInt(i32, nk[0..4], -24, .little);
     @memcpy(nk[4..6], nk_sig);
     try std.testing.expect(cellLooksLikeKeyNode(&nk, 0));
 
-    var vk: [24]u8 = [_]u8{0} ** 24;
+    var vk: [24]u8 = std.mem.zeroes([24]u8);
     std.mem.writeInt(i32, vk[0..4], -24, .little);
     @memcpy(vk[4..6], vk_sig);
     try std.testing.expect(cellLooksLikeValueNode(&vk, 0));
 }
 
 test "lf subkey offsets and nk vk fixture walk" {
-    var lf: [32]u8 = [_]u8{0} ** 32;
+    var lf: [32]u8 = std.mem.zeroes([32]u8);
     std.mem.writeInt(i32, lf[0..4], -32, .little);
     @memcpy(lf[4..6], lf_sig);
     std.mem.writeInt(u16, lf[6..8], 1, .little);
@@ -162,7 +162,7 @@ test "lf subkey offsets and nk vk fixture walk" {
     try std.testing.expectEqual(@as(usize, 1), lfSubkeyNkOffsets(&lf, 0, scratch[0..]));
     try std.testing.expectEqual(child_off, scratch[0]);
 
-    var nkcell: [96]u8 = [_]u8{0} ** 96;
+    var nkcell: [96]u8 = std.mem.zeroes([96]u8);
     std.mem.writeInt(i32, nkcell[0..4], -96, .little);
     @memcpy(nkcell[4..6], nk_sig);
     const name = "Child";
@@ -171,7 +171,7 @@ test "lf subkey offsets and nk vk fixture walk" {
 
     try std.testing.expectEqualStrings(name, nkKeyNameAsciiFixture(&nkcell, 0).?);
 
-    var vkcell: [32]u8 = [_]u8{0} ** 32;
+    var vkcell: [32]u8 = std.mem.zeroes([32]u8);
     std.mem.writeInt(i32, vkcell[0..4], -32, .little);
     @memcpy(vkcell[4..6], vk_sig);
     std.mem.writeInt(u16, vkcell[12..14], 4, .little);

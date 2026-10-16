@@ -41,10 +41,10 @@ pub const MAX_INPUT_CONTEXTS: usize = 16;
 
 /// IME state
 pub const ImeState = enum {
-    disabled,    // IME disabled
-    enabled,     // IME enabled, normal input
-    chinese,     // Chinese input mode (pinyin)
-    english,     // English input mode
+    disabled, // IME disabled
+    enabled, // IME enabled, normal input
+    chinese, // Chinese input mode (pinyin)
+    english, // English input mode
 };
 
 /// IME instance
@@ -55,7 +55,7 @@ pub const ImeInstance = struct {
     pinyin: pinyin_engine.PinyinEngine,
     candidate_window: candidates.CandidateWindow,
     imm_bridge: imm_bridge.ImmBridge,
-    x: i32,  // IME composition window position
+    x: i32, // IME composition window position
     y: i32,
 };
 
@@ -70,7 +70,7 @@ pub const ImeManager = struct {
     /// Initialize IME manager
     pub fn init() ImeManager {
         return .{
-            .instances = [_]?ImeInstance{null} ** MAX_IME_INSTANCES,
+            .instances = [_]?ImeInstance{null} * *MAX_IME_INSTANCES,
             .instance_count = 0,
             .active_instance = null,
             .default_x = 100,
@@ -217,7 +217,7 @@ fn handleKey(inst: *ImeInstance, vk_code: u8) bool {
 
     switch (inst.state) {
         .chinese => return handleChineseKey(inst, vk_code),
-        .english => return false,  // Pass through
+        .english => return false, // Pass through
         .disabled, .enabled => return false,
     }
 }
@@ -295,7 +295,7 @@ fn updateCandidates(inst: *ImeInstance) void {
     }
 
     // Search pinyin dictionary
-    var results: [candidates.MAX_CANDIDATES][32]u8 = [_][32]u8{[_]u8{0} ** 32} ** candidates.MAX_CANDIDATES;
+    var results: [candidates.MAX_CANDIDATES][32]u8 = std.mem.zeroes([candidates.MAX_CANDIDATES][32]u8);
     const count = inst.pinyin.search(pinyin_buf, &results);
 
     inst.candidate_window.setCandidates(&results, count);

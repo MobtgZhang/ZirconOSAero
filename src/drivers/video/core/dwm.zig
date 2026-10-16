@@ -146,8 +146,8 @@ pub fn applyPlatformAndResolutionTuning(width: u32, height: u32) void {
     if (!initialized) return;
     const builtin = @import("builtin");
     if (builtin.cpu.arch == .loongarch64) {
-        config.glass_blur_radius = @min(config.glass_blur_radius, nt61_aero.KernelDwm.glass_blur_radius_loongarch_cap);
-        config.glass_blur_passes = @min(config.glass_blur_passes, nt61_aero.KernelDwm.glass_blur_passes_loongarch_cap);
+        config.glass_blur_radius = @min(config.glass_blur_radius, nt61_aero.KernelDwm.glass_blur_radius_la_cap);
+        config.glass_blur_passes = @min(config.glass_blur_passes, nt61_aero.KernelDwm.glass_blur_passes_la_cap);
     }
     const pixels = width *| height;
     if (pixels >= nt61_aero.KernelDwm.blur_resolution_downgrade_pixel_threshold) {
@@ -339,14 +339,14 @@ fn renderGlassEffectInternal(x: i32, y: i32, w: i32, h: i32, tint: color_nt61.Ke
     }
 
     const eff_tint = if (tint != 0) tint else config.glass_tint_color;
-    var blur_r = @as(u32, config.glass_blur_radius);
-    const passes = @as(u32, config.glass_blur_passes);
+    var blur_r: u32 = @as(u32, config.glass_blur_radius);
+    const passes: u32 = @as(u32, config.glass_blur_passes);
     const tint_alpha: u8 = switch (chrome) {
         .taskbar => config.glass_taskbar_tint_opacity,
         else => config.glass_tint_opacity,
     };
 
-    const cap_tb = nt61_aero.KernelDwm.taskbar_blur_radius_cap;
+    const cap_tb: u32 = @as(u32, nt61_aero.KernelDwm.taskbar_blur_radius_cap);
     if (chrome == .taskbar and cap_tb > 0) {
         blur_r = @min(blur_r, @as(u32, cap_tb));
     }
@@ -354,22 +354,24 @@ fn renderGlassEffectInternal(x: i32, y: i32, w: i32, h: i32, tint: color_nt61.Ke
     const do_blur = !skip_box_blur and blur_r > 0 and passes > 0;
     // NT 6.1 Aero 风格：标题栏/面板用多遍盒式模糊；任务栏薄但宽，小半径多遍 ≈ 更强磨砂感。
     if (do_blur and glass_lite_blur) {
-        const tr = @min(blur_r, @as(u32, 4));
+        const tr: u32 = @as(u32, @min(blur_r, @as(u32, 4)));
         boxBlurRectBudgeted(x, y, w, h, @max(1, tr), 1);
     } else if (do_blur and !skip_glass_box_blur) {
         if (chrome == .taskbar) {
-            const tr = @min(blur_r, @as(u32, 6));
+            const tr: u32 = @as(u32, @min(blur_r, @as(u32, 6)));
             boxBlurRectBudgeted(x, y, w, h, tr, 1);
             if (tr > 1) {
-                boxBlurRectBudgeted(x, y, w, h, @max(2, tr * 2 / 3), 1);
+                const reduced_radius: u32 = @as(u32, @max(2, tr * 2 / 3));
+                boxBlurRectBudgeted(x, y, w, h, reduced_radius, 1);
             }
             boxBlurRectBudgeted(x, y, w, h, 2, 1);
         } else {
             // 标题栏/面板：递减半径的多遍盒式模糊，减轻纯盒式滤波在按钮区的块状边缘（与任务栏路径同思路，算法自研）。
-            const tr = @max(1, blur_r);
+            const tr: u32 = @as(u32, @max(1, blur_r));
             boxBlurRectBudgeted(x, y, w, h, tr, 1);
             if (tr >= 4) {
-                boxBlurRectBudgeted(x, y, w, h, @max(2, tr * 2 / 3), 1);
+                const reduced_radius: u32 = @as(u32, @max(2, tr * 2 / 3));
+                boxBlurRectBudgeted(x, y, w, h, reduced_radius, 1);
             }
             if (passes > 1 and tr >= 2) {
                 boxBlurRectBudgeted(x, y, w, h, 2, @min(passes, 2));

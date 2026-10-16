@@ -51,7 +51,7 @@ pub const Mdl = struct {
     byte_count: u32,
     flags: MdlFlags = .{},
     pfn_count: u8 = 0,
-    pfns: [max_mdl_pfns]u64 = .{0} ** max_mdl_pfns,
+    pfns: [max_mdl_pfns]u64 = std.mem.zeroes([max_mdl_pfns]u64),
 
     pub fn init(start_va: u64, byte_count: u32) Mdl {
         return .{
@@ -73,7 +73,7 @@ pub const Mdl = struct {
         if (self.byte_count == 0) return;
 
         const page: u64 = 4096;
-        const pages_needed = (self.byte_count + @as(u32, @truncate(page)) - 1) / @as(u32, @truncate(page));
+        const pages_needed = (@as(u64, self.byte_count) + page - 1) / page;
         var i: u32 = 0;
         while (i < pages_needed and self.pfn_count < max_mdl_pfns) : (i += 1) {
             const va = self.start_va + @as(u64, i) * page;
@@ -105,4 +105,11 @@ test "Mdl layout stable for host regression" {
     const m = Mdl.init(0xFFFF_8000_0000_1000, 4096);
     try std.testing.expectEqual(@as(u64, 0xFFFF_8000_0000_1000), m.start_va);
     try std.testing.expectEqual(@as(u32, 4096), m.byte_count);
+}
+
+test "Mdl PFN count does not overflow u32" {
+    var m = Mdl.init(0x1000, std.math.maxInt(u32));
+    m.fillPfnsIdentityAssume4k();
+    try std.testing.expect(m.flags.pages_populated);
+    try std.testing.expectEqual(@as(u8, max_mdl_pfns), m.pfn_count);
 }

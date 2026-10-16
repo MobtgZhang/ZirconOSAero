@@ -22,7 +22,7 @@ const std = @import("std");
 
 fn surfaceZOrderTwoPass(comptime n: usize, is_topmost: *const [n]bool) [n]i16 {
     var zi: i16 = 10;
-    var out: [n]i16 = .{0} ** n;
+    var out: [n]i16 = std.mem.zeroes([n]i16);
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (is_topmost[i]) continue;

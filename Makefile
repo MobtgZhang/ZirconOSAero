@@ -6,6 +6,7 @@
 
 .PHONY: all build build-release run run-debug iso iso-debug iso-release \
 	build-zbm build-esp build-desktop fetch-assets fetch-firmware \
+	win7fs \
 	test clean help show-config sync-resolution
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -32,7 +33,7 @@ QEMU_MEM     ?= 8G
 # 功能开关
 ENABLE_IDT   ?= true
 DEBUG_LOG    ?= true
-MOUSE_DEBUG  ?= false
+MOUSE_DEBUG  ?= $(if $(filter Debug,$(OPTIMIZE)),true,false)
 DESKTOP_BISECT ?= false
 AERO_BLUR_LIGHT ?= false
 QEMU_GTK_ZOOM ?= zoom-to-fit=off
@@ -74,7 +75,11 @@ QEMU_MIPS64EL_CPU ?= Loongson-3A4000
 AARCH64_PFLASH_MB ?= 64
 RISCV64_QEMU_VIRTIO_GPU ?= 0
 AARCH64_QEMU_VIRTIO_GPU ?= 0
-QEMU_DISPLAY_BACKEND ?= gtk
+# gtk：默认桌面窗口（已知 QEMU 10.x GTK 宿主鼠标→VirtIO 路由受限，见 reports/051）。
+# vnc：`-display none -vnc $(QEMU_VNC_DISPLAY)`，宿主鼠标事件可正确路由到 VirtIO 输入设备。
+# sdl：SDL2 窗口。
+QEMU_DISPLAY_BACKEND ?= vnc
+QEMU_VNC_DISPLAY ?= :1
 QEMU_GTK_EXTRA ?= ,grab-on-hover=on
 
 # 配置验证
@@ -113,14 +118,14 @@ THEME_DIR    := $(ROOT_DIR)/src/desktop/$(DESKTOP)
 
 # 内核与固件路径
 KERNEL_ELF_DEBUG := $(TMP_DIR)/kernel-prefix/bin/kernel
-KERNEL_ELF       := $(TMP_DIR)/kernel.elf
+KERNEL_ELF       := $(TMP_DIR)/winload.efi
 ISO_DEBUG        := $(RELEASE_DIR)/zirconos-$(VERSION)-uefi-$(ARCH)-debug.iso
 ISO_RELEASE      := $(RELEASE_DIR)/zirconos-$(VERSION)-uefi-$(ARCH)-release.iso
 ESP_IMG          := $(BUILD_DIR)/esp-$(ARCH).img
 ESP_IMG_AARCH64  := $(BUILD_DIR)/esp-aarch64.img
 ESP_IMG_RISCV64  := $(BUILD_DIR)/esp-riscv64.img
 ESP_IMG_LOONGARCH64 := $(BUILD_DIR)/esp-loongarch64.img
-ESP_IMG_MB       ?= 256
+ESP_IMG_MB       ?= 1024
 ZBM_DISK_MBR     := $(BUILD_DIR)/zirconos-mbr.img
 ZBM_DISK_GPT     := $(BUILD_DIR)/zirconos-gpt.img
 
@@ -133,6 +138,7 @@ ZBM_RISCV64_EFI     := $(BUILD_DIR)/BOOTRISCV64.EFI
 # 固件路径
 OVMF_CODE    ?= $(if $(wildcard $(FIRMWARE_DIR)/OVMF_CODE-x86_64.fd),$(FIRMWARE_DIR)/OVMF_CODE-x86_64.fd,/usr/share/OVMF/OVMF_CODE_4M.fd)
 OVMF_VARS    ?= $(if $(wildcard $(FIRMWARE_DIR)/OVMF_VARS-x86_64.fd),$(FIRMWARE_DIR)/OVMF_VARS-x86_64.fd,/usr/share/OVMF/OVMF_VARS_4M.fd)
+OVMF_VARS_WRITABLE := $(BUILD_DIR)/ovmf/OVMF_VARS_4M.fd
 AARCH64_EFI_CODE ?= $(FIRMWARE_DIR)/QEMU_EFI-aarch64.fd
 AARCH64_EFI_VARS ?= $(FIRMWARE_DIR)/QEMU_VARS-aarch64.fd
 RISCV64_EFI_CODE ?= $(FIRMWARE_DIR)/VIRT-riscv64.fd
@@ -160,14 +166,19 @@ SYNC_RESOLUTION_CMD = ZIRCON_RESOLUTION="$(RESOLUTION)" python3 $(ROOT_DIR)/scri
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ifeq ($(QEMU_DISPLAY_BACKEND),sdl)
-QEMU_X86_VIDEO_FLAGS := -display sdl -vga std
+QEMU_X86_VIDEO_FLAGS := -display sdl
+else ifeq ($(QEMU_DISPLAY_BACKEND),vnc)
+QEMU_VNC_DISPLAY ?= :1
+QEMU_X86_VIDEO_FLAGS := -display none -vnc $(QEMU_VNC_DISPLAY)
 else
-QEMU_X86_VIDEO_FLAGS := -display gtk,$(QEMU_GTK_ZOOM),show-cursor=on$(QEMU_GTK_EXTRA) -vga std
+QEMU_X86_VIDEO_FLAGS := -display gtk,$(QEMU_GTK_ZOOM),show-cursor=on$(QEMU_GTK_EXTRA)
 endif
 
 QEMU_COMMON_X86 := -machine pc -m $(QEMU_MEM) -serial stdio -no-reboot -no-shutdown \
 	$(QEMU_X86_VIDEO_FLAGS) \
-	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci
+	-device virtio-gpu-pci,id=zircon_vgpu \
+	-device virtio-keyboard-pci,id=zircon_keyboard \
+	-device virtio-tablet-pci,id=zircon_tablet,display=zircon_vgpu
 
 QEMU_X86_UEFI_MACHINE ?= q35
 ifeq ($(shell test -r /dev/kvm && echo yes),yes)
@@ -184,11 +195,24 @@ QEMU_X86_UEFI_NETDEV := -netdev user,id=net0 -device virtio-net-pci,netdev=net0
 else
 QEMU_X86_UEFI_NETDEV :=
 endif
-QEMU_COMMON_X86_UEFI := -machine $(QEMU_X86_UEFI_MACHINE),accel=$(QEMU_X86_UEFI_ACCEL) \
+QEMU_X86_UEFI_VIRTIO_GPU ?= 1
+ifeq ($(QEMU_X86_UEFI_VIRTIO_GPU),1)
+QEMU_X86_UEFI_GPU_FLAGS := -device virtio-gpu-pci,id=zircon_vgpu
+QEMU_X86_UEFI_INPUT := -device virtio-keyboard-pci,id=zircon_keyboard \
+	-device virtio-tablet-pci,id=zircon_tablet,display=zircon_vga
+else
+QEMU_X86_UEFI_GPU_FLAGS :=
+QEMU_X86_UEFI_INPUT :=
+endif
+QEMU_X86_UEFI_QMP_SOCKET := $(shell mktemp -u /tmp/zircon-qmp-XXXXXX.sock)
+QEMU_COMMON_X86_UEFI := -machine $(QEMU_X86_UEFI_MACHINE),accel=$(QEMU_X86_UEFI_ACCEL),i8042=off \
 	$(QEMU_X86_UEFI_CPU) -smp $(QEMU_SMP_UEFI) -m $(QEMU_MEM) \
 	-serial stdio -no-reboot -no-shutdown \
+	-qmp unix:$(QEMU_X86_UEFI_QMP_SOCKET),server,nowait \
+	-vga none -device VGA,id=zircon_vga \
 	$(QEMU_X86_VIDEO_FLAGS) \
-	-device virtio-mouse-pci -device virtio-keyboard-pci -device virtio-tablet-pci \
+	$(QEMU_X86_UEFI_GPU_FLAGS) \
+	$(QEMU_X86_UEFI_INPUT) \
 	$(QEMU_X86_UEFI_NETDEV)
 
 QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
@@ -290,6 +314,10 @@ show-config:
 	@echo "║  RESOLUTION   = $(RESOLUTION)"
 	@echo "║  ZBM/resolution = $(ZBM_RES_W)x$(ZBM_RES_H)"
 	@echo "║  QEMU_MEM     = $(QEMU_MEM)"
+	@echo "║  QEMU_BACKEND = $(QEMU_DISPLAY_BACKEND)"
+ifeq ($(QEMU_DISPLAY_BACKEND),vnc)
+	@echo "║  QEMU_VNC     = $(QEMU_VNC_DISPLAY)"
+endif
 	@echo "║  ENABLE_IDT   = $(ENABLE_IDT)"
 	@echo "║  DEBUG_LOG    = $(DEBUG_LOG)"
 	@echo "╚══════════════════════════════════════════════╝"
@@ -421,16 +449,51 @@ ifeq ($(ARCH),loongarch64)
 endif
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ISO TARGETS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+iso: iso-debug
+
+iso-debug: $(RELEASE_DIR)
+	@if [ "$(BOOT_METHOD)" != "uefi" ]; then \
+		echo "[ZirconOS] ERROR: ISO requires BOOT_METHOD=uefi" >&2; exit 1; \
+	fi
+	+@$(MAKE) --no-print-directory build-esp
+	@bash $(ROOT_DIR)/scripts/build/mkiso-uefi-zbm.sh \
+		$(ISO_DEBUG) $(ESP_IMG)
+
+iso-release: $(RELEASE_DIR)
+	@if [ "$(BOOT_METHOD)" != "uefi" ]; then \
+		echo "[ZirconOS] ERROR: ISO requires BOOT_METHOD=uefi" >&2; exit 1; \
+	fi
+	@$(MAKE) --no-print-directory ARCH=$(ARCH) BOOT_METHOD=$(BOOT_METHOD) \
+		BOOTLOADER=$(BOOTLOADER) DESKTOP=$(DESKTOP) OPTIMIZE=ReleaseSafe \
+		build-esp
+	@bash $(ROOT_DIR)/scripts/build/mkiso-uefi-zbm.sh \
+		$(ISO_RELEASE) $(ESP_IMG)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  WIN7 FS TARGETS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+win7fs: build $(BUILD_DIR)
+	@bash $(ROOT_DIR)/scripts/build/mkfs-win7.sh \
+		$(BUILD_DIR)/win7-fs \
+		$(KERNEL_ELF)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  RUN TARGETS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 run: build build-esp
 	@$(MAKE) show-config
 	@echo "Starting QEMU..."
+	@mkdir -p $(BUILD_DIR)/ovmf
+	@cp -f $(OVMF_VARS) $(OVMF_VARS_WRITABLE) 2>/dev/null || true
 	@if [ "$(ARCH)" = "x86_64" ] && [ "$(BOOT_METHOD)" = "uefi" ]; then \
 		qemu-system-x86_64 $(QEMU_COMMON_X86_UEFI) \
 			-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
-			-drive if=pflash,format=raw,file=$(OVMF_VARS) \
+			-drive if=pflash,format=raw,file=$(OVMF_VARS_WRITABLE) \
 			-drive file=$(ESP_IMG),format=raw,if=virtio; \
 	elif [ "$(ARCH)" = "x86_64" ] && [ "$(BOOT_METHOD)" = "mbr" ]; then \
 		qemu-system-x86_64 $(QEMU_COMMON_X86) -kernel $(KERNEL_ELF); \

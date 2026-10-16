@@ -80,43 +80,43 @@ var ctx_menu_items_buf: [CTX_MAX_ITEMS]ContextMenuItem = undefined;
 fn buildFileContextMenu() void {
     ctx_menu_item_count = 0;
     const items = &ctx_menu_items_buf;
-    
+
     // Open
     items[ctx_menu_item_count] = .{ .label = "打开" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Cut
     items[ctx_menu_item_count] = .{ .label = "剪切" };
     ctx_menu_item_count += 1;
-    
+
     // Copy
     items[ctx_menu_item_count] = .{ .label = "复制" };
     ctx_menu_item_count += 1;
-    
+
     // Paste
     items[ctx_menu_item_count] = .{ .label = "粘贴", .enabled = false };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Rename
     items[ctx_menu_item_count] = .{ .label = "重命名" };
     ctx_menu_item_count += 1;
-    
+
     // Delete
     items[ctx_menu_item_count] = .{ .label = "删除" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Properties
     items[ctx_menu_item_count] = .{ .label = "属性" };
     ctx_menu_item_count += 1;
@@ -125,51 +125,51 @@ fn buildFileContextMenu() void {
 fn buildFolderContextMenu() void {
     ctx_menu_item_count = 0;
     const items = &ctx_menu_items_buf;
-    
+
     // Open
     items[ctx_menu_item_count] = .{ .label = "打开" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Cut
     items[ctx_menu_item_count] = .{ .label = "剪切" };
     ctx_menu_item_count += 1;
-    
+
     // Copy
     items[ctx_menu_item_count] = .{ .label = "复制" };
     ctx_menu_item_count += 1;
-    
+
     // Paste
     items[ctx_menu_item_count] = .{ .label = "粘贴" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // New Folder
     items[ctx_menu_item_count] = .{ .label = "新建文件夹" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Rename
     items[ctx_menu_item_count] = .{ .label = "重命名" };
     ctx_menu_item_count += 1;
-    
+
     // Delete
     items[ctx_menu_item_count] = .{ .label = "删除" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Properties
     items[ctx_menu_item_count] = .{ .label = "属性" };
     ctx_menu_item_count += 1;
@@ -178,31 +178,31 @@ fn buildFolderContextMenu() void {
 fn buildEmptyAreaContextMenu() void {
     ctx_menu_item_count = 0;
     const items = &ctx_menu_items_buf;
-    
+
     // View submenu placeholder
     items[ctx_menu_item_count] = .{ .label = "视图", .submenu = true };
     ctx_menu_item_count += 1;
-    
+
     // Sort by
     items[ctx_menu_item_count] = .{ .label = "排序方式", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Paste
     items[ctx_menu_item_count] = .{ .label = "粘贴" };
     ctx_menu_item_count += 1;
-    
+
     // New Folder
     items[ctx_menu_item_count] = .{ .label = "新建文件夹" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Refresh
     items[ctx_menu_item_count] = .{ .label = "刷新" };
     ctx_menu_item_count += 1;
@@ -211,31 +211,31 @@ fn buildEmptyAreaContextMenu() void {
 fn buildDriveContextMenu() void {
     ctx_menu_item_count = 0;
     const items = &ctx_menu_items_buf;
-    
+
     // Open
     items[ctx_menu_item_count] = .{ .label = "打开" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Include in library
     items[ctx_menu_item_count] = .{ .label = "包含到库中", .submenu = true };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Format (for removable)
     items[ctx_menu_item_count] = .{ .label = "格式化...", .enabled = false };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Properties
     items[ctx_menu_item_count] = .{ .label = "属性" };
     ctx_menu_item_count += 1;
@@ -244,35 +244,35 @@ fn buildDriveContextMenu() void {
 fn buildMultipleSelectionContextMenu() void {
     ctx_menu_item_count = 0;
     const items = &ctx_menu_items_buf;
-    
+
     // Open
     items[ctx_menu_item_count] = .{ .label = "打开" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Cut
     items[ctx_menu_item_count] = .{ .label = "剪切" };
     ctx_menu_item_count += 1;
-    
+
     // Copy
     items[ctx_menu_item_count] = .{ .label = "复制" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Delete
     items[ctx_menu_item_count] = .{ .label = "删除" };
     ctx_menu_item_count += 1;
-    
+
     // Separator
     items[ctx_menu_item_count] = .{ .label = "---", .separator_after = false };
     ctx_menu_item_count += 1;
-    
+
     // Properties
     items[ctx_menu_item_count] = .{ .label = "属性" };
     ctx_menu_item_count += 1;
@@ -284,7 +284,7 @@ pub fn showExplorerContextMenu(kind: ExplorerContextMenuKind, x: i32, y: i32) vo
     ctx_menu_kind = kind;
     ctx_menu_x = x;
     ctx_menu_y = y;
-    
+
     switch (kind) {
         .file => buildFileContextMenu(),
         .folder => buildFolderContextMenu(),
@@ -293,7 +293,7 @@ pub fn showExplorerContextMenu(kind: ExplorerContextMenuKind, x: i32, y: i32) vo
         .multiple_selection => buildMultipleSelectionContextMenu(),
         .none => {},
     }
-    
+
     ctx_menu_visible = true;
     ctx_menu_hover_index = -1;
     ctx_submenu_visible = false;
@@ -319,47 +319,47 @@ pub fn getExplorerContextMenuKind() ExplorerContextMenuKind {
 
 pub fn renderExplorerContextMenu() void {
     if (!ctx_menu_visible) return;
-    
+
     const mh = ctxMenuHeight();
     const mw: i32 = CTX_MENU_W;
     const sx = ctx_menu_x;
     const sy = ctx_menu_y;
-    
+
     // Shadow
     fb.fillRect(sx + CTX_SHADOW_OFFSET, sy + CTX_SHADOW_OFFSET, mw, mh, rgb(0x40, 0x40, 0x40));
-    
+
     // Background
     fb.fillRect(sx, sy, mw, mh, rgb(0xF8, 0xF8, 0xF8));
     fb.drawRect(sx, sy, mw, mh, rgb(0xA0, 0xA0, 0xA0));
-    
+
     // Items
     var iy: i32 = sy + CTX_MENU_PAD;
     var item_idx: usize = 0;
     while (item_idx < ctx_menu_item_count) : (item_idx += 1) {
         const item = ctx_menu_items_buf[item_idx];
-        
+
         if (std.mem.eql(u8, item.label, "---")) {
             fb.drawHLine(sx + 4, iy + 4, mw - 8, rgb(0xC0, 0xC0, 0xC0));
             iy += 8;
             continue;
         }
-        
+
         const is_hover = (@as(i32, @intCast(item_idx)) == ctx_menu_hover_index);
         if (is_hover) {
             fb.fillRect(sx + 2, iy, mw - 4, CTX_ITEM_H, rgb(0xD8, 0xE8, 0xF8));
         }
-        
+
         const tc: u32 = if (item.enabled) rgb(0x10, 0x10, 0x10) else rgb(0x80, 0x80, 0x80);
         fb.drawTextTransparent(sx + 8, iy + 4, item.label, tc);
-        
+
         // Submenu arrow
         if (item.submenu) {
             fb.drawTextTransparent(sx + mw - 16, iy + 4, "▶", rgb(0x40, 0x40, 0x40));
         }
-        
+
         iy += CTX_ITEM_H;
     }
-    
+
     // Render submenu if visible
     if (ctx_submenu_visible) {
         renderContextSubmenu();
@@ -369,22 +369,22 @@ pub fn renderExplorerContextMenu() void {
 fn renderContextSubmenu() void {
     const smh = submenuHeight();
     const smw: i32 = CTX_MENU_W;
-    
+
     // Animate
     ctx_submenu_anim_progress = @min(1.0, ctx_submenu_anim_progress + 0.15);
     if (ctx_submenu_anim_progress > 1.0) ctx_submenu_anim_progress = 1.0;
-    
+
     const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(smw)) * (1.0 - ctx_submenu_anim_progress)));
     const ax = ctx_submenu_x + anim_offset;
     const ay = ctx_submenu_y;
-    
+
     // Shadow
     fb.fillRect(ax + CTX_SHADOW_OFFSET, ay + CTX_SHADOW_OFFSET, smw, smh, rgb(0x40, 0x40, 0x40));
-    
+
     // Background
     fb.fillRect(ax, ay, smw, smh, rgb(0xF8, 0xF8, 0xF8));
     fb.drawRect(ax, ay, smw, smh, rgb(0xA0, 0xA0, 0xA0));
-    
+
     // Items
     var iy: i32 = ay + CTX_MENU_PAD;
     var i: usize = 0;
@@ -393,7 +393,7 @@ fn renderContextSubmenu() void {
         if (is_hover) {
             fb.fillRect(ax + 2, iy, smw - 4, CTX_ITEM_H, rgb(0xD8, 0xE8, 0xF8));
         }
-        
+
         fb.drawTextTransparent(ax + 8, iy + 4, ctx_submenu_items[i], rgb(0x10, 0x10, 0x10));
         iy += CTX_ITEM_H;
     }
@@ -403,20 +403,21 @@ fn renderContextSubmenu() void {
 
 pub fn isInsideExplorerContextMenu(x: i32, y: i32) bool {
     if (!ctx_menu_visible) return false;
-    
+
     // Check submenu first
     if (ctx_submenu_visible) {
         const smh = submenuHeight();
         const smw: i32 = CTX_MENU_W;
         const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(smw)) * (1.0 - ctx_submenu_anim_progress)));
         if (x >= ctx_submenu_x + anim_offset and x < ctx_submenu_x + anim_offset + smw and
-            y >= ctx_submenu_y and y < ctx_submenu_y + smh) {
+            y >= ctx_submenu_y and y < ctx_submenu_y + smh)
+        {
             return true;
         }
     }
-    
+
     return x >= ctx_menu_x and x < ctx_menu_x + CTX_MENU_W and
-           y >= ctx_menu_y and y < ctx_menu_y + ctxMenuHeight();
+        y >= ctx_menu_y and y < ctx_menu_y + ctxMenuHeight();
 }
 
 pub fn updateExplorerContextMenuHover(x: i32, y: i32) void {
@@ -424,23 +425,25 @@ pub fn updateExplorerContextMenuHover(x: i32, y: i32) void {
         ctx_menu_hover_index = -1;
         return;
     }
-    
+
     // Check submenu hover
     if (ctx_submenu_visible) {
         const smh = submenuHeight();
         const smw: i32 = CTX_MENU_W;
         const anim_offset = @as(i32, @intFromFloat(@as(f32, @floatFromInt(smw)) * (1.0 - ctx_submenu_anim_progress)));
         if (x >= ctx_submenu_x + anim_offset and x < ctx_submenu_x + anim_offset + smw and
-            y >= ctx_submenu_y and y < ctx_submenu_y + smh) {
+            y >= ctx_submenu_y and y < ctx_submenu_y + smh)
+        {
             const rel_y = y - ctx_submenu_y - CTX_MENU_PAD;
             ctx_submenu_hover_index = @divTrunc(rel_y, CTX_ITEM_H);
             return;
         }
     }
-    
+
     // Main menu hover
     if (x >= ctx_menu_x and x < ctx_menu_x + CTX_MENU_W and
-        y >= ctx_menu_y and y < ctx_menu_y + ctxMenuHeight()) {
+        y >= ctx_menu_y and y < ctx_menu_y + ctxMenuHeight())
+    {
         const rel_y = y - ctx_menu_y - CTX_MENU_PAD;
         const idx = @divTrunc(rel_y, CTX_ITEM_H);
         if (idx >= 0 and @as(usize, @intCast(idx)) < ctx_menu_item_count) {
@@ -448,7 +451,7 @@ pub fn updateExplorerContextMenuHover(x: i32, y: i32) void {
             return;
         }
     }
-    
+
     ctx_menu_hover_index = -1;
     ctx_submenu_hover_index = -1;
 }
@@ -463,11 +466,11 @@ pub fn getExplorerContextMenuHoverItem() ?ContextMenuItem {
 pub fn getExplorerContextMenuClickResult() ?struct { action: []const u8, kind: ExplorerContextMenuKind } {
     if (ctx_menu_hover_index < 0) return null;
     if (@as(usize, @intCast(ctx_menu_hover_index)) >= ctx_menu_item_count) return null;
-    
+
     const item = ctx_menu_items_buf[@as(usize, @intCast(ctx_menu_hover_index))];
     if (!item.enabled) return null;
     if (std.mem.eql(u8, item.label, "---")) return null;
-    
+
     const result = .{ .action = item.label, .kind = ctx_menu_kind };
     hideExplorerContextMenu();
     return result;

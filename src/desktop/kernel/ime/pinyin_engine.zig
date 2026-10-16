@@ -47,7 +47,7 @@ pub const PinyinTone = enum(u8) {
 /// Pinyin entry (single syllable)
 pub const PinyinEntry = struct {
     pinyin: [8]u8,
-    chars: [32]u8,  // UTF-8 encoded Chinese characters
+    chars: [32]u8, // UTF-8 encoded Chinese characters
 };
 
 /// Pinyin engine
@@ -62,7 +62,7 @@ pub const PinyinEngine = struct {
     /// Initialize pinyin engine
     pub fn init() PinyinEngine {
         return .{
-            .buffer = [_]u8{0} ** 32,
+            .buffer = [_]u8{0} * *32,
             .buffer_len = 0,
             .dictionary = pinyin_dictionary,
         };

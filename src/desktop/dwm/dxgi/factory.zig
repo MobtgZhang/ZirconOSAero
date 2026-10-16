@@ -59,7 +59,7 @@ pub const Factory = struct {
     }
 
     pub fn enumAdapters(self: *Factory, index: u32, adapter: **adapter_mod.Adapter) u32 {
-        if (index >= self.adapters.len) return @intFromEnum(errors.DXGI_ERROR.DXGI_ERROR_NOT_FOUND);
+        if (index >= self.adapters.len) return @backingInt(errors.DXGI_ERROR.DXGI_ERROR_NOT_FOUND);
         adapter.* = self.adapters[index];
         adapter.*.addRef();
         return 0; // S_OK

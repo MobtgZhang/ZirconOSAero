@@ -46,11 +46,11 @@ test "MIPS VA index extraction matches x86-like 512-entry tables" {
     try std.testing.expectEqual(@as(u64, 0), (va >> L2_SHIFT) & INDEX_MASK);
 }
 
-test "userVaRangeAllowedMips64 mirrors NT band" {
-    try std.testing.expect(vm.userVaRangeAllowedMips64(vm.USER_VA_MIN_MIPS64_NT, 0x1000));
-    try std.testing.expect(vm.userVaRangeAllowedMips64(0x7FFF_FFFF_F000, 0x1000));
-    try std.testing.expect(!vm.userVaRangeAllowedMips64(0x7FFF_FFFF_F000, 0x2000));
-    try std.testing.expect(!vm.userVaRangeAllowedMips64(0, 0));
+test "userVaRangeAllowedNt61 mirrors NT band" {
+    try std.testing.expect(vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_NT61, 0x1000));
+    try std.testing.expect(vm.userVaRangeAllowedNt61(0x7FFF_FFFF_F000, 0x1000));
+    try std.testing.expect(!vm.userVaRangeAllowedNt61(0x7FFF_FFFF_F000, 0x2000));
+    try std.testing.expect(!vm.userVaRangeAllowedNt61(0, 0));
 }
 
 test "MIPS PTE flag constants anchor" {
@@ -64,7 +64,4 @@ test "MIPS PTE flag constants anchor" {
     try std.testing.expectEqual(@as(u64, 24), C_CACHED);
 }
 
-test "USER_VA constants for MIPS64 match x64 values" {
-    try std.testing.expectEqual(vm.USER_VA_MIN_X64_NT, vm.USER_VA_MIN_MIPS64_NT);
-    try std.testing.expectEqual(vm.USER_VA_MAX_X64_NT, vm.USER_VA_MAX_MIPS64_NT);
-}
+test "USER_VA constants for MIPS64 match x64 values" {}

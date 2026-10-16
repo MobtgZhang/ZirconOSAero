@@ -107,7 +107,7 @@ pub fn handleExplorerKey(key: VirtualKey, total_items: usize, column_count: usiz
     if (alt_pressed) {
         return handleAltKey(key);
     }
-    
+
     return handlePlainKey(key, total_items, column_count);
 }
 
@@ -241,8 +241,7 @@ fn handlePlainKey(key: VirtualKey, total_items: usize, column_count: usize) KeyA
             }
             return .unhandled;
         },
-        .vk_up, .vk_down, .vk_left, .vk_right,
-        .vk_home, .vk_end, .vk_page_up, .vk_page_down => {
+        .vk_up, .vk_down, .vk_left, .vk_right, .vk_home, .vk_end, .vk_page_up, .vk_page_down => {
             // Arrow keys: Navigate selection
             const direction = keyToDirection(key);
             if (direction) |dir| {

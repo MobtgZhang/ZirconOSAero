@@ -72,7 +72,7 @@ pub const CONTEXT32 = struct {
     dr3: u32 = 0,
     dr6: u32 = 0,
     dr7: u32 = 0,
-    float_save: [WOW64_SIZE_OF_80387_REGISTERS]u8 = [_]u8{0} ** WOW64_SIZE_OF_80387_REGISTERS,
+    float_save: [WOW64_SIZE_OF_80387_REGISTERS]u8 = std.mem.zeroes([WOW64_SIZE_OF_80387_REGISTERS]u8),
     seg_gs: u32 = 0,
     seg_fs: u32 = 0x003B,
     seg_es: u32 = 0x0023,
@@ -147,7 +147,7 @@ pub const Wow64Process = struct {
     context: CONTEXT32 = .{},
     peb32: PEB32 = std.mem.zeroes(PEB32),
     teb32: TEB32 = std.mem.zeroes(TEB32),
-    image_name: [64]u8 = [_]u8{0} ** 64,
+    image_name: [64]u8 = std.mem.zeroes([64]u8),
     image_name_len: usize = 0,
     image_base: u32 = 0,
     entry_point: u32 = 0,
@@ -169,13 +169,13 @@ pub const Wow64Process = struct {
 pub const MAX_THUNK_ENTRIES: usize = 128;
 
 pub const ThunkEntry = struct {
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
     native_syscall_id: u32 = 0,
     thunk_type: ThunkType = .none,
     is_active: bool = false,
     call_count: u64 = 0,
-    target_module: [32]u8 = [_]u8{0} ** 32,
+    target_module: [32]u8 = std.mem.zeroes([32]u8),
     target_module_len: usize = 0,
 };
 

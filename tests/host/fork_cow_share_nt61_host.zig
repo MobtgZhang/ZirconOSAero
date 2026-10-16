@@ -47,7 +47,7 @@ test "duplicateUserMappingsForFork then tryCowWriteFault splits child pfn" {
     try std.testing.expect(vm.initAddressSpaceInPlace(&parent, &fa));
     defer vm.releaseProcessAddressSpace(&parent);
 
-    const user_va: u64 = vm.USER_VA_MIN_X64_NT;
+    const user_va: u64 = vm.USER_VA_MIN_NT61;
     const phys = parent.mapPageAlloc(user_va, .{ .writable = true, .user = true, .executable = false }) orelse
         return error.ParentMapFail;
     vm.recordCommittedVadRange(&parent, user_va, 1, vm.PAGE_READWRITE);
@@ -77,4 +77,26 @@ test "duplicateUserMappingsForFork then tryCowWriteFault splits child pfn" {
 
     page[0] = 0xCD;
     try std.testing.expectEqual(@as(u8, 0xAB), child_page[0]);
+}
+
+test "releaseProcessAddressSpace frees user leaf and page tables" {
+    const pool_pages: usize = 256;
+    const pool = std.testing.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(4096), pool_pages * 4096) catch return error.OutOfMemory;
+    defer std.testing.allocator.free(pool);
+
+    var fa: FrameAllocator = undefined;
+    fa.testSeedLinearFreeFrames(pool_pages);
+    fa.testAttachHostBackedPool(pool);
+
+    var space: vm.AddressSpace = undefined;
+    try std.testing.expect(vm.initAddressSpaceInPlace(&space, &fa));
+
+    const user_va: u64 = vm.USER_VA_MIN_NT61;
+    const phys = space.mapPageAlloc(user_va, .{ .writable = true, .user = true, .executable = false }) orelse
+        return error.MapFail;
+    vm.recordCommittedVadRange(&space, user_va, 1, vm.PAGE_READWRITE);
+
+    try std.testing.expectEqual(@as(u16, 0), fa.shareCount(phys));
+    vm.releaseProcessAddressSpace(&space);
+    try std.testing.expect(fa.isPhysicalPageFree(phys));
 }

@@ -9,11 +9,11 @@
 const theme = @import("theme.zig");
 
 pub const ThemeConfig = struct {
-    display_name: [128]u8 = [_]u8{0} ** 128,
+    display_name: [128]u8 = std.mem.zeroes([128]u8),
     display_name_len: u8 = 0,
-    theme_id: [64]u8 = [_]u8{0} ** 64,
+    theme_id: [64]u8 = std.mem.zeroes([64]u8),
     theme_id_len: u8 = 0,
-    wallpaper: [128]u8 = [_]u8{0} ** 128,
+    wallpaper: [128]u8 = std.mem.zeroes([128]u8),
     wallpaper_len: u8 = 0,
     color_scheme: theme.ColorScheme = .zircon_blue,
 
@@ -33,7 +33,7 @@ pub const ThemeConfig = struct {
 };
 
 const MAX_THEMES: usize = 16;
-var loaded_themes: [MAX_THEMES]ThemeConfig = [_]ThemeConfig{.{}} ** MAX_THEMES;
+var loaded_themes: [MAX_THEMES]ThemeConfig = std.mem.zeroes([MAX_THEMES]ThemeConfig);
 var theme_count: usize = 0;
 
 pub fn getLoadedThemes() []const ThemeConfig {

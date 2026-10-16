@@ -68,7 +68,7 @@ pub fn isFullyOpen() bool {
 }
 
 pub const MenuItem = struct {
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: u8 = 0,
     icon_id: u16 = 0,
     is_separator: bool = false,
@@ -78,14 +78,14 @@ pub const MenuItem = struct {
 const MAX_LEFT_ITEMS: usize = 16;
 const MAX_RIGHT_ITEMS: usize = 16;
 
-var left_items: [MAX_LEFT_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_LEFT_ITEMS;
+var left_items: [MAX_LEFT_ITEMS]MenuItem = std.mem.zeroes([MAX_LEFT_ITEMS]MenuItem);
 var left_count: usize = 0;
 
-var right_items: [MAX_RIGHT_ITEMS]MenuItem = [_]MenuItem{.{}} ** MAX_RIGHT_ITEMS;
+var right_items: [MAX_RIGHT_ITEMS]MenuItem = std.mem.zeroes([MAX_RIGHT_ITEMS]MenuItem);
 var right_count: usize = 0;
 
 var visible: bool = false;
-var search_text: [128]u8 = [_]u8{0} ** 128;
+var search_text: [128]u8 = std.mem.zeroes([128]u8);
 var search_len: usize = 0;
 
 pub fn init() void {

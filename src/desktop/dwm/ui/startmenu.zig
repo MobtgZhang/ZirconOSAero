@@ -259,7 +259,8 @@ pub fn hitTest(px: i32, py: i32) ?usize {
     for (0..g_menu_item_count) |i| {
         const item = g_menu_items[i];
         if (abs_x >= item.x and abs_x < item.x + item.width and
-            abs_y >= item.y and abs_y < item.y + item.height) {
+            abs_y >= item.y and abs_y < item.y + item.height)
+        {
             return i;
         }
     }
@@ -298,7 +299,8 @@ pub fn onClick(px: i32, py: i32) ?u32 {
 
 pub fn updateAnimations() void {
     if (g_startmenu_state.animation_state == .closed or
-        g_startmenu_state.animation_state == .open) {
+        g_startmenu_state.animation_state == .open)
+    {
         return;
     }
 

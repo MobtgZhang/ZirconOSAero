@@ -58,7 +58,7 @@ const EfiHandoff = extern struct {
     fb_width: u32 = 0,
     fb_height: u32 = 0,
     fb_bpp: u8 = 0,
-    _pad: [3]u8 = [_]u8{0} ** 3,
+    _pad: [3]u8 = std.mem.zeroes([3]u8),
     mmap_count: u32 = 0,
     mmap_entry_size: u32 = 0,
     mmap_off_from_handoff: u32 = 0,
@@ -89,10 +89,10 @@ fn storeU8(ptr: usize, val: u8) void {
 
 fn efiToKernelMmapType(mt: u32) u32 {
     const MT = uefi.tables.MemoryType;
-    if (mt == @intFromEnum(MT.conventional_memory)) return 1;
-    if (mt == @intFromEnum(MT.acpi_reclaim_memory)) return 3;
-    if (mt == @intFromEnum(MT.unusable_memory)) return 5;
-    if (mt == @intFromEnum(MT.reserved_memory_type)) return 5;
+    if (mt == @backingInt(MT.conventional_memory)) return 1;
+    if (mt == @backingInt(MT.acpi_reclaim_memory)) return 3;
+    if (mt == @backingInt(MT.unusable_memory)) return 5;
+    if (mt == @backingInt(MT.reserved_memory_type)) return 5;
     return 2;
 }
 
@@ -363,7 +363,7 @@ fn runBootManager(out: anytype, bs: *uefi.tables.BootServices, cin: *uefi.protoc
 
         puts(out, "\r\n");
         puts(out, "  [!!] Failed to load kernel image.\r\n");
-        puts(out, "  [!!] Verify ESP:\\EFI\\BOOT\\BOOTMIPS64EL.EFI and \\boot\\kernel.elf.\r\n");
+        puts(out, "  [!!] Verify ESP:\\EFI\\Microsoft\\Boot\\bootmgfw.efi and \\Windows\\System32\\winload.efi.\r\n");
         puts(out, "  [!!] System halted.\r\n");
         while (true) {}
     }
@@ -425,11 +425,11 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices, selected_idx: 
         .read,
         .{},
     ) catch {
-        puts(out, "    [!!] kernel.elf not found on ESP\r\n");
+        puts(out, "    [!!] winload.efi not found on ESP\r\n");
         return;
     };
 
-    puts(out, "    [*] kernel.elf opened\r\n");
+    puts(out, "    [*] winload.efi opened\r\n");
 
     var info_buf: [256]u8 align(8) = undefined;
     const file_info = kernel_file.getInfo(.file, @as([]align(8) u8, &info_buf)) catch {
@@ -556,7 +556,7 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices, selected_idx: 
         const dst = HANDOFF_PHYS + MMAP_STORE_OFF + @as(usize, n) * @sizeOf(KernelMmapEntry);
         storeU64(dst + @offsetOf(KernelMmapEntry, "base_addr"), md.physical_start);
         storeU64(dst + @offsetOf(KernelMmapEntry, "length"), md.number_of_pages * 4096);
-        storeU32(dst + @offsetOf(KernelMmapEntry, "type"), efiToKernelMmapType(@intFromEnum(md.type)));
+        storeU32(dst + @offsetOf(KernelMmapEntry, "type"), efiToKernelMmapType(@backingInt(md.type)));
         storeU32(dst + @offsetOf(KernelMmapEntry, "reserved"), 0);
         n += 1;
     }

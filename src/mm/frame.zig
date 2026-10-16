@@ -122,7 +122,7 @@ fn flushDebugSerialIfPossible() void {
 }
 
 /// 清零一帧；`phys` 须为可写 GPA（内核恒等映射）或主机测试池指针。
-/// x86_64 内核：`rep stosq`；主机 `zig test` 用 `u64` 循环（避免用户态内联汇编与约束差异导致 SIGSEGV）。
+/// 内核：`rep stosq`（平台相关）；主机 `zig test` 用 `u64` 循环（避免用户态内联汇编与约束差异导致 SIGSEGV）。
 /// 调试：QEMU `-S -s` + `target remote :1234`，`break memsetPhysicalPage`（或 `rb *memsetPhysicalPage`）；#PF 时 `info registers cr2 rip`。
 /// ISA 调试口 0xE9：Debug 下进/出 `rep stosq` 各写一字节（Bochs/QEMU `-d guest_errors` 等可见）。
 pub fn memsetPhysicalPage(phys: u64) void {
@@ -151,18 +151,17 @@ pub fn memsetPhysicalPage(phys: u64) void {
 
 /// CoW / 填页（约定同 `memsetPhysicalPage`）。
 pub fn memcpyPhysicalPage(dst_phys: u64, src_phys: u64) void {
-    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding) {
-        asm volatile (
-            \\cld
-            \\rep movsq
-            :
-            : [rdi] "{rdi}" (dst_phys),
-              [rsi] "{rsi}" (src_phys),
-              [rcx] "{rcx}" (@as(usize, 512)),
-            : .{ .rdi = true, .rsi = true, .rcx = true, .memory = true });
-        return;
-    }
+    memcpyPhysicalPageGeneric(dst_phys, src_phys);
+}
+
+/// 通用物理页拷贝（每次 8 字节，512 次 = 4 KiB）；无 arch 特化。
+fn memcpyPhysicalPageGeneric(dst_phys: u64, src_phys: u64) void {
+    const dst: [*]u64 = @ptrFromInt(dst_phys);
+    const src: [*]const u64 = @ptrFromInt(src_phys);
     var i: usize = 0;
+    while (i < 512) : (i += 1) {
+        dst[i] = src[i];
+    }
     const d: [*]volatile u64 = @ptrFromInt(dst_phys);
     const s: [*]const volatile u64 = @ptrFromInt(src_phys);
     while (i < 512) : (i += 1) d[i] = s[i];
@@ -310,7 +309,7 @@ pub const FrameAllocator = struct {
     pub fn init(self: *FrameAllocator, boot_info: ?boot_mod.BootInfo, kernel_end: usize) void {
         self.boot_kernel_end_exclusive = kernel_end;
         for (&self.bitmap) |*b| b.* = 0;
-        @memset(&self.pfn_meta, @intFromEnum(PfnState.unused));
+        @memset(&self.pfn_meta, @backingInt(PfnState.unused));
         @memset(&self.pfn_locks, 0);
         @memset(&self.pfn_share_count, 0);
         @memset(&self.pfn_flink, 0);
@@ -354,7 +353,7 @@ pub const FrameAllocator = struct {
         while (mi < info.mmap_entry_count) : (mi += 1) {
             const e = info.getMmapEntry(mi) orelse break;
             if (e.length == 0) continue;
-            if (e.type == @intFromEnum(boot_mod.MmapEntryType.available)) continue;
+            if (e.type == @backingInt(boot_mod.MmapEntryType.available)) continue;
             if (e.base_addr > std.math.maxInt(u64) - e.length) continue;
             if (nram_n < nram_raw.len) {
                 nram_raw[nram_n] = .{ .start = e.base_addr, .end_excl = e.base_addr + e.length };
@@ -378,7 +377,7 @@ pub const FrameAllocator = struct {
         mi = 0;
         while (mi < info.mmap_entry_count) : (mi += 1) {
             const entry = info.getMmapEntry(mi) orelse break;
-            if (entry.type != @intFromEnum(boot_mod.MmapEntryType.available)) continue;
+            if (entry.type != @backingInt(boot_mod.MmapEntryType.available)) continue;
             if (entry.length == 0) continue;
             const base = entry.base_addr;
             const len = entry.length;
@@ -468,7 +467,7 @@ pub const FrameAllocator = struct {
             if (w < BITMAP_SIZE) self.bitmap[w] |= mask;
             f += bits_in_word;
         }
-        @memset(self.pfn_meta[lo..hi_excl], @intFromEnum(PfnState.free));
+        @memset(self.pfn_meta[lo..hi_excl], @backingInt(PfnState.free));
         const old = self.free_head[zidx];
         const first = lo;
         const last = hi_excl - 1;
@@ -570,12 +569,12 @@ pub const FrameAllocator = struct {
     }
 
     fn setPfn(self: *FrameAllocator, frame: usize, st: PfnState) void {
-        if (frame < MAX_PHYS_FRAMES) self.pfn_meta[frame] = @intFromEnum(st);
+        if (frame < MAX_PHYS_FRAMES) self.pfn_meta[frame] = @backingInt(st);
     }
 
     fn getPfn(self: *const FrameAllocator, frame: usize) PfnState {
         if (frame >= MAX_PHYS_FRAMES) return .unused;
-        return @enumFromInt(self.pfn_meta[frame]);
+        return @fromBackingInt(@intCast(self.pfn_meta[frame]));
     }
 
     fn bitmapMarkFree(self: *FrameAllocator, frame: usize) void {
@@ -684,24 +683,38 @@ pub const FrameAllocator = struct {
         self.used_frames += 1;
     }
 
+    fn popUnlockedFromList(self: *FrameAllocator, heads: *[3]u32, zone_idx: usize) ?usize {
+        var f = heads[zone_idx];
+        while (f != pfn_list_nil) {
+            const next = self.pfn_flink[f];
+            if (self.pfn_locks[f] == 0) {
+                self.listUnlink(heads, zone_idx, f);
+                return f;
+            }
+            f = next;
+        }
+        return null;
+    }
+
+    fn popUnlockedZeroedBelowMaxPhys(self: *FrameAllocator, max_phys_exclusive: u64, zone_idx: usize) ?usize {
+        var f = self.zeroed_head[zone_idx];
+        while (f != pfn_list_nil) {
+            const next = self.pfn_flink[f];
+            const phys = self.physFromSlot(f);
+            if (phys < max_phys_exclusive and self.pfn_locks[f] == 0) {
+                self.listUnlink(&self.zeroed_head, zone_idx, f);
+                return f;
+            }
+            f = next;
+        }
+        return null;
+    }
+
     /// 自指定 zone 弹出一页：先 Zeroed 再 Free（Free 弹出后内容未定义，由调用方决定是否清零）。
     fn popFrameInZoneFixed(self: *FrameAllocator, zone: MemoryZone) ?usize {
         const zi = zoneToIdx(zone);
-        if (self.listPop(&self.zeroed_head, zi)) |f| {
-            if (self.pfn_locks[f] != 0) {
-                self.listPrepend(&self.zeroed_head, zi, f);
-                return null;
-            }
-            return f;
-        }
-        if (self.listPop(&self.free_head, zi)) |f| {
-            if (self.pfn_locks[f] != 0) {
-                self.listPrepend(&self.free_head, zi, f);
-                return null;
-            }
-            return f;
-        }
-        return null;
+        return self.popUnlockedFromList(&self.zeroed_head, zi) orelse
+            self.popUnlockedFromList(&self.free_head, zi);
     }
 
     /// 伙伴 arena 等已占用但非「活跃匿名页」的帧。
@@ -791,19 +804,11 @@ pub const FrameAllocator = struct {
             arch.flushDebugSerialOutput();
         }
         const zorder = [_]MemoryZone{ .normal, .high, .dma };
+        const ceiling = g_alloc_phys_ceiling_exclusive orelse std.math.maxInt(u64);
         for (zorder) |z| {
             const idx = zoneToIdx(z);
-            if (self.listPop(&self.zeroed_head, idx)) |f| {
+            if (self.popUnlockedZeroedBelowMaxPhys(ceiling, idx)) |f| {
                 const p = self.physFromSlot(f);
-                // 若帧超出恒等映射上限，须归还 zeroed 链表供后续 drain 统一处理。
-                // 否则该帧会被标记为 active，但其 phys 在 `memsetPhysicalPage` 时会导致 #PF（MMIO 地址无映射）。
-                if (g_alloc_phys_ceiling_exclusive) |ceil| {
-                    if (p >= ceil) {
-                        // 帧超出恒等映射上限，须归还 zeroed 链表供后续 drain 统一处理。
-                        self.listPrepend(&self.zeroed_head, idx, f);
-                        continue;
-                    }
-                }
                 self.activateFrame(f);
                 if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
                     klog.debug("PFN: allocZeroed reuse zeroed GPA 0x%x (no memset)", .{p});
@@ -844,23 +849,17 @@ pub const FrameAllocator = struct {
         // 导致该帧可能同时在 free 链表 + active 状态。检查 bitmap 会错误地将 active 帧移回 free 链表。
         for (zorder) |z| {
             const idx = zoneToIdx(z);
-            var f = self.zeroed_head[idx];
-            while (f != pfn_list_nil) {
+            if (self.popUnlockedZeroedBelowMaxPhys(max_phys_exclusive, idx)) |f| {
                 const phys_z = self.physFromSlot(f);
-                const next = self.pfn_flink[f];
-                if (phys_z < max_phys_exclusive) {
-                    self.listUnlink(&self.zeroed_head, idx, f);
-                    self.activateFrame(f);
-                    if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
-                        klog.debug("PFN: allocZeroedBelowMaxPhys reuse zeroed GPA 0x{x} (ceiling 0x{x}, no memset)", .{
-                            phys_z,
-                            max_phys_exclusive,
-                        });
-                        flushDebugSerialIfPossible();
-                    }
-                    return phys_z;
+                self.activateFrame(f);
+                if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
+                    klog.debug("PFN: allocZeroedBelowMaxPhys reuse zeroed GPA 0x{x} (ceiling 0x{x}, no memset)", .{
+                        phys_z,
+                        max_phys_exclusive,
+                    });
+                    flushDebugSerialIfPossible();
                 }
-                f = next;
+                return phys_z;
             }
         }
         // bitmap 扫描：跳过 zeroed 链表后直接走 scan，避免 alloc() 路径弹出超出上限的 free 帧。
@@ -978,7 +977,7 @@ pub const FrameAllocator = struct {
         self.host_test_base = 0;
         self.boot_kernel_end_exclusive = 0;
         for (&self.bitmap) |*w| w.* = 0;
-        @memset(&self.pfn_meta, @intFromEnum(PfnState.unused));
+        @memset(&self.pfn_meta, @backingInt(PfnState.unused));
         @memset(&self.pfn_locks, 0);
         @memset(&self.pfn_share_count, 0);
         @memset(&self.pfn_flink, 0);
@@ -1130,6 +1129,38 @@ test "frame lock prevents free" {
     frame_unit_test_storage.unlockPfnPhys(phys);
     frame_unit_test_storage.free(phys);
     try std.testing.expect(frame_unit_test_storage.isPhysicalPageFree(phys));
+}
+
+test "locked frame head does not block allocation" {
+    frame_unit_test_storage.testSeedLinearFreeFrames(8);
+    const locked = frame_unit_test_storage.physFromSlot(0);
+    frame_unit_test_storage.lockPfnPhys(locked);
+    const p = frame_unit_test_storage.allocInZone(.dma) orelse return error.Fail;
+    try std.testing.expectEqual(@as(u64, FRAME_SIZE), p);
+    frame_unit_test_storage.free(p);
+    frame_unit_test_storage.unlockPfnPhys(locked);
+}
+
+test "locked zeroed frame is skipped" {
+    frame_unit_test_storage.testSeedLinearFreeFrames(8);
+    frame_unit_test_storage.testEnqueueZeroedFrame(1);
+    frame_unit_test_storage.testEnqueueZeroedFrame(0);
+    frame_unit_test_storage.lockPfnPhys(frame_unit_test_storage.physFromSlot(0));
+    const p = frame_unit_test_storage.allocZeroed() orelse return error.Fail;
+    try std.testing.expectEqual(@as(u64, FRAME_SIZE), p);
+    frame_unit_test_storage.unlockPfnPhys(frame_unit_test_storage.physFromSlot(0));
+    frame_unit_test_storage.free(p);
+}
+
+test "allocZeroedBelowMaxPhys skips locked zeroed frame" {
+    frame_unit_test_storage.testSeedLinearFreeFrames(8);
+    frame_unit_test_storage.testEnqueueZeroedFrame(1);
+    frame_unit_test_storage.testEnqueueZeroedFrame(0);
+    frame_unit_test_storage.lockPfnPhys(frame_unit_test_storage.physFromSlot(0));
+    const p = frame_unit_test_storage.allocZeroedBelowMaxPhys(8 * FRAME_SIZE) orelse return error.Fail;
+    try std.testing.expectEqual(@as(u64, FRAME_SIZE), p);
+    frame_unit_test_storage.unlockPfnPhys(frame_unit_test_storage.physFromSlot(0));
+    frame_unit_test_storage.free(p);
 }
 
 test "frame freeContiguousRange" {

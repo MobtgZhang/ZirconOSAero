@@ -158,8 +158,7 @@ export fn riscv_dispatch_trap(frame: *TrapFrame) callconv(.c) void {
                         return;
                     }
                     _ = process.terminateProcess(proc.pid, 0xC0000005);
-                    klog.err("riscv64: user page fault ACCESS_VIOLATION (va=0x%x cause=0x%x) PID=%u",
-                        .{ fault_va, cause, proc.pid });
+                    klog.err("riscv64: user page fault ACCESS_VIOLATION (va=0x%x cause=0x%x) PID=%u", .{ fault_va, cause, proc.pid });
                     @import("../riscv64/mod.zig").halt();
                 }
             }

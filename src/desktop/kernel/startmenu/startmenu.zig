@@ -154,7 +154,7 @@ var hover_index: i32 = -1;
 /// `updatePointerHover` 检测到变化时的上一索引，供 `getHoverHighlightRepaintBounds` 与当前 `hover_index` 做行级脏区并集。
 var hover_prev_for_partial_repaint: i32 = -1;
 /// 搜索框输入（开始菜单打开时由主循环 `feedSearchFromKeyboard` 填充）。
-var search_buf: [96]u8 = [_]u8{0} ** 96;
+var search_buf: [96]u8 = std.mem.zeroes([96]u8);
 var search_len: usize = 0;
 var power_flyout_open: bool = false;
 /// 左列视图状态（替换原 all_programs_open 侧栏语义）：pinned=固定列表，all_programs=程序列表。

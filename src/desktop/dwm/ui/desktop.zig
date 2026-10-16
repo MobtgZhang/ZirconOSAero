@@ -238,7 +238,8 @@ pub fn hitTestIcon(px: i32, py: i32) ?usize {
         i -= 1;
         const icon = g_desktop_icons[i];
         if (px >= icon.x and px < icon.x + ICON_SPACING_X and
-            py >= icon.y and py < icon.y + ICON_SPACING_Y) {
+            py >= icon.y and py < icon.y + ICON_SPACING_Y)
+        {
             return i;
         }
     }
@@ -293,7 +294,8 @@ pub fn hitTestContextMenu(px: i32, py: i32) ?ContextMenuItem {
     const menu_width: i32 = 160;
 
     if (px >= g_context_menu_x and px < g_context_menu_x + menu_width and
-        py >= g_context_menu_y and py < g_context_menu_y + @as(i32, @intCast(g_context_menu_item_count)) * menu_item_height) {
+        py >= g_context_menu_y and py < g_context_menu_y + @as(i32, @intCast(g_context_menu_item_count)) * menu_item_height)
+    {
         const idx = @as(usize, @intCast((py - g_context_menu_y) / menu_item_height));
         if (idx < g_context_menu_item_count) {
             return g_context_menu_items[idx];

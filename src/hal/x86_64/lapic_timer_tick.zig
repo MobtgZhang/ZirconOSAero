@@ -36,8 +36,12 @@ const kpcr = @import("../../ke/kpcr.zig");
 // 在 host 测试模式下使用 no-op 日志
 const KlogStub = struct {
     pub const DEBUG_MODE = false;
-    pub fn info(comptime _: []const u8, _: anytype) void { _ = KlogStub; }
-    pub fn debug(comptime _: []const u8, _: anytype) void { _ = KlogStub; }
+    pub fn info(comptime _: []const u8, _: anytype) void {
+        _ = KlogStub;
+    }
+    pub fn debug(comptime _: []const u8, _: anytype) void {
+        _ = KlogStub;
+    }
 };
 const klog = if (builtin.os.tag == .freestanding)
     @import("../../rtl/klog.zig")

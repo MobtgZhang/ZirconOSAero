@@ -27,6 +27,7 @@
 const std = @import("std");
 const fb = @import("../../../drivers/video/core/framebuffer.zig");
 const theme_mod = @import("../../kernel/theme/root.zig");
+const config = @import("../../../config/config.zig");
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme_mod.rgb(r, g, b);
@@ -107,19 +108,16 @@ pub const SysInfoWindow = struct {
         const ty = si.y + 40;
 
         for (tabs, 0..) |tab_name, i| {
-            const tab_enum: InfoTab = @enumFromInt(i);
+            const tab_enum: InfoTab = @fromBackingInt(@intCast(i));
             const selected = (si.active_tab == tab_enum);
             const tab_w: i32 = 80;
             const tab_h: i32 = 28;
 
             const bg = if (selected) rgb(0xF8, 0xFC, 0xFF) else rgb(0xE8, 0xEC, 0xF4);
             fb.fillRect(tx, ty, tab_w, tab_h, bg);
-            fb.draw3DRect(tx, ty, tab_w, tab_h,
-                if (selected) rgb(0xFF, 0xFF, 0xFF) else rgb(0xD0, 0xD8, 0xE0),
-                if (selected) rgb(0xC8, 0xD4, 0xE0) else rgb(0xFF, 0xFF, 0xFF));
+            fb.draw3DRect(tx, ty, tab_w, tab_h, if (selected) rgb(0xFF, 0xFF, 0xFF) else rgb(0xD0, 0xD8, 0xE0), if (selected) rgb(0xC8, 0xD4, 0xE0) else rgb(0xFF, 0xFF, 0xFF));
 
-            fb.drawTextTransparent(tx + 4, ty + 8, tab_name,
-                if (selected) rgb(0x20, 0x40, 0x80) else rgb(0x40, 0x40, 0x50));
+            fb.drawTextTransparent(tx + 4, ty + 8, tab_name, if (selected) rgb(0x20, 0x40, 0x80) else rgb(0x40, 0x40, 0x50));
             tx += tab_w + 4;
         }
     }
@@ -139,15 +137,15 @@ pub const SysInfoWindow = struct {
     fn renderSystemInfo(si: *SysInfoWindow, cx: *i32, cy: *i32) void {
         _ = si;
         const labels = [_][]const u8{
-            "OS Name:",           "Version:",
-            "System Type:",       "Registered Owner:",
-            "Product ID:",        "Original Install Date:",
+            "OS Name:",     "Version:",
+            "System Type:", "Registered Owner:",
+            "Product ID:",  "Original Install Date:",
         };
 
         const values = [_][]const u8{
             "ZirconOSAero Enterprise",
             "6.1 (Build 7601)",
-            "LoongArch64 / x86_64",
+            config.getNtProductArch(),
             "ZirconOSAero User",
             "00426-OEM-xxxxxxx-xxxxx",
             "2026-04-11",

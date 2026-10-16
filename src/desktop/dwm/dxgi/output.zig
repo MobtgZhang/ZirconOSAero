@@ -29,7 +29,7 @@ pub const Output = struct {
     pub fn initDefault() *Output {
         const self = std.heap.page_allocator.create(Output) catch unreachable;
         self.desc = .{
-            .device_name = [_]u16{0} ** 32,
+            .device_name = [_]u16{0} * *32,
             .desktop_coordinates = .{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 },
             .attached_to_desktop = true,
             .rotation = .DXGI_MODE_ROTATION_IDENTITY,
@@ -88,7 +88,7 @@ pub const Output = struct {
 
         if (mode_list == null or count.* < modes.len) {
             count.* = modes.len;
-            return @intFromEnum(errors.DXGI_ERROR.DXGI_ERROR_MORE_DATA);
+            return @backingInt(errors.DXGI_ERROR.DXGI_ERROR_MORE_DATA);
         }
 
         for (modes, 0..) |mode, i| {

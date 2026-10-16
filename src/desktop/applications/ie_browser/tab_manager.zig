@@ -99,7 +99,7 @@ pub const TabManager = struct {
 
     pub fn create() TabManager {
         return .{
-            .tabs = [_]?IETab{null} ** MaxTabs,
+            .tabs = [_]?IETab{null} * *MaxTabs,
             .tab_count = 0,
             .active_tab_index = 0,
             .next_tab_id = 1,

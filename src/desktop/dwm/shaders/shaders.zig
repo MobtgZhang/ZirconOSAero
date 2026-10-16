@@ -31,7 +31,7 @@ pub const ShaderBytecode = struct {
 };
 
 pub const ShaderCache = struct {
-    shaders: [MAX_SHADER_TYPES]?ShaderBytecode = .{null} ** MAX_SHADER_TYPES,
+    shaders: [MAX_SHADER_TYPES]?ShaderBytecode = std.mem.zeroes([MAX_SHADER_TYPES]?ShaderBytecode),
     initialized: bool,
 
     pub fn init(self: *ShaderCache) void {
@@ -39,7 +39,7 @@ pub const ShaderCache = struct {
     }
 
     pub fn loadShader(self: *ShaderCache, shader_type: ShaderType, bytecode: []const u8) void {
-        const idx = @intFromEnum(shader_type);
+        const idx = @backingInt(shader_type);
         if (idx < MAX_SHADER_TYPES) {
             self.shaders[idx] = .{
                 .shader_type = shader_type,
@@ -50,7 +50,7 @@ pub const ShaderCache = struct {
     }
 
     pub fn getShader(self: *const ShaderCache, shader_type: ShaderType) ?*const ShaderBytecode {
-        const idx = @intFromEnum(shader_type);
+        const idx = @backingInt(shader_type);
         if (idx < MAX_SHADER_TYPES) {
             return self.shaders[idx];
         }

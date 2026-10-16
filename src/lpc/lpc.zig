@@ -91,7 +91,7 @@ pub const LpcMessage = extern struct {
     /// Returned status code for replies
     return_status: io.NTSTATUS = io.STATUS_SUCCESS,
     /// Message payload data
-    data: [MAX_MESSAGE_DATA_LENGTH]u8 = [_]u8{0} ** MAX_MESSAGE_DATA_LENGTH,
+    data: [MAX_MESSAGE_DATA_LENGTH]u8 = std.mem.zeroes([MAX_MESSAGE_DATA_LENGTH]u8),
 };
 
 /// LPC connection information structure (passed during connection)
@@ -111,7 +111,7 @@ pub const LpcPort = struct {
     /// Object header
     header: ob.ObjectHeader = .{ .obj_type = .lpc_port },
     /// Port name (for named ports)
-    name: [MAX_PORT_NAME_LENGTH]u8 = [_]u8{0} ** MAX_PORT_NAME_LENGTH,
+    name: [MAX_PORT_NAME_LENGTH]u8 = std.mem.zeroes([MAX_PORT_NAME_LENGTH]u8),
     /// Name length
     name_len: usize = 0,
     /// Port type
@@ -136,7 +136,7 @@ pub const LpcPort = struct {
         .message_id = 0,
         .client_process_id = 0,
         .client_thread_id = 0,
-    }} ** MAX_PENDING_MESSAGES,
+    }} * *MAX_PENDING_MESSAGES,
     /// Number of pending messages in queue
     message_count: usize = 0,
     /// Pending connection requests (only for connection ports)
@@ -147,11 +147,11 @@ pub const LpcPort = struct {
         .message_id = 0,
         .client_process_id = 0,
         .client_thread_id = 0,
-    }} ** MAX_CONNECTION_REQUESTS,
+    }} * *MAX_CONNECTION_REQUESTS,
     /// Number of pending connection requests
     connection_count: usize = 0,
     /// Connected client ports (only for connection ports)
-    client_ports: [MAX_CONNECTED_CLIENTS]u32 = [_]u32{0} ** MAX_CONNECTED_CLIENTS,
+    client_ports: [MAX_CONNECTED_CLIENTS]u32 = std.mem.zeroes([MAX_CONNECTED_CLIENTS]u32),
     /// Number of connected clients
     client_count: usize = 0,
     /// Event signaled when a message arrives
@@ -167,7 +167,7 @@ pub const LpcPort = struct {
 /// Global LPC port table
 var ports: [ob.MAX_OBJECTS]LpcPort = [_]LpcPort{.{
     .port_type = .UnconnectedPort,
-}} ** ob.MAX_OBJECTS;
+}} * *ob.MAX_OBJECTS;
 var port_count: usize = 0;
 var next_port_id: u32 = 1;
 var lpc_initialized: bool = false;
@@ -454,12 +454,12 @@ fn sendMessage(port: *LpcPort, message: *const LpcMessage) io.NTSTATUS {
     if (port.message_count >= MAX_PENDING_MESSAGES) return io.STATUS_INSUFFICIENT_RESOURCES;
 
     // 优先使用底层IPC队列传输
-    var ipc_data: [ipc.MSG_DATA_SIZE]u8 = [_]u8{0} ** ipc.MSG_DATA_SIZE;
+    var ipc_data: [ipc.MSG_DATA_SIZE]u8 = std.mem.zeroes([ipc.MSG_DATA_SIZE]u8);
     const copy_len = @min(message.data_length, ipc.MSG_DATA_SIZE);
     @memcpy(ipc_data[0..copy_len], message.data[0..copy_len]);
 
     // 把LPC消息封装成IPC消息发送给端口所属进程
-    const result = ipc.sendTyped(ps.getCurrentProcessId(), port.owner_process_id, @intFromEnum(message.message_type), switch (message.message_type) {
+    const result = ipc.sendTyped(ps.getCurrentProcessId(), port.owner_process_id, @backingInt(message.message_type), switch (message.message_type) {
         .ConnectionRequest => .connection_request,
         .ConnectionAccepted, .ConnectionRejected => .connection_reply,
         .Request => .request,

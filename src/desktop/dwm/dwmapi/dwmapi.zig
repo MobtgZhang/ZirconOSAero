@@ -115,7 +115,7 @@ pub const ThumbnailState = struct {
     opacity: u8,
 };
 
-pub var g_thumbnail_pool: [MAX_THUMBNAILS]?ThumbnailState = [_]?ThumbnailState{null} ** MAX_THUMBNAILS;
+pub var g_thumbnail_pool: [MAX_THUMBNAILS]?ThumbnailState = std.mem.zeroes([MAX_THUMBNAILS]?ThumbnailState);
 pub var g_thumbnail_count: usize = 0;
 pub var g_thumbnail_next_id: HTHUMBNAIL = 1;
 

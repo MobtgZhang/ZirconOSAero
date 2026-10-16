@@ -34,7 +34,10 @@ fn rgb(r: u32, g: u32, b: u32) u32 {
 
 const Point = struct { x: i32, y: i32 };
 const Rect = struct {
-    x: i32, y: i32, width: i32, height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
     pub fn contains(r: Rect, px: i32, py: i32) bool {
         return px >= r.x and px < r.x + r.width and py >= r.y and py < r.y + r.height;
     }
@@ -55,9 +58,12 @@ pub const Control = struct {
 
     pub fn create(x_pos: i32, y_pos: i32, w: i32, h: i32) Control {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = w, .height = h,
-            .visible = true, .enabled = true,
+            .x = x_pos,
+            .y = y_pos,
+            .width = w,
+            .height = h,
+            .visible = true,
+            .enabled = true,
             .state = .normal,
         };
     }
@@ -67,7 +73,9 @@ pub const Control = struct {
         return c.visible and c.enabled and r.contains(px, py);
     }
 
-    pub fn setState(c: *Control, s: ControlState) void { c.state = s; }
+    pub fn setState(c: *Control, s: ControlState) void {
+        c.state = s;
+    }
 
     pub fn getClientRect(c: *const Control) Rect {
         return .{ .x = c.x, .y = c.y, .width = c.width, .height = c.height };
@@ -1107,7 +1115,7 @@ pub const TextArea = struct {
             if (line_len > 0 and line_start < ta.text.len) {
                 const display_len = @min(line_len, @as(usize, @intCast(@divTrunc(w - (text_area_x - x), ta.char_width))));
                 if (display_len > 0) {
-                    fb.drawTextTransparentClipped (text_area_x, text_y, text_area_x + w, ta.text[line_start..][0..display_len], rgb(0x10, 0x10, 0x18));
+                    fb.drawTextTransparentClipped(text_area_x, text_y, text_area_x + w, ta.text[line_start..][0..display_len], rgb(0x10, 0x10, 0x18));
                 }
             }
             text_y += ta.line_height;

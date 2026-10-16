@@ -87,12 +87,14 @@ pub const NotepadApp = struct {
     /// Create a new Notepad instance
     pub fn create(x_pos: i32, y_pos: i32) NotepadApp {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 640, .height = 480,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 640,
+            .height = 480,
             .title = "Untitled - Notepad",
             .visible = true,
             .focused = false,
-            .text = [_]u8{0} ** 65536,
+            .text = [_]u8{0} * *65536,
             .text_len = 0,
             .cursor_x = 0,
             .cursor_y = 0,
@@ -100,7 +102,7 @@ pub const NotepadApp = struct {
             .scroll_y = 0,
             .line_count = 1,
             .modified = false,
-            .file_path = [_]u8{0} ** vfs.MAX_PATH,
+            .file_path = [_]u8{0} * *vfs.MAX_PATH,
             .file_path_len = 0,
             .file_handle = null,
             .last_error = .success,

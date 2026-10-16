@@ -21,9 +21,9 @@ pub const FontCategory = enum(u8) {
 };
 
 pub const FontEntry = struct {
-    name: [NAME_MAX]u8 = [_]u8{0} ** NAME_MAX,
+    name: [NAME_MAX]u8 = std.mem.zeroes([NAME_MAX]u8),
     name_len: u8 = 0,
-    path: [PATH_MAX]u8 = [_]u8{0} ** PATH_MAX,
+    path: [PATH_MAX]u8 = std.mem.zeroes([PATH_MAX]u8),
     path_len: u8 = 0,
     category: FontCategory = .western,
     is_bold: bool = false,
@@ -31,7 +31,7 @@ pub const FontEntry = struct {
     loaded: bool = false,
 };
 
-var fonts: [MAX_FONT_FAMILIES]FontEntry = [_]FontEntry{.{}} ** MAX_FONT_FAMILIES;
+var fonts: [MAX_FONT_FAMILIES]FontEntry = std.mem.zeroes([MAX_FONT_FAMILIES]FontEntry);
 var font_count: usize = 0;
 var initialized: bool = false;
 

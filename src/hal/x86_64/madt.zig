@@ -45,7 +45,7 @@ pub var ioapic_mmio_phys: u32 = 0;
 /// 已启用 Local APIC 条目的 **APIC ID** 列表（顺序与 MADT 中一致）；`apic_id_count` 为有效前缀长度。
 pub const MAX_APIC_ID_LIST: usize = 64;
 pub var apic_id_count: u32 = 0;
-pub var apic_ids: [MAX_APIC_ID_LIST]u8 = [_]u8{0} ** MAX_APIC_ID_LIST;
+pub var apic_ids: [MAX_APIC_ID_LIST]u8 = std.mem.zeroes([MAX_APIC_ID_LIST]u8);
 
 /// 启发式 BSP：**首个** flags.enabled 的 Local APIC 条目的 APIC ID（固件未必显式标记 BSP；与公开固件常见布局一致时为 APIC ID 0）。
 pub var bsp_apic_id: u8 = 0;

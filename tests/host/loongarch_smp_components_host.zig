@@ -46,10 +46,10 @@ const MAX_APS: usize = 255;
 const GUARD_PAGE_SIZE: usize = AP_STACK_SIZE;
 
 test "LoongArch64 CSR constants" {
-    try std.testing.expectEqual(@as(u12, 0x18), CSR_PGDL);   // PGDL
-    try std.testing.expectEqual(@as(u12, 0x30), CSR_TPID);   // TPID
-    try std.testing.expectEqual(@as(u12, 0x4), CSR_ECFG);    // ECFG
-    try std.testing.expectEqual(@as(u12, 0xc), CSR_EENTRY);  // EENTRY
+    try std.testing.expectEqual(@as(u12, 0x18), CSR_PGDL); // PGDL
+    try std.testing.expectEqual(@as(u12, 0x30), CSR_TPID); // TPID
+    try std.testing.expectEqual(@as(u12, 0x4), CSR_ECFG); // ECFG
+    try std.testing.expectEqual(@as(u12, 0xc), CSR_EENTRY); // EENTRY
 }
 
 test "LoongArch64 SMP constants" {

@@ -20,6 +20,7 @@
 //! Manages sessions, starts subsystem hosts (CSRSS), and manages the boot sequence.
 //! Implements the NT-style session manager process.
 
+const std = @import("std");
 const process = @import("../ps/process.zig");
 const ipc = @import("../lpc/ipc.zig");
 const port = @import("../lpc/port.zig");
@@ -57,19 +58,19 @@ pub const SubsystemType = enum(u8) {
 
 pub const SubsystemInfo = struct {
     sub_type: SubsystemType = .native,
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
     server_pid: u32 = 0,
     is_active: bool = false,
-    port_name: [32]u8 = [_]u8{0} ** 32,
+    port_name: [32]u8 = std.mem.zeroes([32]u8),
     port_name_len: usize = 0,
 };
 
-var sessions: [MAX_SESSIONS]Session = [_]Session{.{}} ** MAX_SESSIONS;
+var sessions: [MAX_SESSIONS]Session = std.mem.zeroes([MAX_SESSIONS]Session);
 var session_count: u32 = 0;
 var next_session_id: u32 = 0;
 
-var subsystems: [MAX_SUBSYSTEMS]SubsystemInfo = [_]SubsystemInfo{.{}} ** MAX_SUBSYSTEMS;
+var subsystems: [MAX_SUBSYSTEMS]SubsystemInfo = std.mem.zeroes([MAX_SUBSYSTEMS]SubsystemInfo);
 var subsystem_count: usize = 0;
 
 var smss_initialized: bool = false;
@@ -144,7 +145,7 @@ pub fn handleMessage() void {
     switch (msg.opcode) {
         1 => {
             const sid = createSession(false);
-            var reply: [ipc.MSG_DATA_SIZE]u8 = [_]u8{0} ** ipc.MSG_DATA_SIZE;
+            var reply: [ipc.MSG_DATA_SIZE]u8 = std.mem.zeroes([ipc.MSG_DATA_SIZE]u8);
             if (sid) |s| {
                 reply[0] = @intCast(s & 0xFF);
                 reply[1] = @intCast((s >> 8) & 0xFF);
@@ -152,7 +153,7 @@ pub fn handleMessage() void {
             _ = ipc.send(SMSS_PID, msg.sender, msg.opcode, &reply);
         },
         2 => {
-            var reply: [ipc.MSG_DATA_SIZE]u8 = [_]u8{0} ** ipc.MSG_DATA_SIZE;
+            var reply: [ipc.MSG_DATA_SIZE]u8 = std.mem.zeroes([ipc.MSG_DATA_SIZE]u8);
             reply[0] = @intCast(session_count & 0xFF);
             _ = ipc.send(SMSS_PID, msg.sender, msg.opcode, &reply);
         },

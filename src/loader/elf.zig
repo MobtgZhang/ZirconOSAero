@@ -20,6 +20,7 @@
 //! Phase 7 Enhanced: Segment mapping, dynamic linking support,
 //! symbol resolution, and multi-architecture ELF loading.
 
+const std = @import("std");
 const ob = @import("../ob/object.zig");
 const klog = @import("../rtl/klog.zig");
 
@@ -78,7 +79,7 @@ pub const DT_SYMTAB: i64 = 6;
 pub const DT_STRSZ: i64 = 10;
 
 pub const Elf64Header = extern struct {
-    e_ident: [16]u8 align(1) = [_]u8{0} ** 16,
+    e_ident: [16]u8 align(1) = std.mem.zeroes([16]u8),
     e_type: u16 align(1) = 0,
     e_machine: u16 align(1) = 0,
     e_version: u32 align(1) = 0,
@@ -173,7 +174,7 @@ pub const SegmentInfo = struct {
 };
 
 pub const ElfSymbol = struct {
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
     value: u64 = 0,
     size: u64 = 0,
@@ -188,16 +189,16 @@ pub const ElfImage = struct {
     is_loaded: bool = false,
     is_pie: bool = false,
     is_shared: bool = false,
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
-    full_path: [260]u8 = [_]u8{0} ** 260,
+    full_path: [260]u8 = std.mem.zeroes([260]u8),
     full_path_len: usize = 0,
-    segments: [MAX_SEGMENTS]SegmentInfo = [_]SegmentInfo{.{}} ** MAX_SEGMENTS,
+    segments: [MAX_SEGMENTS]SegmentInfo = std.mem.zeroes([MAX_SEGMENTS]SegmentInfo),
     segment_count: usize = 0,
-    symbols: [MAX_SYMBOLS]ElfSymbol = [_]ElfSymbol{.{}} ** MAX_SYMBOLS,
+    symbols: [MAX_SYMBOLS]ElfSymbol = std.mem.zeroes([MAX_SYMBOLS]ElfSymbol),
     symbol_count: usize = 0,
-    needed: [MAX_NEEDED][64]u8 = [_][64]u8{[_]u8{0} ** 64} ** MAX_NEEDED,
-    needed_len: [MAX_NEEDED]usize = [_]usize{0} ** MAX_NEEDED,
+    needed: [MAX_NEEDED][64]u8 = std.mem.zeroes([MAX_NEEDED][64]u8),
+    needed_len: [MAX_NEEDED]usize = std.mem.zeroes([MAX_NEEDED]usize),
     needed_count: usize = 0,
     machine: u16 = 0,
     elf_type: u16 = 0,
@@ -265,7 +266,7 @@ pub const ElfImage = struct {
     }
 };
 
-var elf_images: [MAX_ELF_IMAGES]ElfImage = [_]ElfImage{.{}} ** MAX_ELF_IMAGES;
+var elf_images: [MAX_ELF_IMAGES]ElfImage = std.mem.zeroes([MAX_ELF_IMAGES]ElfImage);
 var elf_count: usize = 0;
 
 pub const ElfLoadResult = struct {

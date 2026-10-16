@@ -50,13 +50,13 @@ pub const DesktopIconKind = enum(u8) {
 /// 根据 icon_id (icons.IconId) 转换为 DesktopIconKind
 pub fn iconKindFromId(icon_id: u16) DesktopIconKind {
     return switch (icon_id) {
-        1 => .computer,      // .computer
-        2 => .documents,      // .documents
-        3 => .recycle_bin,   // .recycle_bin
-        4 => .terminal,      // .terminal
-        5 => .network,       // .network
-        6 => .browser,       // .browser
-        7 => .settings,      // .control_panel
+        1 => .computer, // .computer
+        2 => .documents, // .documents
+        3 => .recycle_bin, // .recycle_bin
+        4 => .terminal, // .terminal
+        5 => .network, // .network
+        6 => .browser, // .browser
+        7 => .settings, // .control_panel
         else => .custom,
     };
 }
@@ -64,7 +64,7 @@ pub fn iconKindFromId(icon_id: u16) DesktopIconKind {
 pub const DesktopIcon = struct {
     kind: DesktopIconKind,
     label: []const u8,
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: u8 = 0,
     icon: icons.IconId,
     x: i32,
@@ -84,7 +84,7 @@ fn initDesktopIconsArray() void {
         icon.* = .{
             .kind = .custom,
             .label = "",
-            .name = [_]u8{0} ** 64,
+            .name = [_]u8{0} * *64,
             .name_len = 0,
             .icon = .computer,
             .x = 0,
@@ -104,10 +104,10 @@ var desktop_drag_offset_y: i32 = 0;
 var desktop_focused: bool = false;
 
 // Hover enhancement state
-var desktop_hover_start_tick: usize = 0;  // 悬停开始时间（使用 usize 防止溢出）
-var desktop_hover_tick: usize = 0;        // 当前tick（使用 usize 防止溢出）
-const HOVER_DELAY_TICKS: usize = 5;        // 悬停延迟（帧数）
-const HOVER_ANIM_TICKS: usize = 3;        // 悬停动画持续时间
+var desktop_hover_start_tick: usize = 0; // 悬停开始时间（使用 usize 防止溢出）
+var desktop_hover_tick: usize = 0; // 当前tick（使用 usize 防止溢出）
+const HOVER_DELAY_TICKS: usize = 5; // 悬停延迟（帧数）
+const HOVER_ANIM_TICKS: usize = 3; // 悬停动画持续时间
 
 // Layout
 const ICON_SIZE: i32 = 48;
@@ -152,10 +152,7 @@ pub fn navigateUp() void {
         if (new_index < @as(i32, @intCast(desktop_icon_count))) {
             desktop_selected_index = new_index;
         } else {
-            desktop_selected_index = @min(
-                @as(i32, @intCast(desktop_icon_count)) - 1,
-                (new_row + 1) * col_count - 1
-            );
+            desktop_selected_index = @min(@as(i32, @intCast(desktop_icon_count)) - 1, (new_row + 1) * col_count - 1);
         }
     } else {
         const last_row = (@as(i32, @intCast(desktop_icon_count)) - 1) / col_count;
@@ -517,7 +514,7 @@ fn renderIconTooltip(label: []const u8, icon_x: i32, icon_y: i32) void {
 
 pub fn renderAllDesktopIcons() void {
     if (!desktop_icons_initialized) initDesktopIcons();
-    
+
     for (0..desktop_icon_count) |i| {
         const is_selected = (@as(i32, @intCast(i)) == desktop_selected_index);
         const is_hover = (@as(i32, @intCast(i)) == desktop_hover_index);
@@ -532,7 +529,7 @@ pub fn hitTestDesktopIcon(px: i32, py: i32) ?usize {
         const icon = desktop_icons[i];
         const hit_x = px >= icon.x - 2 and px < icon.x + ICON_SIZE + 2;
         const hit_y = py >= icon.y - 2 and py < icon.y + ICON_SIZE + LABEL_HEIGHT + 2;
-        
+
         if (hit_x and hit_y) {
             return i;
         }
@@ -545,7 +542,7 @@ pub fn hitTestDesktopIconLabel(px: i32, py: i32) ?usize {
         const icon = desktop_icons[i];
         const hit_x = px >= icon.x - 2 and px < icon.x + ICON_SIZE + 2;
         const hit_y = py >= icon.y + ICON_SIZE and py < icon.y + ICON_SIZE + LABEL_HEIGHT + 2;
-        
+
         if (hit_x and hit_y) {
             return i;
         }
@@ -557,9 +554,9 @@ pub fn hitTestDesktopIconLabel(px: i32, py: i32) ?usize {
 
 pub fn handleDesktopIconClick(index: usize, double_click: bool) void {
     if (index >= desktop_icon_count) return;
-    
+
     const icon = desktop_icons[index];
-    
+
     if (double_click) {
         // Double-click: Open
         handleDesktopIconOpen(icon);
@@ -602,8 +599,10 @@ pub fn handleDesktopIconOpen(icon: DesktopIcon) void {
             if (icon.custom_path) |path| {
                 // Parse custom path to get drive letter and subpath
                 if (path.len >= 3 and path[1] == ':') {
-                    const letter = if (path[0] >= 'a' and path[0] <= 'z') 
-                        path[0] - 32 else path[0];
+                    const letter = if (path[0] >= 'a' and path[0] <= 'z')
+                        path[0] - 32
+                    else
+                        path[0];
                     const subpath = if (path.len > 3) path[3..] else "";
                     explorer_state.explorerNavigateToPath(letter, subpath);
                 }
@@ -615,7 +614,7 @@ pub fn handleDesktopIconOpen(icon: DesktopIcon) void {
 
 pub fn handleDesktopIconRightClick(index: usize) void {
     if (index >= desktop_icon_count) return;
-    
+
     desktop_selected_index = @as(i32, @intCast(index));
     // Show context menu for desktop icon
     explorer_context_menu.showExplorerContextMenu(.file, 0, 0);
@@ -625,11 +624,11 @@ pub fn handleDesktopIconRightClick(index: usize) void {
 
 pub fn moveDesktopIcon(index: usize, new_x: i32, new_y: i32) void {
     if (index >= desktop_icon_count) return;
-    
+
     // Snap to grid
     const snapped_x = @as(i32, @intCast((@as(i32, @intCast(new_x)) / ICON_STEP_X) * ICON_STEP_X));
     const snapped_y = @as(i32, @intCast((@as(i32, @intCast(new_y)) / ICON_STEP_Y) * ICON_STEP_Y));
-    
+
     desktop_icons[index].x = snapped_x;
     desktop_icons[index].y = snapped_y;
 }
@@ -644,10 +643,10 @@ var desktop_rename_cursor: usize = 0;
 
 pub fn startDesktopIconRename(index: usize) void {
     if (index >= desktop_icon_count) return;
-    
+
     desktop_rename_active = true;
     desktop_rename_index = index;
-    
+
     const icon = desktop_icons[index];
     const len = @min(icon.label.len, desktop_rename_text.len);
     @memcpy(desktop_rename_text[0..len], icon.label[0..len]);
@@ -661,14 +660,14 @@ pub fn isDesktopRenameActive() bool {
 
 pub fn commitDesktopRename() void {
     if (!desktop_rename_active) return;
-    
+
     // Apply rename
     if (desktop_rename_len > 0 and desktop_rename_index < desktop_icon_count) {
         const icon = &desktop_icons[desktop_rename_index];
         // In a real implementation, we'd update the label
         _ = icon;
     }
-    
+
     desktop_rename_active = false;
 }
 
@@ -680,14 +679,14 @@ pub fn cancelDesktopRename() void {
 
 pub fn renderDesktopRenameOverlay(x: i32, y: i32, w: i32, h: i32) void {
     if (!desktop_rename_active) return;
-    
+
     // Background
     fb.fillRect(x, y, w, h, rgb(0xFF, 0xFF, 0xFF));
     fb.drawRect(x, y, w, h, rgb(0x00, 0x51, 0x9E));
-    
+
     // Text
     fb.drawTextTransparent(x + 4, y + (h - 14) / 2, desktop_rename_text[0..desktop_rename_len], rgb(0x18, 0x18, 0x18));
-    
+
     // Cursor
     const cursor_x = x + 4 + fb.textWidth(desktop_rename_text[0..desktop_rename_cursor]);
     fb.fillRect(cursor_x, y + 2, 2, h - 4, rgb(0x00, 0x51, 0x9E));

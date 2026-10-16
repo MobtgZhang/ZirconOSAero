@@ -48,18 +48,18 @@ pub const LongDirEntry = extern struct {
     /// 序号：位 6..0 = 序列号（1..20），位 7 = LAST_ENTRY_FLAG (0x40)。
     sequence: u8 align(1) = 0,
     /// Unicode 名字的 UTF-16LE 前 5 个字符（每个字符 2 字节）。
-    name1: [10]u8 align(1) = [_]u8{0} ** 10,
+    name1: [10]u8 align(1) = std.mem.zeroes([10]u8),
     attr: u8 align(1) = 0,
     /// VFAT 类型：0 表示长文件名条目。
     entry_type: u8 align(1) = 0,
     /// 校验和：短文件名的 DOS 名字段校验和。
     checksum: u8 align(1) = 0,
     /// Unicode 名字的第 6..11 个字符（6 个字符）。
-    name2: [12]u8 align(1) = [_]u8{0} ** 12,
+    name2: [12]u8 align(1) = std.mem.zeroes([12]u8),
     /// 起始簇号（未使用，必须为 0）。
     first_cluster: u16 align(1) = 0,
     /// Unicode 名字的第 12..12 个字符（最后 2 个字符）。
-    name3: [4]u8 align(1) = [_]u8{0} ** 4,
+    name3: [4]u8 align(1) = std.mem.zeroes([4]u8),
 
     pub fn isLast(self: *const LongDirEntry) bool {
         return (self.sequence & 0x40) != 0;
@@ -128,7 +128,7 @@ fn decodeLfnChain(entries: []LongDirEntry) []u8 {
 
 pub const BPB = extern struct {
     jmp_boot: [3]u8 align(1) = .{ 0, 0, 0 },
-    oem_name: [8]u8 align(1) = [_]u8{0} ** 8,
+    oem_name: [8]u8 align(1) = std.mem.zeroes([8]u8),
     bytes_per_sector: u16 align(1) = 0,
     sectors_per_cluster: u8 align(1) = 0,
     reserved_sectors: u16 align(1) = 0,
@@ -148,18 +148,18 @@ pub const BPB = extern struct {
     root_cluster: u32 align(1) = 0,
     fs_info: u16 align(1) = 0,
     backup_boot_sector: u16 align(1) = 0,
-    reserved: [12]u8 align(1) = [_]u8{0} ** 12,
+    reserved: [12]u8 align(1) = std.mem.zeroes([12]u8),
     drive_number: u8 align(1) = 0,
     reserved1: u8 align(1) = 0,
     boot_sig: u8 align(1) = 0,
     volume_id: u32 align(1) = 0,
-    volume_label: [11]u8 align(1) = [_]u8{0} ** 11,
-    fs_type: [8]u8 align(1) = [_]u8{0} ** 8,
+    volume_label: [11]u8 align(1) = std.mem.zeroes([11]u8),
+    fs_type: [8]u8 align(1) = std.mem.zeroes([8]u8),
 };
 
 pub const DirEntry83 = extern struct {
-    name: [8]u8 align(1) = [_]u8{0} ** 8,
-    ext: [3]u8 align(1) = [_]u8{0} ** 3,
+    name: [8]u8 align(1) = std.mem.zeroes([8]u8),
+    ext: [3]u8 align(1) = std.mem.zeroes([3]u8),
     attr: u8 align(1) = 0,
     nt_reserved: u8 align(1) = 0,
     create_time_tenth: u8 align(1) = 0,
@@ -208,13 +208,13 @@ const MAX_DIR_ENTRIES: usize = 256;
 
 pub const Fat32Volume = struct {
     bpb: BPB = .{},
-    fat_table: [MAX_FAT_ENTRIES]u32 = [_]u32{0} ** MAX_FAT_ENTRIES,
-    data_area: [MAX_DATA_SECTORS * SECTOR_SIZE]u8 = [_]u8{0} ** (MAX_DATA_SECTORS * SECTOR_SIZE),
-    root_entries: [MAX_DIR_ENTRIES]DirEntry83 = [_]DirEntry83{.{}} ** MAX_DIR_ENTRIES,
+    fat_table: [MAX_FAT_ENTRIES]u32 = std.mem.zeroes([MAX_FAT_ENTRIES]u32),
+    data_area: [MAX_DATA_SECTORS * SECTOR_SIZE]u8 = @splat(0),
+    root_entries: [MAX_DIR_ENTRIES]DirEntry83 = std.mem.zeroes([MAX_DIR_ENTRIES]DirEntry83),
     root_entry_count: usize = 0,
     next_free_cluster: u32 = 0,
     is_mounted: bool = false,
-    label: [11]u8 = [_]u8{0} ** 11,
+    label: [11]u8 = std.mem.zeroes([11]u8),
 
     pub fn format(self: *Fat32Volume, label: []const u8) void {
         self.bpb = .{};
@@ -419,7 +419,7 @@ pub const Fat32Volume = struct {
 };
 
 fn matchName(entry: *const DirEntry83, name: []const u8) bool {
-    var short: [12]u8 = [_]u8{' '} ** 12;
+    var short: [12]u8 = std.mem.zeroes([12]u8);
     var pos: usize = 0;
     for (entry.name) |c| {
         if (c == ' ') break;
@@ -501,7 +501,10 @@ fn extractNameFromDirChain(entries: []u8) []u8 {
         }
         var has_ext = false;
         for (de.ext) |c| {
-            if (c != ' ') { has_ext = true; break; }
+            if (c != ' ') {
+                has_ext = true;
+                break;
+            }
         }
         if (has_ext) {
             short_name[np] = '.';

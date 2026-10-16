@@ -60,7 +60,7 @@ comptime {
 
 const FreeNode = lookaside.ListNode;
 
-var free_heads: [SLOT_COUNT]?*FreeNode = .{null} ** SLOT_COUNT;
+var free_heads: [SLOT_COUNT]?*FreeNode = std.mem.zeroes([SLOT_COUNT]?*FreeNode);
 
 var pool_gate: std.atomic.Value(u32) = .init(0);
 

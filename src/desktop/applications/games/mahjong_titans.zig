@@ -57,38 +57,46 @@ pub const MahjongTitansGame = struct {
     height: i32,
     visible: bool,
     caption_hover: CaptionButtonType,
-    
+
     tiles: [144]?TileType,
     tile_count: usize,
     selected_tile: i32,
-    
+
     score: i32,
     moves: u32,
     game_over: bool,
     game_won: bool,
     difficulty: Difficulty,
-    
+
     hover_tile: i32,
     hover_new: bool,
     hover_hint: bool,
     hover_shuffle: bool,
 
     pub const Difficulty = enum { easy, medium, hard };
-    
+
     pub const CaptionButtonType = enum { none, minimize, maximize, close };
 
     pub fn create(x_pos: i32, y_pos: i32) MahjongTitansGame {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 640, .height = 520,
-            .visible = true, .caption_hover = .none,
-            .tiles = undefined, .tile_count = 0,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 640,
+            .height = 520,
+            .visible = true,
+            .caption_hover = .none,
+            .tiles = undefined,
+            .tile_count = 0,
             .selected_tile = -1,
-            .score = 0, .moves = 0,
-            .game_over = false, .game_won = false,
+            .score = 0,
+            .moves = 0,
+            .game_over = false,
+            .game_won = false,
             .difficulty = .medium,
-            .hover_tile = -1, .hover_new = false,
-            .hover_hint = false, .hover_shuffle = false,
+            .hover_tile = -1,
+            .hover_new = false,
+            .hover_hint = false,
+            .hover_shuffle = false,
         };
     }
 
@@ -98,14 +106,14 @@ pub const MahjongTitansGame = struct {
         mt.game_over = false;
         mt.game_won = false;
         mt.selected_tile = -1;
-        
+
         mt.generateTiles();
     }
 
     pub fn generateTiles(mt: *MahjongTitansGame) void {
         mt.tile_count = 0;
         var match_id: u8 = 0;
-        
+
         // Basic tiles (4 of each)
         const basic_suits = [_]TileSuit{ .bamboo, .circle, .character };
         for (basic_suits) |suit| {
@@ -125,7 +133,7 @@ pub const MahjongTitansGame = struct {
                 match_id += 1;
             }
         }
-        
+
         // Wind tiles (4 of each, 16 total)
         const winds = [_]u8{ 1, 2, 3, 4 }; // East, South, West, North
         for (winds) |wind| {
@@ -142,7 +150,7 @@ pub const MahjongTitansGame = struct {
             }
             match_id += 1;
         }
-        
+
         // Dragon tiles (4 of each, 12 total)
         const dragons = [_]u8{ 1, 2, 3 }; // Red, Green, White
         for (dragons) |dragon| {
@@ -159,7 +167,7 @@ pub const MahjongTitansGame = struct {
             }
             match_id += 1;
         }
-        
+
         // Fill remaining with flower tiles (for matching variety)
         while (mt.tile_count < 144 and match_id < 255) : (match_id += 1) {
             var i: u8 = 0;
@@ -174,17 +182,17 @@ pub const MahjongTitansGame = struct {
                 }
             }
         }
-        
+
         // Shuffle tiles
         mt.shuffleTiles();
-        
+
         // Remove pairs based on difficulty
         var remove_count: usize = switch (mt.difficulty) {
             .easy => 72,
             .medium => 48,
             .hard => 24,
         };
-        
+
         while (remove_count > 0 and mt.tile_count > 0) : (remove_count -= 1) {
             mt.tile_count -= 1;
             mt.tiles[mt.tile_count] = null;
@@ -194,7 +202,7 @@ pub const MahjongTitansGame = struct {
     pub fn shuffleTiles(mt: *MahjongTitansGame) void {
         const seed = @as(u64, @bitCast(std.time.nanoTimestamp()));
         const rng = std.rand.DefaultPrng.init(seed);
-        
+
         var i: usize = mt.tile_count;
         while (i > 1) : (i -= 1) {
             const j = rng.random().int(usize, i);
@@ -207,7 +215,7 @@ pub const MahjongTitansGame = struct {
     pub fn handleTileClick(mt: *MahjongTitansGame, tile_idx: i32) void {
         if (tile_idx < 0 or tile_idx >= @as(i32, @intCast(mt.tile_count))) return;
         if (mt.tiles[@as(usize, @intCast(tile_idx))] == null) return;
-        
+
         if (mt.selected_tile == -1) {
             mt.selected_tile = tile_idx;
         } else {
@@ -217,7 +225,7 @@ pub const MahjongTitansGame = struct {
                 const sel = mt.selected_tile;
                 const sel_tile = mt.tiles[@as(usize, @intCast(sel))];
                 const click_tile = mt.tiles[@as(usize, @intCast(tile_idx))];
-                
+
                 if (sel_tile != null and click_tile != null) {
                     if (sel_tile.?.match_id == click_tile.?.match_id) {
                         // Match found
@@ -225,7 +233,7 @@ pub const MahjongTitansGame = struct {
                         mt.tiles[@as(usize, @intCast(tile_idx))] = null;
                         mt.score += 100;
                         mt.moves += 1;
-                        
+
                         // Check for win
                         var all_empty = true;
                         for (mt.tiles) |tile| {
@@ -254,11 +262,11 @@ pub const MahjongTitansGame = struct {
         var i: usize = 0;
         while (i < mt.tile_count) : (i += 1) {
             if (mt.tiles[i] == null) continue;
-            
+
             var j: usize = i + 1;
             while (j < mt.tile_count) : (j += 1) {
                 if (mt.tiles[j] == null) continue;
-                
+
                 if (mt.tiles[i].?.match_id == mt.tiles[j].?.match_id) {
                     mt.selected_tile = @as(i32, @intCast(i));
                     mt.hover_tile = @as(i32, @intCast(j));
@@ -272,23 +280,23 @@ pub const MahjongTitansGame = struct {
         // Collect remaining tiles
         var remaining: [144]?TileType = undefined;
         var count: usize = 0;
-        
+
         for (mt.tiles) |tile| {
             if (tile != null) {
                 remaining[count] = tile;
                 count += 1;
             }
         }
-        
+
         // Reset all tiles
         for (&mt.tiles) |*tile| {
             tile.* = null;
         }
-        
+
         // Shuffle remaining
         const seed = @as(u64, @bitCast(std.time.nanoTimestamp()));
         const rng = std.rand.DefaultPrng.init(seed);
-        
+
         var idx: usize = count;
         while (idx > 1) : (idx -= 1) {
             const j = rng.random().int(usize, idx);
@@ -296,7 +304,7 @@ pub const MahjongTitansGame = struct {
             remaining[idx - 1] = remaining[j];
             remaining[j] = temp;
         }
-        
+
         // Place back
         mt.tile_count = count;
         var k: usize = 0;
@@ -304,7 +312,7 @@ pub const MahjongTitansGame = struct {
             mt.tiles[k] = tile;
             k += 1;
         }
-        
+
         mt.score = @max(0, mt.score - 50);
     }
 
@@ -343,47 +351,47 @@ pub const MahjongTitansGame = struct {
         const tile_h: i32 = 70;
         const gap_x: i32 = 4;
         const gap_y: i32 = 4;
-        
+
         // Calculate grid dimensions (aim for roughly square)
         const cols: i32 = 12;
         const rows: i32 = (@as(i32, @intCast(mt.tile_count)) + cols - 1) / cols;
-        
+
         const grid_w = cols * (tile_w + gap_x) - gap_x;
         const start_x = wx + (ww - grid_w) / 2;
         const start_y = wy + 60;
-        
+
         var tile_idx: usize = 0;
         var row: i32 = 0;
         while (row < rows) : (row += 1) {
             var col: i32 = 0;
             while (col < cols) : (col += 1) {
                 if (tile_idx >= mt.tile_count) break;
-                
+
                 const tile = mt.tiles[tile_idx];
                 if (tile != null) {
                     const tx = start_x + col * (tile_w + gap_x);
                     const ty = start_y + row * (tile_h + gap_y);
-                    
+
                     const is_selected = @as(i32, @intCast(tile_idx)) == mt.selected_tile;
                     const is_hint = @as(i32, @intCast(tile_idx)) == mt.hover_tile;
-                    
+
                     var tile_color = rgb(0xFF, 0xFF, 0xE8);
                     if (is_selected) {
                         tile_color = rgb(0xFF, 0xE0, 0x80);
                     } else if (is_hint) {
                         tile_color = rgb(0xC0, 0xFF, 0xC0);
                     }
-                    
+
                     // Draw tile shadow
                     fb.fillRect(tx + 2, ty + 2, tile_w, tile_h, rgb(0x80, 0x80, 0x60));
                     // Draw tile body
                     fb.fillRect(tx, ty, tile_w, tile_h, tile_color);
                     fb.draw3DRect(tx, ty, tile_w, tile_h, rgb(0xD0, 0xD0, 0xB0), rgb(0xFF, 0xFF, 0xFF));
-                    
+
                     // Draw tile symbol
                     const sym_x = tx + tile_w / 2;
                     const sym_y = ty + tile_h / 2 - 5;
-                    
+
                     const sym_color = switch (tile.?.suit) {
                         .bamboo => rgb(0x00, 0x80, 0x00),
                         .circle => rgb(0x00, 0x00, 0xA0),
@@ -396,21 +404,26 @@ pub const MahjongTitansGame = struct {
                         },
                         .flower => rgb(0xC0, 0x00, 0xC0),
                     };
-                    
+
                     // Draw simple tile indicator
                     const symbol: []const u8 = switch (tile.?.suit) {
                         .bamboo => "B",
                         .circle => "C",
                         .character => "N",
                         .wind => switch (tile.?.value) {
-                            1 => "E", 2 => "S", 3 => "W", else => "N",
+                            1 => "E",
+                            2 => "S",
+                            3 => "W",
+                            else => "N",
                         },
                         .dragon => switch (tile.?.value) {
-                            1 => "R", 2 => "G", else => "W",
+                            1 => "R",
+                            2 => "G",
+                            else => "W",
                         },
                         .flower => "F",
                     };
-                    
+
                     var val_buf: [8]u8 = undefined;
                     const val_str = std.fmt.bufPrint(&val_buf, "{s}{d}", .{ symbol, tile.?.value }) catch symbol;
                     fb.drawTextTransparent(sym_x - 10, sym_y - 10, val_str, sym_color);
@@ -428,7 +441,7 @@ pub const MahjongTitansGame = struct {
         const btn_y = sy + 12;
         const btn_w: i32 = 90;
         const btn_h: i32 = 30;
-        
+
         const new_color = if (mt.hover_new) rgb(0x80, 0xD0, 0x80) else rgb(0x60, 0xB0, 0x60);
         fb.fillRect(wx + 10, btn_y, btn_w, btn_h, new_color);
         fb.draw3DRect(wx + 10, btn_y, btn_w, btn_h, rgb(0x40, 0x90, 0x40), rgb(0x80, 0xE0, 0x80));
@@ -450,18 +463,18 @@ pub const MahjongTitansGame = struct {
         if (mt.game_won) {
             fb.fillRect(wx + 120, wy + 150, ww - 240, 180, rgb(0xE0, 0xF0, 0xE0));
             fb.draw3DRect(wx + 120, wy + 150, ww - 240, 180, rgb(0xA0, 0xC0, 0xA0), rgb(0xFF, 0xFF, 0xFF));
-            fb.drawTextTransparent(wx + ww/2 - 50, wy + 180, "Congratulations!", rgb(0x00, 0x80, 0x00));
-            fb.drawTextTransparent(wx + ww/2 - 80, wy + 220, "You cleared all tiles!", rgb(0x30, 0x60, 0x30));
+            fb.drawTextTransparent(wx + ww / 2 - 50, wy + 180, "Congratulations!", rgb(0x00, 0x80, 0x00));
+            fb.drawTextTransparent(wx + ww / 2 - 80, wy + 220, "You cleared all tiles!", rgb(0x30, 0x60, 0x30));
             var final_buf: [48]u8 = undefined;
             const final_str = std.fmt.bufPrint(&final_buf, "Final Score: {d}", .{mt.score}) catch "";
-            fb.drawTextTransparent(wx + ww/2 - 60, wy + 260, final_str, rgb(0x00, 0x50, 0x00));
+            fb.drawTextTransparent(wx + ww / 2 - 60, wy + 260, final_str, rgb(0x00, 0x50, 0x00));
         }
 
         if (mt.game_over) {
             fb.fillRect(wx + 120, wy + 150, ww - 240, 180, rgb(0xF0, 0xE0, 0xE0));
             fb.draw3DRect(wx + 120, wy + 150, ww - 240, 180, rgb(0xC0, 0xA0, 0xA0), rgb(0xFF, 0xFF, 0xFF));
-            fb.drawTextTransparent(wx + ww/2 - 40, wy + 180, "Game Over", rgb(0x80, 0x00, 0x00));
-            fb.drawTextTransparent(wx + ww/2 - 80, wy + 220, "No more moves available", rgb(0x60, 0x30, 0x30));
+            fb.drawTextTransparent(wx + ww / 2 - 40, wy + 180, "Game Over", rgb(0x80, 0x00, 0x00));
+            fb.drawTextTransparent(wx + ww / 2 - 80, wy + 220, "No more moves available", rgb(0x60, 0x30, 0x30));
         }
     }
 };

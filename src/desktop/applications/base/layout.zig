@@ -577,8 +577,8 @@ pub const GridLayout = struct {
             return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
         }
 
-        var max_col_width = [_]i32{0} ** 16;
-        var max_row_height = [_]i32{0} ** 16;
+        var max_col_width = [_]i32{0} * *16;
+        var max_row_height = [_]i32{0} * *16;
 
         for (gl.items[0..gl.item_count]) |*item| {
             if (item.column < gl.columns) {

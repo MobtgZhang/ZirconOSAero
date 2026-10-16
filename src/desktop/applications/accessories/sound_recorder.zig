@@ -119,8 +119,8 @@ pub const SoundRecorderWindow = struct {
             .recording_time = 0,
             .playback_position = 0,
             .playback_duration = 0,
-            .audio_levels = [_]i32{0} ** 64,
-            .audio_history = [_]i16{0} ** 8192,
+            .audio_levels = [_]i32{0} * *64,
+            .audio_history = [_]i16{0} * *8192,
             .audio_sample_count = 0,
             .audio_format = .pcm_44100_mono_16bit,
             .quality = .medium,
@@ -525,7 +525,7 @@ pub const SoundRecorderWindow = struct {
         var qx_pos = qx + 60;
 
         for (qualities, 0..) |q, idx| {
-            const is_selected = @as(u8, @intFromEnum(sr.quality)) == idx;
+            const is_selected = @as(u8, @backingInt(sr.quality)) == idx;
             const bw: i32 = 60;
             const bh: i32 = 18;
 

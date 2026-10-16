@@ -315,10 +315,6 @@ pub fn keWaitForMultipleObjectsWaitAll(
     std.debug.assert(hdrs.len <= 64);
     const tid = scheduler.getCurrentThreadId();
 
-    // 信号状态跟踪数组（true = 已满足）
-    var signaled: [64]bool = [_]bool{false} ** 64;
-    var signaled_count: usize = 0;
-
     while (true) {
         const outcome: ?i32 = blk: {
             scheduler.lockSchedIrq();
@@ -329,25 +325,15 @@ pub fn keWaitForMultipleObjectsWaitAll(
                 break :blk st;
             }
 
-            // 检查并消耗已 signal 的对象
             var all_ready = true;
-            signaled_count = 0;
-            for (hdrs, 0..) |h, i| {
-                if (signaled[i]) {
-                    signaled_count += 1;
-                    continue;
-                }
-                if (tryConsumeWaitable(h)) {
-                    signaled[i] = true;
-                    signaled_count += 1;
-                } else {
+            for (hdrs) |h| {
+                if (!isWaitableReady(h)) {
                     all_ready = false;
+                    break;
                 }
             }
 
-            // 所有对象都已 signaled → 消耗并返回
-            if (all_ready and signaled_count == hdrs.len) {
-                // 再次消耗（因为上面的 tryConsumeWaitable 已经消耗过一次）
+            if (all_ready) {
                 for (hdrs) |h| {
                     _ = tryConsumeWaitable(h);
                 }

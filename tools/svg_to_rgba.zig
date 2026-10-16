@@ -19,9 +19,9 @@
 //! SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZirconOSAero — SVG to RGBA bitmap converter (Zig version)
 //!
-//! Replaces the Python svg_to_rgba.py, uses rsvg-convert as subprocess
+//! Replaces the Python svg_to_rgba.py, uses rsvg-convert or Inkscape as a subprocess
 //! and the built-in PNG decoder to produce RGBA files and manifest.zig.
-//! Requires `librsvg` (rsvg-convert) installed on the build host.
+//! Requires `librsvg` (rsvg-convert) or Inkscape installed on the build host.
 
 const std = @import("std");
 const png = @import("png");
@@ -87,59 +87,74 @@ const CURSORS = [_]FileEntry{
 const LOGO = FileEntry{ .name = "logo", .path = "src/desktop/aero/resources/logo.svg", .size = 64 };
 const START_ORB = FileEntry{ .name = "start_orb", .path = "src/desktop/aero/resources/start_orb.svg", .size = 64 };
 
-fn convertSvgToRgba(allocator: std.mem.Allocator, svg_path: []const u8, size: u32) ![]u8 {
-    // Run rsvg-convert to get PNG data
+fn convertSvgToRgbaWith(io: std.Io, allocator: std.mem.Allocator, renderer_path: []const u8, svg_path: []const u8, size: u32) !png.PixelBuffer {
     const width_str = try std.fmt.allocPrint(allocator, "{d}", .{size});
     defer allocator.free(width_str);
     const height_str = try std.fmt.allocPrint(allocator, "{d}", .{size});
     defer allocator.free(height_str);
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{
-            "rsvg-convert",
-            "-w",
-            width_str,
-            "-h",
-            height_str,
-            "-f",
-            "png",
-            svg_path,
-        },
-    }) catch |err| {
-        if (err == error.FileNotFound) {
-            std.log.err("找不到 'rsvg-convert' 命令，请先安装：sudo apt install librsvg2-bin", .{});
+    if (std.mem.eql(u8, renderer_path, "inkscape")) {
+        var random_bytes: [4]u8 = undefined;
+        io.random(&random_bytes);
+        const random_id = std.mem.readInt(u32, &random_bytes, .little);
+        const png_filename = try std.fmt.allocPrint(allocator, "zircon-svg-{d}.png", .{random_id});
+        defer allocator.free(png_filename);
+        const png_path = try std.fs.path.join(allocator, &.{ "/tmp", png_filename });
+        defer allocator.free(png_path);
+
+        const result = try std.process.run(allocator, io, .{
+            .argv = &.{ renderer_path, "--export-type=png", "--export-width", width_str, "--export-height", height_str, "--export-filename", png_path, svg_path },
+        });
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+
+        if (result.term == .exited and result.term.exited != 0) {
+            std.log.err("{s} failed for {s}: {s}", .{ renderer_path, svg_path, result.stderr });
+            return error.SvgRenderFailed;
         }
-        return err;
-    };
+
+        const png_data = try std.Io.Dir.cwd().readFileAlloc(io, png_path, allocator, .limited(512 * 1024 * 1024));
+        defer allocator.free(png_data);
+        return png.decode(allocator, png_data);
+    }
+
+    const result = try std.process.run(allocator, io, .{
+        .argv = &.{ renderer_path, "-w", width_str, "-h", height_str, "-f", "png", svg_path },
+    });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term.Exited != 0) {
-        std.log.err("rsvg-convert failed for {s}: {s}", .{ svg_path, result.stderr });
-        return error.RsvgConvertFailed;
+    if (result.term == .exited and result.term.exited != 0) {
+        std.log.err("{s} failed for {s}: {s}", .{ renderer_path, svg_path, result.stderr });
+        return error.SvgRenderFailed;
     }
 
-    // Decode PNG to RGBA
-    const rgba = try png.decodePixels(allocator, result.stdout);
-    return rgba;
+    return png.decode(allocator, result.stdout);
 }
 
-fn processFile(allocator: std.mem.Allocator, output_dir: []const u8, entry: FileEntry) !void {
+fn convertSvgToRgba(io: std.Io, allocator: std.mem.Allocator, svg_path: []const u8, size: u32) !png.PixelBuffer {
+    if (convertSvgToRgbaWith(io, allocator, "rsvg-convert", svg_path, size)) |rgba| {
+        return rgba;
+    } else |err| {
+        if (err != error.FileNotFound) return err;
+        return convertSvgToRgbaWith(io, allocator, "inkscape", svg_path, size);
+    }
+}
+
+fn processFile(io: std.Io, allocator: std.mem.Allocator, output_dir: []const u8, entry: FileEntry) !void {
     std.debug.print("Processing {s}: {s}\n", .{ entry.name, entry.path });
 
     // Check if SVG exists
     if (!std.fs.path.isAbsolute(entry.path)) {
         // Check relative to CWD
-        const cwd = std.fs.cwd();
-        _ = cwd.statFile(entry.path) catch |err| {
+        _ = std.Io.Dir.cwd().statFile(io, entry.path, .{}) catch |err| {
             std.log.err("SVG file not found: {s} ({})", .{ entry.path, err });
             return err;
         };
     }
 
-    const rgba = try convertSvgToRgba(allocator, entry.path, entry.size);
-    defer allocator.free(rgba);
+    const rgba = try convertSvgToRgba(io, allocator, entry.path, entry.size);
+    defer rgba.free(allocator);
 
     // Write RGBA file
     const filename = try std.fmt.allocPrint(allocator, "{s}.rgba", .{entry.name});
@@ -147,65 +162,54 @@ fn processFile(allocator: std.mem.Allocator, output_dir: []const u8, entry: File
     const output_path = try std.fs.path.join(allocator, &.{ output_dir, filename });
     defer allocator.free(output_path);
 
-    var file = try std.fs.cwd().createFile(output_path, .{});
-    defer file.close();
-    try file.writeAll(rgba);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = output_path, .data = rgba.data });
 }
 
-fn generateManifest(allocator: std.mem.Allocator, output_dir: []const u8) !void {
+fn generateManifest(io: std.Io, allocator: std.mem.Allocator, output_dir: []const u8) !void {
     // Write manifest file directly to avoid writer API issues
     const manifest_path = try std.fs.path.join(allocator, &.{ output_dir, "svg_embed_manifest.zig" });
     defer allocator.free(manifest_path);
 
-    var file = try std.fs.cwd().createFile(manifest_path, .{});
-    defer file.close();
+    var manifest: std.ArrayList(u8) = .empty;
+    defer manifest.deinit(allocator);
+    const w = &manifest;
 
-    // Helper function to write formatted strings
-    const writeFmt = struct {
-        fn impl(f: std.fs.File, alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
-            const str = try std.fmt.allocPrint(alloc, fmt, args);
-            defer alloc.free(str);
-            _ = try f.write(str);
-        }
-    }.impl;
+    try w.print(allocator, "// SPDX-License-Identifier: MIT OR Apache-2.0\n", .{});
+    try w.print(allocator, "//! AUTO-GENERATED by tools/svg_to_rgba.zig — do not edit manually.\n", .{});
+    try w.print(allocator, "//! This file contains pre-rasterized RGBA bitmaps for all SVG icons/logo/start_orb.\n\n", .{});
 
-    try writeFmt(file, allocator, "// SPDX-License-Identifier: MIT OR Apache-2.0\n", .{});
-    try writeFmt(file, allocator, "//! AUTO-GENERATED by tools/svg_to_rgba.zig — do not edit manually.\n", .{});
-    try writeFmt(file, allocator, "//! This file contains pre-rasterized RGBA bitmaps for all SVG icons/logo/start_orb.\n\n", .{});
+    try w.print(allocator, "pub const icon_count = {d};\n", .{ICONS.len});
+    try w.print(allocator, "pub const cursor_count = {d};\n\n", .{CURSORS.len});
 
-    try writeFmt(file, allocator, "pub const icon_count = {d};\n", .{ICONS.len});
-    try writeFmt(file, allocator, "pub const cursor_count = {d};\n\n", .{CURSORS.len});
+    try w.print(allocator, "pub const logo_w: u32 = {d};\n", .{LOGO.size});
+    try w.print(allocator, "pub const logo_h: u32 = {d};\n", .{LOGO.size});
+    try w.print(allocator, "pub const logo = @embedFile(\"logo.rgba\");\n\n", .{});
 
-    try writeFmt(file, allocator, "pub const logo_w: u32 = {d};\n", .{LOGO.size});
-    try writeFmt(file, allocator, "pub const logo_h: u32 = {d};\n", .{LOGO.size});
-    try writeFmt(file, allocator, "pub const logo = @embedFile(\"logo.rgba\");\n\n", .{});
-
-    try writeFmt(file, allocator, "pub const start_orb_w: u32 = {d};\n", .{START_ORB.size});
-    try writeFmt(file, allocator, "pub const start_orb_h: u32 = {d};\n", .{START_ORB.size});
-    try writeFmt(file, allocator, "pub const start_orb = @embedFile(\"start_orb.rgba\");\n\n", .{});
+    try w.print(allocator, "pub const start_orb_w: u32 = {d};\n", .{START_ORB.size});
+    try w.print(allocator, "pub const start_orb_h: u32 = {d};\n", .{START_ORB.size});
+    try w.print(allocator, "pub const start_orb = @embedFile(\"start_orb.rgba\");\n\n", .{});
 
     // Write icons
     for (ICONS) |icon| {
-        try writeFmt(file, allocator, "pub const {s}_w: u32 = {d};\n", .{ icon.name, icon.size });
-        try writeFmt(file, allocator, "pub const {s}_h: u32 = {d};\n", .{ icon.name, icon.size });
-        try writeFmt(file, allocator, "pub const {s} = @embedFile(\"{s}.rgba\");\n\n", .{ icon.name, icon.name });
+        try w.print(allocator, "pub const {s}_w: u32 = {d};\n", .{ icon.name, icon.size });
+        try w.print(allocator, "pub const {s}_h: u32 = {d};\n", .{ icon.name, icon.size });
+        try w.print(allocator, "pub const {s} = @embedFile(\"{s}.rgba\");\n\n", .{ icon.name, icon.name });
     }
 
     // Write cursors
     for (CURSORS) |cursor| {
-        try writeFmt(file, allocator, "pub const {s}_w: u32 = {d};\n", .{ cursor.name, cursor.size });
-        try writeFmt(file, allocator, "pub const {s}_h: u32 = {d};\n", .{ cursor.name, cursor.size });
-        try writeFmt(file, allocator, "pub const {s} = @embedFile(\"{s}.rgba\");\n\n", .{ cursor.name, cursor.name });
+        try w.print(allocator, "pub const {s}_w: u32 = {d};\n", .{ cursor.name, cursor.size });
+        try w.print(allocator, "pub const {s}_h: u32 = {d};\n", .{ cursor.name, cursor.size });
+        try w.print(allocator, "pub const {s} = @embedFile(\"{s}.rgba\");\n\n", .{ cursor.name, cursor.name });
     }
+
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = manifest.items });
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     if (args.len < 2) {
         std.debug.print("Usage: {s} <output_directory>\n", .{args[0]});
@@ -215,26 +219,26 @@ pub fn main() !void {
     const output_dir = args[1];
 
     // Create output directory if it doesn't exist
-    try std.fs.cwd().makePath(output_dir);
+    try std.Io.Dir.cwd().createDirPath(io, output_dir);
 
     // Process logo
-    try processFile(allocator, output_dir, LOGO);
+    try processFile(io, allocator, output_dir, LOGO);
 
     // Process start orb
-    try processFile(allocator, output_dir, START_ORB);
+    try processFile(io, allocator, output_dir, START_ORB);
 
     // Process all icons
     for (ICONS) |icon| {
-        try processFile(allocator, output_dir, icon);
+        try processFile(io, allocator, output_dir, icon);
     }
 
     // Process all cursors
     for (CURSORS) |cursor| {
-        try processFile(allocator, output_dir, cursor);
+        try processFile(io, allocator, output_dir, cursor);
     }
 
     // Generate manifest
-    try generateManifest(allocator, output_dir);
+    try generateManifest(io, allocator, output_dir);
 
     std.debug.print("\nDone! Output written to: {s}\n", .{output_dir});
     std.debug.print("  Logo: logo.rgba ({}x{})\n", .{ LOGO.size, LOGO.size });

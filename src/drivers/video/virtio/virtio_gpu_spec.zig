@@ -38,16 +38,15 @@ pub const vq_cursor: u16 = 1;
 
 // Command types (le32 `type` field in virtio_gpu_ctrl_hdr). Values from VirtIO GPU device section.
 pub const CMD_GET_DISPLAY_INFO: u32 = 0x0100;
-pub const CMD_SET_SCANOUT: u32 = 0x0101;
-pub const CMD_RESOURCE_FLUSH: u32 = 0x0102;
+pub const CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
+pub const CMD_RESOURCE_UNREF: u32 = 0x0102;
+pub const CMD_SET_SCANOUT: u32 = 0x0103;
+pub const CMD_RESOURCE_FLUSH: u32 = 0x0104;
+pub const CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
+pub const CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
+pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 /// Cursor queue command（VirtIO-GPU）；当前内核仅占位，供路线图与 QEMU 能力探测。
 pub const CMD_UPDATE_CURSOR: u32 = 0x0300;
-pub const CMD_RESOURCE_CREATE_2D: u32 = 0x0201;
-pub const CMD_RESOURCE_UNREF: u32 = 0x0202;
-pub const CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0203;
-pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0204;
-pub const CMD_TRANSFER_TO_HOST_2D: u32 = 0x0205;
-pub const CMD_TRANSFER_FROM_HOST_2D: u32 = 0x0206;
 pub const CMD_RESOURCE_FILL: u32 = 0x0207;
 pub const CMD_RESOURCE_COPY: u32 = 0x0208;
 pub const CMD_RESOURCE_BLEND: u32 = 0x0209;
@@ -68,8 +67,9 @@ pub const FEATURE_MASK_VIRGL: u32 = 1;
 pub const RESP_OK_NODATA: u32 = 0x1100;
 pub const RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 
-/// `format` for `CMD_RESOURCE_CREATE_2D` (VirtIO GPU device: `VIRTIO_GPU_FORMAT_*`).
+/// `format` for `CMD_RESOURCE_CREATE_2D` (QEMU uses `R8G8B8A8_UNORM` for 2D resources).
 pub const FORMAT_B8G8R8X8_UNORM: u32 = 1;
+pub const FORMAT_R8G8B8A8_UNORM: u32 = 2;
 
 /// virtio_gpu_ctrl_hdr (device ↔ driver); all multi-byte fields are little-endian on the wire.
 pub const CtrlHdr = extern struct {

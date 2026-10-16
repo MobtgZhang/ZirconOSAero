@@ -31,6 +31,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const klog = @import("../rtl/klog.zig");
 const arch = @import("../arch.zig");
+const irq_spinlock = @import("../ke/spinlock.zig");
 const se = @import("../se/security_descriptor.zig");
 const token = @import("../se/token.zig");
 
@@ -78,6 +79,7 @@ pub const ObjectHeader = struct {
     name_ptr: u64 = 0,
     name_len: u16 = 0,
     security: ?*se.ObjectSecurity = null,
+    security_storage: se.ObjectSecurity = se.ObjectSecurity.initDefault(),
     signal_state: bool = false,
     wait_count: u32 = 0,
     /// 通用时间戳字段；**同步对象**：`.semaphore` 时打包 `current_count|max_count`（各 32 bit，见 `ke/wait.zig`），其它类型勿依赖此布局。
@@ -86,7 +88,15 @@ pub const ObjectHeader = struct {
     wait_list_tail: ?*WaitEntry = null,
 
     pub fn addRef(self: *ObjectHeader) void {
-        _ = @atomicRmw(u32, &self.ref_count, .Add, 1, .seq_cst);
+        var cur = @atomicLoad(u32, &self.ref_count, .seq_cst);
+        while (cur != std.math.maxInt(u32)) {
+            const next = cur + 1;
+            if (@cmpxchgStrong(u32, &self.ref_count, cur, next, .seq_cst, .seq_cst)) |actual| {
+                cur = actual;
+                continue;
+            }
+            return;
+        }
     }
 
     /// 引用减一；返回 **减后** 是否为 0（与旧 `release` 布尔语义一致）。
@@ -94,7 +104,7 @@ pub const ObjectHeader = struct {
         var cur = @atomicLoad(u32, &self.ref_count, .seq_cst);
         while (true) {
             if (cur == 0) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("ObjectHeader.release: ref_count underflow", .{});
                 }
                 return false;
@@ -122,6 +132,13 @@ pub const ObjectHeader = struct {
 
     pub fn isSignaled(self: *const ObjectHeader) bool {
         return self.signal_state;
+    }
+
+    pub fn ensureDefaultSecurity(self: *ObjectHeader) void {
+        if (self.security == null) {
+            self.security_storage = se.ObjectSecurity.initDefault();
+            self.security = &self.security_storage;
+        }
     }
 
     pub fn signal(self: *ObjectHeader) void {
@@ -196,13 +213,14 @@ pub const HandleEntry = struct {
 const MAX_HANDLES: usize = 4096;
 
 pub const HandleTable = struct {
-    entries: [MAX_HANDLES]HandleEntry = [_]HandleEntry{.{}} ** MAX_HANDLES,
+    entries: [MAX_HANDLES]HandleEntry = std.mem.zeroes([MAX_HANDLES]HandleEntry),
     count: usize = 0,
     owner_pid: u32 = 0,
+    lock: irq_spinlock.IrqSpinLock = .{},
 
     pub fn init(pid: u32) HandleTable {
         return .{
-            .entries = [_]HandleEntry{.{}} ** MAX_HANDLES,
+            .entries = @splat(.{}),
             .count = 0,
             .owner_pid = pid,
         };
@@ -210,10 +228,17 @@ pub const HandleTable = struct {
 
     pub fn allocHandle(self: *HandleTable, object_ptr: u64, access: ACCESS_MASK, obj_type: ObjectType) ?Handle {
         if (object_ptr == 0) return null;
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
         // One reference per handle; balanced in closeHandle via release().
         referenceObject(object_ptr);
         const hdr = @as(*ObjectHeader, @ptrFromInt(object_ptr));
-        _ = @atomicRmw(u32, &hdr.handle_count, .Add, 1, .seq_cst);
+        if (!incHandleCount(hdr)) {
+            _ = dereferenceObject(object_ptr);
+            return null;
+        }
 
         for (self.entries[0..], 0..) |*entry, i| {
             if (entry.object_ptr == 0) {
@@ -232,6 +257,10 @@ pub const HandleTable = struct {
 
     pub fn closeHandle(self: *HandleTable, handle: Handle) bool {
         if (handle >= MAX_HANDLES) return false;
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
         const entry = &self.entries[handle];
         if (entry.object_ptr == 0) return false;
 
@@ -245,6 +274,9 @@ pub const HandleTable = struct {
         if (self.count > 0) self.count -= 1;
         if (freed and obj_type == .section) {
             @import("cleanup_hooks.zig").invokeSectionLastReference(object_ptr);
+        }
+        if (freed and obj_type == .file) {
+            @import("cleanup_hooks.zig").invokeFileLastReference(object_ptr);
         }
         return true;
     }
@@ -291,7 +323,7 @@ fn decHandleCount(hdr: *ObjectHeader) void {
     var cur = @atomicLoad(u32, &hdr.handle_count, .seq_cst);
     while (true) {
         if (cur == 0) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("HandleTable: handle_count underflow on close/rollback", .{});
             }
             return;
@@ -305,6 +337,19 @@ fn decHandleCount(hdr: *ObjectHeader) void {
     }
 }
 
+fn incHandleCount(hdr: *ObjectHeader) bool {
+    var cur = @atomicLoad(u32, &hdr.handle_count, .seq_cst);
+    while (true) {
+        if (cur == std.math.maxInt(u32)) return false;
+        const next = cur + 1;
+        if (@cmpxchgStrong(u32, &hdr.handle_count, cur, next, .seq_cst, .seq_cst)) |actual| {
+            cur = actual;
+            continue;
+        }
+        return true;
+    }
+}
+
 // ── Object Type Registry ──
 
 const MAX_TYPES: usize = 16;
@@ -315,7 +360,7 @@ pub const TypeInfo = struct {
     total_objects: u32 = 0,
 };
 
-var type_registry: [MAX_TYPES]TypeInfo = [_]TypeInfo{.{}} ** MAX_TYPES;
+var type_registry: [MAX_TYPES]TypeInfo = std.mem.zeroes([MAX_TYPES]TypeInfo);
 var type_count: usize = 0;
 var ob_initialized: bool = false;
 
@@ -368,17 +413,13 @@ pub fn createObject(obj_type: ObjectType, ptr: u64) void {
     @atomicStore(u32, &hdr.ref_count, 1, .seq_cst);
     @atomicStore(u32, &hdr.handle_count, 0, .seq_cst);
 
-    // Initialize default security descriptor
-    hdr.security = std.heap.page_allocator.create(se.ObjectSecurity) catch null;
-    if (hdr.security) |sec| {
-        sec.* = se.ObjectSecurity.initDefault();
-    }
+    hdr.ensureDefaultSecurity();
 }
 
 /// Check access to an object for the given token
 pub fn checkObjectAccess(hdr: *const ObjectHeader, user_token: *const token.Token, desired_access: ACCESS_MASK) bool {
     // If no security descriptor, allow full access
-    if (hdr.security == null) return true;
+    if (hdr.security == null) return false;
 
     return hdr.security.?.checkAccess(user_token, desired_access);
 }
@@ -398,20 +439,30 @@ pub fn dereferenceObject(ptr: u64) bool {
 const MAX_NAMESPACE_ENTRIES: usize = 1024;
 
 pub const NamespaceEntry = struct {
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
     obj_type: ObjectType = .directory,
     object_ptr: u64 = 0,
     parent_idx: u32 = 0,
     /// `obj_type == .symbolic_link` 时有效：目标路径（UTF-8 字节，非以 NUL 结尾的 C 串）。
-    link_target: [64]u8 = [_]u8{0} ** 64,
+    link_target: [64]u8 = std.mem.zeroes([64]u8),
     link_target_len: usize = 0,
 };
 
-var namespace: [MAX_NAMESPACE_ENTRIES]NamespaceEntry = [_]NamespaceEntry{.{}} ** MAX_NAMESPACE_ENTRIES;
+var namespace: [MAX_NAMESPACE_ENTRIES]NamespaceEntry = std.mem.zeroes([MAX_NAMESPACE_ENTRIES]NamespaceEntry);
 var namespace_count: usize = 0;
+var namespace_used: [MAX_NAMESPACE_ENTRIES]bool = std.mem.zeroes([MAX_NAMESPACE_ENTRIES]bool);
+var namespace_lock: irq_spinlock.IrqSpinLock = .{};
 
 pub fn initNamespace() void {
+    namespace_lock.lock();
+    defer namespace_lock.unlock();
+
+    for (&namespace, 0..) |*entry, i| {
+        entry.* = .{};
+        namespace_used[i] = false;
+    }
+    namespace_count = 0;
     createNamespaceDir("\\", 0);
     createNamespaceDir("\\ObjectTypes", 0);
     createNamespaceDir("\\Devices", 0);
@@ -423,77 +474,108 @@ pub fn initNamespace() void {
 }
 
 fn createNamespaceDir(name: []const u8, parent: u32) void {
+    if (name.len == 0 or name.len > 64) return;
     if (namespace_count >= MAX_NAMESPACE_ENTRIES) return;
+    for (0..MAX_NAMESPACE_ENTRIES) |i| {
+        if (namespace_used[i]) {
+            const entry = &namespace[i];
+            if (entry.name_len == name.len and std.mem.eql(u8, entry.name[0..entry.name_len], name)) return;
+        }
+    }
     var entry = &namespace[namespace_count];
     entry.* = .{};
-    const copy_len = @min(name.len, entry.name.len);
-    @memcpy(entry.name[0..copy_len], name[0..copy_len]);
-    entry.name_len = copy_len;
+    @memcpy(entry.name[0..name.len], name);
+    entry.name_len = name.len;
     entry.obj_type = .directory;
     entry.parent_idx = parent;
+    namespace_used[namespace_count] = true;
     namespace_count += 1;
 }
 
-pub fn lookupNamespace(name: []const u8) ?*NamespaceEntry {
-    for (namespace[0..namespace_count]) |*entry| {
-        if (entry.name_len != name.len) continue;
-        var match = true;
-        for (entry.name[0..entry.name_len], name) |a, b| {
-            if (a != b) {
-                match = false;
-                break;
-            }
-        }
-        if (match) return entry;
+/// 返回命名空间条目的快照，避免调用方持有 `namespace_lock` 保护的槽位指针。
+pub fn lookupNamespace(name: []const u8) ?NamespaceEntry {
+    namespace_lock.lock();
+    defer namespace_lock.unlock();
+
+    for (&namespace, 0..) |*entry, i| {
+        if (!namespace_used[i] or entry.name_len != name.len) continue;
+        if (std.mem.eql(u8, entry.name[0..entry.name_len], name)) return entry.*;
     }
     return null;
 }
 
 pub fn insertNamespace(name: []const u8, obj_type: ObjectType, object_ptr: u64, parent: u32) bool {
+    if (name.len == 0 or name.len > 64) return false;
+
+    namespace_lock.lock();
+    defer namespace_lock.unlock();
+
+    for (0..MAX_NAMESPACE_ENTRIES) |i| {
+        const entry = &namespace[i];
+        if (namespace_used[i] and entry.name_len == name.len and std.mem.eql(u8, entry.name[0..entry.name_len], name)) return false;
+    }
     if (namespace_count >= MAX_NAMESPACE_ENTRIES) return false;
-    var entry = &namespace[namespace_count];
-    entry.* = .{};
-    const copy_len = @min(name.len, entry.name.len);
-    @memcpy(entry.name[0..copy_len], name[0..copy_len]);
-    entry.name_len = copy_len;
-    entry.obj_type = obj_type;
-    entry.object_ptr = object_ptr;
-    entry.parent_idx = parent;
-    namespace_count += 1;
-    return true;
+
+    for (&namespace, 0..) |*entry, i| {
+        if (namespace_used[i]) continue;
+        entry.* = .{};
+        @memcpy(entry.name[0..name.len], name);
+        entry.name_len = name.len;
+        entry.obj_type = obj_type;
+        entry.object_ptr = object_ptr;
+        entry.parent_idx = parent;
+        namespace_used[i] = true;
+        namespace_count += 1;
+        return true;
+    }
+    return false;
 }
 
-/// 在对象命名空间中登记 **单层** 符号链接（K6.1 子集）；`target` 为规范化后的内部路径片段。
 pub fn insertSymbolicLink(name: []const u8, target: []const u8, parent: u32) bool {
-    if (namespace_count >= MAX_NAMESPACE_ENTRIES) return false;
     if (name.len == 0 or target.len == 0) return false;
     if (name.len > 64 or target.len > 64) return false;
-    var entry = &namespace[namespace_count];
-    entry.* = .{};
-    @memcpy(entry.name[0..name.len], name);
-    entry.name_len = name.len;
-    entry.obj_type = .symbolic_link;
-    entry.parent_idx = parent;
-    @memcpy(entry.link_target[0..target.len], target);
-    entry.link_target_len = target.len;
-    namespace_count += 1;
-    return true;
+
+    namespace_lock.lock();
+    defer namespace_lock.unlock();
+
+    if (lookupNamespaceLocked(name) != null) return false;
+    if (namespace_count >= MAX_NAMESPACE_ENTRIES) return false;
+
+    for (&namespace, 0..) |*entry, i| {
+        if (namespace_used[i]) continue;
+        entry.* = .{};
+        @memcpy(entry.name[0..name.len], name);
+        entry.name_len = name.len;
+        entry.obj_type = .symbolic_link;
+        entry.parent_idx = parent;
+        @memcpy(entry.link_target[0..target.len], target);
+        entry.link_target_len = target.len;
+        namespace_used[i] = true;
+        namespace_count += 1;
+        return true;
+    }
+    return false;
+}
+
+fn lookupNamespaceLocked(name: []const u8) ?*NamespaceEntry {
+    for (&namespace, 0..) |*entry, i| {
+        if (!namespace_used[i] or entry.name_len != name.len) continue;
+        if (std.mem.eql(u8, entry.name[0..entry.name_len], name)) return entry;
+    }
+    return null;
 }
 
 pub fn removeNamespace(name: []const u8) bool {
-    for (namespace[0..namespace_count]) |*entry| {
-        if (entry.name_len != name.len) continue;
-        var match = true;
-        for (entry.name[0..entry.name_len], name) |a, b| {
-            if (a != b) {
-                match = false;
-                break;
-            }
-        }
-        if (match) {
-            entry.* = .{};
-            return true;
-        }
+    namespace_lock.lock();
+    defer namespace_lock.unlock();
+
+    for (&namespace, 0..) |*entry, i| {
+        if (!namespace_used[i] or entry.name_len != name.len) continue;
+        if (!std.mem.eql(u8, entry.name[0..entry.name_len], name)) continue;
+        entry.* = .{};
+        namespace_used[i] = false;
+        namespace_count -= 1;
+        return true;
     }
     return false;
 }

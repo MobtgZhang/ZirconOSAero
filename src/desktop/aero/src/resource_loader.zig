@@ -24,28 +24,28 @@ pub const MAX_BRAND_ASSETS: usize = 8;
 pub const PATH_MAX: usize = 128;
 
 pub const ResourceEntry = struct {
-    path: [PATH_MAX]u8 = [_]u8{0} ** PATH_MAX,
+    path: [PATH_MAX]u8 = std.mem.zeroes([PATH_MAX]u8),
     path_len: u8 = 0,
     loaded: bool = false,
     id: u16 = 0,
 };
 
-var wallpapers: [MAX_WALLPAPERS]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_WALLPAPERS;
+var wallpapers: [MAX_WALLPAPERS]ResourceEntry = std.mem.zeroes([MAX_WALLPAPERS]ResourceEntry);
 var wallpaper_count: usize = 0;
 
-var icons: [MAX_ICONS]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_ICONS;
+var icons: [MAX_ICONS]ResourceEntry = std.mem.zeroes([MAX_ICONS]ResourceEntry);
 var icon_count: usize = 0;
 
-var cursors: [MAX_CURSORS]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_CURSORS;
+var cursors: [MAX_CURSORS]ResourceEntry = std.mem.zeroes([MAX_CURSORS]ResourceEntry);
 var cursor_count: usize = 0;
 
-var theme_files: [MAX_THEME_FILES]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_THEME_FILES;
+var theme_files: [MAX_THEME_FILES]ResourceEntry = std.mem.zeroes([MAX_THEME_FILES]ResourceEntry);
 var theme_file_count: usize = 0;
 
-var sound_schemes: [MAX_SOUND_SCHEMES]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_SOUND_SCHEMES;
+var sound_schemes: [MAX_SOUND_SCHEMES]ResourceEntry = std.mem.zeroes([MAX_SOUND_SCHEMES]ResourceEntry);
 var sound_scheme_count: usize = 0;
 
-var brand_assets: [MAX_BRAND_ASSETS]ResourceEntry = [_]ResourceEntry{.{}} ** MAX_BRAND_ASSETS;
+var brand_assets: [MAX_BRAND_ASSETS]ResourceEntry = std.mem.zeroes([MAX_BRAND_ASSETS]ResourceEntry);
 var brand_asset_count: usize = 0;
 
 var initialized: bool = false;

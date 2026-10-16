@@ -44,7 +44,7 @@ pub const Surface = struct {
     height: u32 = 0,
     flags: SurfaceFlags = .{},
     dirty: bool = true,
-    damage_rects: [MAX_DAMAGE_RECTS]Rect = [_]Rect{.{}} ** MAX_DAMAGE_RECTS,
+    damage_rects: [MAX_DAMAGE_RECTS]Rect = std.mem.zeroes([MAX_DAMAGE_RECTS]Rect),
     damage_count: usize = 0,
     z_order: i32 = 0,
     x: i32 = 0,
@@ -140,7 +140,7 @@ pub const VsyncState = struct {
     frame_budget_remaining: i64 = 0,
 };
 
-var surfaces: [MAX_SURFACES]Surface = [_]Surface{.{}} ** MAX_SURFACES;
+var surfaces: [MAX_SURFACES]Surface = std.mem.zeroes([MAX_SURFACES]Surface);
 var surface_count: usize = 0;
 var next_surface_id: u32 = 1;
 

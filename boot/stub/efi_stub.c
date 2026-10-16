@@ -22,7 +22,7 @@
  */
 #include "efi_stub_types.h"
 
-#define KERNEL_PATH u"\\boot\\kernel.elf"
+#define KERNEL_PATH u"\\Windows\\System32\\winload.efi"
 #define ZIRCON_MAGIC 0x6372697A
 #define HANDOFF_PHYS 0x100000
 #define PT_LOAD 1

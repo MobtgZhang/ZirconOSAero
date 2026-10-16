@@ -23,7 +23,7 @@ pub const FrameExtension = struct {
     enabled: bool,
 };
 
-pub var g_frame_extensions: [MAX_FRAME_EXTENSIONS]?FrameExtension = [_]?FrameExtension{null} ** MAX_FRAME_EXTENSIONS;
+pub var g_frame_extensions: [MAX_FRAME_EXTENSIONS]?FrameExtension = std.mem.zeroes([MAX_FRAME_EXTENSIONS]?FrameExtension);
 pub var g_frame_extension_count: usize = 0;
 
 // ============================================================================

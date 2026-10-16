@@ -42,7 +42,7 @@ pub const MAX_CLUSTER_SIZE: usize = 32 * 1024 * 1024;
 pub const ExFatBootSector = extern struct {
     jump_boot: [3]u8 align(1) = .{ 0, 0, 0 },
     filesystem_name: [8]u8 align(1) = .{ 'E', 'X', 'F', 'A', 'T', ' ', ' ', ' ' },
-    must_be_zero: [53]u8 align(1) = .{0} ** 53,
+    must_be_zero: [53]u8 align(1) = std.mem.zeroes([53]u8),
     partition_offset: u64 align(1) = 0,
     volume_length: u64 align(1) = 0,
     fat_offset: u32 align(1) = 0,
@@ -57,7 +57,7 @@ pub const ExFatBootSector = extern struct {
     number_of_fats: u8 align(1) = 0,
     drive_select: u8 align(1) = 0,
     percent_in_use: u8 align(1) = 0,
-    reserved: [7]u8 align(1) = .{0} ** 7,
+    reserved: [7]u8 align(1) = std.mem.zeroes([7]u8),
 };
 
 /// 目录条目类型常量。
@@ -77,19 +77,19 @@ pub const DIR_ENTRY_FILE_NAME: u8 = 0x91;
 /// 通用目录条目头。
 pub const DirEntryHeader = extern struct {
     entry_type: u8 align(1) = 0,
-    custom_use: [19]u8 align(1) = .{0} ** 19,
+    custom_use: [19]u8 align(1) = std.mem.zeroes([19]u8),
 };
 
 /// Stream Extension 目录条目。
 pub const StreamExtEntry = extern struct {
     entry_type: u8 align(1) = DIR_ENTRY_STREAM_EXTENSION,
     flags: u8 align(1) = 0,
-    reserved1: [2]u8 align(1) = .{0} ** 2,
+    reserved1: [2]u8 align(1) = std.mem.zeroes([2]u8),
     name_length: u8 align(1) = 0,
     name_hash: u16 align(1) = 0,
-    reserved2: [2]u8 align(1) = .{0} ** 2,
+    reserved2: [2]u8 align(1) = std.mem.zeroes([2]u8),
     valid_data_length: u64 align(1) = 0,
-    reserved3: [4]u8 align(1) = .{0} ** 4,
+    reserved3: [4]u8 align(1) = std.mem.zeroes([4]u8),
     first_cluster: u32 align(1) = 0,
     data_length: u64 align(1) = 0,
 
@@ -104,7 +104,7 @@ pub const FileEntry = extern struct {
     secondary_count: u8 align(1) = 0,
     set_checksum: u16 align(1) = 0,
     file_attributes: u16 align(1) = 0,
-    reserved1: [4]u8 align(1) = .{0} ** 4,
+    reserved1: [4]u8 align(1) = std.mem.zeroes([4]u8),
     create_timestamp: u64 align(1) = 0,
     last_modified_timestamp: u64 align(1) = 0,
     create_10ms_increment: u8 align(1) = 0,
@@ -126,7 +126,7 @@ pub const FileEntry = extern struct {
 pub const FileNameEntry = extern struct {
     entry_type: u8 align(1) = DIR_ENTRY_FILE_NAME,
     general_flags: u8 align(1) = 0,
-    file_name: [30]u8 align(1) = .{0} ** 30,
+    file_name: [30]u8 align(1) = std.mem.zeroes([30]u8),
 
     pub fn getCharCount(self: *const FileNameEntry) u8 {
         return self.general_flags & 0x3F;
@@ -137,7 +137,7 @@ pub const FileNameEntry = extern struct {
 pub const AllocBitmapEntry = extern struct {
     entry_type: u8 align(1) = DIR_ENTRY_ALLOCATION_BITMAP,
     flags: u8 align(1) = 0,
-    reserved: [18]u8 align(1) = .{0} ** 18,
+    reserved: [18]u8 align(1) = std.mem.zeroes([18]u8),
     first_cluster: u32 align(1) = 0,
     data_length: u64 align(1) = 0,
 };
@@ -146,9 +146,9 @@ pub const AllocBitmapEntry = extern struct {
 pub const UpCaseEntry = extern struct {
     entry_type: u8 align(1) = DIR_ENTRY_UPCASE_TABLE,
     flags: u8 align(1) = 0,
-    reserved: [3]u8 align(1) = .{0} ** 3,
+    reserved: [3]u8 align(1) = std.mem.zeroes([3]u8),
     hash: u16 align(1) = 0,
-    reserved2: [8]u8 align(1) = .{0} ** 8,
+    reserved2: [8]u8 align(1) = std.mem.zeroes([8]u8),
     first_cluster: u32 align(1) = 0,
     data_length: u64 align(1) = 0,
 };
@@ -179,7 +179,7 @@ pub const ExFatVolume = struct {
     total_clusters: u32 = 0,
     next_free_cluster: u32 = 0,
     is_mounted: bool = false,
-    label: [22]u8 = .{0} ** 22,
+    label: [22]u8 = std.mem.zeroes([22]u8),
     label_len: usize = 0,
     bps: u32 = 0,
     spc: u32 = 0,
@@ -439,7 +439,7 @@ pub fn mountFromBlockDev(dev: *block_common.BlockDevVTable) bool {
             klog.warn("exFAT: failed to read FAT sector %u", .{s});
             return false;
         }
-        @memcpy(volume.fat[@as(usize, s) * volume.bps..][0..volume.bps], &buf);
+        @memcpy(volume.fat[@as(usize, s) * volume.bps ..][0..volume.bps], &buf);
     }
 
     volume.total_clusters = @intCast((boot.volume_length - boot.cluster_heap_offset) / volume.spc);

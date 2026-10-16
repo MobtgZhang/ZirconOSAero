@@ -473,7 +473,8 @@ pub fn hitTestWindow(px: i32, py: i32) ?*ManagedWindow {
 
         const rect = win.current_rect;
         if (px >= rect.x and px < rect.x + rect.w and
-            py >= rect.y and py < rect.y + rect.h) {
+            py >= rect.y and py < rect.y + rect.h)
+        {
             if (win.z_order > max_z) {
                 max_z = win.z_order;
                 result = win;
@@ -544,11 +545,7 @@ pub fn updateAnimations() void {
 
             if (win.animation_end_rect.w > 0 and win.animation_end_rect.h > 0) {
                 win.current_rect = win.animation_end_rect;
-                surface_mgr.resizeSurface(
-                    win.surface_id,
-                    @as(u32, @intCast(win.animation_end_rect.w)),
-                    @as(u32, @intCast(win.animation_end_rect.h))
-                );
+                surface_mgr.resizeSurface(win.surface_id, @as(u32, @intCast(win.animation_end_rect.w)), @as(u32, @intCast(win.animation_end_rect.h)));
                 surface_mgr.moveSurface(win.surface_id, win.animation_end_rect.x, win.animation_end_rect.y);
             }
             continue;
@@ -565,10 +562,8 @@ pub fn updateAnimations() void {
         const new_h = lerpInt(win.animation_start_rect.h, win.animation_end_rect.h, progress);
 
         // 插值透明度
-        const new_alpha: u8 = @intFromFloat(
-            @as(f32, @floatFromInt(win.animation_start_alpha)) * (1.0 - progress) +
-            @as(f32, @floatFromInt(win.animation_end_alpha)) * progress
-        );
+        const new_alpha: u8 = @intFromFloat(@as(f32, @floatFromInt(win.animation_start_alpha)) * (1.0 - progress) +
+            @as(f32, @floatFromInt(win.animation_end_alpha)) * progress);
 
         // 更新表面
         if (new_w > 0 and new_h > 0) {

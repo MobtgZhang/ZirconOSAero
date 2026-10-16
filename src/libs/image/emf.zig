@@ -183,7 +183,7 @@ pub const EmfObjectType = enum(u8) {
 // Parsing
 
 fn emfRecordTypeFromU32(t: u32) EmrRecordType {
-    return @as(EmrRecordType, @enumFromInt(t));
+    return @as(EmrRecordType, @fromBackingInt(@intCast(t)));
 }
 
 /// Parses an EMF header from data.
@@ -293,13 +293,13 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) mod.ImageError!Emf
         return mod.ImageError.InvalidSignature;
     }
 
-    var records = std.ArrayListUnmanaged(EmfRecord){};
+    var records = std.ArrayListUnmanaged(EmfRecord).empty;
     errdefer records.deinit(allocator);
 
     var pos: usize = 0;
     while (pos + 8 <= data.len) {
-        const record_type = std.mem.readIntLittle(u32, data[pos..pos + 4]);
-        const record_size = std.mem.readIntLittle(u32, data[pos + 4..pos + 8]);
+        const record_type = std.mem.readIntLittle(u32, data[pos .. pos + 4]);
+        const record_size = std.mem.readIntLittle(u32, data[pos + 4 .. pos + 8]);
 
         if (record_size < 8) break;
         if (pos + @as(usize, record_size) > data.len) break;
@@ -342,9 +342,9 @@ pub fn getBounds(playback: *const EmfPlayback) struct { i32, i32, i32, i32 } {
 
 /// Decoder interface entry.
 pub const emfDecoder: mod.Decoder = .{
-    .signature = &[1]u8{ 0x00 },
+    .signature = &[1]u8{0x00},
     .name = "EMF",
-    .extensions = &.{ ".emf" },
+    .extensions = &.{".emf"},
     .decodeFn = struct {
         fn call(_: std.mem.Allocator, _: []const u8) mod.ImageError!mod.PixelBuffer {
             // EMF is a vector format — return a placeholder

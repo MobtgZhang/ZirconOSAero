@@ -40,9 +40,19 @@ pub const Suit = enum(u8) {
 };
 
 pub const CardValue = enum(u8) {
-    ace = 1, two = 2, three = 3, four = 4, five = 5,
-    six = 6, seven = 7, eight = 8, nine = 9, ten = 10,
-    jack = 11, queen = 12, king = 13,
+    ace = 1,
+    two = 2,
+    three = 3,
+    four = 4,
+    five = 5,
+    six = 6,
+    seven = 7,
+    eight = 8,
+    nine = 9,
+    ten = 10,
+    jack = 11,
+    queen = 12,
+    king = 13,
 };
 
 pub const Card = struct {
@@ -74,16 +84,23 @@ pub const FreeCellGame = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) FreeCellGame {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 800, .height = 580,
-            .visible = true, .caption_hover = .none,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 800,
+            .height = 580,
+            .visible = true,
+            .caption_hover = .none,
             .cascades = undefined,
-            .cascade_counts = [_]u8{0} ** 8,
-            .free_cells = [_]?Card{null} ** 4,
-            .home_cells = [_]?Card{null} ** 4,
-            .moves = 0, .score = 0, .game_won = false,
-            .selected_cascade = -1, .selected_card_index = -1,
-            .hover_new = false, .hover_undo = false,
+            .cascade_counts = [_]u8{0} * *8,
+            .free_cells = [_]?Card{null} * *4,
+            .home_cells = [_]?Card{null} * *4,
+            .moves = 0,
+            .score = 0,
+            .game_won = false,
+            .selected_cascade = -1,
+            .selected_card_index = -1,
+            .hover_new = false,
+            .hover_undo = false,
         };
     }
 
@@ -106,8 +123,8 @@ pub const FreeCellGame = struct {
         for (0..4) |s| {
             for (1..14) |v| {
                 deck[deck_idx] = .{
-                    .suit = @enumFromInt(s),
-                    .value = @enumFromInt(v),
+                    .suit = @fromBackingInt(@intCast(s)),
+                    .value = @fromBackingInt(@intCast(v)),
                     .face_up = true,
                 };
                 deck_idx += 1;
@@ -143,11 +160,11 @@ pub const FreeCellGame = struct {
 
     fn canMoveToCascade(card: Card, target: Card) bool {
         if (!target.face_up) return false;
-        return @intFromEnum(card.value) == @intFromEnum(target.value) + 1;
+        return @backingInt(card.value) == @backingInt(target.value) + 1;
     }
 
     fn canMoveToHome(cell: Card, home_idx: usize) bool {
-        if (@intFromEnum(cell.suit) != home_idx) return false;
+        if (@backingInt(cell.suit) != home_idx) return false;
         return true;
     }
 
@@ -164,7 +181,8 @@ pub const FreeCellGame = struct {
         for (0..4) |i| {
             const cell_x = home_start_x + @as(i32, @intCast(i)) * (home_cell_w + 5);
             if (px >= cell_x and px < cell_x + home_cell_w and
-                py >= home_y and py < home_y + 50) {
+                py >= home_y and py < home_y + 50)
+            {
                 if (fc.selected_cascade >= 0 and fc.selected_card_index >= 0) {
                     const col = @as(usize, @intCast(fc.selected_cascade));
                     const idx = fc.cascade_counts[col] - 1;
@@ -200,7 +218,7 @@ pub const FreeCellGame = struct {
                         const sel_idx = @as(usize, @intCast(fc.selected_card_index));
                         if (fc.cascade_counts[sel_col] > sel_idx) {
                             const card = fc.cascades[sel_col][sel_idx];
-                            if (@intFromEnum(card.value) == 13) {
+                            if (@backingInt(card.value) == 13) {
                                 const count = fc.cascade_counts[sel_col] - sel_idx;
                                 var j: usize = 0;
                                 while (j < count) : (j += 1) {
@@ -360,8 +378,8 @@ pub const FreeCellGame = struct {
         if (fc.game_won) {
             fb.fillRect(wx + 200, wy + 200, ww - 400, 150, rgb(0xE0, 0xF0, 0xE0));
             fb.draw3DRect(wx + 200, wy + 200, ww - 400, 150, rgb(0xA0, 0xC0, 0xA0), rgb(0xFF, 0xFF, 0xFF));
-            fb.drawTextTransparent(wx + ww/2 - 80, wy + 240, "Congratulations!", rgb(0x00, 0x80, 0x00));
-            fb.drawTextTransparent(wx + ww/2 - 100, wy + 280, "You won FreeCell!", rgb(0x40, 0x60, 0x40));
+            fb.drawTextTransparent(wx + ww / 2 - 80, wy + 240, "Congratulations!", rgb(0x00, 0x80, 0x00));
+            fb.drawTextTransparent(wx + ww / 2 - 100, wy + 280, "You won FreeCell!", rgb(0x40, 0x60, 0x40));
         }
     }
 

@@ -38,8 +38,7 @@ pub const RvThreadContext = extern struct {
 pub extern fn riscv_switch_context(from: *RvThreadContext, to: *RvThreadContext) callconv(.c) void;
 
 pub fn trampolineAddr() usize {
-    return asm volatile (
-        "lla %[o], riscv_thread_trampoline"
+    return asm volatile ("lla %[o], riscv_thread_trampoline"
         : [o] "=r" (-> usize),
     );
 }

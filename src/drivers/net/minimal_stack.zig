@@ -371,7 +371,7 @@ pub fn virtioNetStackSmokeSelfTest() bool {
     @memset(&eth, 0);
     eth[12] = 0x08;
     eth[13] = 0x00;
-    var ip: [20]u8 = [_]u8{0} ** 20;
+    var ip: [20]u8 = std.mem.zeroes([20]u8);
     ip[0] = 0x45;
     ip[8] = 64;
     ip[9] = IPPROTO_UDP;
@@ -383,7 +383,7 @@ pub fn virtioNetStackSmokeSelfTest() bool {
 }
 
 test "parseIpv4Header rejects IHL greater than 5 (options not implemented)" {
-    var wire: [20]u8 = [_]u8{0} ** 20;
+    var wire: [20]u8 = std.mem.zeroes([20]u8);
     wire[0] = 0x46; // version 4, IHL 6 — 解析器仅接受 IHL=5
     try std.testing.expect(parseIpv4Header(&wire) == null);
 }
@@ -402,7 +402,7 @@ test "parseArpHeaderFixed decodes Ethernet/IPv4 style preamble" {
 }
 
 test "parseIpv4Header decodes RFC791 fixed header (big-endian fields)" {
-    var wire: [20]u8 = [_]u8{0} ** 20;
+    var wire: [20]u8 = std.mem.zeroes([20]u8);
     wire[0] = 0x45; // version 4, IHL 5
     wire[1] = 0;
     std.mem.writeInt(u16, wire[2..4], 28, .big); // total length

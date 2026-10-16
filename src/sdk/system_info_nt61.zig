@@ -29,10 +29,10 @@ const std = @import("std");
 
 /// Learn：`SYSTEM_BASIC_INFORMATION`（x64 上含尾部填充至 8 字节界）。
 pub const SYSTEM_BASIC_INFORMATION_NT61_X64 = extern struct {
-    Reserved1: [24]u8 = [_]u8{0} ** 24,
-    Reserved2: [4]u64 = [_]u64{0} ** 4,
+    Reserved1: [24]u8 = std.mem.zeroes([24]u8),
+    Reserved2: [4]u64 = std.mem.zeroes([4]u64),
     NumberOfProcessors: u8 = 1,
-    _pad_tail: [7]u8 = [_]u8{0} ** 7,
+    _pad_tail: [7]u8 = std.mem.zeroes([7]u8),
 };
 
 comptime {
@@ -64,7 +64,7 @@ pub const UNICODE_STRING_SYSTEM_INFO = extern struct {
 pub const SYSTEM_PROCESS_INFORMATION_NT61_X64 = extern struct {
     NextEntryOffset: u32 = 0,
     NumberOfThreads: u32 = 0,
-    Reserved1: [48]u8 = [_]u8{0} ** 48,
+    Reserved1: [48]u8 = std.mem.zeroes([48]u8),
     ImageName: UNICODE_STRING_SYSTEM_INFO = .{},
     BasePriority: i32 = 0,
     _pad_base_pri: u32 = 0,
@@ -86,7 +86,7 @@ pub const SYSTEM_PROCESS_INFORMATION_NT61_X64 = extern struct {
     PagefileUsage: u64 = 0,
     PeakPagefileUsage: u64 = 0,
     PrivatePageCount: u64 = 0,
-    Reserved7: [6]i64 = [_]i64{0} ** 6,
+    Reserved7: [6]i64 = std.mem.zeroes([6]i64),
 };
 
 comptime {
@@ -101,7 +101,7 @@ pub const CLIENT_ID_NT61_X64 = extern struct {
 
 /// Learn：`SYSTEM_THREAD_INFORMATION`。
 pub const SYSTEM_THREAD_INFORMATION_NT61_X64 = extern struct {
-    Reserved1: [3]i64 = [_]i64{0} ** 3,
+    Reserved1: [3]i64 = std.mem.zeroes([3]i64),
     Reserved2: u32 = 0,
     _pad_r2: u32 = 0,
     StartAddress: u64 = 0,
@@ -128,7 +128,7 @@ pub const RTL_PROCESS_MODULE_INFORMATION_NT61_X64 = extern struct {
     InitOrderIndex: u16 = 0,
     LoadCount: u16 = 0,
     OffsetToFileName: u16 = 0,
-    FullPathName: [256]u8 = [_]u8{0} ** 256,
+    FullPathName: [256]u8 = std.mem.zeroes([256]u8),
 };
 
 comptime {

@@ -27,7 +27,7 @@
 // Reference: https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/ns-ntddk-kuser_shared_data
 
 const std = @import("std");
-const builtin = @import("builtin");
+const hal = @import("../hal.zig");
 const kuser_sdk = @import("../sdk/kuser_shared_nt61.zig");
 const vm = @import("vm.zig");
 const arch = @import("../arch.zig");
@@ -39,7 +39,7 @@ test "KUSER_SHARED_DATA VA page aligned for user mapping" {
 
 /// 运行时校验：共享页已映射且 **不可写**（x64）；供进程创建路径自检。
 pub fn verifyKuserMappingInAddressSpace(space: *vm.AddressSpace) bool {
-    if (builtin.cpu.arch != .x86_64) return true;
+    if (!hal.supportsKuserShared()) return true;
     const va = kuser_sdk.KUSER_SHARED_DATA_VA_X64;
     if (space.getPhysical(va) == null) return false;
     const pg = arch.impl.paging;
@@ -49,7 +49,7 @@ pub fn verifyKuserMappingInAddressSpace(space: *vm.AddressSpace) bool {
 
 /// 在新进程地址空间中安装共享数据页。失败时调用方应 `releaseProcessAddressSpace`。
 pub fn installInProcessAddressSpace(space: *vm.AddressSpace) bool {
-    if (builtin.cpu.arch != .x86_64) return true;
+    if (!hal.supportsKuserShared()) return true;
 
     // 关中断：避免 timer/调度路径与 `panic_context` 交叠导致 phase 误判（Phase 5 首次建进程诊断）。
     arch.disableInterrupts();

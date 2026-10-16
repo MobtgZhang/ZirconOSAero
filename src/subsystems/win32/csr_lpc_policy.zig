@@ -149,7 +149,7 @@ pub fn readCloseDesktopHdesk(data: []const u8) ?u32 {
 }
 
 test "desktop DSK1 name payload round-trip" {
-    var buf: [40]u8 = [_]u8{0} ** 40;
+    var buf: [40]u8 = std.mem.zeroes([40]u8);
     std.mem.writeInt(u32, buf[0..4], desktop_open_switch_magic_le, .little);
     buf[4] = 3;
     @memcpy(buf[5..8], "abc");

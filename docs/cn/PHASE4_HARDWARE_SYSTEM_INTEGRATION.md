@@ -17,7 +17,7 @@
 ### Phase4-Plus（可选，不与 Core 混为一谈）
 
 - **VirGL / `CMD_SUBMIT_3D` 非空载荷**：自主编码命令流（不复制 Mesa 源码）；用户态提交边界见 `MM_Section_Roadmap.md`。
-- **GPU 辅助模糊**：仅在 `tryVirglBlurBoxDelegation` 等路径**真实返回 true** 时由 `dwm` 减轻 CPU 盒式模糊；否则保持 `dwm_blur_budget` 模型。
+- **GPU 辅助模糊**：仅在 VirGL 路径**真实返回 true** 时由 `dwm` 减轻 CPU 盒式模糊；否则保持 `dwm_blur_budget` 模型。
 
 ## 6–8 周里程碑表（建议顺序）
 

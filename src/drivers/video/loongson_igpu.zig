@@ -120,14 +120,14 @@ fn runPciProbeOnce() void {
     klog.info("Loongson iGPU: DID=0x%x rev=0x%x gen=%u bus=%u dev=%u fn=%u MMIO=0x%x size=0x%x", .{
         dev.device_id,
         dev.revision_id,
-        @intFromEnum(generation),
+        @backingInt(generation),
         dev.loc.bus,
         dev.loc.dev,
         dev.loc.func,
         mmio_phys,
         mmio_size,
     });
-    klog.info("Loongson iGPU: display_init=%u (handoff path when GOP/ramfb present)", .{@intFromEnum(display_result)});
+    klog.info("Loongson iGPU: display_init=%u (handoff path when GOP/ramfb present)", .{@backingInt(display_result)});
 }
 
 pub fn ensureDeferredProbeCompleted() void {

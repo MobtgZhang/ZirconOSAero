@@ -418,7 +418,7 @@ pub const X86ToIRRegMap = struct {
             5 => .r4,
             6 => .r5,
             7 => .r6,
-            8...31 => @as(IRReg, @enumFromInt(x86_reg)),
+            8...31 => @as(IRReg, @fromBackingInt(@intCast(x86_reg))),
             else => .zero,
         };
     }

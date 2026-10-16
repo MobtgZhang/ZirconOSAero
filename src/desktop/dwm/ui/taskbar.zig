@@ -266,7 +266,8 @@ pub fn onMouseMove(px: i32, py: i32) void {
     for (0..g_task_button_count) |i| {
         const btn = g_task_buttons[i];
         if (px >= btn.x and px < btn.x + btn.width and
-            py >= btn.y and py < btn.y + btn.height) {
+            py >= btn.y and py < btn.y + btn.height)
+        {
             g_task_buttons[i].state = .hovered;
         } else if (!g_task_buttons[i].is_active) {
             g_task_buttons[i].state = .normal;
@@ -324,14 +325,12 @@ pub fn showTaskbar() void {
     if (!g_taskbar_state.auto_hide_enabled) return;
     g_taskbar_state.is_auto_hidden = false;
     g_taskbar_state.auto_hide_offset = 0;
-    surface_mgr.moveSurface(g_taskbar_state.surface_id, 0,
-        @as(i32, @intCast(compositor.getScreenSize().h)) - TASKBAR_HEIGHT);
+    surface_mgr.moveSurface(g_taskbar_state.surface_id, 0, @as(i32, @intCast(compositor.getScreenSize().h)) - TASKBAR_HEIGHT);
 }
 
 pub fn hideTaskbar() void {
     if (!g_taskbar_state.auto_hide_enabled) return;
     g_taskbar_state.is_auto_hidden = true;
     g_taskbar_state.auto_hide_offset = TASKBAR_HEIGHT;
-    surface_mgr.moveSurface(g_taskbar_state.surface_id, 0,
-        @as(i32, @intCast(compositor.getScreenSize().h)));
+    surface_mgr.moveSurface(g_taskbar_state.surface_id, 0, @as(i32, @intCast(compositor.getScreenSize().h)));
 }

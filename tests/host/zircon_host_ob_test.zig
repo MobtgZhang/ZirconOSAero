@@ -26,10 +26,16 @@
 
 const std = @import("std");
 const ob = @import("../../src/ob/object.zig");
+const token_mod = @import("../../src/se/token.zig");
 
 var g_section_cleanup_test_ptr: u64 = 0;
 fn sectionCleanupTestHook(p: u64) void {
     g_section_cleanup_test_ptr = p;
+}
+
+var g_file_cleanup_test_ptr: u64 = 0;
+fn fileCleanupTestHook(p: u64) void {
+    g_file_cleanup_test_ptr = p;
 }
 
 test "handle table alloc increments ref_count and handle_count" {
@@ -86,6 +92,22 @@ test "section last reference invokes cleanup hook" {
     try std.testing.expectEqual(@as(u64, 0), g_section_cleanup_test_ptr);
     try std.testing.expect(table.closeHandle(h));
     try std.testing.expectEqual(ptr, g_section_cleanup_test_ptr);
+}
+
+test "file last reference invokes cleanup hook" {
+    const hooks = @import("../../src/ob/cleanup_hooks.zig");
+    g_file_cleanup_test_ptr = 0;
+    hooks.file_last_reference = fileCleanupTestHook;
+    defer hooks.file_last_reference = null;
+
+    var hdr = ob.ObjectHeader{ .obj_type = .file, .ref_count = 0, .handle_count = 0 };
+    var table = ob.HandleTable.init(1);
+    const ptr: u64 = @intFromPtr(&hdr);
+    const h = table.allocHandle(ptr, ob.GENERIC_ALL, .file) orelse return error.AllocHandle;
+    try std.testing.expectEqual(@as(u32, 1), hdr.refCount());
+    try std.testing.expectEqual(@as(u64, 0), g_file_cleanup_test_ptr);
+    try std.testing.expect(table.closeHandle(h));
+    try std.testing.expectEqual(ptr, g_file_cleanup_test_ptr);
 }
 
 test "handle table lookup and checkAccess" {
@@ -179,4 +201,66 @@ test "ObjectHeader wait list FIFO append and idempotent remove" {
     ob.waitListRemove(&e2);
     try std.testing.expect(hdr.wait_list_head == null);
     try std.testing.expect(hdr.wait_list_tail == null);
+}
+
+test "ObjectHeader addRef saturates instead of wrapping" {
+    var hdr = ob.ObjectHeader{ .obj_type = .event, .ref_count = std.math.maxInt(u32) };
+    hdr.addRef();
+    try std.testing.expectEqual(std.math.maxInt(u32), hdr.refCount());
+}
+
+test "allocHandle rejects saturated handle_count without leaking reference" {
+    var hdr = ob.ObjectHeader{
+        .obj_type = .event,
+        .ref_count = 1,
+        .handle_count = std.math.maxInt(u32),
+    };
+    var table = ob.HandleTable.init(1);
+    const handle = table.allocHandle(@intFromPtr(&hdr), ob.GENERIC_READ, .event);
+    try std.testing.expect(handle == null);
+    try std.testing.expectEqual(@as(u32, 1), hdr.refCount());
+    try std.testing.expectEqual(std.math.maxInt(u32), hdr.handleCount());
+}
+
+test "namespace rejects duplicates and reuses removed slots" {
+    ob.initNamespace();
+    const initial_count = ob.getNamespaceCount();
+    try std.testing.expect(ob.insertNamespace("\\Test", .event, 0, 0));
+    try std.testing.expect(!ob.insertNamespace("\\Test", .event, 0, 0));
+    try std.testing.expectEqual(initial_count + 1, ob.getNamespaceCount());
+    try std.testing.expect(ob.removeNamespace("\\Test"));
+    try std.testing.expectEqual(initial_count, ob.getNamespaceCount());
+    try std.testing.expect(ob.insertNamespace("\\Replacement", .event, 0, 0));
+    try std.testing.expectEqual(initial_count + 1, ob.getNamespaceCount());
+}
+
+test "namespace lookup returns detached snapshot" {
+    ob.initNamespace();
+    const initial_count = ob.getNamespaceCount();
+    const first_object_ptr: u64 = 0x1100;
+    const second_object_ptr: u64 = 0x2200;
+
+    try std.testing.expect(ob.insertNamespace("\\LookupSnapshot", .event, first_object_ptr, 0));
+    const snapshot = ob.lookupNamespace("\\LookupSnapshot") orelse return error.LookupFailed;
+    try std.testing.expectEqual(first_object_ptr, snapshot.object_ptr);
+
+    try std.testing.expect(ob.removeNamespace("\\LookupSnapshot"));
+    try std.testing.expect(ob.insertNamespace("\\LookupSnapshot", .event, second_object_ptr, 0));
+    try std.testing.expectEqual(second_object_ptr, snapshot.object_ptr);
+    const current = ob.lookupNamespace("\\LookupSnapshot") orelse return error.CurrentLookupFailed;
+    try std.testing.expectEqual(second_object_ptr, current.object_ptr);
+
+    try std.testing.expect(ob.removeNamespace("\\LookupSnapshot"));
+    try std.testing.expectEqual(initial_count, ob.getNamespaceCount());
+}
+
+test "created object security rejects unelevated write access" {
+    ob.init();
+    var hdr = ob.ObjectHeader{ .obj_type = .event };
+    ob.createObject(.event, @intFromPtr(&hdr));
+    try std.testing.expect(hdr.security != null);
+
+    const user = token_mod.createUserToken(0);
+    try std.testing.expect(!ob.checkObjectAccess(&hdr, &user, ob.GENERIC_WRITE));
+    try std.testing.expect(ob.checkObjectAccess(&hdr, &user, 0x0000_0001));
 }

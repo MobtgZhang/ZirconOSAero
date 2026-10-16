@@ -225,9 +225,7 @@ pub fn lockSession() void {
 
     // 显示登录屏幕
     const screen_size = compositor.getScreenSize();
-    surface_mgr.moveSurface(g_surface_id,
-        (@as(i32, @intCast(screen_size.w)) - LOGON_WIDTH) / 2,
-        (@as(i32, @intCast(screen_size.h)) - LOGON_HEIGHT) / 2);
+    surface_mgr.moveSurface(g_surface_id, (@as(i32, @intCast(screen_size.w)) - LOGON_WIDTH) / 2, (@as(i32, @intCast(screen_size.h)) - LOGON_HEIGHT) / 2);
     surface_mgr.setSurfaceVisible(g_surface_id, true);
     surface_mgr.setSurfaceZOrder(g_surface_id, 1000);
 }

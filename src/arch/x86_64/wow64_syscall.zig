@@ -1,3 +1,4 @@
+const std = @import("std");
 // Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
 //
 // ZirconOS
@@ -66,7 +67,7 @@ pub fn dispatchInt2e(frame: *InterruptFrame) void {
     const svc: u32 = @truncate(frame.rax);
     const arg_ptr_u32: u32 = @truncate(frame.rdx);
 
-    var args_buf: [max_stack_args]u32 = [_]u32{0} ** max_stack_args;
+    var args_buf: [max_stack_args]u32 = std.mem.zeroes([max_stack_args]u32);
     var args_slice: []const u32 = &[_]u32{};
 
     if (arg_ptr_u32 != 0) {

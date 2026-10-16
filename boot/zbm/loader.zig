@@ -83,12 +83,12 @@ pub const Elf64Header = extern struct {
     pub fn isValid(self: *const Elf64Header) bool {
         const magic: u32 = @as(*const u32, @ptrCast(&self.e_ident[0])).*;
         return magic == ELF_MAGIC and
-            self.e_ident[4] == @intFromEnum(ElfClass.elf64) and
-            self.e_type == @intFromEnum(ElfType.executable);
+            self.e_ident[4] == @backingInt(ElfClass.elf64) and
+            self.e_type == @backingInt(ElfType.executable);
     }
 
     pub fn getMachine(self: *const Elf64Header) ElfMachine {
-        return @enumFromInt(self.e_machine);
+        return @fromBackingInt(@intCast(self.e_machine));
     }
 };
 
@@ -208,7 +208,7 @@ pub fn parseElfHeader(buffer: [*]const u8, buffer_size: usize) struct { info: Ke
         return .{ .info = KernelInfo.init(), .err = .invalid_elf };
     }
 
-    if (ehdr.e_ident[4] != @intFromEnum(ElfClass.elf64)) {
+    if (ehdr.e_ident[4] != @backingInt(ElfClass.elf64)) {
         return .{ .info = KernelInfo.init(), .err = .wrong_class };
     }
 

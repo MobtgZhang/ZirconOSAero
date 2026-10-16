@@ -119,7 +119,7 @@ pub fn isWin32kServiceIndex(syscall_num: u32) bool {
 /// 获取服务名称（用于调试）
 pub fn getWin32kServiceName(syscall_num: u32) ?[]const u8 {
     inline for (@typeInfo(Win32kService).Enum.fields) |field| {
-        if (@intFromEnum(@as(Win32kService, @enumFromInt(syscall_num))) == syscall_num) {
+        if (@backingInt(@as(Win32kService, @fromBackingInt(@intCast(syscall_num)))) == syscall_num) {
             return field.name;
         }
     }
@@ -133,10 +133,10 @@ pub const Win32kResult = struct {
 };
 
 /// 分派 Win32k 服务调用
-pub fn dispatchWin32kSyscall(wow_proc: *types .Wow64Process, syscall_num: u32, args: []const u32) ntdll.NTSTATUS {
+pub fn dispatchWin32kSyscall(wow_proc: *types.Wow64Process, syscall_num: u32, args: []const u32) ntdll.NTSTATUS {
     total_win32k_translations += 1;
 
-    const service = @as(Win32kService, @enumFromInt(syscall_num));
+    const service = @as(Win32kService, @fromBackingInt(@intCast(syscall_num)));
     return switch (service) {
         // ── 用户消息服务 ──────────────────────────────────────────
         .NtUserPostMessage => win32kPostMessage(args),
@@ -231,7 +231,7 @@ fn win32kPostMessage(args: []const u32) ntdll.NTSTATUS {
 }
 
 /// NtUserSendMessage: 32位→64位同步消息发送
-fn win32kSendMessage(wow_proc: *types .Wow64Process, args: []const u32) ntdll.NTSTATUS {
+fn win32kSendMessage(wow_proc: *types.Wow64Process, args: []const u32) ntdll.NTSTATUS {
     if (args.len < 4) return ntdll.STATUS_INVALID_PARAMETER;
     _ = wow_proc;
     const hwnd32 = @as(HWND32, args[0]);
@@ -245,7 +245,7 @@ fn win32kSendMessage(wow_proc: *types .Wow64Process, args: []const u32) ntdll.NT
 }
 
 /// NtUserGetMessage: 32位→64位获取消息
-fn win32kGetMessage(wow_proc: *types .Wow64Process, args: []const u32) ntdll.NTSTATUS {
+fn win32kGetMessage(wow_proc: *types.Wow64Process, args: []const u32) ntdll.NTSTATUS {
     if (args.len < 4) return ntdll.STATUS_INVALID_PARAMETER;
     _ = wow_proc;
     const msg_ptr32 = args[0];
@@ -273,7 +273,7 @@ fn win32kGetMessage(wow_proc: *types .Wow64Process, args: []const u32) ntdll.NTS
 }
 
 /// NtUserPeekMessage: 32位→64位窥探消息
-fn win32kPeekMessage(wow_proc: *types .Wow64Process, args: []const u32) ntdll.NTSTATUS {
+fn win32kPeekMessage(wow_proc: *types.Wow64Process, args: []const u32) ntdll.NTSTATUS {
     if (args.len < 5) return ntdll.STATUS_INVALID_PARAMETER;
     _ = wow_proc;
     const msg_ptr32 = args[0];
@@ -377,7 +377,7 @@ fn win32kRegisterClass(args: []const u32) ntdll.NTSTATUS {
 
 /// NtUserCreateWindowEx: 32位→64位窗口创建
 /// args: ex_style, class_name, window_name, style, x, y, width, height, parent, menu, instance, param
-fn win32kCreateWindowEx(wow_proc: *types .Wow64Process, args: []const u32) ntdll.NTSTATUS {
+fn win32kCreateWindowEx(wow_proc: *types.Wow64Process, args: []const u32) ntdll.NTSTATUS {
     if (args.len < 12) return ntdll.STATUS_INVALID_PARAMETER;
     _ = wow_proc;
 
@@ -425,8 +425,14 @@ fn win32kCreateWindowEx(wow_proc: *types .Wow64Process, args: []const u32) ntdll
         class_name[0..class_len],
         name_buf[0..name_len],
         style,
-        x, y, width, height,
-        parent, menu, instance, 0,
+        x,
+        y,
+        width,
+        height,
+        parent,
+        menu,
+        instance,
+        0,
     );
 
     if (hwnd != 0) {
@@ -697,8 +703,7 @@ fn win32kStretchBlt(args: []const u32) ntdll.NTSTATUS {
     const hdc_dst = hdc32to64(hdc_dst32);
     const hdc_src = hdc32to64(hdc_src32);
 
-    if (user32.StretchBlt(hdc_dst, x_dst, y_dst, cx_dst, cy_dst,
-                          hdc_src, x_src, y_src, cx_src, cy_src, rop) != 0) {
+    if (user32.StretchBlt(hdc_dst, x_dst, y_dst, cx_dst, cy_dst, hdc_src, x_src, y_src, cx_src, cy_src, rop) != 0) {
         return ntdll.STATUS_SUCCESS;
     }
     return ntdll.STATUS_UNSUCCESSFUL;
@@ -917,7 +922,8 @@ fn win32kExtTextOut(args: []const u32) ntdll.NTSTATUS {
 
     const rect_opt: ?*const user32.RECT = if (rect_ptr32 != 0)
         @ptrFromInt(marshal.userVaFromWow64Ptr32(rect_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER)
-    else null;
+    else
+        null;
 
     const dx_opt: ?[*]const i32 = if (dx_ptr32 != 0) blk: {
         const ptr = marshal.userVaFromWow64Ptr32(dx_ptr32) orelse return ntdll.STATUS_INVALID_PARAMETER;
@@ -1297,7 +1303,8 @@ fn win32kCreateFont(args: []const u32) ntdll.NTSTATUS {
 
     const face_name_ptr64 = if (face_name_ptr32 != 0)
         marshal.userVaFromWow64Ptr32(face_name_ptr32)
-    else null;
+    else
+        null;
 
     _ = height;
     _ = width;

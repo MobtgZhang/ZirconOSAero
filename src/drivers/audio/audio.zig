@@ -24,6 +24,7 @@
 //! When a hardware audio driver (AC97 / HD Audio / USB Audio) is
 //! loaded in the future, it registers itself and drains the pending
 //! event queue.
+const std = @import("std");
 
 const klog = @import("../../rtl/klog.zig");
 
@@ -43,7 +44,7 @@ pub const SoundEvent = enum(u8) {
 };
 
 const MAX_PENDING: usize = 16;
-var pending_events: [MAX_PENDING]SoundEvent = [_]SoundEvent{.startup} ** MAX_PENDING;
+var pending_events: [MAX_PENDING]SoundEvent = std.mem.zeroes([MAX_PENDING]SoundEvent);
 var pending_count: usize = 0;
 
 var hw_present: bool = false;

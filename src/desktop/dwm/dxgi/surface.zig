@@ -70,7 +70,7 @@ pub const SurfaceState = struct {
 };
 
 pub const MAX_SURFACES: usize = 128;
-pub var g_surface_pool: [MAX_SURFACES]?SurfaceState = [_]?SurfaceState{null} ** MAX_SURFACES;
+pub var g_surface_pool: [MAX_SURFACES]?SurfaceState = std.mem.zeroes([MAX_SURFACES]?SurfaceState);
 pub var g_surface_count: usize = 0;
 
 // ============================================================================
@@ -189,7 +189,7 @@ pub var g_resource_pool: [MAX_RESOURCES]?struct {
     shared_handle: ?*anyopaque,
     usage: u32,
     eviction_priority: u32,
-} = [_]?struct { shared_handle: ?*anyopaque, usage: u32, eviction_priority: u32 }{null} ** MAX_RESOURCES;
+} = [_]?struct { shared_handle: ?*anyopaque, usage: u32, eviction_priority: u32 }{null} * *MAX_RESOURCES;
 pub var g_resource_count: usize = 0;
 
 pub fn createResource(shared_handle: ?*anyopaque, usage: u32) !usize {

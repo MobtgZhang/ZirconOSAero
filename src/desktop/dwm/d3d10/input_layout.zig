@@ -17,6 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! D3D10 InputLayout Implementation
+const std = @import("std");
 
 const d3d10_types = @import("d3d10_types.zig");
 const d3d10_errors = @import("d3d10_errors.zig");
@@ -47,7 +48,7 @@ pub const InputLayoutState = struct {
 };
 
 pub const MAX_INPUT_LAYOUTS: usize = 64;
-pub var g_input_layout_pool: [MAX_INPUT_LAYOUTS]?InputLayoutState = [_]?InputLayoutState{null} ** MAX_INPUT_LAYOUTS;
+pub var g_input_layout_pool: [MAX_INPUT_LAYOUTS]?InputLayoutState = std.mem.zeroes([MAX_INPUT_LAYOUTS]?InputLayoutState);
 pub var g_input_layout_count: usize = 0;
 
 // ============================================================================

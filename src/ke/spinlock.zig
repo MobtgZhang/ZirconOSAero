@@ -70,4 +70,11 @@ pub const IrqSpinLock = struct {
         self.v.store(0, .release);
         arch.restoreInterrupts(were_enabled);
     }
+
+    /// 供 `noreturn` 栈切换使用：释放锁但保留关中断状态，切换恢复原线程时再按保存值恢复。
+    pub fn unlockKeepingInterruptsDisabled(self: *IrqSpinLock) bool {
+        const were_enabled = self.saved_if;
+        self.v.store(0, .release);
+        return were_enabled;
+    }
 };

@@ -48,7 +48,7 @@ pub const KeyedMutexState = struct {
 };
 
 pub const MAX_KEYED_MUTEXES: usize = 256;
-pub var g_mutex_pool: [MAX_KEYED_MUTEXES]?KeyedMutexState = [_]?KeyedMutexState{null} ** MAX_KEYED_MUTEXES;
+pub var g_mutex_pool: [MAX_KEYED_MUTEXES]?KeyedMutexState = std.mem.zeroes([MAX_KEYED_MUTEXES]?KeyedMutexState);
 pub var g_mutex_count: usize = 0;
 
 // ============================================================================

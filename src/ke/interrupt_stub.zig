@@ -16,7 +16,7 @@
 // License along with this library; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
-//! 非 x86 架构占位：`isr.zig` 等仅在 x86_64 编译，此模块满足 `interrupt.zig` 的类型导出。
+//! 非 PC 架构占位：`isr.zig` 等仅在 PC 架构编译，此模块满足 `interrupt.zig` 的类型导出。
 
 pub const InterruptFrame = extern struct {
     _pad: u8 = 0,

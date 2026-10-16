@@ -73,7 +73,7 @@ pub fn isSelected(index: usize) bool {
 pub fn addToSelection(index: usize) void {
     if (selection_count >= MAX_SELECTION) return;
     if (isSelected(index)) return;
-    
+
     selection_indices[selection_count] = index;
     selection_count += 1;
 }
@@ -113,7 +113,7 @@ pub fn selectOnly(index: usize) void {
 pub fn selectRange(from: usize, to: usize) void {
     const start = @min(from, to);
     const end = @max(from, to);
-    
+
     for (start..end + 1) |i| {
         addToSelection(i);
     }
@@ -132,14 +132,14 @@ pub fn selectAll(total_items: usize) void {
 pub fn invertSelection(total_items: usize) void {
     var new_selection: [MAX_SELECTION]usize = undefined;
     var new_count: usize = 0;
-    
+
     for (0..total_items) |i| {
         if (!isSelected(i) and new_count < MAX_SELECTION) {
             new_selection[new_count] = i;
             new_count += 1;
         }
     }
-    
+
     for (0..new_count) |i| {
         selection_indices[i] = new_selection[i];
     }
@@ -198,7 +198,7 @@ pub fn startRubberBand(x: i32, y: i32) void {
 pub fn updateRubberBand(x: i32, y: i32) void {
     rubber_band.w = x - rubber_band.x;
     rubber_band.h = y - rubber_band.y;
-    
+
     // Normalize negative dimensions
     if (rubber_band.w < 0) {
         rubber_band.x += rubber_band.w;
@@ -231,20 +231,20 @@ pub fn isItemInRubberBand(
     item_h: i32,
 ) bool {
     if (!is_rubber_banding) return false;
-    
+
     // Check if item rect intersects with rubber band
     const rb_left = rubber_band.x;
     const rb_right = rubber_band.x + rubber_band.w;
     const rb_top = rubber_band.y;
     const rb_bottom = rubber_band.y + rubber_band.h;
-    
+
     const it_left = item_x;
     const it_right = item_x + item_w;
     const it_top = item_y;
     const it_bottom = item_y + item_h;
-    
+
     return !(rb_right < it_left or rb_left > it_right or
-             rb_bottom < it_top or rb_top > it_bottom);
+        rb_bottom < it_top or rb_top > it_bottom);
 }
 
 // ── Selection with Rubber-Band ─────────────────────────────────────────────
@@ -254,7 +254,7 @@ pub fn selectItemsInRubberBand(
     total_items: usize,
 ) void {
     if (!is_rubber_banding) return;
-    
+
     for (0..total_items) |i| {
         const rect = getItemRect(i);
         if (isItemInRubberBand(rect.x, rect.y, rect.w, rect.h)) {

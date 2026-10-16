@@ -17,6 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! D3D10 BlendState Implementation
+const std = @import("std");
 
 const d3d10_types = @import("d3d10_types.zig");
 const d3d10_errors = @import("d3d10_errors.zig");
@@ -41,7 +42,7 @@ pub const ID3D10BlendState = extern struct {
 // ============================================================================
 
 pub const MAX_BLEND_STATES: usize = 32;
-pub var g_blend_pool: [MAX_BLEND_STATES]?d3d10_types.D3D10_BLEND_DESC = [_]?d3d10_types.D3D10_BLEND_DESC{null} ** MAX_BLEND_STATES;
+pub var g_blend_pool: [MAX_BLEND_STATES]?d3d10_types.D3D10_BLEND_DESC = std.mem.zeroes([MAX_BLEND_STATES]?d3d10_types.D3D10_BLEND_DESC);
 pub var g_blend_count: usize = 0;
 
 // ============================================================================

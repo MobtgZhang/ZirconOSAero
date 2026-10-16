@@ -105,18 +105,18 @@ pub fn firstGptPartitionFromHeaderAndTable(
 }
 
 test "protective MBR + GPT first entry" {
-    var mbr: [512]u8 = [_]u8{0} ** 512;
+    var mbr: [512]u8 = std.mem.zeroes([512]u8);
     mbr[450] = 0xEE;
     mbr[510] = 0x55;
     mbr[511] = 0xAA;
     try std.testing.expect(isGptProtectiveMbr(&mbr));
     try std.testing.expect(firstMbrPartition(&mbr) == null);
 
-    var gh: [512]u8 = [_]u8{0} ** 512;
+    var gh: [512]u8 = std.mem.zeroes([512]u8);
     @memcpy(gh[0..8], gpt_sig);
     std.mem.writeInt(u32, gh[84..][0..4], 128, .little);
 
-    var te: [512]u8 = [_]u8{0} ** 512;
+    var te: [512]u8 = std.mem.zeroes([512]u8);
     std.mem.writeInt(u64, te[32..][0..8], 2048, .little);
     std.mem.writeInt(u64, te[40..][0..8], 4096, .little);
     te[0] = 0x01;
@@ -127,7 +127,7 @@ test "protective MBR + GPT first entry" {
 }
 
 test "MBR first partition" {
-    var m: [512]u8 = [_]u8{0} ** 512;
+    var m: [512]u8 = std.mem.zeroes([512]u8);
     m[446 + 4] = 0x07;
     std.mem.writeInt(u32, m[446 + 8 ..][0..4], 2048, .little);
     std.mem.writeInt(u32, m[446 + 12 ..][0..4], 100000, .little);

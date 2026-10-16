@@ -30,7 +30,7 @@ pub fn initForGeneration(gen: types.IntelGpuGeneration, mmio_base: usize, kms_ex
         .gen11 => gen11.initPipelineHandoffOnly(mmio_base, kms_experimental),
         .gen6, .gen7, .gen8 => blk: {
             if (klog.DEBUG_MODE) {
-                klog.info("Intel display: Gen%u — legacy handoff only", .{@intFromEnum(gen)});
+                klog.info("Intel display: Gen%u — legacy handoff only", .{@backingInt(gen)});
             }
             break :blk .handoff_only;
         },

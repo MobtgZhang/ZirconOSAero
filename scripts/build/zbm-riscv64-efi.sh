@@ -22,7 +22,7 @@ if [ -n "${RISCV64_EFI_CC:-}" ]; then
     CC=( ${RISCV64_EFI_CC} )
 elif command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
     CC=(riscv64-linux-gnu-gcc)
-elif command -v zig >/dev/null 2>&1; then
+elif command -v riscv64-linux-gnu-ld >/dev/null 2>&1 || command -v zig >/dev/null 2>&1; then
     CC=(zig cc -target riscv64-linux-gnu)
     echo "[ZirconOS] Using: zig cc -target riscv64-linux-gnu"
 else
@@ -92,7 +92,7 @@ if [[ "$(basename "${CC[0]}")" == riscv64-linux-gnu-gcc ]]; then
         -L"$GNUEFI_LIB_DIR" -lgnuefi -lefi \
         "$LIBGCC"
 elif command -v zig >/dev/null 2>&1; then
-    LIBGCC="$(zig cc -target riscv64-linux-gnu -print-libgcc-file-name)"
+    LIBGCC="${GNUEFI_LIB_DIR}/libgcc.a"
     echo "[ZirconOS] GNU-EFI link (zig + ld): ${OBJ} → ${OUT}"
     if command -v riscv64-linux-gnu-ld >/dev/null 2>&1; then
         riscv64-linux-gnu-ld -shared -Bsymbolic \

@@ -10,7 +10,7 @@ const ensureWallpaperPngAssetsPresent = wr.ensureWallpaperPngAssetsPresent;
 const wallpaper_png_inputs = wr.wallpaper_png_inputs;
 
 pub fn build(b: *std.Build) void {
-    const optimize = b.standardOptimizeOption(.{});
+    const optimize: std.builtin.OptimizeMode = b.standardOptimizeOption(.{}) orelse .debug;
 
     // Clean step
     const clean_step = b.step("clean", "Remove build artifacts and cache");
@@ -213,10 +213,10 @@ pub fn build(b: *std.Build) void {
     // Zig 0.15.x：x86_64 内核在 `-ODebug` 下 `build-exe` 链接阶段会异常退出（LLVM/自托管链接器崩溃）。
     // 将内核实际编译档位升为 ReleaseSafe；`-Ddebug` 仍控制运行时 klog，与 `-Doptimize` 解耦。
     const kernel_optimize: std.builtin.OptimizeMode = blk: {
-        if (cpu_arch == .x86_64 and optimize == .Debug) {
+        if (cpu_arch == .x86_64 and optimize == .debug) {
             const zv = @import("builtin").zig_version;
             if (zv.major == 0 and zv.minor == 15) {
-                break :blk .ReleaseSafe;
+                break :blk .safe;
             }
         }
         break :blk optimize;
@@ -230,7 +230,7 @@ pub fn build(b: *std.Build) void {
             .os_tag = .freestanding,
             .abi = .none,
         };
-        if (cpu_arch == .x86_64 and kernel_optimize != .Debug) {
+        if (cpu_arch == .x86_64 and kernel_optimize != .debug) {
             q.cpu_features_sub = std.Target.x86.featureSet(&.{
                 .mmx, .sse,  .sse2,    .sse3, .ssse3, .sse4_1, .sse4_2,
                 .avx, .avx2, .avx512f,
@@ -251,7 +251,7 @@ pub fn build(b: *std.Build) void {
     const wallpaper_embed_mod = b.createModule(.{
         .root_source_file = b.path("tools/wallpaper_embed.zig"),
         .target = b.graph.host,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
     });
     wallpaper_embed_mod.addImport("png", image_png_mod);
     const wallpaper_embed_exe = b.addExecutable(.{
@@ -275,7 +275,7 @@ pub fn build(b: *std.Build) void {
     const svg_to_rgba_mod = b.createModule(.{
         .root_source_file = b.path("tools/svg_to_rgba.zig"),
         .target = b.graph.host,
-        .optimize = .ReleaseSafe,
+        .optimize = .safe,
     });
     svg_to_rgba_mod.addImport("png", image_png_mod);
 
@@ -501,6 +501,10 @@ pub fn build(b: *std.Build) void {
     });
     kernel.step.dependOn(&run_wallpaper_embed.step);
     kernel.step.dependOn(&run_svg_embed.step);
+    if (cpu_arch == .x86_64) {
+        kernel.bundle_compiler_rt = false;
+        root_mod.addObjectFile(b.path("compiler_rt_min.o"));
+    }
 
     const run_aero_sounds = b.addSystemCommand(&.{
         "python3",
@@ -521,7 +525,7 @@ pub fn build(b: *std.Build) void {
     kernel.link_z_max_page_size = 0x1000;
     // Zig 自托管链接器会覆盖脚本中的起始 VA；显式与 link/x86_64.ld 对齐（UEFI 大内核需避开 16MiB 附近分配失败区）
     if (cpu_arch == .x86_64) {
-        kernel.image_base = 0x02000000;
+        kernel.image_base = 0x04000000;
     }
 
     const linker_script = if (mem.eql(u8, arch_opt, "x86_64"))
@@ -540,31 +544,31 @@ pub fn build(b: *std.Build) void {
     kernel.setLinkerScript(linker_script);
 
     if (mem.eql(u8, arch_opt, "x86_64")) {
-        kernel.addAssemblyFile(b.path("src/arch/x86_64/start.s"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/x86_64/start.s"));
         if (enable_idt_opt) {
-            kernel.addAssemblyFile(b.path("src/arch/x86_64/isr_common.s"));
-            kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_lstar.s"));
+            kernel.root_module.addAssemblyFile(b.path("src/arch/x86_64/isr_common.s"));
+            kernel.root_module.addAssemblyFile(b.path("src/arch/x86_64/syscall_lstar.s"));
         }
-        kernel.addAssemblyFile(b.path("src/arch/x86_64/context_switch.S"));
-        kernel.addAssemblyFile(b.path("src/arch/x86_64/kernel_end.s"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/x86_64/context_switch.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/x86_64/kernel_end.s"));
     } else if (mem.eql(u8, arch_opt, "aarch64")) {
-        kernel.addAssemblyFile(b.path("src/arch/aarch64/start.S"));
-        kernel.addAssemblyFile(b.path("src/arch/aarch64/exception_vector.S"));
-        kernel.addAssemblyFile(b.path("src/arch/aarch64/context_switch.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/aarch64/start.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/aarch64/exception_vector.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/aarch64/context_switch.S"));
     } else if (mem.eql(u8, arch_opt, "riscv64")) {
-        kernel.addAssemblyFile(b.path("src/arch/riscv64/start.S"));
-        kernel.addAssemblyFile(b.path("src/arch/riscv64/trap.S"));
-        kernel.addAssemblyFile(b.path("src/arch/riscv64/context_switch.S"));
-        kernel.addAssemblyFile(b.path("src/arch/riscv64/ap_entry.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/riscv64/start.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/riscv64/trap.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/riscv64/context_switch.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/riscv64/ap_entry.S"));
     } else if (mem.eql(u8, arch_opt, "loongarch64")) {
-        kernel.addAssemblyFile(b.path("src/arch/loongarch64/crt0.S"));
-        kernel.addAssemblyFile(b.path("src/arch/loongarch64/exc_vec.S"));
-        kernel.addAssemblyFile(b.path("src/arch/loongarch64/context_switch.S"));
-        kernel.addAssemblyFile(b.path("src/arch/loongarch64/ap_entry.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/loongarch64/crt0.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/loongarch64/exc_vec.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/loongarch64/context_switch.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/loongarch64/ap_entry.S"));
     } else if (mem.eql(u8, arch_opt, "mips64el")) {
-        kernel.addAssemblyFile(b.path("src/arch/mips64el/start.S"));
-        kernel.addAssemblyFile(b.path("src/arch/mips64el/exceptions.S"));
-        kernel.addAssemblyFile(b.path("src/arch/mips64el/context_switch.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/mips64el/start.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/mips64el/exceptions.S"));
+        kernel.root_module.addAssemblyFile(b.path("src/arch/mips64el/context_switch.S"));
     }
 
     const install_kernel = b.addInstallArtifact(kernel, .{});
@@ -576,17 +580,17 @@ pub fn build(b: *std.Build) void {
     const timekeeping_mod = b.createModule(.{
         .root_source_file = b.path("src/ke/timekeeping.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const arch_mod_host = b.createModule(.{
         .root_source_file = b.path("src/arch.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const klog_ringbuf_mod = b.createModule(.{
         .root_source_file = b.path("src/rtl/klog_ringbuf.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "timekeeping", .module = timekeeping_mod },
         },
@@ -594,7 +598,7 @@ pub fn build(b: *std.Build) void {
     const klog_mod = b.createModule(.{
         .root_source_file = b.path("src/rtl/klog.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "arch", .module = arch_mod_host },
             .{ .name = "timekeeping", .module = timekeeping_mod },
@@ -606,38 +610,38 @@ pub fn build(b: *std.Build) void {
     const hal_loongarch_tlb_flush_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/loongarch64/tlb_flush.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const hal_x86_64_tlb_broadcast_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/x86_64/tlb_broadcast.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const hal_aarch64_tlb_flush_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/aarch64/tlb_flush.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const hal_mips64el_tlb_flush_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/mips64el/tlb_flush.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const rtl_panic_context_mod = b.createModule(.{
         .root_source_file = b.path("src/rtl/panic_context.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const se_sid_mod = b.createModule(.{
         .root_source_file = b.path("src/se/sid.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     // se_mod 不需要在 ob_mod 之前定义，因为 token.zig 使用延迟导入
     const se_mod = b.createModule(.{
         .root_source_file = b.path("src/se/token.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "klog", .module = klog_mod },
             .{ .name = "sid.zig", .module = se_sid_mod },
@@ -646,7 +650,7 @@ pub fn build(b: *std.Build) void {
     const ob_mod = b.createModule(.{
         .root_source_file = b.path("src/ob/object.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "klog", .module = klog_mod },
             // arch 已在 ob/object.zig 中条件导入，不需要在这里指定
@@ -657,7 +661,7 @@ pub fn build(b: *std.Build) void {
     const ke_mod = b.createModule(.{
         .root_source_file = b.path("src/ke/wait.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "ob/object.zig", .module = ob_mod },
         },
@@ -665,12 +669,12 @@ pub fn build(b: *std.Build) void {
     const ke_kpcr_mod = b.createModule(.{
         .root_source_file = b.path("src/ke/kpcr.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const mm_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/vm.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "arch", .module = arch_mod_host },
             .{ .name = "klog", .module = klog_mod },
@@ -684,7 +688,7 @@ pub fn build(b: *std.Build) void {
     const mm_vad_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/vad.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "arch", .module = arch_mod_host },
             .{ .name = "klog", .module = klog_mod },
@@ -693,7 +697,7 @@ pub fn build(b: *std.Build) void {
     const config_mod = b.createModule(.{
         .root_source_file = b.path("src/config/os_version.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "klog", .module = klog_mod },
         },
@@ -701,7 +705,7 @@ pub fn build(b: *std.Build) void {
     const registry_mod = b.createModule(.{
         .root_source_file = b.path("src/registry/registry.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "klog", .module = klog_mod },
             .{ .name = "ob/object.zig", .module = ob_mod },
@@ -713,7 +717,7 @@ pub fn build(b: *std.Build) void {
     const heap_test_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/heap.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "klog", .module = klog_mod },
             .{ .name = "timekeeping", .module = timekeeping_mod },
@@ -730,7 +734,7 @@ pub fn build(b: *std.Build) void {
     const pool_test_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/pool.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "klog", .module = klog_mod },
             .{ .name = "timekeeping", .module = timekeeping_mod },
@@ -747,7 +751,7 @@ pub fn build(b: *std.Build) void {
     const buddy_test_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/buddy.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const buddy_tests = b.addTest(.{
         .root_module = buddy_test_mod,
@@ -758,7 +762,7 @@ pub fn build(b: *std.Build) void {
     const slab_test_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/slab.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "klog", .module = klog_mod },
             .{ .name = "timekeeping", .module = timekeeping_mod },
@@ -775,7 +779,7 @@ pub fn build(b: *std.Build) void {
     const vm_nt_protect_pte_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/vm_nt_protect_pte_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const vm_nt_protect_pte_tests = b.addTest(.{
         .root_module = vm_nt_protect_pte_host_mod,
@@ -786,7 +790,7 @@ pub fn build(b: *std.Build) void {
     const ssdt_test_mod = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/ssdt_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const ssdt_tests = b.addTest(.{
         .root_module = ssdt_test_mod,
@@ -797,7 +801,7 @@ pub fn build(b: *std.Build) void {
     const wow64_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/x64_semantic_alias.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "ssdt_nt61", .module = ssdt_test_mod },
         },
@@ -806,12 +810,12 @@ pub fn build(b: *std.Build) void {
     const ntdll_syscall_stub_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/ntdll_syscall_win64.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const ssdt_stub_parity_mod = b.createModule(.{
         .root_source_file = b.path("tests/ssdt_stub_parity.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "ssdt", .module = ssdt_test_mod },
             .{ .name = "stub", .module = ntdll_syscall_stub_mod },
@@ -826,7 +830,7 @@ pub fn build(b: *std.Build) void {
     const se_token_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/se_token.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const se_token_tests = b.addTest(.{
         .root_module = se_token_host_mod,
@@ -834,10 +838,32 @@ pub fn build(b: *std.Build) void {
     });
     const run_se_token_tests = b.addRunArtifact(se_token_tests);
 
+    const se_descriptor_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/se_security_descriptor_host_test.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
+    const se_descriptor_host_tests = b.addTest(.{
+        .root_module = se_descriptor_host_mod,
+        .name = "se_descriptor_host",
+    });
+    const run_se_descriptor_host_tests = b.addRunArtifact(se_descriptor_host_tests);
+
+    const ntdll_sync_security_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/ntdll_sync_security_host_test.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
+    const ntdll_sync_security_host_tests = b.addTest(.{
+        .root_module = ntdll_sync_security_host_mod,
+        .name = "ntdll_sync_security_host",
+    });
+    const run_ntdll_sync_security_host_tests = b.addRunArtifact(ntdll_sync_security_host_tests);
+
     const lpc_cross_pid_queue_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/lpc_cross_pid_queue_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const lpc_cross_pid_queue_tests = b.addTest(.{
         .root_module = lpc_cross_pid_queue_host_mod,
@@ -848,7 +874,7 @@ pub fn build(b: *std.Build) void {
     const lpc_two_pid_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/lpc_two_pid_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const lpc_two_pid_host_tests = b.addTest(.{
         .root_module = lpc_two_pid_host_mod,
@@ -859,7 +885,7 @@ pub fn build(b: *std.Build) void {
     const lpc_bad_pointer_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/lpc_bad_pointer_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const lpc_bad_pointer_host_tests = b.addTest(.{
         .root_module = lpc_bad_pointer_host_mod,
@@ -870,7 +896,7 @@ pub fn build(b: *std.Build) void {
     const smp_atomic_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/smp_atomic_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const smp_atomic_tests = b.addTest(.{
         .root_module = smp_atomic_host_mod,
@@ -881,7 +907,7 @@ pub fn build(b: *std.Build) void {
     const wow64_types_test_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/types.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const wow64_types_tests = b.addTest(.{
         .root_module = wow64_types_test_mod,
@@ -892,13 +918,13 @@ pub fn build(b: *std.Build) void {
     const nt61_aero_defaults_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/nt61_aero_defaults.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
 
     const ob_object_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/zircon_host_ob_test.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "nt61_aero_defaults", .module = nt61_aero_defaults_host_mod },
             .{ .name = "klog", .module = klog_mod },
@@ -917,7 +943,7 @@ pub fn build(b: *std.Build) void {
     const io_irp_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/io_irp_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const io_irp_tests = b.addTest(.{
         .root_module = io_irp_host_mod,
@@ -928,7 +954,7 @@ pub fn build(b: *std.Build) void {
     const ecam_layout_test_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/x86_64/ecam_layout.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const ecam_layout_tests = b.addTest(.{
         .root_module = ecam_layout_test_mod,
@@ -939,7 +965,7 @@ pub fn build(b: *std.Build) void {
     const acpi_fadt_pm1a_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/acpi_fadt_pm1a_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const acpi_fadt_pm1a_host_tests = b.addTest(.{
         .root_module = acpi_fadt_pm1a_host_mod,
@@ -950,7 +976,7 @@ pub fn build(b: *std.Build) void {
     const acpi_tables_parse_test_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/x86_64/acpi_tables_parse.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const acpi_tables_parse_tests = b.addTest(.{
         .root_module = acpi_tables_parse_test_mod,
@@ -961,7 +987,7 @@ pub fn build(b: *std.Build) void {
     const j_smp_inventory_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/j_smp_inventory_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const j_smp_inventory_host_tests = b.addTest(.{
         .root_module = j_smp_inventory_host_mod,
@@ -972,7 +998,7 @@ pub fn build(b: *std.Build) void {
     const hpet_id_test_mod = b.createModule(.{
         .root_source_file = b.path("src/hal/x86_64/hpet_id.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const hpet_id_tests = b.addTest(.{
         .root_module = hpet_id_test_mod,
@@ -983,7 +1009,7 @@ pub fn build(b: *std.Build) void {
     const lpc_portkind_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/lpc_portkind_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const lpc_portkind_tests = b.addTest(.{
         .root_module = lpc_portkind_host_mod,
@@ -994,7 +1020,7 @@ pub fn build(b: *std.Build) void {
     const minimal_net_test_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/net/minimal_stack.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const minimal_net_tests = b.addTest(.{
         .root_module = minimal_net_test_mod,
@@ -1005,7 +1031,7 @@ pub fn build(b: *std.Build) void {
     const mdl_test_mod = b.createModule(.{
         .root_source_file = b.path("src/mm/mdl.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const mdl_tests = b.addTest(.{
         .root_module = mdl_test_mod,
@@ -1016,7 +1042,7 @@ pub fn build(b: *std.Build) void {
     const frame_bitmap_math_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/frame_bitmap_math_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const frame_bitmap_math_tests = b.addTest(.{
         .root_module = frame_bitmap_math_host_mod,
@@ -1027,7 +1053,7 @@ pub fn build(b: *std.Build) void {
     const multiboot2_parse_host_mod = b.createModule(.{
         .root_source_file = b.path("src/boot/multiboot2_parse.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const multiboot2_parse_host_tests = b.addTest(.{
         .root_module = multiboot2_parse_host_mod,
@@ -1038,7 +1064,7 @@ pub fn build(b: *std.Build) void {
     const ke_irql_host_mod = b.createModule(.{
         .root_source_file = b.path("src/ke/irql.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const ke_irql_host_tests = b.addTest(.{
         .root_module = ke_irql_host_mod,
@@ -1049,7 +1075,7 @@ pub fn build(b: *std.Build) void {
     const paging_x86_host_mod = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/paging.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const paging_x86_host_tests = b.addTest(.{
         .root_module = paging_x86_host_mod,
@@ -1060,7 +1086,7 @@ pub fn build(b: *std.Build) void {
     const pci_bind_test_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/bus/pci_driver_bind.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const pci_bind_tests = b.addTest(.{
         .root_module = pci_bind_test_mod,
@@ -1071,7 +1097,7 @@ pub fn build(b: *std.Build) void {
     const fs_vfs_constants_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/fs_vfs_constants_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const fs_vfs_constants_tests = b.addTest(.{
         .root_module = fs_vfs_constants_host_mod,
@@ -1082,7 +1108,7 @@ pub fn build(b: *std.Build) void {
     const partition_table_host_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/storage/partition_table.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const partition_table_host_tests = b.addTest(.{
         .root_module = partition_table_host_mod,
@@ -1093,7 +1119,7 @@ pub fn build(b: *std.Build) void {
     const fs_status_nt_map_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/fs_status_nt_map_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const fs_status_nt_map_tests = b.addTest(.{
         .root_module = fs_status_nt_map_host_mod,
@@ -1104,7 +1130,7 @@ pub fn build(b: *std.Build) void {
     const nt61_backlog_anchors_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61_full_api_backlog_anchors_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "ssdt", .module = ssdt_test_mod },
         },
@@ -1118,7 +1144,7 @@ pub fn build(b: *std.Build) void {
     const sched_policy_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/scheduler_policy_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const sched_policy_tests = b.addTest(.{
         .root_module = sched_policy_host_mod,
@@ -1129,7 +1155,7 @@ pub fn build(b: *std.Build) void {
     const mutex_inherit_depth_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/mutex_inherit_depth_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const mutex_inherit_depth_tests = b.addTest(.{
         .root_module = mutex_inherit_depth_host_mod,
@@ -1140,7 +1166,7 @@ pub fn build(b: *std.Build) void {
     const nt61_phase_f_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61_phase_f_scheduler_gap.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const nt61_phase_f_tests = b.addTest(.{
         .root_module = nt61_phase_f_mod,
@@ -1151,7 +1177,7 @@ pub fn build(b: *std.Build) void {
     const gpu_device_host_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/video/core/gpu_device.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const gpu_device_tests = b.addTest(.{
         .root_module = gpu_device_host_mod,
@@ -1162,7 +1188,7 @@ pub fn build(b: *std.Build) void {
     const virtio_gpu_spec_host_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/video/virtio/virtio_gpu_spec.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const virtio_gpu_spec_tests = b.addTest(.{
         .root_module = virtio_gpu_spec_host_mod,
@@ -1173,7 +1199,7 @@ pub fn build(b: *std.Build) void {
     const display_flip_journal_host_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/video/core/display_flip_journal.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const display_flip_journal_tests = b.addTest(.{
         .root_module = display_flip_journal_host_mod,
@@ -1184,22 +1210,22 @@ pub fn build(b: *std.Build) void {
     const teb_nt61_x64_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/teb_nt61_x64.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const peb_nt61_x64_host_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/peb_nt61_x64.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const kuser_shared_nt61_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/kuser_shared_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const nt61_abi_layout_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61_abi_layout_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "teb", .module = teb_nt61_x64_mod },
             .{ .name = "peb", .module = peb_nt61_x64_host_mod },
@@ -1215,7 +1241,7 @@ pub fn build(b: *std.Build) void {
     const system_info_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/system_info_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const system_info_nt61_layout_tests = b.addTest(.{
         .root_module = system_info_nt61_host_mod,
@@ -1226,12 +1252,12 @@ pub fn build(b: *std.Build) void {
     const object_layout_nt61_mod = b.createModule(.{
         .root_source_file = b.path("sdk/object_layout_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const object_layout_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/object_layout_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "object_layout_nt61", .module = object_layout_nt61_mod },
             .{ .name = "teb", .module = teb_nt61_x64_mod },
@@ -1246,22 +1272,22 @@ pub fn build(b: *std.Build) void {
     const seh_pdata_min_anchor_mod = b.createModule(.{
         .root_source_file = b.path("src/loader/seh_pdata_min.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const alpc_min_anchor_mod = b.createModule(.{
         .root_source_file = b.path("src/lpc/alpc_min.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const csrss_skeleton_anchor_mod = b.createModule(.{
         .root_source_file = b.path("src/servers/csrss_skeleton.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const stage4_min_anchor_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/stage4_min_anchor_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "seh_pdata_min", .module = seh_pdata_min_anchor_mod },
             .{ .name = "alpc_min", .module = alpc_min_anchor_mod },
@@ -1277,12 +1303,12 @@ pub fn build(b: *std.Build) void {
     const sdk_nt61_syscall_path_mod = b.createModule(.{
         .root_source_file = b.path("sdk/nt61_syscall_numbers_x64.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const syscall_numbers_lock_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/syscall_numbers_lock_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "sdk_nt61_syscall_path", .module = sdk_nt61_syscall_path_mod },
             .{ .name = "arch/x86_64/ssdt_nt61.zig", .module = ssdt_test_mod },
@@ -1297,7 +1323,7 @@ pub fn build(b: *std.Build) void {
     const wait_user_apc_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/wait_user_apc_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "ke/wait.zig", .module = ke_mod },
             .{ .name = "ob/object.zig", .module = ob_mod },
@@ -1315,7 +1341,7 @@ pub fn build(b: *std.Build) void {
     const nt61_layouts_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/layouts.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const nt61_layouts_tests = b.addTest(.{
         .root_module = nt61_layouts_host_mod,
@@ -1326,7 +1352,7 @@ pub fn build(b: *std.Build) void {
     const pe64_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("sdk/pe64_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const pe64_nt61_tests = b.addTest(.{
         .root_module = pe64_nt61_host_mod,
@@ -1337,7 +1363,7 @@ pub fn build(b: *std.Build) void {
     const win32k_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32k/mod.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const win32k_tests = b.addTest(.{
         .root_module = win32k_host_mod,
@@ -1348,7 +1374,7 @@ pub fn build(b: *std.Build) void {
     const msg_pm_semantics_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/msg_pm_semantics.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const msg_pm_semantics_tests = b.addTest(.{
         .root_module = msg_pm_semantics_host_mod,
@@ -1359,7 +1385,7 @@ pub fn build(b: *std.Build) void {
     const gdi_rop_contract_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/gdi_rop_contract.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const gdi_rop_contract_tests = b.addTest(.{
         .root_module = gdi_rop_contract_host_mod,
@@ -1370,7 +1396,7 @@ pub fn build(b: *std.Build) void {
     const hid_boot_report_host_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/usb/hid_boot_report.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const hid_boot_report_tests = b.addTest(.{
         .root_module = hid_boot_report_host_mod,
@@ -1381,7 +1407,7 @@ pub fn build(b: *std.Build) void {
     const dwm_surface_spec_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_surface_spec.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const dwm_surface_spec_tests = b.addTest(.{
         .root_module = dwm_surface_spec_host_mod,
@@ -1392,7 +1418,7 @@ pub fn build(b: *std.Build) void {
     const aero_flag_mapping_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/aero_flag_mapping.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const aero_flag_mapping_tests = b.addTest(.{
         .root_module = aero_flag_mapping_host_mod,
@@ -1409,7 +1435,7 @@ pub fn build(b: *std.Build) void {
     const csr_lpc_policy_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/csr_lpc_policy.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const csr_lpc_policy_tests = b.addTest(.{
         .root_module = csr_lpc_policy_host_mod,
@@ -1420,7 +1446,7 @@ pub fn build(b: *std.Build) void {
     const nt61_dual_track_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/nt61_dual_track_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "nt61_aero_defaults", .module = nt61_aero_defaults_host_mod },
             .{ .name = "aero_flag_mapping", .module = aero_flag_mapping_host_mod },
@@ -1436,7 +1462,7 @@ pub fn build(b: *std.Build) void {
     const color_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/color_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const color_nt61_tests = b.addTest(.{
         .root_module = color_nt61_host_mod,
@@ -1447,7 +1473,7 @@ pub fn build(b: *std.Build) void {
     const dwm_config_registry_sync_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_config_registry_sync.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const dwm_config_registry_sync_tests = b.addTest(.{
         .root_module = dwm_config_registry_sync_host_mod,
@@ -1458,7 +1484,7 @@ pub fn build(b: *std.Build) void {
     const dwm_blur_budget_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_blur_budget.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const dwm_blur_budget_tests = b.addTest(.{
         .root_module = dwm_blur_budget_host_mod,
@@ -1469,7 +1495,7 @@ pub fn build(b: *std.Build) void {
     const compositor_sync_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/compositor_sync_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const compositor_sync_nt61_tests = b.addTest(.{
         .root_module = compositor_sync_nt61_host_mod,
@@ -1480,7 +1506,7 @@ pub fn build(b: *std.Build) void {
     const dwm_nt61_api_contract_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_nt61_api_contract.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const dwm_nt61_api_contract_tests = b.addTest(.{
         .root_module = dwm_nt61_api_contract_host_mod,
@@ -1491,7 +1517,7 @@ pub fn build(b: *std.Build) void {
     const dwm_nt61_abi_inventory_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/dwm_nt61_abi_inventory.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const dwm_nt61_abi_inventory_tests = b.addTest(.{
         .root_module = dwm_nt61_abi_inventory_host_mod,
@@ -1502,7 +1528,7 @@ pub fn build(b: *std.Build) void {
     const dwmapi_wow64_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/dwmapi_wow64.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "dwm_nt61_api_contract", .module = dwm_nt61_api_contract_host_mod },
         },
@@ -1516,7 +1542,7 @@ pub fn build(b: *std.Build) void {
     const ntfs_hive_minimum_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/ntfs_hive_minimum_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const ntfs_hive_minimum_tests = b.addTest(.{
         .root_module = ntfs_hive_minimum_host_mod,
@@ -1527,7 +1553,7 @@ pub fn build(b: *std.Build) void {
     const win32k_api_semantics_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/win32k_api_semantics_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "msg_pm_semantics", .module = msg_pm_semantics_host_mod },
             .{ .name = "csr_lpc_policy", .module = csr_lpc_policy_host_mod },
@@ -1544,7 +1570,7 @@ pub fn build(b: *std.Build) void {
     const dwm_messages_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/dwm_messages_nt61.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "dwm_nt61_api_contract", .module = dwm_nt61_api_contract_host_mod },
             .{ .name = "csr_lpc_policy", .module = csr_lpc_policy_host_mod },
@@ -1559,7 +1585,7 @@ pub fn build(b: *std.Build) void {
     const dwm_zorder_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/dwm_zorder_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const dwm_zorder_nt61_tests = b.addTest(.{
         .root_module = dwm_zorder_nt61_host_mod,
@@ -1570,7 +1596,7 @@ pub fn build(b: *std.Build) void {
     const multimon_dpi_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/multimon_dpi_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const multimon_dpi_nt61_tests = b.addTest(.{
         .root_module = multimon_dpi_nt61_host_mod,
@@ -1581,7 +1607,7 @@ pub fn build(b: *std.Build) void {
     const display_set_mode_ioctl_layout_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/display_set_mode_ioctl_layout_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const display_set_mode_ioctl_layout_tests = b.addTest(.{
         .root_module = display_set_mode_ioctl_layout_host_mod,
@@ -1592,7 +1618,7 @@ pub fn build(b: *std.Build) void {
     const taskbar_peek_hit_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/taskbar_peek_hit_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const taskbar_peek_hit_nt61_tests = b.addTest(.{
         .root_module = taskbar_peek_hit_nt61_host_mod,
@@ -1603,7 +1629,7 @@ pub fn build(b: *std.Build) void {
     const startmenu_paint_hint_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/startmenu_paint_hint_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const startmenu_paint_hint_nt61_tests = b.addTest(.{
         .root_module = startmenu_paint_hint_nt61_host_mod,
@@ -1614,7 +1640,7 @@ pub fn build(b: *std.Build) void {
     const shell_partial_repaint_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/shell_partial_repaint_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const shell_partial_repaint_nt61_tests = b.addTest(.{
         .root_module = shell_partial_repaint_nt61_host_mod,
@@ -1625,7 +1651,7 @@ pub fn build(b: *std.Build) void {
     const kernel_stub_audit_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/kernel_stub_audit_anchor_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const kernel_stub_audit_tests = b.addTest(.{
         .root_module = kernel_stub_audit_host_mod,
@@ -1636,12 +1662,12 @@ pub fn build(b: *std.Build) void {
     const wddm_abstraction_host_mod = b.createModule(.{
         .root_source_file = b.path("src/drivers/video/core/wddm_abstraction.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const dwm_nt61_integration_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/dwm_nt61_integration_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "dwm_config_registry_sync", .module = dwm_config_registry_sync_host_mod },
             .{ .name = "dwm_blur_budget", .module = dwm_blur_budget_host_mod },
@@ -1660,7 +1686,7 @@ pub fn build(b: *std.Build) void {
     const registry_zosh1_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/registry_zosh1_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const registry_zosh1_tests = b.addTest(.{
         .root_module = registry_zosh1_host_mod,
@@ -1671,7 +1697,7 @@ pub fn build(b: *std.Build) void {
     const phase_b_exec_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/zircon_host_phase_b_exec_test.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "registry/registry.zig", .module = registry_mod },
             .{ .name = "se/token.zig", .module = se_mod },
@@ -1690,7 +1716,7 @@ pub fn build(b: *std.Build) void {
     const regf_parse_host_mod = b.createModule(.{
         .root_source_file = b.path("src/registry/regf_parse.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const regf_parse_tests = b.addTest(.{
         .root_module = regf_parse_host_mod,
@@ -1701,7 +1727,7 @@ pub fn build(b: *std.Build) void {
     const wow64_ssdt_x86_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/ssdt_x86_win7_sp1.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const wow64_ssdt_x86_tests = b.addTest(.{
         .root_module = wow64_ssdt_x86_mod,
@@ -1712,7 +1738,7 @@ pub fn build(b: *std.Build) void {
     const wow64_x64_semantic_alias_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/wow64_x64_semantic_alias_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "arch/x86_64/ssdt_nt61.zig", .module = ssdt_test_mod },
             .{ .name = "subsystems/win32/wow64/ssdt_x86_win7_sp1.zig", .module = wow64_ssdt_x86_mod },
@@ -1729,7 +1755,7 @@ pub fn build(b: *std.Build) void {
     const wow64_redirect_host_mod = b.createModule(.{
         .root_source_file = b.path("src/subsystems/win32/wow64/redirect.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const wow64_redirect_tests = b.addTest(.{
         .root_module = wow64_redirect_host_mod,
@@ -1740,7 +1766,7 @@ pub fn build(b: *std.Build) void {
     const phase4_host_anchors_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61/phase4_host_anchors.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "ssdt_x86_win7_sp1", .module = wow64_ssdt_x86_mod },
         },
@@ -1754,7 +1780,7 @@ pub fn build(b: *std.Build) void {
     const ssdt_x64_x86_namespace_mod = b.createModule(.{
         .root_source_file = b.path("tests/ssdt_x64_x86_namespace.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "ssdt_x64", .module = ssdt_test_mod },
             .{ .name = "ssdt_x86", .module = wow64_ssdt_x86_mod },
@@ -1769,7 +1795,7 @@ pub fn build(b: *std.Build) void {
     const lpc_handshake_version_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/lpc_handshake_version_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const lpc_handshake_version_tests = b.addTest(.{
         .root_module = lpc_handshake_version_host_mod,
@@ -1780,7 +1806,7 @@ pub fn build(b: *std.Build) void {
     const nt61_os_version_layout_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/nt61_os_version_layout_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const nt61_os_version_layout_tests = b.addTest(.{
         .root_module = nt61_os_version_layout_host_mod,
@@ -1791,7 +1817,7 @@ pub fn build(b: *std.Build) void {
     const rtl_verify_version_info_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/rtl_verify_version_info_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "config/os_version.zig", .module = config_mod },
         },
@@ -1806,7 +1832,7 @@ pub fn build(b: *std.Build) void {
     const nt61_core_dll_abi_inventory_host_mod = b.createModule(.{
         .root_source_file = b.path("src/config/nt61_core_dll_abi_inventory.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const nt61_core_dll_abi_inventory_tests = b.addTest(.{
         .root_module = nt61_core_dll_abi_inventory_host_mod,
@@ -1817,7 +1843,7 @@ pub fn build(b: *std.Build) void {
     const pe_loader_policy_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/pe_loader_policy_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const pe_loader_policy_tests = b.addTest(.{
         .root_module = pe_loader_policy_host_mod,
@@ -1828,7 +1854,7 @@ pub fn build(b: *std.Build) void {
     const fork_cow_share_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/fork_cow_share_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "mm/vm.zig", .module = mm_mod },
         },
@@ -1846,7 +1872,7 @@ pub fn build(b: *std.Build) void {
     const vm_user_va_policy_nt61_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/vm_user_va_policy_nt61_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "arch/x86_64/ssdt_nt61.zig", .module = ssdt_test_mod },
             .{ .name = "mm/vm.zig", .module = mm_mod },
@@ -1866,7 +1892,7 @@ pub fn build(b: *std.Build) void {
     const loongarch_nt61_mm_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/loongarch_nt61_mm_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "arch.zig", .module = arch_mod_host },
             .{ .name = "hal/loongarch64/tlb_flush.zig", .module = hal_loongarch_tlb_flush_mod },
@@ -1888,7 +1914,7 @@ pub fn build(b: *std.Build) void {
     const mips64el_nt61_mm_host_mod = b.createModule(.{
         .root_source_file = b.path("tests/mips64el_nt61_mm_host.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{
             .{ .name = "mm/vm.zig", .module = mm_mod },
         },
@@ -1913,6 +1939,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ssdt_tests.step);
     test_step.dependOn(&run_ssdt_stub_parity_tests.step);
     test_step.dependOn(&run_se_token_tests.step);
+    test_step.dependOn(&run_se_descriptor_host_tests.step);
+    test_step.dependOn(&run_ntdll_sync_security_host_tests.step);
     test_step.dependOn(&run_lpc_cross_pid_queue_tests.step);
     test_step.dependOn(&run_lpc_two_pid_host_tests.step);
     test_step.dependOn(&run_lpc_bad_pointer_host_tests.step);
@@ -2014,7 +2042,7 @@ pub fn build(b: *std.Build) void {
     const pwsh_lite_mod = b.createModule(.{
         .root_source_file = b.path("tools/pwsh-lite/main.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     const pwsh_lite_exe = b.addExecutable(.{
         .name = "pwsh-lite",
@@ -2056,7 +2084,7 @@ fn addMinimalPeNt61Step(b: *std.Build) void {
     const minimal_pe_mod = b.createModule(.{
         .root_source_file = b.path("tools/minimal_pe_nt61/minimal_pe.zig"),
         .target = win_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
     });
     const minimal_pe_exe = b.addExecutable(.{
         .name = "zircon_nt61_minimal_pe",
@@ -2287,7 +2315,7 @@ fn buildZbm(b: *std.Build, cpu_arch: std.Target.Cpu.Arch, optimize: std.builtin.
     const zbm_mod = b.createModule(.{
         .root_source_file = b.path("boot/zbm/zbm.zig"),
         .target = zbm_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .link_libc = false,
         .code_model = .kernel,
         .pic = false,
@@ -2390,7 +2418,7 @@ fn buildLoongArchZbmEfiObject(
     const zbm_mod = b.createModule(.{
         .root_source_file = b.path("boot/zbm/uefi/main_loongarch64.zig"),
         .target = la_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .link_libc = false,
         // 与内核一致：避免大位移/PCREL 与 la464 默认特性组合下出现非法指令或错址（历史「Zig ZBM INE」根因之一）。
         .code_model = .medium,
@@ -2465,7 +2493,7 @@ fn buildMips64elZbmEfiObject(
     const zbm_mod = b.createModule(.{
         .root_source_file = b.path("boot/zbm/uefi/main_mips64el.zig"),
         .target = mips_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .link_libc = false,
         .code_model = .medium,
     });
@@ -2494,10 +2522,10 @@ const aero_shell_icon_basenames = [_][]const u8{
 
 /// JSON manifest for the LoongArch64-style bundle (no PE DLL; PE machine 0x6264 is logical only).
 fn laShellIconsManifestJsonAlloc(b: *std.Build) []const u8 {
-    var list: std.ArrayList(u8) = .{};
+    var list: std.ArrayList(u8) = .empty;
     defer list.deinit(b.allocator);
-    const w = list.writer(b.allocator);
-    w.print(
+
+    list.print(b.allocator,
         \\{{
         \\  "schema_version": 1,
         \\  "virtual_dll": "zircon_shell32_res.dll",
@@ -2512,13 +2540,14 @@ fn laShellIconsManifestJsonAlloc(b: *std.Build) []const u8 {
     for (aero_shell_icon_basenames, 0..) |base, i| {
         const logical: u8 = @intCast(i + 1);
         const pe_id: u16 = @intCast(100 + logical);
-        if (i > 0) w.print(",\n", .{}) catch @panic("OOM");
-        w.print(
+        if (i > 0) list.print(b.allocator, ",\n", .{}) catch @panic("OOM");
+        list.print(
+            b.allocator,
             "    {{ \"logical_id\": {d}, \"pe_resource_id\": {d}, \"ico\": \"{s}.ico\", \"shell_reference\": \"zircon_shell32_res.dll,-{d}\" }}",
             .{ logical, pe_id, base, pe_id },
         ) catch @panic("OOM");
     }
-    w.print(
+    list.print(b.allocator,
         \\
         \\
         \\  ]

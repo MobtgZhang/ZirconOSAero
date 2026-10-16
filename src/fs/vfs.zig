@@ -29,6 +29,7 @@
 
 const std = @import("std");
 const ob = @import("../ob/object.zig");
+const cleanup_hooks = @import("../ob/cleanup_hooks.zig");
 const io = @import("../io/io.zig");
 const klog = @import("../rtl/klog.zig");
 const token = @import("../se/token.zig");
@@ -69,7 +70,7 @@ pub const SeekOrigin = enum(u8) {
 };
 
 pub const DirEntry = struct {
-    name: [MAX_NAME]u8 = [_]u8{0} ** MAX_NAME,
+    name: [MAX_NAME]u8 = std.mem.zeroes([MAX_NAME]u8),
     name_len: usize = 0,
     file_type: FileType = .regular,
     file_size: u64 = 0,
@@ -142,7 +143,7 @@ pub const WriteResult = struct {
 
 pub const FileObject = struct {
     header: ob.ObjectHeader = .{ .obj_type = .file },
-    path: [MAX_PATH]u8 = [_]u8{0} ** MAX_PATH,
+    path: [MAX_PATH]u8 = std.mem.zeroes([MAX_PATH]u8),
     path_len: usize = 0,
     file_type: FileType = .regular,
     access_mode: FileAccessMode = .read,
@@ -158,22 +159,22 @@ pub const FileObject = struct {
 };
 
 pub const MountPoint = struct {
-    prefix: [32]u8 = [_]u8{0} ** 32,
+    prefix: [32]u8 = std.mem.zeroes([32]u8),
     prefix_len: usize = 0,
     fs_type: FsType = .unknown,
     ops: FsOps = .{},
     device_idx: u32 = 0,
     is_active: bool = false,
-    label: [16]u8 = [_]u8{0} ** 16,
+    label: [16]u8 = std.mem.zeroes([16]u8),
     label_len: usize = 0,
     /// 卷设备栈顶索引（`io.createDevice`）；0 表示未创建（回退直接 `FsOps`）。
     volume_device_idx: u32 = 0,
 };
 
-var files: [MAX_OPEN_FILES]FileObject = [_]FileObject{.{}} ** MAX_OPEN_FILES;
+var files: [MAX_OPEN_FILES]FileObject = @splat(.{});
 var file_count: usize = 0;
 
-var mounts: [MAX_MOUNT_POINTS]MountPoint = [_]MountPoint{.{}} ** MAX_MOUNT_POINTS;
+var mounts: [MAX_MOUNT_POINTS]MountPoint = std.mem.zeroes([MAX_MOUNT_POINTS]MountPoint);
 var mount_count: usize = 0;
 
 var vfs_initialized: bool = false;
@@ -334,10 +335,13 @@ fn shareConflict(path: []const u8, want_write: bool, new_share: u32) bool {
 
 pub fn init() void {
     file_count = 0;
+    files = @splat(.{});
     mount_count = 0;
     vfs_initialized = true;
     vfs_volume_driver_ready = false;
     vfs_volume_driver_idx = 0;
+
+    cleanup_hooks.file_last_reference = onFileLastReference;
 
     _ = ob.insertNamespace("\\FileSystem", .directory, 0, 0);
     _ = ob.insertNamespace("\\DosDevices", .directory, 0, 0);
@@ -457,14 +461,21 @@ pub fn openEx(path: []const u8, access: FileAccessMode, share_access: u32) ?*Fil
     // 安全检查：验证当前用户是否有权限访问该文件
     const current_token = token.getCurrentToken();
     if (!checkFileAccess(norm, access, current_token)) {
-        klog.debug("VFS: Access denied for path '%s' (access mode=%u)", .{ norm, @intFromEnum(access) });
+        klog.debug("VFS: Access denied for path '%s' (access mode=%u)", .{ norm, @backingInt(access) });
         return null;
     }
 
     const want_write = access == .write or access == .read_write;
     if (shareConflict(norm, want_write, share_access)) return null;
 
-    var f = &files[file_count];
+    var allocated: ?*FileObject = null;
+    for (&files) |*candidate| {
+        if (!candidate.is_open) {
+            allocated = candidate;
+            break;
+        }
+    }
+    const f = allocated orelse return null;
     f.* = .{};
     const copy_len = @min(norm.len, f.path.len);
     @memcpy(f.path[0..copy_len], norm[0..copy_len]);
@@ -497,6 +508,8 @@ pub fn open(path: []const u8, access: FileAccessMode) ?*FileObject {
 pub fn close(f: *FileObject) FileStatus {
     if (!f.is_open) return .invalid_parameter;
 
+    if (file_count > 0) file_count -= 1;
+
     if (f.mount_idx < mount_count) {
         const mp = &mounts[f.mount_idx];
         if (mp.ops.cleanup) |cleanup_fn| {
@@ -509,6 +522,12 @@ pub fn close(f: *FileObject) FileStatus {
 
     f.is_open = false;
     return .success;
+}
+
+fn onFileLastReference(object_ptr: u64) void {
+    const f: *FileObject = @ptrFromInt(object_ptr);
+    var irp = io.Irp{ .major_function = .close };
+    _ = dispatchFileObjectIrp(f, &irp);
 }
 
 pub fn read(f: *FileObject, buffer: []u8) ReadResult {

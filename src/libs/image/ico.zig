@@ -109,10 +109,10 @@ fn parseIconDirEntries(allocator: std.mem.Allocator, data: []const u8, count: u1
             .height = data[offset + 1],
             .color_count = data[offset + 2],
             .reserved = data[offset + 3],
-            .planes = std.mem.readIntLittle(u16, data[offset + 4..offset + 6]),
-            .bit_count = std.mem.readIntLittle(u16, data[offset + 6..offset + 8]),
-            .bytes_in_res = std.mem.readIntLittle(u32, data[offset + 8..offset + 12]),
-            .image_offset = std.mem.readIntLittle(u32, data[offset + 12..offset + 16]),
+            .planes = std.mem.readIntLittle(u16, data[offset + 4 .. offset + 6]),
+            .bit_count = std.mem.readIntLittle(u16, data[offset + 6 .. offset + 8]),
+            .bytes_in_res = std.mem.readIntLittle(u32, data[offset + 8 .. offset + 12]),
+            .image_offset = std.mem.readIntLittle(u32, data[offset + 12 .. offset + 16]),
         };
     }
     return entries;
@@ -201,7 +201,7 @@ pub fn decodeImageData(allocator: std.mem.Allocator, img: *const IconImage) mod.
         const maybe_and_mask_size = std.mem.readIntLittle(u32, bmp_data[0..4]);
         // AND mask size should match (width_padded_to_4_bytes * height / 8)
         if (maybe_and_mask_size < bmp_data.len) {
-            const header_start = std.mem.readIntLittle(u32, bmp_data[maybe_and_mask_size..maybe_and_mask_size + 4]);
+            const header_start = std.mem.readIntLittle(u32, bmp_data[maybe_and_mask_size .. maybe_and_mask_size + 4]);
             // BITMAPINFOHEADER starts with its size (40 for standard)
             if (header_start == 40 or header_start == 124) {
                 bmp_data = bmp_data[4..];
@@ -273,7 +273,7 @@ pub fn decodeIcoFile(allocator: std.mem.Allocator, data: []const u8) mod.ImageEr
 pub const icoDecoder: mod.Decoder = .{
     .signature = &ICO_SIGNATURE,
     .name = "ICO",
-    .extensions = &.{ ".ico" },
+    .extensions = &.{".ico"},
     .detectFn = detectIco,
     .decodeFn = decode,
 };

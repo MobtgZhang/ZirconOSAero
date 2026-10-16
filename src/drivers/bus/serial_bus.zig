@@ -17,27 +17,13 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! 串口（UART）类驱动：在 I/O 管理器上注册 COM1（16550）字符设备。
-//! 硬件访问复用 `hal/x86_64/serial.zig`；IRP read/write 用于收发缓冲。
+//! 硬件访问复用 HAL 串口模块；IRP read/write 用于收发缓冲。
 
-const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 
-const serial = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/serial.zig")
-else
-    struct {
-        pub fn isReady() bool {
-            return false;
-        }
-        pub fn hasData() bool {
-            return false;
-        }
-        pub fn readByte() ?u8 {
-            return null;
-        }
-        pub fn writeByte(_: u8) void {}
-    };
+const hal_sb = @import("../../hal.zig");
+const serial = hal_sb.serial;
 
 pub const IOCTL_SERIAL_GET_READY: u32 = 0x000B0000;
 pub const IOCTL_SERIAL_RX_PENDING: u32 = 0x000B0001;
@@ -113,7 +99,7 @@ fn serialDispatch(irp: *io.Irp) io.NTSTATUS {
 }
 
 pub fn init() void {
-    if (builtin.target.cpu.arch != .x86_64) {
+    if (!hal_sb.hasLegacyPCDevices) {
         klog.info("Serial bus: skipped (no COM1 on this arch)", .{});
         return;
     }

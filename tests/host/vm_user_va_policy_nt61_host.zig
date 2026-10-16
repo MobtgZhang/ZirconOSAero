@@ -35,23 +35,23 @@ test "Stage A gate anchor: NtAllocateVirtualMemory ssdt index" {
     try std.testing.expectEqual(@as(u32, 0x1B), ssdt.NtFreeVirtualMemory);
 }
 
-test "userVaRangeAllowedX64 rejects below 64KiB policy min" {
-    try std.testing.expect(!vm.userVaRangeAllowedX64(0x8000, 0x1000));
-    try std.testing.expect(vm.userVaRangeAllowedX64(vm.USER_VA_MIN_X64_NT, 0x1000));
+test "userVaRangeAllowedNt61 rejects below 64KiB policy min" {
+    try std.testing.expect(!vm.userVaRangeAllowedNt61(0x8000, 0x1000));
+    try std.testing.expect(vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_NT61, 0x1000));
 }
 
-test "userVaRangeAllowedX64 rejects span past 7FFFFFFFFFFF" {
-    try std.testing.expect(vm.userVaRangeAllowedX64(0x7FFF_FFFF_F000, 0x1000));
-    try std.testing.expect(!vm.userVaRangeAllowedX64(0x7FFF_FFFF_F000, 0x2000));
+test "userVaRangeAllowedNt61 rejects span past 7FFFFFFFFFFF" {
+    try std.testing.expect(vm.userVaRangeAllowedNt61(0x7FFF_FFFF_F000, 0x1000));
+    try std.testing.expect(!vm.userVaRangeAllowedNt61(0x7FFF_FFFF_F000, 0x2000));
 }
 
-test "userVaRangeAllowedLa64 host-callable (NT band)" {
-    try std.testing.expect(vm.userVaRangeAllowedLa64(vm.USER_VA_MIN_LA_NT, 0x1000));
-    try std.testing.expect(!vm.userVaRangeAllowedLa64(0x5000, 0x1000));
+test "userVaRangeAllowedNt61 host-callable (NT band)" {
+    try std.testing.expect(vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_NT61, 0x1000));
+    try std.testing.expect(!vm.userVaRangeAllowedNt61(0x5000, 0x1000));
 }
 
-test "userVaRangeAllowedNt61 on x86_64 host matches X64 policy" {
-    try std.testing.expect(vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_X64_NT, 0x1000));
+test "userVaRangeAllowedNt61 on host matches policy" {
+    try std.testing.expect(vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_NT61, 0x1000));
     try std.testing.expect(!vm.userVaRangeAllowedNt61(0x8000, 0x1000));
 }
 

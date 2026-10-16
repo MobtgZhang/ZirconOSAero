@@ -46,14 +46,14 @@ pub const AcpiPmDiag = enum(u32) {
 pub fn trySystemPowerOffAssumingS5Typ() void {
     const a = acpi_core.pm1aControlIoPort();
     if (a == 0) {
-        klog.warn("ACPI PM: S5 skipped diag=0x{x} (no PM1a_CNT)", .{@intFromEnum(AcpiPmDiag.no_pm1a)});
+        klog.warn("ACPI PM: S5 skipped diag=0x{x} (no PM1a_CNT)", .{@backingInt(AcpiPmDiag.no_pm1a)});
         return;
     }
     const word: u16 = (ASSUMED_SLP_TYP_FOR_S5 << 10) | PM1_SLP_EN;
     klog.info("ACPI PM: PM1a_CNT port=0x%x write 0x%x diag=0x{x}", .{
         a,
         word,
-        @intFromEnum(AcpiPmDiag.pm1a_write_done),
+        @backingInt(AcpiPmDiag.pm1a_write_done),
     });
     portio.outw(a, word);
     const b = acpi_core.pm1bControlIoPort();
@@ -69,7 +69,7 @@ pub fn tryHardwareResetFromFadt() void {
     const f = acpi_core.fadtSnapshot();
     if (f.reset_gas_space_id != 1 or f.reset_gas_addr == 0) {
         klog.warn("ACPI PM: reset skipped diag=0x{x} (need FADT RESET_REG System IO)", .{
-            @intFromEnum(AcpiPmDiag.reset_no_io_gas),
+            @backingInt(AcpiPmDiag.reset_no_io_gas),
         });
         return;
     }
@@ -77,7 +77,7 @@ pub fn tryHardwareResetFromFadt() void {
     klog.info("ACPI PM: RESET_REG outb port=0x%x val=0x%x diag=0x{x}", .{
         port,
         f.reset_value,
-        @intFromEnum(AcpiPmDiag.reset_port_written),
+        @backingInt(AcpiPmDiag.reset_port_written),
     });
     portio.outb(port, f.reset_value);
     arch_x86.disableInterrupts();

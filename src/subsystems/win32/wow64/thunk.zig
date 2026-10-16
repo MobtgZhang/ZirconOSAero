@@ -37,12 +37,12 @@ pub var total_ptr_conversions: u64 = 0;
 
 pub const userVaFromWow64Ptr32 = marshal.userVaFromWow64Ptr32;
 
-pub fn translateSyscall32to64(wow_proc: *types .Wow64Process, syscall_num: u32) ntdll.NTSTATUS {
+pub fn translateSyscall32to64(wow_proc: *types.Wow64Process, syscall_num: u32) ntdll.NTSTATUS {
     return translateSyscall32to64WithArgs(wow_proc, syscall_num, &[_]u32{});
 }
 
 /// 带 stdcall 实参（u32 槽，按形参从左到右对应 `args[0]..`）的 32→64 翻译；供 `marshal` 与演示路径使用。
-pub fn translateSyscall32to64WithArgs(wow_proc: *types .Wow64Process, syscall_num: u32, args: []const u32) ntdll.NTSTATUS {
+pub fn translateSyscall32to64WithArgs(wow_proc: *types.Wow64Process, syscall_num: u32, args: []const u32) ntdll.NTSTATUS {
     wow_proc.syscall_count += 1;
     total_syscall_translations += 1;
 

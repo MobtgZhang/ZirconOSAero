@@ -36,7 +36,7 @@ pub fn initForFamily(family: types.AmdGpuFamily, mmio_base: usize, kms_experimen
         }
         if (klog.DEBUG_MODE) {
             klog.info("AMD display: kms_experimental set — no unsafe MMIO writes; handoff only (family=%u)", .{
-                @intFromEnum(family),
+                @backingInt(family),
             });
         }
     }

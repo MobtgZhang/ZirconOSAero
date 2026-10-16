@@ -139,7 +139,7 @@ pub const ProgramsApplet = struct {
         const sort_x = [_]i32{ x + 8, x + 250, x + 350 };
 
         inline for (fields, 0..) |field, i| {
-            const is_selected = (@as(usize, @intCast(@intFromEnum(applet.sort_by))) == i);
+            const is_selected = (@as(usize, @intCast(@backingInt(applet.sort_by))) == i);
             fb.drawTextTransparent(sort_x[i], y + 12, field, if (is_selected) rgb(0x10, 0x40, 0x90) else rgb(0x30, 0x30, 0x50));
         }
     }

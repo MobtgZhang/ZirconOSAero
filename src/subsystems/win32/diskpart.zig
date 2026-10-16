@@ -21,6 +21,7 @@
 //! Supports: list disk/volume/partition, select, detail, create, delete,
 //! format, assign, clean, extend, shrink, active, inactive, etc.
 
+const std = @import("std");
 const console = @import("console.zig");
 const vfs = @import("../../fs/vfs.zig");
 const explorer_vol_snap = @import("../../fs/explorer_volume_snapshot.zig");
@@ -65,7 +66,7 @@ pub const Partition = struct {
     is_system: bool = false,
     is_boot: bool = false,
     drive_letter: u8 = 0,
-    label: [16]u8 = [_]u8{0} ** 16,
+    label: [16]u8 = std.mem.zeroes([16]u8),
     label_len: usize = 0,
     status: PartitionStatus = .healthy,
     in_use: bool = false,
@@ -79,9 +80,9 @@ pub const Disk = struct {
     status: PartitionStatus = .online,
     is_boot: bool = false,
     is_system: bool = false,
-    model: [32]u8 = [_]u8{0} ** 32,
+    model: [32]u8 = std.mem.zeroes([32]u8),
     model_len: usize = 0,
-    partitions: [8]Partition = [_]Partition{.{}} ** 8,
+    partitions: [8]Partition = std.mem.zeroes([8]Partition),
     partition_count: u32 = 0,
     in_use: bool = false,
 };
@@ -89,13 +90,13 @@ pub const Disk = struct {
 pub const Volume = struct {
     number: u32 = 0,
     drive_letter: u8 = 0,
-    label: [16]u8 = [_]u8{0} ** 16,
+    label: [16]u8 = std.mem.zeroes([16]u8),
     label_len: usize = 0,
     fs_type: vfs.FsType = .unknown,
     size_mb: u32 = 0,
     free_mb: u32 = 0,
     status: PartitionStatus = .healthy,
-    info: [16]u8 = [_]u8{0} ** 16,
+    info: [16]u8 = std.mem.zeroes([16]u8),
     info_len: usize = 0,
     in_use: bool = false,
 };
@@ -105,9 +106,9 @@ const MAX_VOLUMES: usize = 16;
 
 pub const DiskPartState = struct {
     console_id: u32 = 0,
-    disks: [MAX_DISKS]Disk = [_]Disk{.{}} ** MAX_DISKS,
+    disks: [MAX_DISKS]Disk = std.mem.zeroes([MAX_DISKS]Disk),
     disk_count: u32 = 0,
-    volumes: [MAX_VOLUMES]Volume = [_]Volume{.{}} ** MAX_VOLUMES,
+    volumes: [MAX_VOLUMES]Volume = std.mem.zeroes([MAX_VOLUMES]Volume),
     volume_count: u32 = 0,
     selected_disk: ?u32 = null,
     selected_volume: ?u32 = null,

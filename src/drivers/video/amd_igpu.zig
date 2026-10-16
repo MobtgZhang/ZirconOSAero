@@ -146,7 +146,7 @@ fn runPciProbeOnce() void {
     klog.info("AMD display: DID=0x%x rev=0x%x family=%u bus=%u dev=%u fn=%u MMIO=0x%x size=0x%x VRAM_AP=0x%x", .{
         dev.device_id,
         dev.revision_id,
-        @intFromEnum(family),
+        @backingInt(family),
         dev.loc.bus,
         dev.loc.dev,
         dev.loc.func,
@@ -154,7 +154,7 @@ fn runPciProbeOnce() void {
         mmio_size,
         vram_aperture_phys,
     });
-    klog.info("AMD display: display_init=%u (GOP handoff when firmware enabled)", .{@intFromEnum(display_result)});
+    klog.info("AMD display: display_init=%u (GOP handoff when firmware enabled)", .{@backingInt(display_result)});
 }
 
 pub fn ensureDeferredProbeCompleted() void {
@@ -167,7 +167,7 @@ pub fn resolveDesktopFramebuffer(boot: DesktopFb) DesktopFb {
     ensureDeferredProbeCompleted();
     if (!build_options.amd_igpu or !probe_ok) return boot;
     const dev = primary.?;
-    hdmi.syncAmdDisplayConnector(dev.device_id, @intFromEnum(family));
+    hdmi.syncAmdDisplayConnector(dev.device_id, @backingInt(family));
     hdmi.syncFramebufferMode(boot.width, boot.height, boot.bpp);
     _ = gmc.installFramebufferGmcStub(.{
         .reg_mmio_phys = mmio_phys,

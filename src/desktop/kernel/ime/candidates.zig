@@ -61,7 +61,7 @@ pub const CandidateWindow = struct {
     /// Initialize candidate window
     pub fn create(x_pos: i32, y_pos: i32) CandidateWindow {
         return .{
-            .candidates = [_][MAX_CANDIDATE_LEN]u8{[_]u8{0} ** MAX_CANDIDATE_LEN} ** MAX_CANDIDATES,
+            .candidates = [_][MAX_CANDIDATE_LEN]u8{[_]u8{0} * *MAX_CANDIDATE_LEN} * *MAX_CANDIDATES,
             .count = 0,
             .selected = 0,
             .x = x_pos,
@@ -191,7 +191,7 @@ pub const CandidateWindow = struct {
             }
 
             // Draw number prefix
-            const num_str: []const u8 = if (i < 9) &.{ '1' + @as(u8, @intCast(i)) } else "10+";
+            const num_str: []const u8 = if (i < 9) &.{'1' + @as(u8, @intCast(i))} else "10+";
             fb.drawTextTransparent(x + 4, cy + 4, num_str, theme.rgb(0x40, 0x40, 0x40));
 
             // Draw candidate text

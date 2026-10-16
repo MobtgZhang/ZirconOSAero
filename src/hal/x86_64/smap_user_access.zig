@@ -21,20 +21,17 @@
 const builtin = @import("builtin");
 const mitigations = @import("mitigations.zig");
 
+extern fn x86_smap_stac() void;
+extern fn x86_smap_clac() void;
+
 pub fn syscallEnterAllowUserMemory() void {
     if (builtin.cpu.arch != .x86_64) return;
     if (!mitigations.smapEnabled()) return;
-    asm volatile ("stac"
-        :
-        :
-        : .{ .memory = true });
+    x86_smap_stac();
 }
 
 pub fn syscallExitRestoreSmap() void {
     if (builtin.cpu.arch != .x86_64) return;
     if (!mitigations.smapEnabled()) return;
-    asm volatile ("clac"
-        :
-        :
-        : .{ .memory = true });
+    x86_smap_clac();
 }

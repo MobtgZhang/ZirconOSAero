@@ -46,20 +46,20 @@ pub const UserlandSurfaceFlagsLayout = struct {
 };
 
 comptime {
-    const nk = @typeInfo(dwm_surface_spec.KernelCompositorSurfaceFlags).@"struct".fields.len;
-    const nu = @typeInfo(UserlandSurfaceFlagsLayout).@"struct".fields.len;
+    const nk = @typeInfo(dwm_surface_spec.KernelCompositorSurfaceFlags).@"struct".field_names.len;
+    const nu = @typeInfo(UserlandSurfaceFlagsLayout).@"struct".field_names.len;
     if (nk != nu) @compileError("aero_flag_mapping: kernel vs userland SurfaceFlags field count drift");
 }
 
 comptime {
-    const info = @typeInfo(UserlandSurfaceFlagsLayout).@"struct".fields;
+    const info = @typeInfo(UserlandSurfaceFlagsLayout).@"struct".field_names;
     const expected: []const []const u8 = &.{
         "has_alpha",  "needs_shadow", "is_visible", "is_opaque",
         "needs_blur", "is_glass",     "is_cursor",  "is_desktop",
     };
     if (info.len != expected.len) @compileError("UserlandSurfaceFlagsLayout: field count drift");
-    for (info, expected) |fld, exp| {
-        if (!std.mem.eql(u8, fld.name, exp))
+    for (info, expected) |field_name, exp| {
+        if (!std.mem.eql(u8, field_name, exp))
             @compileError("UserlandSurfaceFlagsLayout: rename/order drift — sync compositor.zig + DesktopManagerSpec");
     }
 
@@ -83,21 +83,21 @@ comptime {
 
     // 逐内核标志「单 bit 为真」表驱动：防止只手搓 2～3 个样本时漏掉字段。
     const K = dwm_surface_spec.KernelCompositorSurfaceFlags;
-    const k_fields = @typeInfo(K).@"struct".fields;
+    const k_fields = @typeInfo(K).@"struct".field_names;
     for (k_fields) |fld| {
         var k1: K = .{};
-        @field(k1, fld.name) = true;
+        @field(k1, fld) = true;
         const mapped = kernelToUserland(k1);
-        if (std.mem.eql(u8, fld.name, "layered") or std.mem.eql(u8, fld.name, "popup")) {
+        if (std.mem.eql(u8, fld, "layered") or std.mem.eql(u8, fld, "popup")) {
             if (!mapped.has_alpha) @compileError("aero_flag_mapping: layered/popup must set has_alpha");
-        } else if (std.mem.eql(u8, fld.name, "dwm_blur_behind")) {
+        } else if (std.mem.eql(u8, fld, "dwm_blur_behind")) {
             if (!(mapped.needs_blur and mapped.is_glass and !mapped.is_opaque))
                 @compileError("aero_flag_mapping: dwm_blur_behind single-flag invariant");
-        } else if (std.mem.eql(u8, fld.name, "has_caption") or std.mem.eql(u8, fld.name, "child")) {
+        } else if (std.mem.eql(u8, fld, "has_caption") or std.mem.eql(u8, fld, "child")) {
             if (!mapped.needs_shadow) @compileError("aero_flag_mapping: has_caption/child must set needs_shadow");
-        } else if (std.mem.eql(u8, fld.name, "topmost")) {
+        } else if (std.mem.eql(u8, fld, "topmost")) {
             if (!mapped.is_opaque) @compileError("aero_flag_mapping: topmost alone must stay opaque userland");
-        } else if (std.mem.eql(u8, fld.name, "snap_target")) {
+        } else if (std.mem.eql(u8, fld, "snap_target")) {
             if (!mapped.is_opaque) @compileError("aero_flag_mapping: snap_target has no userland bit; must stay opaque");
         }
         // dwm_ncrendering：当前 kernelToUserland 不消费该项；单 true 与默认一致，无额外 userland 位。

@@ -19,22 +19,11 @@
 //! Primary-channel ATA/IDE PIO driver (NT6: atapi / storport stack simplified)
 //! Fixed primary legacy I/O: command block 0x1F0–0x1F7, control 0x3F6.
 
-const builtin = @import("builtin");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
 
-const portio = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/portio.zig")
-else
-    struct {
-        pub fn inb(_: u16) u8 {
-            return 0;
-        }
-        pub fn outb(_: u16, _: u8) void {}
-        pub fn inw(_: u16) u16 {
-            return 0;
-        }
-    };
+const hal_drv = @import("../../hal.zig");
+const portio = hal_drv.portio;
 
 const ATA_DATA: u16 = 0x1F0;
 const ATA_SECCNT: u16 = 0x1F2;
@@ -74,7 +63,7 @@ fn selectMaster() void {
 }
 
 pub fn tryIdentify() bool {
-    if (builtin.target.cpu.arch != .x86_64) return false;
+    if (!hal_drv.hasLegacyPCDevices) return false;
     selectMaster();
     if (!statusWait()) return false;
 
@@ -131,7 +120,7 @@ fn ataDispatch(irp: *io.Irp) io.NTSTATUS {
 }
 
 pub fn init() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal_drv.hasLegacyPCDevices) return;
 
     portio.outb(ATA_CTL, 0); // clear reset
     present = tryIdentify();

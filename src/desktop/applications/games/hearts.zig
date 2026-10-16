@@ -77,8 +77,10 @@ pub const HeartsGame = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) HeartsGame {
         var hg = HeartsGame{
-            .x = x_pos, .y = y_pos,
-            .width = 800, .height = 600,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 800,
+            .height = 600,
             .visible = true,
             .players = undefined,
             .current_player = 0,
@@ -117,7 +119,7 @@ pub const HeartsGame = struct {
         const suits = [_]HSuit{ .hearts, .diamonds, .clubs, .spades };
         for (suits) |suit| {
             for (2..15) |v| {
-                deck[idx] = .{ .suit = suit, .value = @enumFromInt(v), .dealt = false };
+                deck[idx] = .{ .suit = suit, .value = @fromBackingInt(@intCast(v)), .dealt = false };
                 idx += 1;
             }
         }
@@ -202,12 +204,12 @@ pub const HeartsGame = struct {
     fn scoreTrick(hg: *HeartsGame) void {
         const lead_suit = hg.trick_cards[0].suit;
         var winner_idx: u8 = 0;
-        var highest_value: u8 = @intFromEnum(hg.trick_cards[0].value);
+        var highest_value: u8 = @backingInt(hg.trick_cards[0].value);
 
         for (1..4) |i| {
             const card = hg.trick_cards[i];
-            if (card.suit == lead_suit and @intFromEnum(card.value) > highest_value) {
-                highest_value = @intFromEnum(card.value);
+            if (card.suit == lead_suit and @backingInt(card.value) > highest_value) {
+                highest_value = @backingInt(card.value);
                 winner_idx = @as(u8, @intCast(i));
             }
         }
@@ -260,7 +262,7 @@ pub const HeartsGame = struct {
 
         for (0..player.hand_count) |i| {
             const card = player.hand[i];
-            const val = @intFromEnum(card.value);
+            const val = @backingInt(card.value);
             var score = val;
 
             if (avoid_hearts and card.suit == .hearts) {
@@ -285,7 +287,7 @@ pub const HeartsGame = struct {
         for (0..player.hand_count) |i| {
             const card = player.hand[i];
             if (card.suit == lead_suit) {
-                const val = @intFromEnum(card.value);
+                const val = @backingInt(card.value);
                 if (val < best_value) {
                     best_value = val;
                     best_idx = @as(u8, @intCast(i));
@@ -343,9 +345,19 @@ pub const HeartsGame = struct {
             fb.draw3DRect(cx, hand_y + offset_y, card_w, card_h, rgb(0xFF, 0xFF, 0xFF), rgb(0xC0, 0xC0, 0xC0));
 
             const value_str = switch (card.value) {
-                .two => "2", .three => "3", .four => "4", .five => "5",
-                .six => "6", .seven => "7", .eight => "8", .nine => "9",
-                .ten => "10", .jack => "J", .queen => "Q", .king => "K", .ace => "A",
+                .two => "2",
+                .three => "3",
+                .four => "4",
+                .five => "5",
+                .six => "6",
+                .seven => "7",
+                .eight => "8",
+                .nine => "9",
+                .ten => "10",
+                .jack => "J",
+                .queen => "Q",
+                .king => "K",
+                .ace => "A",
             };
             const suit_color = if (is_red) rgb(0xCC, 0x00, 0x00) else rgb(0x00, 0x00, 0x00);
             fb.drawTextTransparent(cx + 4, hand_y + offset_y + 4, value_str, suit_color);
@@ -383,9 +395,19 @@ pub const HeartsGame = struct {
             fb.draw3DRect(card_x, card_y, 50, 70, rgb(0xFF, 0xFF, 0xFF), rgb(0xC0, 0xC0, 0xC0));
 
             const value_str = switch (card.value) {
-                .two => "2", .three => "3", .four => "4", .five => "5",
-                .six => "6", .seven => "7", .eight => "8", .nine => "9",
-                .ten => "10", .jack => "J", .queen => "Q", .king => "K", .ace => "A",
+                .two => "2",
+                .three => "3",
+                .four => "4",
+                .five => "5",
+                .six => "6",
+                .seven => "7",
+                .eight => "8",
+                .nine => "9",
+                .ten => "10",
+                .jack => "J",
+                .queen => "Q",
+                .king => "K",
+                .ace => "A",
             };
             const suit_color = if (is_red) rgb(0xCC, 0x00, 0x00) else rgb(0x00, 0x00, 0x00);
             fb.drawTextTransparent(card_x + 4, card_y + 4, value_str, suit_color);

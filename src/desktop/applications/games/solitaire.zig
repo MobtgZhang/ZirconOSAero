@@ -34,9 +34,19 @@ fn rgb(r: u32, g: u32, b: u32) u32 {
 
 pub const Suit = enum(u2) { hearts, diamonds, clubs, spades };
 pub const CardValue = enum(u4) {
-    ace = 1, two = 2, three = 3, four = 4, five = 5,
-    six = 6, seven = 7, eight = 8, nine = 9, ten = 10,
-    jack = 11, queen = 12, king = 13,
+    ace = 1,
+    two = 2,
+    three = 3,
+    four = 4,
+    five = 5,
+    six = 6,
+    seven = 7,
+    eight = 8,
+    nine = 9,
+    ten = 10,
+    jack = 11,
+    queen = 12,
+    king = 13,
 };
 
 pub const Card = struct {
@@ -80,16 +90,18 @@ pub const SolitaireGame = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) SolitaireGame {
         var sol = SolitaireGame{
-            .x = x_pos, .y = y_pos,
-            .width = 700, .height = 550,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 700,
+            .height = 550,
             .visible = true,
             .cards = undefined,
             .deck = undefined,
             .deck_index = 0,
             .waste_index = 0,
-            .tableau = [_][20]u8{[_]u8{0} ** 20} ** 7,
-            .tableau_count = [_]u8{0} ** 7,
-            .foundations = [_]u8{0} ** 4,
+            .tableau = [_][20]u8{[_]u8{0} * *20} * *7,
+            .tableau_count = [_]u8{0} * *7,
+            .foundations = [_]u8{0} * *4,
             .game_state = .playing,
             .score = 0,
             .moves = 0,
@@ -114,8 +126,8 @@ pub const SolitaireGame = struct {
         s.moves = 0;
         s.time_elapsed = 0;
         s.game_state = .playing;
-        s.foundations = [_]u8{0} ** 4;
-        s.tableau_count = [_]u8{0} ** 7;
+        s.foundations = [_]u8{0} * *4;
+        s.tableau_count = [_]u8{0} * *7;
         s.dragging_card = null;
         s.animating = false;
         s.initDeck();
@@ -128,9 +140,10 @@ pub const SolitaireGame = struct {
             for (1..14) |v| {
                 s.cards[idx] = .{
                     .suit = suit,
-                    .value = @enumFromInt(v),
+                    .value = @fromBackingInt(@intCast(v)),
                     .face_up = false,
-                    .x = 0, .y = 0,
+                    .x = 0,
+                    .y = 0,
                 };
                 idx += 1;
             }
@@ -197,7 +210,7 @@ pub const SolitaireGame = struct {
         const card = switch (pile) {
             .waste => if (s.deck_index > 0) s.cards[s.deck[s.deck_index - 1]] else return,
             .tableau_0, .tableau_1, .tableau_2, .tableau_3, .tableau_4, .tableau_5, .tableau_6 => |col| blk: {
-                const c = @intFromEnum(col);
+                const c = @backingInt(col);
                 if (card_idx >= s.tableau_count[c]) return;
                 break :blk s.cards[s.tableau[c][card_idx]];
             },
@@ -207,7 +220,7 @@ pub const SolitaireGame = struct {
         if (!card.face_up) return;
         if (card.value != .ace) return;
 
-        const foundation_idx: usize = @intFromEnum(card.suit);
+        const foundation_idx: usize = @backingInt(card.suit);
         if (s.foundations[foundation_idx] == 0) {
             s.foundations[foundation_idx] = 1;
             s.moves += 1;
@@ -217,7 +230,7 @@ pub const SolitaireGame = struct {
             switch (pile) {
                 .waste => {},
                 .tableau_0, .tableau_1, .tableau_2, .tableau_3, .tableau_4, .tableau_5, .tableau_6 => |col| {
-                    const c = @intFromEnum(col);
+                    const c = @backingInt(col);
                     if (s.tableau_count[c] > 0) {
                         s.tableau_count[c] -= 1;
                         if (s.tableau_count[c] > 0) {
@@ -316,7 +329,7 @@ pub const SolitaireGame = struct {
             fb.draw3DRect(r.x, r.y, r.w, r.h, rgb(0xFF, 0xFF, 0xFF), rgb(0x00, 0x60, 0x00));
 
             if (s.foundations[f] > 0) {
-                const card_idx_base = @as(u8, @intFromEnum(suit)) * 13;
+                const card_idx_base = @as(u8, @backingInt(suit)) * 13;
                 const top_value = s.foundations[f];
                 const top_card = s.cards[card_idx_base + top_value - 1];
                 s.renderCardFace(top_card, r.x, r.y);

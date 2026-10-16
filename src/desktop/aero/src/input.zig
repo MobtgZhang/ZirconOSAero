@@ -87,7 +87,7 @@ pub const KeyboardState = struct {
     repeat_count: u32 = 0,
 };
 
-var hotkeys: [MAX_HOTKEYS]HotkeyEntry = [_]HotkeyEntry{.{}} ** MAX_HOTKEYS;
+var hotkeys: [MAX_HOTKEYS]HotkeyEntry = std.mem.zeroes([MAX_HOTKEYS]HotkeyEntry);
 var hotkey_count: usize = 0;
 var next_hotkey_id: u32 = 1;
 

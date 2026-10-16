@@ -102,10 +102,10 @@ fn parseCurDirEntries(allocator: std.mem.Allocator, data: []const u8, count: u16
             .height = data[offset + 1],
             .color_count = data[offset + 2],
             .reserved = data[offset + 3],
-            .hotspot_x = std.mem.readIntLittle(u16, data[offset + 4..offset + 6]),
-            .hotspot_y = std.mem.readIntLittle(u16, data[offset + 6..offset + 8]),
-            .bytes_in_res = std.mem.readIntLittle(u32, data[offset + 8..offset + 12]),
-            .image_offset = std.mem.readIntLittle(u32, data[offset + 12..offset + 16]),
+            .hotspot_x = std.mem.readIntLittle(u16, data[offset + 4 .. offset + 6]),
+            .hotspot_y = std.mem.readIntLittle(u16, data[offset + 6 .. offset + 8]),
+            .bytes_in_res = std.mem.readIntLittle(u32, data[offset + 8 .. offset + 12]),
+            .image_offset = std.mem.readIntLittle(u32, data[offset + 12 .. offset + 16]),
         };
     }
     return entries;
@@ -161,7 +161,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) mod.ImageError!mod
     if (bmp_data.len >= 4) {
         const maybe_size = std.mem.readIntLittle(u32, bmp_data[0..4]);
         if (maybe_size < bmp_data.len) {
-            const hdr = std.mem.readIntLittle(u32, bmp_data[maybe_size..maybe_size + 4]);
+            const hdr = std.mem.readIntLittle(u32, bmp_data[maybe_size .. maybe_size + 4]);
             if (hdr == 40 or hdr == 124) {
                 bmp_data = bmp_data[4..];
             }
@@ -204,7 +204,7 @@ pub fn decodeCurFile(allocator: std.mem.Allocator, data: []const u8) mod.ImageEr
 pub const curDecoder: mod.Decoder = .{
     .signature = &CUR_SIGNATURE,
     .name = "CUR",
-    .extensions = &.{ ".cur" },
+    .extensions = &.{".cur"},
     .detectFn = detectCur,
     .decodeFn = decode,
 };

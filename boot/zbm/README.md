@@ -10,7 +10,7 @@ These names mirror the *user-visible* layout of Windows boot media; files are **
 |------|---------|
 | `\Boot\BCD` | **Simplified** boot configuration store used by ZBM (`boot/zbm/common/bcd.zig`). **Not** a byte-compatible copy of Microsoft’s BCD hive. |
 | `\Boot\zbm.efi` | Optional logical name in `src/config/boot.conf` (`loader_path`); firmware typically loads `\EFI\BOOT\BOOTX64.EFI` (or `BOOTAA64.EFI`, `BOOTRISCV64.EFI`, `BOOTLOONGARCH64.EFI`). |
-| `\boot\kernel.elf` | Kernel image loaded by ZBM after menu selection. |
+| `\Windows\System32\winload.efi` | Kernel image loaded by ZBM after menu selection. |
 
 ## Handoff to the kernel
 

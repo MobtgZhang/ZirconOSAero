@@ -27,7 +27,6 @@
 // Reference: MS Learn — scheduling (conceptual); OS textbook MLQ; Intel SDM for syscall path elsewhere.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const build_options = @import("build_options");
 const peb_stub_va = @import("../sdk/peb_nt61_x64.zig");
 const klog = @import("../rtl/klog.zig");
@@ -36,8 +35,10 @@ const process_mod = @import("../ps/process.zig");
 const spinlock_mod = @import("spinlock.zig");
 const percpu_sched = @import("percpu_sched.zig");
 const kpcr = @import("kpcr.zig");
+const hal_context = @import("../hal/thread_context.zig");
 const ob = @import("../ob/object.zig");
 const KeApc = @import("apc_object.zig").KeApc;
+const arch_mod = @import("../arch.zig");
 /// IB-01: 用于注册 I/O boost 回调，避免直接依赖以防循环引用。
 const io_mod = @import("../io/io.zig");
 
@@ -47,14 +48,7 @@ var sched_irq_lock: spinlock_mod.IrqSpinLock = .{};
 /// 跨平台序列一致性内存屏障辅助函数。
 /// 根据目标架构选择合适的内存屏障指令。
 inline fn seqCstBarrier() void {
-    switch (builtin.cpu.arch) {
-        .x86_64 => asm volatile ("mfence" ::: .{ .memory = true }),
-        .aarch64 => asm volatile ("dmb sy" ::: .{ .memory = true }),
-        .loongarch64 => asm volatile ("dbar 0" ::: .{ .memory = true }),
-        .riscv64 => asm volatile ("fence iorw, iorw" ::: .{ .memory = true }),
-        .mips64el => asm volatile ("sync" ::: .{ .memory = true }),
-        else => asm volatile ("" ::: .{ .memory = true }),
-    }
+    @import("../arch.zig").memoryBarrier();
 }
 
 /// 前台会话进程时间片加成（tick；clean-room 常数，可调）。
@@ -117,22 +111,8 @@ var global_non_empty: u32 = 0;
 var rr_cpu_cursor: [NUM_PRI]u8 = @splat(0);
 
 fn schedNumCpus() usize {
-    if (builtin.cpu.arch == .x86_64) {
-        const madt = @import("../hal/x86_64/madt.zig");
-        const n: u32 = madt.logical_cpu_count;
-        return @max(@as(usize, 1), @min(@as(usize, @intCast(n)), MAX_SCHED_CPUS));
-    }
-    if (builtin.cpu.arch == .loongarch64) {
-        const topo = @import("../hal/loongarch64/cpu_topology.zig");
-        const n: u32 = topo.logicalCpuCount();
-        return @max(@as(usize, 1), @min(@as(usize, @intCast(n)), MAX_SCHED_CPUS));
-    }
-    if (builtin.cpu.arch == .mips64el) {
-        const topo = @import("../hal/mips64el/cpu_topology.zig");
-        const n: u32 = topo.logicalCpuCount();
-        return @max(@as(usize, 1), @min(@as(usize, @intCast(n)), MAX_SCHED_CPUS));
-    }
-    return 1;
+    const hal = @import("../hal.zig");
+    return @max(@as(usize, 1), @min(@as(usize, @intCast(hal.logicalCpuCount())), MAX_SCHED_CPUS));
 }
 
 fn homeCpuSchedSlot(home: u32) usize {
@@ -150,13 +130,13 @@ fn affinityCpuMask(t: *const Thread) u64 {
     return t.affinity_mask;
 }
 
-fn pickHomeCpuForAffinity(mask: u64) u32 {
+fn pickHomeCpuForAffinity(mask: u64) ?u32 {
     const n = schedNumCpus();
     var c: u32 = 0;
     while (c < n) : (c += 1) {
         if ((mask & (@as(u64, 1) << @intCast(c))) != 0) return c;
     }
-    return 0;
+    return null;
 }
 
 fn resetReadyQueues() void {
@@ -260,13 +240,20 @@ fn enqueueReadyLocked(tid: usize) void {
     if (tid >= thread_count) return;
     if (threads[tid].in_ready_queue) return;
     const ep = effectivePriority(&threads[tid]);
-    var slot = homeCpuSchedSlot(threads[tid].home_cpu);
     const mask = affinityCpuMask(&threads[tid]);
-    if ((mask & (@as(u64, 1) << @intCast(slot % schedNumCpus()))) == 0) {
-        threads[tid].home_cpu = pickHomeCpuForAffinity(mask);
-        slot = homeCpuSchedSlot(threads[tid].home_cpu);
-    }
+    const allowed_cpu = pickHomeCpuForAffinity(mask) orelse return;
+    threads[tid].home_cpu = allowed_cpu;
+    const slot = homeCpuSchedSlot(allowed_cpu);
     enqueueToBucket(slot, ep, tid);
+}
+
+fn performContextSwitchLocked(from_idx: usize, to_idx: usize, released_for_switch: *bool) void {
+    const saved_interrupts = sched_irq_lock.unlockKeepingInterruptsDisabled();
+    released_for_switch.* = true;
+
+    _ = hal_context.switchContext(&threads[from_idx].context_storage, &threads[to_idx].context_storage);
+
+    arch_mod.restoreInterrupts(saved_interrupts);
 }
 
 /// 按当前 `effectivePriority` 入队（`home_cpu` 决定 CPU 槽；受亲和掩码约束）。
@@ -546,7 +533,7 @@ pub const Thread = struct {
     /// PI-02: 链式继承 — 本线程当前正在等待的互斥锁持有者线程 ID。
     /// 当本线程获得锁并唤醒等待者时，如果等待者有继承优先级，传播给本线程正在等待的锁的持有者。
     waiting_mutex_owner_tid: usize = 0,
-    name: [16]u8 = [_]u8{0} ** 16,
+    name: [16]u8 = std.mem.zeroes([16]u8),
     kernel_apc_head: ?*KeApc = null,
     user_apc_head: ?*KeApc = null,
     /// `keWait*` 阻塞在对象等待队列上时为 true（与 `ob.WaitEntry` 链一致）。
@@ -565,16 +552,8 @@ pub const Thread = struct {
     teb_user_va: u64 = 0,
     /// WOW64：与所属 `Process.is_wow64` 同步（`attachWow64IfPresent` / `createThread`）。
     is_wow64: bool = false,
-    /// LoongArch64：`thread_switch.LaThreadContext` 的 11×u64 镜像；其它架构下保留为 0 占位。
-    la_context_raw: [11]u64 align(8) = @splat(0),
-    /// RISC-V64：`thread_switch.RvThreadContext` 的 14×u64 镜像；其它架构下保留为 0 占位。
-    rv_context_raw: [14]u64 align(8) = @splat(0),
-    /// AArch64：`thread_switch.A64ThreadContext` 的 13×u64 镜像；其它架构下保留为 0 占位。
-    a64_context_raw: [13]u64 align(8) = @splat(0),
-    /// MIPS64EL：`thread_switch.MipsThreadContext` 的 13×u64 镜像；其它架构下保留为 0 占位。
-    mips_context_raw: [13]u64 align(8) = @splat(0),
-    /// x86_64：`thread_switch.X86ThreadContext` 的 18×u64 镜像；其它架构下保留为 0 占位。
-    x86_context_raw: [18]u64 align(8) = @splat(0),
+    /// Opaque, platform-owned context storage; upper kernel never reads registers directly.
+    context_storage: hal_context.ContextStorage = undefined,
 };
 
 fn effectivePriority(t: *const Thread) u8 {
@@ -766,52 +745,7 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
     const stack_base = @intFromPtr(&threads[idx].stack);
     const stack_end = stack_base + STACK_SIZE;
 
-    if (builtin.target.cpu.arch == .loongarch64) {
-        const la_ts = @import("../arch/loongarch64/thread_switch.zig");
-        const la_ptr: *la_ts.LaThreadContext = @ptrCast(&threads[idx].la_context_raw);
-        la_ts.initNewThread(la_ptr, entry, stack_end);
-        threads[idx].stack_top = la_ptr.sp;
-    } else if (builtin.target.cpu.arch == .riscv64) {
-        const rv_ts = @import("../arch/riscv64/thread_switch.zig");
-        const rv_ptr: *rv_ts.RvThreadContext = @ptrCast(&threads[idx].rv_context_raw);
-        rv_ts.initNewThread(rv_ptr, entry, stack_end);
-        threads[idx].stack_top = rv_ptr.sp;
-    } else if (builtin.target.cpu.arch == .aarch64) {
-        const a64_ts = @import("../arch/aarch64/thread_switch.zig");
-        const a64_ptr: *a64_ts.A64ThreadContext = @ptrCast(&threads[idx].a64_context_raw);
-        a64_ts.initNewThread(a64_ptr, entry, stack_end);
-        threads[idx].stack_top = a64_ptr.sp;
-    } else if (builtin.target.cpu.arch == .mips64el) {
-        const mips_ts = @import("../arch/mips64el/thread_switch.zig");
-        const mips_ptr: *mips_ts.MipsThreadContext = @ptrCast(&threads[idx].mips_context_raw);
-        mips_ts.initNewThread(mips_ptr, entry, stack_end);
-        threads[idx].stack_top = mips_ptr.sp;
-    } else if (builtin.target.cpu.arch == .x86_64) {
-        const x86_ts = @import("../arch/x86_64/thread_switch.zig");
-        const x86_ptr: *x86_ts.X86ThreadContext = @ptrFromInt(@intFromPtr(&threads[idx].x86_context_raw));
-        // 只在 freestanding 目标下初始化上下文（native 目标不需要）
-        if (builtin.target.os.tag == .freestanding) {
-            x86_ts.initNewThread(x86_ptr, entry, stack_end);
-        }
-        threads[idx].stack_top = stack_end;
-    } else {
-        var sp = stack_end;
-
-        sp -= 8;
-        @as(*u64, @ptrFromInt(sp)).* = entry;
-        sp -= 8;
-        @as(*u64, @ptrFromInt(sp)).* = 0;
-        sp -= 8;
-        @as(*u64, @ptrFromInt(sp)).* = 0;
-        sp -= 8;
-        @as(*u64, @ptrFromInt(sp)).* = 0;
-        sp -= 8;
-        @as(*u64, @ptrFromInt(sp)).* = 0;
-        sp -= 8;
-        @as(*u64, @ptrFromInt(sp)).* = 0;
-
-        threads[idx].stack_top = sp;
-    }
+    threads[idx].stack_top = hal_context.initThreadContext(&threads[idx].context_storage, entry, stack_end);
     threads[idx].context.rip = entry;
     threads[idx].teb_user_va = peb_stub_va.stubUserTebPageVa(idx);
     threads[idx].is_wow64 = if (process_mod.findProcess(process_id)) |pr| pr.is_wow64 else false;
@@ -832,7 +766,8 @@ pub fn enableScheduling() void {
 
 pub fn tick() void {
     sched_irq_lock.lock();
-    defer sched_irq_lock.unlock();
+    var released_for_switch = false;
+    defer if (!released_for_switch) sched_irq_lock.unlock();
 
     tick_count += 1;
     workStealBalanceIfIdleImpl();
@@ -903,21 +838,7 @@ pub fn tick() void {
         current_thread = next_blk;
         kpcr.setCurrentThreadIndex(@intCast(next_blk));
         activateCr3ForProcessId(threads[next_blk].process_id);
-        if (builtin.target.cpu.arch == .loongarch64) {
-            performLoongArchContextSwitch(cur_for_decay, next_blk);
-        }
-        if (builtin.target.cpu.arch == .riscv64) {
-            performRiscvContextSwitch(cur_for_decay, next_blk);
-        }
-        if (builtin.target.cpu.arch == .aarch64) {
-            performAarch64ContextSwitch(cur_for_decay, next_blk);
-        }
-        if (builtin.target.cpu.arch == .mips64el) {
-            performMipsContextSwitch(cur_for_decay, next_blk);
-        }
-        if (builtin.target.cpu.arch == .x86_64) {
-            performX86_64ContextSwitch(cur_for_decay, next_blk);
-        }
+        performContextSwitchLocked(cur_for_decay, next_blk, &released_for_switch);
         return;
     }
 
@@ -952,68 +873,7 @@ pub fn tick() void {
     current_thread = next;
     kpcr.setCurrentThreadIndex(@intCast(next));
     activateCr3ForProcessId(threads[next].process_id);
-    if (builtin.target.cpu.arch == .loongarch64) {
-        performLoongArchContextSwitch(cur_for_decay, next);
-    }
-    if (builtin.target.cpu.arch == .riscv64) {
-        performRiscvContextSwitch(cur_for_decay, next);
-    }
-    if (builtin.target.cpu.arch == .aarch64) {
-        performAarch64ContextSwitch(cur_for_decay, next);
-    }
-    if (builtin.target.cpu.arch == .mips64el) {
-        performMipsContextSwitch(cur_for_decay, next);
-    }
-    if (builtin.target.cpu.arch == .x86_64) {
-        performX86_64ContextSwitch(cur_for_decay, next);
-    }
-}
-
-fn performLoongArchContextSwitch(from_idx: usize, to_idx: usize) void {
-    if (builtin.target.cpu.arch != .loongarch64) return;
-    const la_ts = @import("../arch/loongarch64/thread_switch.zig");
-    const from_ctx: *la_ts.LaThreadContext = @ptrCast(&threads[from_idx].la_context_raw);
-    const to_ctx: *la_ts.LaThreadContext = @ptrCast(&threads[to_idx].la_context_raw);
-    la_ts.loongarch_switch_context(from_ctx, to_ctx);
-}
-
-fn performRiscvContextSwitch(from_idx: usize, to_idx: usize) void {
-    if (builtin.target.cpu.arch != .riscv64) return;
-    const rv_ts = @import("../arch/riscv64/thread_switch.zig");
-    const from_ctx: *rv_ts.RvThreadContext = @ptrCast(&threads[from_idx].rv_context_raw);
-    const to_ctx: *rv_ts.RvThreadContext = @ptrCast(&threads[to_idx].rv_context_raw);
-    rv_ts.riscv_switch_context(from_ctx, to_ctx);
-}
-
-fn performAarch64ContextSwitch(from_idx: usize, to_idx: usize) void {
-    if (builtin.target.cpu.arch != .aarch64) return;
-    const a64_ts = @import("../arch/aarch64/thread_switch.zig");
-    const from_ctx: *a64_ts.A64ThreadContext = @ptrCast(&threads[from_idx].a64_context_raw);
-    const to_ctx: *a64_ts.A64ThreadContext = @ptrCast(&threads[to_idx].a64_context_raw);
-    a64_ts.aarch64_switch_context(from_ctx, to_ctx);
-}
-
-fn performMipsContextSwitch(from_idx: usize, to_idx: usize) void {
-    if (builtin.target.cpu.arch != .mips64el) return;
-    const mips_ts = @import("../arch/mips64el/thread_switch.zig");
-    const from_ctx: *mips_ts.MipsThreadContext = @ptrCast(&threads[from_idx].mips_context_raw);
-    const to_ctx: *mips_ts.MipsThreadContext = @ptrCast(&threads[to_idx].mips_context_raw);
-    mips_ts.mips64_switch_context(from_ctx, to_ctx);
-}
-
-fn performX86_64ContextSwitch(from_idx: usize, to_idx: usize) void {
-    if (builtin.target.cpu.arch != .x86_64) return;
-    // 在 freestanding 目标下执行上下文切换
-    if (builtin.target.os.tag == .freestanding) {
-        const x86_ts = @import("../arch/x86_64/thread_switch.zig");
-        const from_ctx: *x86_ts.X86ThreadContext = @ptrFromInt(@intFromPtr(&threads[from_idx].x86_context_raw));
-        const to_ctx: *x86_ts.X86ThreadContext = @ptrFromInt(@intFromPtr(&threads[to_idx].x86_context_raw));
-        // x86_64_switch_context 是 noreturn 函数，会直接跳转到目标线程
-        // 调用者不会再执行到这里
-        x86_ts.x86_64_switch_context(from_ctx, to_ctx);
-        unreachable; // noreturn 函数不会返回到这里
-    }
-    // 在 native/test 目标下不执行上下文切换（因为汇编代码未链接）
+    performContextSwitchLocked(cur_for_decay, next, &released_for_switch);
 }
 
 pub fn yield() void {
@@ -1166,7 +1026,9 @@ pub fn setThreadPriorityClass(tid: usize, class: u8) void {
 pub fn setThreadAffinityMask(tid: usize, mask: u64) void {
     if (tid >= thread_count) return;
     threads[tid].affinity_mask = mask;
-    threads[tid].home_cpu = pickHomeCpuForAffinity(affinityCpuMask(&threads[tid]));
+    if (pickHomeCpuForAffinity(affinityCpuMask(&threads[tid]))) |cpu| {
+        threads[tid].home_cpu = cpu;
+    }
 }
 
 /// 本 mutex 上**首次**建立等待继承边：深度 +1 并抬升 floor。
@@ -1303,36 +1165,10 @@ pub fn isInitialized() bool {
 
 /// AP 在线程/按核 tick 全量镜像前：开中断并在 **sti;hlt** 中等待（PIT/IOAPIC 或 IPI 可唤醒）。
 pub fn apProcessorIdleLoop() noreturn {
-    if (builtin.cpu.arch == .x86_64) {
-        const arch_x = @import("../arch/x86_64/mod.zig");
-        arch_x.enableInterrupts();
-        while (true) {
-            asm volatile ("sti; hlt" ::: .{ .memory = true });
-        }
-    }
-    if (builtin.cpu.arch == .loongarch64) {
-        const arch_la = @import("../arch/loongarch64/mod.zig");
-        arch_la.enableInterrupts();
-        while (true) {
-            asm volatile ("idle 0" ::: .{ .memory = true });
-        }
-    }
-    if (builtin.cpu.arch == .mips64el) {
-        const arch_mips = @import("../arch/mips64el/mod.zig");
-        arch_mips.enableInterrupts();
-        while (true) {
-            asm volatile ("wait" ::: .{ .memory = true });
-        }
-    }
-    if (builtin.cpu.arch == .aarch64) {
-        const arch_a64 = @import("../arch/aarch64/mod.zig");
-        arch_a64.enableInterrupts();
-        while (true) {
-            asm volatile ("wfi" ::: .{ .memory = true });
-        }
-    }
+    const arch = @import("../arch.zig");
+    arch.enableInterrupts();
     while (true) {
-        std.atomic.spinLoopHint();
+        arch.waitForInterrupt();
     }
 }
 

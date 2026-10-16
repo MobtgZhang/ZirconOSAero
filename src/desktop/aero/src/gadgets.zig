@@ -8,14 +8,14 @@ pub const CpuMeterGadget = struct {
     center_y: i32 = 0,
     radius: i32 = 0,
     cpu_percent: u8 = 0,
-    net_kbps_str: [16]u8 = [_]u8{0} ** 16,
+    net_kbps_str: [16]u8 = std.mem.zeroes([16]u8),
     net_kbps_len: u8 = 0,
     visible: bool = true,
 };
 
 var cpu_meter: CpuMeterGadget = .{};
 /// 天气占位（内核帧缓冲路径见路线图；此处供宿主 Aero 库演示）。
-var weather_status: [48]u8 = [_]u8{0} ** 48;
+var weather_status: [48]u8 = std.mem.zeroes([48]u8);
 var weather_status_len: u8 = 0;
 
 pub fn init() void {

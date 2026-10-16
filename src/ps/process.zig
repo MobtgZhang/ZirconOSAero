@@ -55,7 +55,7 @@ pub const Process = struct {
     thread_count: usize = 0,
     is_system: bool = false,
     exit_code: u32 = 0,
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
     /// 前台量子加成（`scheduler.quantumTicksForThread`）；桌面会话可置位。
     is_foreground: bool = false,
@@ -124,7 +124,7 @@ pub const Thread = struct {
 var processes: [MAX_PROCESSES]Process = undefined;
 /// 每进程地址空间驻留 BSS 槽位，`createProcess` 仅取指针，避免栈上构造 `AddressSpace`。
 var g_proc_address_spaces: [MAX_PROCESSES]vm.AddressSpace = undefined;
-var g_proc_address_space_busy: [MAX_PROCESSES]bool = [_]bool{false} ** MAX_PROCESSES;
+var g_proc_address_space_busy: [MAX_PROCESSES]bool = std.mem.zeroes([MAX_PROCESSES]bool);
 
 var process_count: usize = 0;
 var next_pid: u32 = 1;
@@ -228,7 +228,8 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
         return null;
     }
     panic_ctx.setPhase(0x0005_0011);
-    if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .loongarch64 or builtin.cpu.arch == .mips64el) {
+    const hal = @import("../hal.zig");
+    if (hal.processAddressSpaceRequiresKernelHalfLink()) {
         if (!vm.linkKernelHalfMappings(space_ptr)) {
             vm.releaseProcessAddressSpace(space_ptr);
             freeProcessAddressSpaceSlot(space_ptr);
@@ -236,7 +237,7 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
             return null;
         }
         panic_ctx.setPhase(0x0005_0012);
-        if (builtin.cpu.arch == .x86_64) {
+        if (hal.supportsKuserShared()) {
             if (!kuser_shared.installInProcessAddressSpace(space_ptr)) {
                 vm.releaseProcessAddressSpace(space_ptr);
                 freeProcessAddressSpaceSlot(space_ptr);
@@ -245,18 +246,16 @@ pub fn createProcess(frame_alloc: *FrameAllocator) ?*Process {
             }
         }
     }
-    // LoongArch64：为用户地址空间分配 ASID
-    if (builtin.cpu.arch == .loongarch64 and builtin.os.tag == .freestanding) {
-        const tlb_la = @import("../hal/loongarch64/tlb_flush.zig");
-        const asid = tlb_la.allocateProcessAsid();
-        if (asid == 0) {
-            vm.releaseProcessAddressSpace(space_ptr);
-            freeProcessAddressSpaceSlot(space_ptr);
-            panic_ctx.setPhase(0);
-            return null;
-        }
-        space_ptr.asid = asid;
-        space_ptr.last_asid_version = tlb_la.getAsidVersion();
+    const address_space_tag = hal.allocateProcessAddressSpaceTag();
+    if (hal.processAddressSpaceUsesTag() and address_space_tag == 0) {
+        vm.releaseProcessAddressSpace(space_ptr);
+        freeProcessAddressSpaceSlot(space_ptr);
+        panic_ctx.setPhase(0);
+        return null;
+    }
+    if (hal.processAddressSpaceUsesTag()) {
+        space_ptr.asid = address_space_tag;
+        space_ptr.last_asid_version = hal.processAddressSpaceTagVersion();
     }
     panic_ctx.setPhase(0x0005_0013);
 
@@ -306,6 +305,7 @@ pub fn createProcessFromPe(
     const pe = @import("../loader/pe.zig");
     if (pe.validatePeHeader(pe_data) != .success) {
         klog.err("Process: invalid PE format for process PID=%u", .{proc.pid});
+        _ = terminateProcess(proc.pid, 0);
         return null;
     }
 
@@ -313,6 +313,7 @@ pub fn createProcessFromPe(
     const asp = proc.address_space orelse return null;
     if (!mapPeSectionsToAddressSpace(asp, pe_data, image_base)) {
         klog.err("Process: failed to map PE sections for PID=%u", .{proc.pid});
+        _ = terminateProcess(proc.pid, 0);
         return null;
     }
 
@@ -439,7 +440,7 @@ pub fn getProcessList() []Process {
 
 /// 仅 `Debug`：`createProcess` 子进程后 `duplicateUserMappingsForFork`；失败则终止子进程。
 pub fn forkProcessForTest(parent_pid: u32, frame_alloc: *FrameAllocator) ?*Process {
-    if (builtin.mode != .Debug) return null;
+    if (builtin.mode != .debug) return null;
     const parent = findProcess(parent_pid) orelse return null;
     const parent_asp = parent.address_space orelse return null;
     const child = createProcess(frame_alloc) orelse return null;
@@ -464,7 +465,7 @@ pub const PsThreadObject = struct {
 
 const max_ps_thread_objects: usize = 1024;
 var g_ps_threads: [max_ps_thread_objects]PsThreadObject = undefined;
-var g_ps_thread_busy: [max_ps_thread_objects]bool = [_]bool{false} ** max_ps_thread_objects;
+var g_ps_thread_busy: [max_ps_thread_objects]bool = std.mem.zeroes([max_ps_thread_objects]bool);
 
 pub fn allocPsThreadObject(scheduler_tid: usize, host_pid: u32) ?*PsThreadObject {
     for (&g_ps_threads, &g_ps_thread_busy) |*obj, *busy| {

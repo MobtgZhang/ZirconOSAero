@@ -57,7 +57,7 @@ pub const AnchorVolumeDescriptorPointer = extern struct {
     desc_tag: UDF_DESCR_TAG = .{},
     main_vol_desc_seq_extent: ExtentAd = .{},
     reserve_vol_desc_seq_extent: ExtentAd = .{},
-    reserved: [480]u8 align(1) = .{0} ** 480,
+    reserved: [480]u8 align(1) = std.mem.zeroes([480]u8),
 };
 
 pub const ExtentAd = extern struct {
@@ -69,10 +69,10 @@ pub const PrimaryVolumeDescriptor = extern struct {
     desc_tag: UDF_DESCR_TAG = .{},
     volume_desc_seq_number: u32 align(1) = 0,
     primary_vol_desc_num: u32 align(1) = 0,
-    volume_id: [32]u8 align(1) = .{0} ** 32,
-    volume_set_id: [128]u8 align(1) = .{0} ** 128,
-    desc_charset: [64]u8 align(1) = .{0} ** 64,
-    explanatory_charset: [64]u8 align(1) = .{0} ** 64,
+    volume_id: [32]u8 align(1) = std.mem.zeroes([32]u8),
+    volume_set_id: [128]u8 align(1) = std.mem.zeroes([128]u8),
+    desc_charset: [64]u8 align(1) = std.mem.zeroes([64]u8),
+    explanatory_charset: [64]u8 align(1) = std.mem.zeroes([64]u8),
     volume_abstrac: u32 align(1) = 0,
     volume_app: u32 align(1) = 0,
     copyright: u32 align(1) = 0,
@@ -88,20 +88,20 @@ pub const PrimaryVolumeDescriptor = extern struct {
     interchange_level: u16 align(1) = 0,
     max_interchange_level: u16 align(1) = 0,
     file_set_catalog: u32 align(1) = 0,
-    reserved: [12]u8 align(1) = .{0} ** 12,
+    reserved: [12]u8 align(1) = std.mem.zeroes([12]u8),
 };
 
 pub const LogicalVolumeDescriptor = extern struct {
     desc_tag: UDF_DESCR_TAG = .{},
     vol_desc_seq_number: u32 align(1) = 0,
-    descriptor_char_set: [64]u8 align(1) = .{0} ** 64,
-    logical_vol_id: [128]u8 align(1) = .{0} ** 128,
+    descriptor_char_set: [64]u8 align(1) = std.mem.zeroes([64]u8),
+    logical_vol_id: [128]u8 align(1) = std.mem.zeroes([128]u8),
     logical_vol_size: u32 align(1) = 0,
-    desc_charset: [64]u8 align(1) = .{0} ** 64,
-    logical_vol_contents_use: [16]u8 align(1) = .{0} ** 16,
+    desc_charset: [64]u8 align(1) = std.mem.zeroes([64]u8),
+    logical_vol_contents_use: [16]u8 align(1) = std.mem.zeroes([16]u8),
     map_table_length: u32 align(1) = 0,
     num_partition_maps: u32 align(1) = 0,
-    imp_use: [128]u8 align(1) = .{0} ** 128,
+    imp_use: [128]u8 align(1) = std.mem.zeroes([128]u8),
 };
 
 pub const FileEntry = extern struct {
@@ -128,11 +128,11 @@ pub const FileEntry = extern struct {
 pub const IcbTag = extern struct {
     prior_recorded_num_direct_entries: u32 align(1) = 0,
     strategy_type: u16 align(1) = 0,
-    strategy_parameter: [4]u8 align(1) = .{0} ** 4,
+    strategy_parameter: [4]u8 align(1) = std.mem.zeroes([4]u8),
     num_entries: u16 align(1) = 0,
     file_type: u8 align(1) = 0,
     parent_icb_location: u32 align(1) = 0,
-    imp_use: [6]u8 align(1) = .{0} ** 6,
+    imp_use: [6]u8 align(1) = std.mem.zeroes([6]u8),
 
     pub fn isDirectory(self: *const IcbTag) bool {
         return self.file_type == UDF_ICBTAG_FILE_TYPE_DIR;
@@ -145,7 +145,7 @@ pub const UdfVolume = struct {
     lvd: LogicalVolumeDescriptor = .{},
     root_fe_lba: u32 = 0,
     volume_space_size: u32 = 0,
-    volume_id: [128]u8 = .{0} ** 128,
+    volume_id: [128]u8 = std.mem.zeroes([128]u8),
     volume_id_len: usize = 0,
     is_mounted: bool = false,
     backend: ?*block_common.BlockDevVTable = null,

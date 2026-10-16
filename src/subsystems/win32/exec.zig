@@ -20,6 +20,7 @@
 //! Phase 9: Orchestrates PE loading, process creation, DLL binding,
 //! import resolution, and application lifecycle for Win32 console apps.
 
+const std = @import("std");
 const klog = @import("../../rtl/klog.zig");
 const pe_loader = @import("../../loader/pe.zig");
 const ntdll = @import("../../libs/ntdll.zig");
@@ -58,17 +59,17 @@ pub const Win32App = struct {
     parent_pid: u32 = 0,
     exit_code: u32 = 0,
     image: ?*pe_loader.LoadedImage = null,
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
-    command_line: [256]u8 = [_]u8{0} ** 256,
+    command_line: [256]u8 = std.mem.zeroes([256]u8),
     command_line_len: usize = 0,
-    current_dir: [260]u8 = [_]u8{0} ** 260,
+    current_dir: [260]u8 = std.mem.zeroes([260]u8),
     current_dir_len: usize = 0,
     console_id: u32 = 0,
     start_tick: u64 = 0,
     dll_count: usize = 0,
-    loaded_dlls: [8][64]u8 = [_][64]u8{[_]u8{0} ** 64} ** 8,
-    loaded_dll_lens: [8]usize = [_]usize{0} ** 8,
+    loaded_dlls: [8][64]u8 = std.mem.zeroes([8][64]u8),
+    loaded_dll_lens: [8]usize = std.mem.zeroes([8]usize),
     creation_flags: u32 = 0,
 
     pub fn getName(self: *const Win32App) []const u8 {
@@ -98,7 +99,7 @@ pub const ExecStatus = enum {
     too_many_apps,
 };
 
-var running_apps: [MAX_RUNNING_APPS]Win32App = [_]Win32App{.{}} ** MAX_RUNNING_APPS;
+var running_apps: [MAX_RUNNING_APPS]Win32App = std.mem.zeroes([MAX_RUNNING_APPS]Win32App);
 var app_count: usize = 0;
 var next_app_pid: u32 = 100;
 var total_launched: u64 = 0;
@@ -167,7 +168,7 @@ pub fn createApp(name: []const u8, cmd_line: []const u8, parent_pid: u32) ExecRe
     total_launched += 1;
 
     klog.info("exec: Launched '%s' (PID=%u, type=%u, DLLs=%u)", .{
-        name, app.pid, @intFromEnum(app.app_type), app.dll_count,
+        name, app.pid, @backingInt(app.app_type), app.dll_count,
     });
 
     return .{

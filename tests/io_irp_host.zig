@@ -127,7 +127,7 @@ fn stackBottom(attached: *const [MAX_DEV]u32, count: usize, top: u32) u32 {
 }
 
 test "device stack bottom follows attached_device chain" {
-    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    var att: [MAX_DEV]u32 = std.mem.zeroes([MAX_DEV]u32);
     att[0] = 1;
     att[1] = 2;
     att[2] = 0;
@@ -135,7 +135,7 @@ test "device stack bottom follows attached_device chain" {
 }
 
 test "device stack bottom empty chain returns top" {
-    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    var att: [MAX_DEV]u32 = std.mem.zeroes([MAX_DEV]u32);
     try std.testing.expectEqual(@as(u32, 1), stackBottom(&att, 3, 1));
 }
 
@@ -168,7 +168,7 @@ fn ioForwardIrpToNextDeviceMirror(top: u32, attached: *const [MAX_DEV]u32, dev_c
 }
 
 test "IoForwardIrpToNextDevice mirror dispatches to attached lower index" {
-    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    var att: [MAX_DEV]u32 = std.mem.zeroes([MAX_DEV]u32);
     att[0] = 1;
     att[1] = 0;
     const S = struct {
@@ -182,7 +182,7 @@ test "IoForwardIrpToNextDevice mirror dispatches to attached lower index" {
 }
 
 test "IoForwardIrpToNextDevice mirror fails without lower device" {
-    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    var att: [MAX_DEV]u32 = std.mem.zeroes([MAX_DEV]u32);
     const S = struct {
         fn disp(_: u32) i32 {
             return STATUS_SUCCESS_HOST;
@@ -246,7 +246,7 @@ test "IoCompleteRequest mirror writes IO_STATUS_BLOCK when pointer set (B3)" {
 }
 
 test "dispatch through stack completes IOSB at bottom device (B3 volume stack)" {
-    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    var att: [MAX_DEV]u32 = std.mem.zeroes([MAX_DEV]u32);
     att[0] = 1;
     att[1] = 2;
     att[2] = 0;
@@ -269,7 +269,7 @@ test "dispatch through stack completes IOSB at bottom device (B3 volume stack)" 
 }
 
 test "dispatchIrpThroughStack falls through NOT_IMPLEMENTED to lower device" {
-    var att: [MAX_DEV]u32 = .{0} ** MAX_DEV;
+    var att: [MAX_DEV]u32 = std.mem.zeroes([MAX_DEV]u32);
     att[0] = 1;
     att[1] = 2;
     att[2] = 0;

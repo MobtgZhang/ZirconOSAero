@@ -171,7 +171,7 @@ pub const DeviceState = struct {
 };
 
 pub const MAX_DEVICES: usize = 8;
-pub var g_device_pool: [MAX_DEVICES]?DeviceState = [_]?DeviceState{null} ** MAX_DEVICES;
+pub var g_device_pool: [MAX_DEVICES]?DeviceState = std.mem.zeroes([MAX_DEVICES]?DeviceState);
 pub var g_device_count: usize = 0;
 
 // ============================================================================

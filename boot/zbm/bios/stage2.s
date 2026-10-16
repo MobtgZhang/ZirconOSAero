@@ -27,7 +27,7 @@
 .set STAGE2_MAGIC,    0x5A42        # 'ZB' — verified by VBR
 .set KERNEL_LOAD_SEG, 0x1000        # Segment for kernel loading
 .set KERNEL_LOAD_OFF, 0x0000
-.set KERNEL_PHYS,     0x02000000    # 32MB — 与 link/x86_64.ld 一致（UEFI/BIOS 同 ELF 布局）
+.set KERNEL_PHYS,     0x04000000    # 64MB — 与 link/x86_64.ld 一致（UEFI/BIOS 同 ELF 布局）
 .set E820_BUF,        0x0500        # E820 memory map buffer
 .set E820_MAX_ENTRIES,64
 .set VGA_TEXT_BASE,   0xB8000
@@ -491,7 +491,7 @@ pm_entry:
     # Kernel starts at partition_start + 65 sectors on the disk image.
     # The partition start LBA was stored at a known location by stage2 init.
     # For ZBM disk images, kernel is at sector 2113 (2048 + 65).
-    movl $KERNEL_PHYS, %edi         # Destination: 32MB (see link/x86_64.ld)
+    movl $KERNEL_PHYS, %edi         # Destination: 64MB (see link/x86_64.ld)
     movl $2113, %ebx                # Starting LBA (partition_start + 65)
     movl $512, %ecx                 # Read 512 sectors (256KB, enough for kernel)
     call ata_pio_read_sectors

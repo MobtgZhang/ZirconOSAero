@@ -238,10 +238,7 @@ pub const PlaylistManager = struct {
             const item_index = i + scroll_offset;
             const item = &pm.items[item_index];
 
-            const row_bg = if (item.is_selected) rgb(0xD8, 0xE8, 0xF8)
-                else if (item.is_playing) rgb(0xE8, 0xF0, 0xFF)
-                else if (i % 2 == 0) rgb(0xF8, 0xFC, 0xFF)
-                else rgb(0xF0, 0xF8, 0xFF);
+            const row_bg = if (item.is_selected) rgb(0xD8, 0xE8, 0xF8) else if (item.is_playing) rgb(0xE8, 0xF0, 0xFF) else if (i % 2 == 0) rgb(0xF8, 0xFC, 0xFF) else rgb(0xF0, 0xF8, 0xFF);
 
             fb.fillRect(x + 2, row_y, w - 4, row_h, row_bg);
 

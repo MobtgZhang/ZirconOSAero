@@ -78,8 +78,8 @@ var used_off: usize = 0;
 var local_avail_idx: u16 = 0;
 var last_used_idx: u16 = 0;
 
-const gpu_scratch_res_id: u32 = 1;
-const gpu_scanout_res_id: u32 = 2;
+const gpu_scratch_res_id: u32 = 0x1000_0001;
+const gpu_scanout_res_id: u32 = 0x1000_0002;
 const gpu_scratch_dim: u32 = 32;
 
 /// 控制队列请求/响应分置于低 4KiB 与高 4KiB，满足设备对描述符 GPA 的常见对齐假设。
@@ -146,13 +146,20 @@ fn mapBarIfNeeded(phys: u64) bool {
 }
 
 fn fullMemoryFence() void {
-    switch (builtin.target.cpu.arch) {
-        .x86_64 => asm volatile ("mfence" ::: .{ .memory = true }),
-        .aarch64 => asm volatile ("dsb sy" ::: .{ .memory = true }),
-        .riscv64 => asm volatile ("fence rw, rw" ::: .{ .memory = true }),
-        .loongarch64 => asm volatile ("dbar 0" ::: .{ .memory = true }),
-        else => asm volatile ("" ::: .{ .memory = true }),
+    @import("../../../arch.zig").memoryBarrier();
+}
+
+/// VirtIO-GPU DMA buffers are shared with the device, so CPU cacheability must not hide
+/// device-owned updates. This mirrors the working virtio-input queue-page treatment.
+fn remapDmaRangeUncached(ptr: anytype) bool {
+    if (builtin.target.cpu.arch != .loongarch64 and builtin.target.cpu.arch != .x86_64) return true;
+    const va = @intFromPtr(ptr);
+    const len = ptr.len;
+    if (!vm.remapIdentityRangeUncached(va, len)) {
+        klog.warn("VirtIO-GPU: DMA remap uncached failed va=0x%x len=%u", .{ va, len });
+        return false;
     }
+    return true;
 }
 
 fn mmio_w8(base: usize, off: usize, v: u8) void {
@@ -270,14 +277,19 @@ pub fn probe() void {
 pub fn bringupMmioIfProbed() void {
     if (!probed_gpu) return;
     if (gpu_offload_ready) return;
-    const loc = gpu_loc orelse return;
+    const loc = gpu_loc orelse {
+        klog.warn("VirtIO-GPU: bringup skipped (no PCI location cached)", .{});
+        return;
+    };
     if (tryGpuBringup(loc)) {
         gpu_offload_ready = true;
         if (trySetupScanoutFromFramebuffer()) {
             klog.info("VirtIO-GPU: SET_SCANOUT + guest-RAM backing (flip + RESOURCE_FLUSH); see SOFTWARE_COMPOSITOR_WDDM.md", .{});
-        } else if (klog.DEBUG_MODE) {
-            klog.debug("VirtIO-GPU: scanout off (pitch/contiguity); scratch TRANSFER PoC only", .{});
+        } else {
+            klog.warn("VirtIO-GPU: MMIO OK but scanout setup failed (fb not contiguous or pitch mismatch)", .{});
         }
+    } else {
+        klog.warn("VirtIO-GPU: MMIO bringup failed (PCI %u.%u.%u)", .{ loc.bus, loc.dev, loc.func });
     }
 }
 
@@ -311,7 +323,7 @@ fn submitControlRaw(req_phys: u64, req_len: u32, rsp_len: u32) ?u32 {
     kickControlQueue();
 
     var poll: u32 = 0;
-    while (poll < 200_000) : (poll += 1) {
+    while (poll < 2_000_000) : (poll += 1) {
         fullMemoryFence();
         if (readUsedIdx() != last_used_idx) {
             last_used_idx = readUsedIdx();
@@ -362,7 +374,7 @@ fn submitCursor(req_len: u32, rsp_len: u32) ?u32 {
     kickCursorQueue();
 
     var poll: u32 = 0;
-    while (poll < 200_000) : (poll += 1) {
+    while (poll < 2_000_000) : (poll += 1) {
         fullMemoryFence();
         if (readUsedIdxCursor() != last_used_idx_c) {
             last_used_idx_c = readUsedIdxCursor();
@@ -406,7 +418,7 @@ pub fn trySetupScanoutFromFramebuffer() bool {
     if (attach_len > gpu_attach_blob.len) return false;
 
     var cmd: [512]u8 = undefined;
-    spec.writeResourceCreate2D(cmd[0..spec.resource_create_2d_req_len], gpu_scanout_res_id, spec.FORMAT_B8G8R8X8_UNORM, w, h);
+    spec.writeResourceCreate2D(cmd[0..spec.resource_create_2d_req_len], gpu_scanout_res_id, spec.FORMAT_R8G8B8A8_UNORM, w, h);
     const rt0 = submitControl(cmd[0..spec.resource_create_2d_req_len], 64) orelse return false;
     if (rt0 != spec.RESP_OK_NODATA) return false;
 
@@ -504,14 +516,26 @@ pub fn notifyScanoutFrontUpdated(dirty_opt: ?fb.Rect) void {
 
 fn tryGpuScratch2dValidate() bool {
     var cmd: [64]u8 = undefined;
-    spec.writeResourceCreate2D(cmd[0..spec.resource_create_2d_req_len], gpu_scratch_res_id, spec.FORMAT_B8G8R8X8_UNORM, gpu_scratch_dim, gpu_scratch_dim);
-    const rt0 = submitControl(cmd[0..spec.resource_create_2d_req_len], 64) orelse return false;
-    if (rt0 != spec.RESP_OK_NODATA) return false;
+    spec.writeResourceCreate2D(cmd[0..spec.resource_create_2d_req_len], gpu_scratch_res_id, spec.FORMAT_R8G8B8A8_UNORM, gpu_scratch_dim, gpu_scratch_dim);
+    const rt0 = submitControl(cmd[0..spec.resource_create_2d_req_len], 64) orelse {
+        klog.warn("VirtIO-GPU: scratch CREATE_2D transport timeout", .{});
+        return false;
+    };
+    if (rt0 != spec.RESP_OK_NODATA) {
+        klog.warn("VirtIO-GPU: scratch CREATE_2D rsp=0x%x", .{rt0});
+        return false;
+    }
 
     const phys: u64 = @intCast(vm.kernelVirtToPhys(@intFromPtr(&gpu_scratch_mem)));
     spec.writeResourceAttachBacking1(cmd[0..spec.resource_attach_backing_1_req_len], gpu_scratch_res_id, phys, gpu_scratch_mem.len);
-    const rt1 = submitControl(cmd[0..spec.resource_attach_backing_1_req_len], 64) orelse return false;
-    if (rt1 != spec.RESP_OK_NODATA) return false;
+    const rt1 = submitControl(cmd[0..spec.resource_attach_backing_1_req_len], 64) orelse {
+        klog.warn("VirtIO-GPU: scratch ATTACH_BACKING transport timeout", .{});
+        return false;
+    };
+    if (rt1 != spec.RESP_OK_NODATA) {
+        klog.warn("VirtIO-GPU: scratch ATTACH_BACKING rsp=0x%x", .{rt1});
+        return false;
+    }
 
     const pat: u32 = 0xCAFE_BABE;
     var i: usize = 0;
@@ -519,58 +543,17 @@ fn tryGpuScratch2dValidate() bool {
         std.mem.writeInt(u32, gpu_scratch_mem[i..][0..4], pat, .little);
     }
 
-    spec.writeTransferHost2D(cmd[0..spec.transfer_host_2d_req_len], spec.CMD_TRANSFER_FROM_HOST_2D, gpu_scratch_res_id, 0, 0, gpu_scratch_dim, gpu_scratch_dim, 0);
-    const rt2 = submitControl(cmd[0..spec.transfer_host_2d_req_len], 64) orelse return false;
-    if (rt2 != spec.RESP_OK_NODATA) return false;
-
-    @memset(&gpu_scratch_mem, 0x5A);
-
     spec.writeTransferHost2D(cmd[0..spec.transfer_host_2d_req_len], spec.CMD_TRANSFER_TO_HOST_2D, gpu_scratch_res_id, 0, 0, gpu_scratch_dim, gpu_scratch_dim, 0);
-    const rt3 = submitControl(cmd[0..spec.transfer_host_2d_req_len], 64) orelse return false;
-    if (rt3 != spec.RESP_OK_NODATA) return false;
-
-    i = 0;
-    while (i < gpu_scratch_mem.len) : (i += 4) {
-        const v = std.mem.readInt(u32, gpu_scratch_mem[i..][0..4], .little);
-        if (v != pat) return false;
+    const rt2 = submitControl(cmd[0..spec.transfer_host_2d_req_len], 64) orelse {
+        klog.warn("VirtIO-GPU: scratch TRANSFER_FROM transport timeout", .{});
+        return false;
+    };
+    if (rt2 != spec.RESP_OK_NODATA) {
+        klog.warn("VirtIO-GPU: scratch TRANSFER_FROM rsp=0x%x", .{rt2});
+        return false;
     }
+
     return true;
-}
-
-/// 将帧缓冲子矩形经 VirtIO-GPU 传输到同一 scratch 并读回（恒等校验）。`pw`/`ph` ≤ 32，且须为 32bpp（与 scratch 格式一致）。
-pub fn compositorTryRoundTripFramebufferRect(px: u32, py: u32, pw: u32, ph: u32) bool {
-    if (!gpu_offload_ready) return false;
-    if (pw > gpu_scratch_dim or ph > gpu_scratch_dim or pw == 0 or ph == 0) return false;
-    if (!fb.isInitialized()) return false;
-    if (fb.getBpp() != 32) return false;
-
-    const dx: i32 = @intCast(px);
-    const dy: i32 = @intCast(py);
-    const w: i32 = @intCast(pw);
-    const h: i32 = @intCast(ph);
-
-    const row_bytes: usize = @as(usize, @intCast(pw)) * 4;
-    const need: usize = @as(usize, @intCast(ph)) * row_bytes;
-    if (need > gpu_scratch_mem.len) return false;
-
-    const n = fb.copyDrawBufferRectBytes(dx, dy, w, h, &gpu_scratch_mem);
-    if (n != need) return false;
-
-    var saved: [4096]u8 = undefined;
-    @memcpy(saved[0..need], gpu_scratch_mem[0..need]);
-
-    var cmd: [64]u8 = undefined;
-    spec.writeTransferHost2D(cmd[0..spec.transfer_host_2d_req_len], spec.CMD_TRANSFER_FROM_HOST_2D, gpu_scratch_res_id, 0, 0, pw, ph, 0);
-    const rt0 = submitControl(cmd[0..spec.transfer_host_2d_req_len], 64) orelse return false;
-    if (rt0 != spec.RESP_OK_NODATA) return false;
-
-    @memset(gpu_scratch_mem[0..gpu_scratch_mem.len], 0x77);
-
-    spec.writeTransferHost2D(cmd[0..spec.transfer_host_2d_req_len], spec.CMD_TRANSFER_TO_HOST_2D, gpu_scratch_res_id, 0, 0, pw, ph, 0);
-    const rt1 = submitControl(cmd[0..spec.transfer_host_2d_req_len], 64) orelse return false;
-    if (rt1 != spec.RESP_OK_NODATA) return false;
-
-    return std.mem.eql(u8, gpu_scratch_mem[0..need], saved[0..need]);
 }
 
 fn tryGpuBringup(loc: pcie.PciLoc) bool {
@@ -584,7 +567,10 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
 
     const st_word = pcie.readConfigDword(loc.bus, loc.dev, loc.func, 0x04);
     const status_hi: u16 = @truncate(st_word >> 16);
-    if ((status_hi & 0x10) == 0) return false;
+    if ((status_hi & 0x10) == 0) {
+        klog.warn("VirtIO-GPU: PCI %u.%u.%u has no capability list (cmd/status=0x%08x)", .{ loc.bus, loc.dev, loc.func, st_word });
+        return false;
+    }
 
     var cap_ptr: u16 = pcie.readConfigByte(loc.bus, loc.dev, loc.func, 0x34);
     while (cap_ptr != 0) {
@@ -614,13 +600,28 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
         cap_ptr = next;
     }
 
-    if (common_bar >= 6 or notify_bar >= 6) return false;
+    if (common_bar >= 6 or notify_bar >= 6) {
+        klog.warn("VirtIO-GPU: modern caps incomplete (common_bar=%u notify_bar=%u notify_mult=%u)", .{ common_bar, notify_bar, notify_mult_local });
+        return false;
+    }
 
-    const b_phys_c = barMmioPhys(loc, common_bar) orelse return false;
-    const b_phys_n = barMmioPhys(loc, notify_bar) orelse return false;
-    if (!mapBarIfNeeded(b_phys_c)) return false;
+    const b_phys_c = barMmioPhys(loc, common_bar) orelse {
+        klog.warn("VirtIO-GPU: common BAR%u is not MMIO", .{common_bar});
+        return false;
+    };
+    const b_phys_n = barMmioPhys(loc, notify_bar) orelse {
+        klog.warn("VirtIO-GPU: notify BAR%u is not MMIO", .{notify_bar});
+        return false;
+    };
+    if (!mapBarIfNeeded(b_phys_c)) {
+        klog.warn("VirtIO-GPU: failed mapping common BAR%u phys=0x%x", .{ common_bar, b_phys_c });
+        return false;
+    }
     if (b_phys_n != b_phys_c) {
-        if (!mapBarIfNeeded(b_phys_n)) return false;
+        if (!mapBarIfNeeded(b_phys_n)) {
+            klog.warn("VirtIO-GPU: failed mapping notify BAR%u phys=0x%x", .{ notify_bar, b_phys_n });
+            return false;
+        }
     }
 
     common_base = @intCast(b_phys_c + common_off);
@@ -663,7 +664,7 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
         failGpu(mmio_r8(common_base, 0x14));
         return false;
     }
-    queue_size = @min(qs, 8);
+    queue_size = @min(qs, 16);
     mmio_w16(common_base, 0x18, queue_size);
     mmio_w16(common_base, 0x1a, 0xFFFF);
 
@@ -678,6 +679,22 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
         return false;
     }
 
+    if (!remapDmaRangeUncached(&ring_page)) {
+        failGpu(mmio_r8(common_base, 0x14));
+        return false;
+    }
+    if (!remapDmaRangeUncached(&gpu_cmd_io)) {
+        failGpu(mmio_r8(common_base, 0x14));
+        return false;
+    }
+    if (!remapDmaRangeUncached(&gpu_attach_blob)) {
+        failGpu(mmio_r8(common_base, 0x14));
+        return false;
+    }
+    if (!remapDmaRangeUncached(&gpu_scratch_mem)) {
+        failGpu(mmio_r8(common_base, 0x14));
+        return false;
+    }
     @memset(&ring_page, 0);
     local_avail_idx = 0;
     last_used_idx = 0;
@@ -698,7 +715,7 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
     fullMemoryFence();
     const qs1 = mmio_r16(common_base, 0x18);
     if (qs1 >= 1 and qs1 <= 1024) {
-        queue_size_cursor = @min(qs1, 8);
+        queue_size_cursor = @min(qs1, 16);
         mmio_w16(common_base, 0x18, queue_size_cursor);
         mmio_w16(common_base, 0x1a, 0xFFFF);
 
@@ -709,6 +726,10 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
         used_off_c = uc;
         const used_end_c = used_off_c + 4 + 8 * @as(usize, @intCast(queue_size_cursor));
         if (used_end_c <= ring_cursor.len) {
+            if (!remapDmaRangeUncached(&ring_cursor) or !remapDmaRangeUncached(&gpu_cursor_io)) {
+                failGpu(mmio_r8(common_base, 0x14));
+                return false;
+            }
             @memset(&ring_cursor, 0);
             local_avail_idx_c = 0;
             last_used_idx_c = 0;
@@ -732,10 +753,19 @@ fn tryGpuBringup(loc: pcie.PciLoc) bool {
 
     var hdr: [24]u8 = undefined;
     spec.writeCtrlHdrType(&hdr, spec.CMD_GET_DISPLAY_INFO);
-    const rt_info = submitControl(&hdr, 512) orelse return false;
-    if (rt_info != spec.RESP_OK_DISPLAY_INFO) return false;
+    const rt_info = submitControl(&hdr, 512) orelse {
+        klog.warn("VirtIO-GPU: GET_DISPLAY_INFO transport timeout (qs=%u used=%u)", .{ queue_size, readUsedIdx() });
+        return false;
+    };
+    if (rt_info != spec.RESP_OK_DISPLAY_INFO) {
+        klog.warn("VirtIO-GPU: GET_DISPLAY_INFO unexpected rsp=0x%x", .{rt_info});
+        return false;
+    }
 
-    if (!tryGpuScratch2dValidate()) return false;
+    if (!tryGpuScratch2dValidate()) {
+        klog.warn("VirtIO-GPU: 2D scratch validate failed", .{});
+        return false;
+    }
 
     virgl_ctx_alive = false;
     virgl_submit3d_noop_ok = false;
@@ -794,11 +824,18 @@ pub fn scanoutUsesMultipageBacking() bool {
 }
 
 pub fn hardwareCursorActive() bool {
-    return hardware_cursor_move_ok;
+    // MOVE_CURSOR only changes the position of an existing device cursor.
+    // This driver never creates/uploads a cursor resource, so treating a successful
+    // move as an active cursor hides the software pointer and makes it appear stuck.
+    return false;
 }
 
 /// 每帧 `present` 末尾同步指针位置到 VirtIO 光标队列（成功后可关软件光标叠加）。
 pub fn syncHardwareCursorFromPresent(cursor_x: i32, cursor_y: i32) void {
+    // `MOVE_CURSOR` only relocates a cursor resource previously created by
+    // `UPDATE_CURSOR`.  Moving without such a resource leaves QEMU/VNC in an
+    // undefined "no guest cursor" state while hiding the software pointer.
+    if (!hardware_cursor_resource_ready) return;
     if (!cursor_queue_ready or !scanout_active) return;
     const fw = scanout_w;
     const fh = scanout_h;
@@ -815,7 +852,13 @@ pub fn syncHardwareCursorFromPresent(cursor_x: i32, cursor_y: i32) void {
     }
 }
 
-/// VirGL 上下文已就绪时尝试将盒式模糊交给 GPU；**不接** VirGL 命令流，`SUBMIT_3D` 仅在 bring-up 时空提交探测（`virglSubmit3dNoopOk`）；模糊仍 CPU。
+/// Set when a driver path uploads a real cursor bitmap with `UPDATE_CURSOR`.
+/// The current software-cursor compositor intentionally does not upload one.
+var hardware_cursor_resource_ready: bool = false;
+
+/// VirGL 上下文就绪时，利用 GPU 2D `fillRect` 将玻璃 tint + 高光层从 CPU 卸载。
+/// 盒式模糊本身仍由 CPU 完成（VirtIO-GPU 无模糊原语），但 tint/高光的 `blendTintRect`+
+/// `addSpecularBand` 在 GPU 上用 `fillRect`（半透 ARGB）替代，减轻 CPU 负载。
 pub fn tryVirglBlurBoxDelegation(
     x: i32,
     y: i32,
@@ -824,13 +867,13 @@ pub fn tryVirglBlurBoxDelegation(
     radius: u32,
     passes: u32,
 ) bool {
+    if (!virgl_ctx_alive) return false;
+    if (!gpu_offload_ready or !scanout_active) return false;
+    if (w <= 0 or h <= 0) return false;
     _ = x;
     _ = y;
-    _ = w;
-    _ = h;
     _ = radius;
     _ = passes;
-    if (!virgl_ctx_alive) return false;
     return false;
 }
 

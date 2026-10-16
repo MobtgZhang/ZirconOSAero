@@ -27,7 +27,7 @@ pub const BlurBehindState = struct {
     transition_on_maximized: bool,
 };
 
-pub var g_blur_windows: [MAX_BLUR_WINDOWS]?BlurBehindState = [_]?BlurBehindState{null} ** MAX_BLUR_WINDOWS;
+pub var g_blur_windows: [MAX_BLUR_WINDOWS]?BlurBehindState = std.mem.zeroes([MAX_BLUR_WINDOWS]?BlurBehindState);
 pub var g_blur_window_count: usize = 0;
 
 // ============================================================================

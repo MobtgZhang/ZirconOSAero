@@ -62,7 +62,10 @@ pub const IETabBar = struct {
 
     pub fn create(x_pos: i32, y_pos: i32, w: i32) IETabBar {
         return .{
-            .x = x_pos, .y = y_pos, .width = w, .height = 28,
+            .x = x_pos,
+            .y = y_pos,
+            .width = w,
+            .height = 28,
             .tabs = undefined,
             .tab_count = 0,
             .active_tab = 0,
@@ -172,7 +175,10 @@ pub const IEAddressBar = struct {
 
     pub fn create(x_pos: i32, y_pos: i32, w: i32) IEAddressBar {
         return .{
-            .x = x_pos, .y = y_pos, .width = w, .height = 24,
+            .x = x_pos,
+            .y = y_pos,
+            .width = w,
+            .height = 24,
             .url = undefined,
             .url_len = 0,
             .is_editing = false,
@@ -238,7 +244,10 @@ pub const IEToolbar = struct {
 
     pub fn create(x_pos: i32, y_pos: i32, w: i32) IEToolbar {
         return .{
-            .x = x_pos, .y = y_pos, .width = w, .height = 32,
+            .x = x_pos,
+            .y = y_pos,
+            .width = w,
+            .height = 32,
             .back_enabled = false,
             .forward_enabled = false,
             .refresh_enabled = true,
@@ -290,7 +299,10 @@ pub const IEFavoritesBar = struct {
 
     pub fn create(x_pos: i32, y_pos: i32, w: i32) IEFavoritesBar {
         return .{
-            .x = x_pos, .y = y_pos, .width = w, .height = 24,
+            .x = x_pos,
+            .y = y_pos,
+            .width = w,
+            .height = 24,
             .items = &[_]IEFavItem{},
             .visible = true,
         };
@@ -327,7 +339,10 @@ pub const IEStatusBar = struct {
 
     pub fn create(x_pos: i32, y_pos: i32, w: i32) IEStatusBar {
         return .{
-            .x = x_pos, .y = y_pos, .width = w, .height = 22,
+            .x = x_pos,
+            .y = y_pos,
+            .width = w,
+            .height = 22,
             .message = "Done",
             .progress = 100,
             .show_progress = false,
@@ -388,7 +403,10 @@ pub const IEBrowser = struct {
 
     pub fn create(x_pos: i32, y_pos: i32, w: i32, h: i32) IEBrowser {
         return .{
-            .x = x_pos, .y = y_pos, .width = w, .height = h,
+            .x = x_pos,
+            .y = y_pos,
+            .width = w,
+            .height = h,
             .title = ie_strings.ieString("window_title"),
             .visible = true,
             .focused = false,

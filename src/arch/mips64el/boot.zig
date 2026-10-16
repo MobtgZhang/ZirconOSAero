@@ -17,6 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! MIPS64EL boot info — layout aligned with `arch/loongarch64/boot.zig` for `frame.zig` / `boot_generic.zig`.
+const std = @import("std");
 
 pub const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0;
 
@@ -87,7 +88,7 @@ const static_mmap = [_]MmapEntry{
     .{
         .base_addr = 0x00200000,
         .length = 256 * 1024 * 1024 - 0x200000,
-        .type = @intFromEnum(MmapEntryType.available),
+        .type = @backingInt(MmapEntryType.available),
         .reserved = 0,
     },
 };
@@ -105,7 +106,7 @@ pub const EfiHandoff = extern struct {
     fb_width: u32 = 0,
     fb_height: u32 = 0,
     fb_bpp: u8 = 0,
-    _pad: [3]u8 = [_]u8{0} ** 3,
+    _pad: [3]u8 = std.mem.zeroes([3]u8),
     mmap_count: u32 = 0,
     mmap_entry_size: u32 = 0,
     mmap_off_from_handoff: u32 = 0,
@@ -151,4 +152,8 @@ pub fn parse(magic: u32, info_addr: usize) ?BootInfo {
         bi.mmap_from_handoff = true;
     }
     return bi;
+}
+/// Stub: no UEFI vector symbol on this target.
+pub fn uefiVectorMb2PhysForDiag() u64 {
+    return 0;
 }

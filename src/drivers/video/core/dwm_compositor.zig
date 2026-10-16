@@ -115,12 +115,12 @@ pub const SurfaceDwmState = struct {
 
 var backend: CompositorBackend = .none;
 var state: CompositorState = .uninitialized;
-var surfaces: [MAX_SURFACES]RedirectedSurface = [_]RedirectedSurface{.{}} ** MAX_SURFACES;
+var surfaces: [MAX_SURFACES]RedirectedSurface = std.mem.zeroes([MAX_SURFACES]RedirectedSurface);
 /// 与 `surfaces[id]` 一一对应；`destroySurface` 时清零。
-var surface_dwm: [MAX_SURFACES]SurfaceDwmState = [_]SurfaceDwmState{.{}} ** MAX_SURFACES;
+var surface_dwm: [MAX_SURFACES]SurfaceDwmState = std.mem.zeroes([MAX_SURFACES]SurfaceDwmState);
 var surface_count: u16 = 0;
 /// 表面世代数组：每个表面一个世代号，销毁时递增。用于检测 stale ID。
-var surface_generations: [MAX_SURFACES]u32 = [_]u32{0} ** MAX_SURFACES;
+var surface_generations: [MAX_SURFACES]u32 = std.mem.zeroes([MAX_SURFACES]u32);
 /// 全局世代计数器，递增用于分配新世代
 var generation_counter: u32 = 1;
 /// 已销毁表面的 ID 回收列表（延迟重用）
@@ -809,7 +809,7 @@ pub fn getAeroConfig() *const AeroConfig {
 
 const MAX_DWM_THUMBNAILS: usize = 32;
 
-var thumb_slot_used: [MAX_DWM_THUMBNAILS]bool = [_]bool{false} ** MAX_DWM_THUMBNAILS;
+var thumb_slot_used: [MAX_DWM_THUMBNAILS]bool = std.mem.zeroes([MAX_DWM_THUMBNAILS]bool);
 var thumb_dest_hwnd: [MAX_DWM_THUMBNAILS]u64 = undefined;
 var thumb_src_hwnd: [MAX_DWM_THUMBNAILS]u64 = undefined;
 var thumb_props_store: [MAX_DWM_THUMBNAILS]dwm_nt61_abi.DWM_THUMBNAIL_PROPERTIES = undefined;

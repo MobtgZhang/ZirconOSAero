@@ -40,10 +40,10 @@ pub const DesktopProcessEntry = struct {
     cpu_percent: f32,
     mem_kb: u32,
     state: DesktopProcessState,
-    is_visible: bool,       // 是否在任务管理器中可见
-    window_title: [64]u8,   // 关联的窗口标题
+    is_visible: bool, // 是否在任务管理器中可见
+    window_title: [64]u8, // 关联的窗口标题
     window_title_len: usize,
-    app_id: u16,            // builtin_apps.BuiltinAppId 对应的ID
+    app_id: u16, // builtin_apps.BuiltinAppId 对应的ID
 };
 
 pub const DesktopProcessState = enum(u8) {
@@ -80,13 +80,13 @@ pub fn initDesktopProcessTable() void {
     for (&desktop_processes) |*p| {
         p.* = .{
             .pid = 0,
-            .name = [_]u8{0} ** 48,
+            .name = [_]u8{0} * *48,
             .name_len = 0,
             .cpu_percent = 0.0,
             .mem_kb = 0,
             .state = .running,
             .is_visible = false,
-            .window_title = [_]u8{0} ** 64,
+            .window_title = [_]u8{0} * *64,
             .window_title_len = 0,
             .app_id = 0,
         };
@@ -95,7 +95,7 @@ pub fn initDesktopProcessTable() void {
         a.* = .{
             .app_id = 0,
             .pid = 0,
-            .title = [_]u8{0} ** 64,
+            .title = [_]u8{0} * *64,
             .title_len = 0,
             .is_minimized = false,
             .is_active = false,
@@ -143,13 +143,13 @@ pub fn registerDesktopProcess(
     var entry = &desktop_processes[slot_index];
     entry.* = .{
         .pid = pid,
-        .name = [_]u8{0} ** 48,
+        .name = @splat(@as(u8, 0)),
         .name_len = 0,
         .cpu_percent = 0.0,
         .mem_kb = 0,
         .state = .running,
         .is_visible = true,
-        .window_title = [_]u8{0} ** 64,
+        .window_title = @splat(@as(u8, 0)),
         .window_title_len = 0,
         .app_id = app_id,
     };
@@ -211,9 +211,10 @@ fn findEmptySlot() ?usize {
 /// 根据app_id和pid查找桌面进程
 pub fn findDesktopProcessByAppAndPid(app_id: u16, pid: u32) ?*DesktopProcessEntry {
     for (0..desktop_process_count) |i| {
-        if (desktop_processes[i].app_id == app_id and 
-            desktop_processes[i].pid == pid and 
-            desktop_processes[i].is_visible) {
+        if (desktop_processes[i].app_id == app_id and
+            desktop_processes[i].pid == pid and
+            desktop_processes[i].is_visible)
+        {
             return &desktop_processes[i];
         }
     }
@@ -333,7 +334,7 @@ pub fn addTaskbarApp(
     entry.* = .{
         .app_id = app_id,
         .pid = pid,
-        .title = [_]u8{0} ** 64,
+        .title = @splat(@as(u8, 0)),
         .title_len = 0,
         .is_minimized = false,
         .is_active = true,

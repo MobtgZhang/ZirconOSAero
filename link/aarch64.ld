@@ -3,7 +3,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-  . = 0x40080000;
+  . = 0x48000000;
   PROVIDE(_kernel_start = .);
 
   .uefi_vector : ALIGN(8)

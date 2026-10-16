@@ -68,11 +68,17 @@ export fn aarch64_ap_init() void {
     klog.info("AArch64 SMP: AP%u KPCR at 0x%x", .{ cpu_num, @intFromPtr(kpcr_ptr) });
 
     // 设置 TPIDR_EL1（per-CPU 数据指针）
-    asm volatile ("msr tpidr_el1, %[ptr]" :: [ptr] "r" (@intFromPtr(kpcr_ptr)));
+    asm volatile ("msr tpidr_el1, %[ptr]"
+        :
+        : [ptr] "r" (@intFromPtr(kpcr_ptr)),
+    );
 
     // 设置 trap vector（VBAR_EL1），指向 BSP 的异常向量表
     const vbar = @intFromPtr(&aarch64_exception_vectors);
-    asm volatile ("msr vbar_el1, %[v]" :: [v] "r" (vbar));
+    asm volatile ("msr vbar_el1, %[v]"
+        :
+        : [v] "r" (vbar),
+    );
     asm volatile ("isb");
 
     // 标记 AP 已启动
@@ -175,4 +181,3 @@ pub fn initSmpTopology() void {
 pub fn isBsp() bool {
     return cpu_topo.currentMpidrAffinity() == 0;
 }
-

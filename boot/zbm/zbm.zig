@@ -112,7 +112,7 @@ pub const BootContext = struct {
             .selected_mode = .normal,
             .kernel_loaded = false,
             .kernel_entry = 0,
-            .kernel_base = 0x2000000,
+            .kernel_base = 0x4000000,
             .multiboot_info_addr = 0x9000,
         };
     }

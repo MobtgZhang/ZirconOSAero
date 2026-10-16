@@ -125,7 +125,7 @@ fn runPciProbeOnce() void {
     klog.info("Intel iGPU: DID=0x%x rev=0x%x gen=%u bus=%u dev=%u fn=%u MMIO=0x%x size=0x%x stolen=%s", .{
         dev.device_id,
         dev.revision_id,
-        @intFromEnum(generation),
+        @backingInt(generation),
         dev.loc.bus,
         dev.loc.dev,
         dev.loc.func,
@@ -133,7 +133,7 @@ fn runPciProbeOnce() void {
         mmio_size,
         if (stolen.valid) "yes" else "no",
     });
-    klog.info("Intel iGPU: display_init=%u (handoff path when GOP present)", .{@intFromEnum(display_result)});
+    klog.info("Intel iGPU: display_init=%u (handoff path when GOP present)", .{@backingInt(display_result)});
 }
 
 /// 延迟探测时由 `resolveDesktopFramebuffer` 在 GOP 参数就绪后调用。

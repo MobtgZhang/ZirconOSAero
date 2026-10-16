@@ -29,6 +29,8 @@ const fb = @import("../../../drivers/video/core/framebuffer.zig");
 const theme_mod = @import("../../kernel/theme/root.zig");
 const vfs = @import("../../../fs/vfs.zig");
 const explorer_vol_snap = @import("../../../fs/explorer_volume_snapshot.zig");
+const kernel_cmd = @import("../../../subsystems/win32/cmd.zig");
+const kernel_console = @import("../../../subsystems/win32/console.zig");
 
 fn rgb(r: u32, g: u32, b: u32) u32 {
     return theme_mod.rgb(r, g, b);
@@ -55,13 +57,23 @@ pub const CmdShell = struct {
     current_drive: u8,
     current_path: [256]u8,
     current_path_len: usize,
+    prompt_buffer: [272]u8,
+    prompt_len: usize,
+    raw_prompt: [128]u8,
+    raw_prompt_len: usize,
+    custom_prompt: bool,
+    kernel_initialized: bool,
+    exit_requested: bool,
 
     const CaptionButtonType = enum { none, minimize, maximize, close };
 
     pub const CmdLine = struct {
-        prompt: []const u8,
-        command: []const u8,
-        output: []const u8,
+        prompt: [272]u8 = undefined,
+        prompt_len: usize = 0,
+        command: [256]u8 = undefined,
+        command_len: usize = 0,
+        output: [256]u8 = undefined,
+        output_len: usize = 0,
     };
 
     pub fn create(x_pos: i32, y_pos: i32) CmdShell {
@@ -85,44 +97,109 @@ pub const CmdShell = struct {
             .current_drive = 'C',
             .current_path = undefined,
             .current_path_len = 0,
+            .prompt_buffer = undefined,
+            .prompt_len = 0,
+            .raw_prompt = undefined,
+            .raw_prompt_len = 0,
+            .custom_prompt = false,
+            .kernel_initialized = false,
+            .exit_requested = false,
         };
         // Initialize current path to Users directory
         const default_path = "\\Users\\User";
         @memcpy(shell.current_path[0..default_path.len], default_path);
         shell.current_path_len = default_path.len;
+        shell.refreshPrompt();
         shell.addWelcomeLine();
         return shell;
     }
 
     pub fn getPrompt(shell: *const CmdShell) []const u8 {
-        var prompt_buf: [272]u8 = undefined;
+        return shell.prompt_buffer[0..shell.prompt_len];
+    }
+
+    pub fn setPrompt(shell: *CmdShell, pattern: []const u8) void {
+        const copy_len = @min(pattern.len, shell.raw_prompt.len);
+        @memcpy(shell.raw_prompt[0..copy_len], pattern[0..copy_len]);
+        shell.raw_prompt_len = copy_len;
+        shell.custom_prompt = copy_len > 0;
+        shell.refreshPrompt();
+    }
+
+    pub fn refreshPrompt(shell: *CmdShell) void {
         var pos: usize = 0;
-
-        // Drive letter
-        prompt_buf[pos] = shell.current_drive;
-        pos += 1;
-        prompt_buf[pos] = ':';
-        pos += 1;
-
-        // Current path
-        if (shell.current_path_len > 0) {
-            @memcpy(prompt_buf[pos..][0..shell.current_path_len], shell.current_path[0..shell.current_path_len]);
-            pos += shell.current_path_len;
+        if (!shell.custom_prompt) {
+            shell.prompt_buffer[pos] = shell.current_drive;
+            pos += 1;
+            shell.prompt_buffer[pos] = ':';
+            pos += 1;
+            if (shell.current_path_len > 0) {
+                @memcpy(shell.prompt_buffer[pos..][0..shell.current_path_len], shell.current_path[0..shell.current_path_len]);
+                pos += shell.current_path_len;
+            }
+        } else {
+            var i: usize = 0;
+            while (i < shell.raw_prompt_len) : (i += 1) {
+                if (shell.raw_prompt[i] != '$' or i + 1 >= shell.raw_prompt_len) {
+                    shell.prompt_buffer[pos] = shell.raw_prompt[i];
+                    pos += 1;
+                    continue;
+                }
+                i += 1;
+                switch (shell.raw_prompt[i]) {
+                    'P', 'p' => {
+                        shell.prompt_buffer[pos] = shell.current_drive;
+                        pos += 1;
+                        shell.prompt_buffer[pos] = ':';
+                        pos += 1;
+                        if (shell.current_path_len > 0) {
+                            @memcpy(shell.prompt_buffer[pos..][0..shell.current_path_len], shell.current_path[0..shell.current_path_len]);
+                            pos += shell.current_path_len;
+                        }
+                    },
+                    'G', 'g' => {
+                        shell.prompt_buffer[pos] = '>';
+                        pos += 1;
+                    },
+                    'B', 'b' => {
+                        shell.prompt_buffer[pos] = '|';
+                        pos += 1;
+                    },
+                    'A', 'a' => {
+                        shell.prompt_buffer[pos] = '&';
+                        pos += 1;
+                    },
+                    'C', 'c' => {
+                        shell.prompt_buffer[pos] = '(';
+                        pos += 1;
+                    },
+                    'F', 'f' => {
+                        shell.prompt_buffer[pos] = ')';
+                        pos += 1;
+                    },
+                    '$' => {
+                        shell.prompt_buffer[pos] = '$';
+                        pos += 1;
+                    },
+                    else => {
+                        shell.prompt_buffer[pos] = shell.raw_prompt[i];
+                        pos += 1;
+                    },
+                }
+            }
         }
-
-        prompt_buf[pos] = '>';
+        shell.prompt_buffer[pos] = '>';
         pos += 1;
-
-        return prompt_buf[0..pos];
+        shell.prompt_len = pos;
     }
 
     fn addWelcomeLine(shell: *CmdShell) void {
         if (shell.line_count < shell.lines.len) {
-            shell.lines[shell.line_count] = .{
-                .prompt = "",
-                .command = "",
-                .output = "ZirconOS [Version 6.1.7601]\r\nCopyright (c) 2009 Microsoft Corporation. All rights reserved.\r\n\r\n",
-            };
+            const welcome = "ZirconOS [Version 6.1.7601]\r\nCopyright (c) 2009 Microsoft Corporation. All rights reserved.\r\n\r\n";
+            const line = &shell.lines[shell.line_count];
+            const copy_len = @min(welcome.len, line.output.len);
+            @memcpy(line.output[0..copy_len], welcome[0..copy_len]);
+            line.output_len = copy_len;
             shell.line_count += 1;
         }
     }
@@ -137,19 +214,28 @@ pub const CmdShell = struct {
             shell.line_count -= 1;
         }
 
-        var output_buf: [4096]u8 = undefined;
         var output_len: usize = 0;
 
         if (cmd.len > 0) {
-            output_len = shell.processCommandEx(cmd, &output_buf);
+            output_len = shell.processCommandEx(cmd, &shell.lines[shell.line_count].output);
         }
 
-        const prompt = shell.getPrompt();
-        shell.lines[shell.line_count] = .{
-            .prompt = prompt,
-            .command = cmd,
-            .output = output_buf[0..output_len],
-        };
+        shell.refreshPrompt();
+        const line_idx = shell.line_count;
+        var line = &shell.lines[line_idx];
+
+        // Copy prompt into inline storage
+        const prompt_data = shell.getPrompt();
+        const prompt_copy = @min(prompt_data.len, line.prompt.len);
+        @memcpy(line.prompt[0..prompt_copy], prompt_data[0..prompt_copy]);
+        line.prompt_len = prompt_copy;
+
+        // Copy command into inline storage
+        const cmd_copy = @min(cmd.len, line.command.len);
+        @memcpy(line.command[0..cmd_copy], cmd[0..cmd_copy]);
+        line.command_len = cmd_copy;
+
+        line.output_len = output_len;
         shell.line_count += 1;
     }
 
@@ -178,6 +264,29 @@ pub const CmdShell = struct {
         const cmd_str = cmd_buf[0..cmd_len];
         const arg_str = arg_buf[0..arg_len];
 
+        // Local commands handled by the desktop shell (filesystem state aware)
+        const local_handled =
+            std.ascii.eqlIgnoreCase(cmd_str, "help") or
+            std.ascii.eqlIgnoreCase(cmd_str, "cls") or
+            std.ascii.eqlIgnoreCase(cmd_str, "dir") or
+            std.ascii.eqlIgnoreCase(cmd_str, "cd") or
+            std.ascii.eqlIgnoreCase(cmd_str, "chdir") or
+            std.ascii.eqlIgnoreCase(cmd_str, "type") or
+            std.ascii.eqlIgnoreCase(cmd_str, "vol") or
+            std.ascii.eqlIgnoreCase(cmd_str, "echo") or
+            std.ascii.eqlIgnoreCase(cmd_str, "prompt") or
+            std.ascii.eqlIgnoreCase(cmd_str, "path") or
+            std.ascii.eqlIgnoreCase(cmd_str, "set") or
+            std.ascii.eqlIgnoreCase(cmd_str, "color") or
+            std.ascii.eqlIgnoreCase(cmd_str, "ver") or
+            std.ascii.eqlIgnoreCase(cmd_str, "date") or
+            std.ascii.eqlIgnoreCase(cmd_str, "time") or
+            std.ascii.eqlIgnoreCase(cmd_str, "exit");
+
+        if (!local_handled) {
+            return shell.dispatchToKernel(cmd, out_buf);
+        }
+
         // Command handlers
         if (std.ascii.eqlIgnoreCase(cmd_str, "help")) {
             return formatOutputStatic(out_buf, "Available commands:\r\n\r\n" ++
@@ -197,12 +306,22 @@ pub const CmdShell = struct {
                 "  color    - Set the default console color\r\n" ++
                 "  prompt   - Change the command prompt\r\n" ++
                 "  path     - Display or set a search path\r\n" ++
-                "  set      - Display, set, or remove environment variables\r\n");
+                "  set      - Display, set, or remove environment variables\r\n" ++
+                "  tasklist - Display all currently running processes\r\n" ++
+                "  ipconfig - Display network configuration\r\n" ++
+                "  sc       - Communicate with the Service Controller\r\n" ++
+                "  reg      - Display or modify registry entries\r\n\r\n" ++
+                "Other built-in commands are dispatched to the system CMD interpreter.\r\n");
         }
 
         if (std.ascii.eqlIgnoreCase(cmd_str, "cls")) {
             shell.line_count = 0;
             return 0;
+        }
+
+        if (std.ascii.eqlIgnoreCase(cmd_str, "exit")) {
+            shell.exit_requested = true;
+            return formatOutputStatic(out_buf, "Exiting CMD...\r\n");
         }
 
         if (std.ascii.eqlIgnoreCase(cmd_str, "dir")) {
@@ -249,9 +368,10 @@ pub const CmdShell = struct {
 
         if (std.ascii.eqlIgnoreCase(cmd_str, "prompt")) {
             if (arg_len == 0) {
-                return formatOutputStatic(out_buf, "PROMPT {text}\r\n");
+                return formatOutput(out_buf, "PROMPT {s}\r\n", .{shell.getPrompt()});
             }
-                return formatOutput(out_buf, "Prompt changed to: {s}\r\n", .{arg_str});
+            shell.setPrompt(arg_buf[0..arg_len]);
+            return 0;
         }
 
         if (std.ascii.eqlIgnoreCase(cmd_str, "path")) {
@@ -284,6 +404,31 @@ pub const CmdShell = struct {
 
         // Unknown command
         return formatOutput(out_buf, "'{s}' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n", .{cmd_str});
+    }
+
+    fn dispatchToKernel(shell: *CmdShell, cmd: []const u8, out_buf: []u8) usize {
+        if (!shell.kernel_initialized and !kernel_cmd.isInitialized()) {
+            kernel_cmd.init();
+            shell.kernel_initialized = true;
+        }
+        shell.kernel_initialized = true;
+
+        const ksh = kernel_cmd.getShell();
+        const con = kernel_console.getActiveConsole() orelse {
+            return formatOutputStatic(out_buf, "Console not available.\r\n");
+        };
+
+        // Clear previous console output
+        con.output_len = 0;
+
+        ksh.executeCommand(cmd);
+
+        // Capture output from console buffer
+        const captured = con.output_buffer[0..con.output_len];
+        const copy_len = @min(captured.len, out_buf.len);
+        @memcpy(out_buf[0..copy_len], captured[0..copy_len]);
+        con.output_len = 0;
+        return copy_len;
     }
 
     fn processDirCommand(shell: *CmdShell, path_arg: []const u8, out_buf: []u8) usize {
@@ -495,7 +640,7 @@ pub const CmdShell = struct {
             return formatOutputStatic(out_buf, "The directory name is invalid.\r\n");
         }
 
-            return formatOutputStatic(out_buf, "The system cannot find the path specified.\r\n");
+        return formatOutputStatic(out_buf, "The system cannot find the path specified.\r\n");
     }
 
     fn processTypeCommand(shell: *CmdShell, filename: []const u8, out_buf: []u8) usize {
@@ -536,7 +681,7 @@ pub const CmdShell = struct {
             return formatOutputStatic(out_buf, "Error reading file.\r\n");
         }
 
-            return formatOutputStatic(out_buf, "The system cannot find the file specified.\r\n");
+        return formatOutputStatic(out_buf, "The system cannot find the file specified.\r\n");
     }
 
     fn processVolCommand(shell: *CmdShell, out_buf: []u8) usize {
@@ -568,7 +713,7 @@ pub const CmdShell = struct {
             }
         }
 
-            return formatOutputStatic(out_buf, "Volume information not available.\r\n");
+        return formatOutputStatic(out_buf, "Volume information not available.\r\n");
     }
 
     fn formatOutput(buf: []u8, comptime fmt: []const u8, args: anytype) usize {
@@ -665,27 +810,27 @@ pub const CmdShell = struct {
         while (line_idx < shell.line_count and y_offset < shell.y + shell.height - 30) {
             const cmdline = shell.lines[line_idx];
 
-            if (cmdline.prompt.len > 0) {
-                fb.drawTextTransparent(shell.x + 8, y_offset, cmdline.prompt, rgb(0xFF, 0xFF, 0xFF));
+            if (cmdline.prompt_len > 0) {
+                fb.drawTextTransparent(shell.x + 8, y_offset, cmdline.prompt[0..cmdline.prompt_len], rgb(0xFF, 0xFF, 0xFF));
             }
 
-            if (cmdline.command.len > 0) {
-                fb.drawTextTransparent(shell.x + 8 + @as(i32, @intCast(cmdline.prompt.len * 8)), y_offset, cmdline.command, rgb(0xFF, 0xFF, 0xFF));
+            if (cmdline.command_len > 0) {
+                fb.drawTextTransparent(shell.x + 8 + @as(i32, @intCast(cmdline.prompt_len * 8)), y_offset, cmdline.command[0..cmdline.command_len], rgb(0xFF, 0xFF, 0xFF));
             }
 
             y_offset += line_height;
 
-            if (cmdline.output.len > 0) {
-                const output_lines: usize = @divTrunc(@as(i32, @intCast(cmdline.output.len)), 70) + 1;
+            if (cmdline.output_len > 0) {
+                const output_lines: usize = @divTrunc(@as(i32, @intCast(cmdline.output_len)), 70) + 1;
                 var out_idx: usize = 0;
                 var line_num: usize = 0;
-                while (out_idx < cmdline.output.len and line_num < output_lines and y_offset < shell.y + shell.height - 30) {
+                while (out_idx < cmdline.output_len and line_num < output_lines and y_offset < shell.y + shell.height - 30) {
                     var line_end = out_idx;
                     var chars_on_line: usize = 0;
-                    while (line_end < cmdline.output.len and chars_on_line < 70) {
+                    while (line_end < cmdline.output_len and chars_on_line < 70) {
                         if (cmdline.output[line_end] == '\n' or cmdline.output[line_end] == '\r') {
                             line_end += 1;
-                            if (line_end < cmdline.output.len and cmdline.output[line_end] == '\n') {
+                            if (line_end < cmdline.output_len and cmdline.output[line_end] == '\n') {
                                 line_end += 1;
                             }
                             break;
@@ -703,6 +848,7 @@ pub const CmdShell = struct {
             line_idx += 1;
         }
 
+        shell.refreshPrompt();
         const prompt = shell.getPrompt();
         const prompt_x = shell.x + 8;
         const prompt_y = shell.y + shell.height - 24;

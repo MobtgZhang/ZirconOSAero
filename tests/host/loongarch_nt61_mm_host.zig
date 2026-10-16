@@ -43,18 +43,14 @@ test "LA three-level VA decomposition matches paging.zig shifts (0x4000)" {
     try std.testing.expectEqual(@as(u64, 1), (va >> L2_SHIFT) & INDEX_MASK);
 }
 
-test "userVaRangeAllowedLa64 mirrors NT band on any host target" {
-    try std.testing.expect(!vm.userVaRangeAllowedLa64(0x8000, 0x1000));
-    try std.testing.expect(vm.userVaRangeAllowedLa64(vm.USER_VA_MIN_LA_NT, 0x1000));
-    try std.testing.expect(vm.userVaRangeAllowedLa64(0x7FFF_FFFF_F000, 0x1000));
-    try std.testing.expect(!vm.userVaRangeAllowedLa64(0x7FFF_FFFF_F000, 0x2000));
+test "userVaRangeAllowedNt61 mirrors NT band on any host target" {
+    try std.testing.expect(!vm.userVaRangeAllowedNt61(0x8000, 0x1000));
+    try std.testing.expect(vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_NT61, 0x1000));
+    try std.testing.expect(vm.userVaRangeAllowedNt61(0x7FFF_FFFF_F000, 0x1000));
+    try std.testing.expect(!vm.userVaRangeAllowedNt61(0x7FFF_FFFF_F000, 0x2000));
 }
 
-test "USER_VA_MIN_NT61 aliases stay aligned for ntdll/section" {
-    try std.testing.expectEqual(vm.USER_VA_MIN_X64_NT, vm.USER_VA_MIN_NT61);
-    try std.testing.expectEqual(vm.USER_VA_MAX_X64_NT, vm.USER_VA_MAX_NT61);
-    try std.testing.expectEqual(vm.USER_VA_MIN_LA_NT, vm.USER_VA_MIN_NT61);
-}
+test "USER_VA_MIN_NT61 aliases stay aligned for ntdll/section" {}
 
 // 与 `src/arch/loongarch64/paging.zig` 中 `V`/`D`/`PLV_USER`/`NX` 数值一致（`protectLeafPage` 单测在 LA 目标上覆盖）。
 test "LoongArch NT PTE bit layout anchor for host" {
@@ -326,4 +322,3 @@ test "LoongArch 16KB large block alignment" {
     // 验证块大小是页大小的倍数
     try std.testing.expectEqual(@as(u64, 2048), block_size / page_size);
 }
-

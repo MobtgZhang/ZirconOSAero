@@ -75,23 +75,23 @@ pub const InkBallGame = struct {
     height: i32,
     visible: bool,
     caption_hover: CaptionButtonType,
-    
+
     balls: [32]Ball,
     ball_count: usize,
     holes: [16]Hole,
     hole_count: usize,
-    
+
     path: [4096]PathPoint,
     path_count: usize,
     is_drawing: bool,
     drawing_color: BallColor,
-    
+
     level: u8,
     score: i32,
     lives: u8,
     game_over: bool,
     level_complete: bool,
-    
+
     hover_new: bool,
     hover_restart: bool,
 
@@ -99,17 +99,27 @@ pub const InkBallGame = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) InkBallGame {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 640, .height = 480,
-            .visible = true, .caption_hover = .none,
-            .balls = undefined, .ball_count = 0,
-            .holes = undefined, .hole_count = 0,
-            .path = undefined, .path_count = 0,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 640,
+            .height = 480,
+            .visible = true,
+            .caption_hover = .none,
+            .balls = undefined,
+            .ball_count = 0,
+            .holes = undefined,
+            .hole_count = 0,
+            .path = undefined,
+            .path_count = 0,
             .is_drawing = false,
             .drawing_color = .red,
-            .level = 1, .score = 0, .lives = 3,
-            .game_over = false, .level_complete = false,
-            .hover_new = false, .hover_restart = false,
+            .level = 1,
+            .score = 0,
+            .lives = 3,
+            .game_over = false,
+            .level_complete = false,
+            .hover_new = false,
+            .hover_restart = false,
         };
     }
 
@@ -121,7 +131,7 @@ pub const InkBallGame = struct {
         ib.level_complete = false;
         ib.path_count = 0;
         ib.ball_count = 0;
-        
+
         ib.initLevel();
     }
 
@@ -130,7 +140,7 @@ pub const InkBallGame = struct {
         ib.is_drawing = false;
         ib.level_complete = false;
         ib.ball_count = 0;
-        
+
         // Create holes based on level
         ib.hole_count = 0;
         var h: usize = 0;
@@ -138,28 +148,30 @@ pub const InkBallGame = struct {
             const hole_x = ib.x + 50 + @as(i32, @intCast(h * 80 % 500));
             const hole_y = ib.y + 150 + @as(i32, @intCast(h * 40 % 200));
             ib.holes[h] = .{
-                .x = hole_x, .y = hole_y,
+                .x = hole_x,
+                .y = hole_y,
                 .radius = 25,
-                .color = @enumFromInt(@as(u8, @intCast(h % 5))),
+                .color = @fromBackingInt(@intCast(@as(u8, @intCast(h % 5)))),
                 .filled = false,
             };
             ib.hole_count += 1;
         }
-        
+
         // Create balls
         var b: usize = 0;
         while (b < @min(ib.level + 1, 32)) : (b += 1) {
             ib.balls[b] = .{
                 .x = @as(f32, @floatFromInt(ib.x + 300 + (b % 3) * 30)),
                 .y = @as(f32, @floatFromInt(ib.y + 50)),
-                .vx = 0, .vy = 0,
-                .color = @enumFromInt(@as(u8, @intCast(b % 5))),
+                .vx = 0,
+                .vy = 0,
+                .color = @fromBackingInt(@intCast(@as(u8, @intCast(b % 5)))),
                 .radius = 12,
                 .active = false,
             };
             ib.ball_count += 1;
         }
-        
+
         // Activate first ball
         if (ib.ball_count > 0) {
             ib.balls[0].active = true;
@@ -186,10 +198,10 @@ pub const InkBallGame = struct {
 
     pub fn endDrawing(ib: *InkBallGame) void {
         ib.is_drawing = false;
-        
+
         // Check if path forms a valid route
         if (ib.path_count < 10) return;
-        
+
         // Launch ball along path
         if (ib.ball_count > 0) {
             var active_ball_idx: usize = 0;
@@ -210,25 +222,25 @@ pub const InkBallGame = struct {
 
     pub fn tick(ib: *InkBallGame) void {
         if (ib.game_over or ib.level_complete) return;
-        
+
         // Update ball physics
         var b: usize = 0;
         while (b < ib.ball_count) : (b += 1) {
             var ball = &ib.balls[b];
             if (ball.vx == 0 and ball.vy == 0) continue;
-            
+
             // Apply gravity
             ball.vy += 0.1;
-            
+
             // Update position
             ball.x += ball.vx;
             ball.y += ball.vy;
-            
+
             // Boundary collision
             const min_x = @as(f32, @floatFromInt(ib.x));
             const max_x = @as(f32, @floatFromInt(ib.x + ib.width));
             const max_y = @as(f32, @floatFromInt(ib.y + ib.height));
-            
+
             if (ball.x < min_x + ball.radius) {
                 ball.x = min_x + ball.radius;
                 ball.vx = -ball.vx * 0.8;
@@ -241,17 +253,17 @@ pub const InkBallGame = struct {
                 ball.y = max_y - ball.radius;
                 ball.vy = -ball.vy * 0.8;
             }
-            
+
             // Check hole collisions
             var h: usize = 0;
             while (h < ib.hole_count) : (h += 1) {
                 const hole = &ib.holes[h];
                 if (hole.filled) continue;
-                
+
                 const dx = ball.x - @as(f32, @floatFromInt(hole.x));
                 const dy = ball.y - @as(f32, @floatFromInt(hole.y));
                 const dist = @sqrt(dx * dx + dy * dy);
-                
+
                 if (dist < ball.radius + @as(f32, @floatFromInt(hole.radius))) {
                     if (ball.color == hole.color) {
                         hole.filled = true;
@@ -268,12 +280,12 @@ pub const InkBallGame = struct {
                     }
                 }
             }
-            
+
             // Activate next ball if current stops
             if (@sqrt(ball.vx * ball.vx + ball.vy * ball.vy) < 0.5) {
                 ball.vx = 0;
                 ball.vy = 0;
-                
+
                 // Find next inactive ball
                 var next_ball_idx: usize = b + 1;
                 while (next_ball_idx < ib.ball_count) : (next_ball_idx += 1) {
@@ -285,12 +297,12 @@ pub const InkBallGame = struct {
                 }
             }
         }
-        
+
         // Check for game over
         if (ib.lives == 0) {
             ib.game_over = true;
         }
-        
+
         // Check for level complete
         var all_filled = true;
         for (ib.holes[0..ib.hole_count]) |hole| {
@@ -338,7 +350,7 @@ pub const InkBallGame = struct {
                 .yellow => rgb(0xE0, 0xE0, 0x40),
                 .purple => rgb(0xC0, 0x40, 0xC0),
             };
-            
+
             if (hole.filled) {
                 fb.fillEllipse(hole.x, hole.y, hole.radius, hole.radius, rgb(0x80, 0x80, 0x80));
             } else {
@@ -375,7 +387,7 @@ pub const InkBallGame = struct {
                 .yellow => rgb(0xFF, 0xFF, 0x60),
                 .purple => rgb(0xFF, 0x60, 0xFF),
             };
-            
+
             if (ball.vx != 0 or ball.vy != 0 or ball.active) {
                 fb.fillEllipse(@intFromFloat(ball.x), @intFromFloat(ball.y), @intFromFloat(ball.radius), @intFromFloat(ball.radius), ball_color);
                 fb.drawEllipse(@intFromFloat(ball.x), @intFromFloat(ball.y), @intFromFloat(ball.radius), @intFromFloat(ball.radius), rgb(0x40, 0x40, 0x40));
@@ -403,15 +415,15 @@ pub const InkBallGame = struct {
         if (ib.game_over) {
             fb.fillRect(wx + 50, wy + 150, ww - 100, 150, rgb(0xE0, 0xE0, 0xE0));
             fb.draw3DRect(wx + 50, wy + 150, ww - 100, 150, rgb(0xC0, 0xC0, 0xC0), rgb(0xFF, 0xFF, 0xFF));
-            fb.drawTextTransparent(wx + ww/2 - 60, wy + 180, "Game Over!", rgb(0xCC, 0x00, 0x00));
-            fb.drawTextTransparent(wx + ww/2 - 80, wy + 220, "Click Restart to try again", rgb(0x60, 0x60, 0x60));
+            fb.drawTextTransparent(wx + ww / 2 - 60, wy + 180, "Game Over!", rgb(0xCC, 0x00, 0x00));
+            fb.drawTextTransparent(wx + ww / 2 - 80, wy + 220, "Click Restart to try again", rgb(0x60, 0x60, 0x60));
         }
 
         if (ib.level_complete) {
             fb.fillRect(wx + 50, wy + 150, ww - 100, 150, rgb(0xE0, 0xF0, 0xE0));
             fb.draw3DRect(wx + 50, wy + 150, ww - 100, 150, rgb(0xC0, 0xE0, 0xC0), rgb(0xFF, 0xFF, 0xFF));
-            fb.drawTextTransparent(wx + ww/2 - 80, wy + 180, "Level Complete!", rgb(0x00, 0x80, 0x00));
-            fb.drawTextTransparent(wx + ww/2 - 60, wy + 220, "Click Next Level", rgb(0x40, 0x40, 0x40));
+            fb.drawTextTransparent(wx + ww / 2 - 80, wy + 180, "Level Complete!", rgb(0x00, 0x80, 0x00));
+            fb.drawTextTransparent(wx + ww / 2 - 60, wy + 220, "Click Next Level", rgb(0x40, 0x40, 0x40));
         }
     }
 };

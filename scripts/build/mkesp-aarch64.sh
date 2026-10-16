@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 构建 aarch64 UEFI ESP 镜像（GPT + FAT32）
-# 包含 ZBM (BOOTAA64.EFI) 和内核 (kernel.elf)
+# 包含 ZBM (BOOTAA64.EFI) 和 NT 6.1 系统目录
 #
-# 用法: mkesp-aarch64.sh <out.img> <kernel.elf> <BOOTAA64.EFI> [startup.nsh 内容]
+# 用法: mkesp-aarch64.sh <out.img> <winload.efi> <BOOTAA64.EFI>
 # 环境变量:
 #   ZIRCON_BUILD_TMP - 默认 <repo>/build/tmp
 #
@@ -29,7 +29,7 @@ if [ ! -f "${BOOT_EFI}" ]; then
     exit 1
 fi
 
-DISK_MB="${ESP_DISK_MB:-256}"
+DISK_MB="${ESP_DISK_MB:-1024}"
 TOTAL_SECTORS=$((DISK_MB * 1024 * 1024 / 512))
 
 if ! command -v sgdisk >/dev/null 2>&1; then
@@ -38,6 +38,10 @@ if ! command -v sgdisk >/dev/null 2>&1; then
 fi
 if ! command -v mkfs.fat >/dev/null 2>&1; then
     echo "[ZirconOS] mkfs.fat 未找到 (安装: dosfstools)" >&2
+    exit 1
+fi
+if ! command -v mmd >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+    echo "[ZirconOS] ERROR: mtools 未安装 (mmd/mcopy 缺失，安装: sudo apt-get install mtools)" >&2
     exit 1
 fi
 
@@ -69,38 +73,28 @@ drive a: file="${_TMP_FAT}"
 mtools_skip_check=1
 EOF
 
-# 创建辅助函数来运行 mtools 命令（过滤无害警告）
+# 创建辅助函数来运行 mtools 命令（失败立即中止）
 run_mtools() {
-    MTOOLSRC="${_MTOOLS_CONF}" "$@" 2>&1 | grep -v "Cannot create entry named \. or \.\." || true
+    local output
+    if output=$(MTOOLSRC="${_MTOOLS_CONF}" "$@" 2>&1); then
+        if [ -n "${output}" ]; then
+            echo "${output}"
+        fi
+        return 0
+    fi
+    echo "[ZirconOS] ERROR: mtools 命令失败: $*" >&2
+    echo "${output}" >&2
+    exit 1
 }
 
-# 创建目录结构（注意：mtools 的 mmd 需要父目录先存在）
-echo "[ZirconOS] 创建目录结构..."
-run_mtools mmd a: EFI
-run_mtools mmd a: boot
-run_mtools mmd a: EFI/BOOT
+_NT61_TREE="$(mktemp -d)"
+bash "${_SCRIPT_DIR}/populate-nt61-esp.sh" \
+    "${_NT61_TREE}" "${BOOT_EFI}" "${KERNEL}" "AA64"
 
-# 复制 ZBM 引导程序
-echo "[ZirconOS] ESP: 复制 BOOTAA64.EFI..."
-run_mtools mcopy -p -n -i a: "$BOOT_EFI" a:/EFI/BOOT/BOOTAA64.EFI
-echo "[ZirconOS] ESP: 已安装 BOOTAA64.EFI"
-
-# 复制内核
-_sz="$(du -h "${KERNEL}" 2>/dev/null | cut -f1 || echo "?")"
-echo "[ZirconOS] ESP: 复制内核 → /boot/kernel.elf (${_sz}) ..."
-run_mtools mcopy -p -n -i a: "$KERNEL" a:/boot/kernel.elf
-echo "[ZirconOS] ESP: 内核已安装"
-
-# 创建 startup.nsh 自动执行 ZBM
-_STARTUP_NSH="$(mktemp)"
-{
-    printf '%s\r\n' 'fs0:'
-    printf '%s\r\n' 'cd \EFI\BOOT'
-    printf '%s\r\n' 'BOOTAA64.EFI'
-} > "${_STARTUP_NSH}"
-run_mtools mcopy -p -n -i a: "${_STARTUP_NSH}" a:/startup.nsh
-rm -f "${_STARTUP_NSH}"
-echo "[ZirconOS] ESP: startup.nsh → ZBM 操作系统选择菜单"
+echo "[ZirconOS] 创建 Windows NT 6.1 ESP 目录结构..."
+run_mtools mcopy -p -n -s -i a: "${_NT61_TREE}/EFI" a:/EFI
+run_mtools mcopy -p -n -s -i a: "${_NT61_TREE}/Windows" a:/Windows
+rm -rf "${_NT61_TREE}"
 
 # 清理临时 mtools 配置
 rm -f "${_MTOOLS_CONF}"

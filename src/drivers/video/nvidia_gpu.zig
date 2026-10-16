@@ -178,14 +178,14 @@ fn runPciProbeOnce() void {
     klog.info("NVIDIA: DID=0x%x rev=0x%x family=%u bus=%u dev=%u fn=%u MMIO=0x%x size=0x%x", .{
         dev.device_id,
         dev.revision_id,
-        @intFromEnum(family),
+        @backingInt(family),
         dev.loc.bus,
         dev.loc.dev,
         dev.loc.func,
         mmio_phys,
         mmio_size,
     });
-    klog.info("NVIDIA: display_init=%u (GOP handoff when firmware enabled)", .{@intFromEnum(display_result)});
+    klog.info("NVIDIA: display_init=%u (GOP handoff when firmware enabled)", .{@backingInt(display_result)});
 }
 
 pub fn ensureDeferredProbeCompleted() void {
@@ -198,7 +198,7 @@ pub fn resolveDesktopFramebuffer(boot: DesktopFb) DesktopFb {
     ensureDeferredProbeCompleted();
     if (!build_options.nvidia_gpu or !probe_ok) return boot;
     if (build_options.nvidia_hdmi_sync) {
-        hdmi.syncNvidiaGpuConnector(primary.?.device_id, @intFromEnum(family));
+        hdmi.syncNvidiaGpuConnector(primary.?.device_id, @backingInt(family));
         hdmi.syncFramebufferMode(boot.width, boot.height, boot.bpp);
     }
     return boot;

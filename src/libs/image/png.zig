@@ -197,7 +197,7 @@ fn rowByteCount(width: u32, ihdr: IhdrData) PngError!usize {
 fn decodeZlib(allocator: std.mem.Allocator, compressed: []const u8) PngError![]u8 {
     var reader: std.Io.Reader = .fixed(compressed);
     var decompress: std.compress.flate.Decompress = .init(&reader, .zlib, &.{});
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
 
     decompress.reader.appendRemainingUnlimited(allocator, &output) catch return PngError.ZlibError;
@@ -256,7 +256,7 @@ fn applyTrns(
 
 fn collectChunks(allocator: std.mem.Allocator, data: []const u8, ihdr: IhdrData) PngError!ChunkState {
     var pos: usize = 8;
-    var idat_list = std.ArrayListUnmanaged(u8){};
+    var idat_list = std.ArrayListUnmanaged(u8).empty;
     defer idat_list.deinit(allocator);
 
     var palette: ?[]PaletteEntry = null;
@@ -681,7 +681,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) PngError!PixelBuff
 pub const pngDecoder: mod.Decoder = .{
     .signature = &PNG_SIGNATURE,
     .name = "PNG",
-    .extensions = &.{ ".png" },
+    .extensions = &.{".png"},
     .decodeFn = decode,
 };
 
@@ -700,8 +700,8 @@ test "png packed row bytes for grayscale1" {
 
 test "png sub filter uses actual bytes per pixel" {
     const raw_row = [_]u8{ 10, 20, 30, 40, 1, 2, 3, 4 };
-    const prev_row = [_]u8{0} ** raw_row.len;
-    var out = [_]u8{0} ** raw_row.len;
+    const prev_row = [_]u8{0} * *raw_row.len;
+    var out = [_]u8{0} * *raw_row.len;
 
     try unfilterScanline(1, 4, &raw_row, &prev_row, &out);
     try std.testing.expectEqualSlices(u8, &.{ 10, 20, 30, 40, 11, 22, 33, 44 }, &out);

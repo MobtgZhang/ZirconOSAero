@@ -167,7 +167,7 @@ pub fn getScheme(cs: ColorScheme) SchemeColors {
 // ── Wallpaper Paths ──
 
 pub const WallpaperPath = struct {
-    path: [128]u8 = [_]u8{0} ** 128,
+    path: [128]u8 = std.mem.zeroes([128]u8),
     len: u8 = 0,
 };
 

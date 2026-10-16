@@ -184,9 +184,9 @@ pub const AppRegistry = struct {
 
     pub fn init() AppRegistry {
         var registry = AppRegistry{
-            .apps = [_]?AppInfo{null} ** 64,
+            .apps = [_]?AppInfo{null} * *64,
             .app_count = 0,
-            .launched_apps = [_]AppId{.unknown} ** 16,
+            .launched_apps = [_]AppId{.unknown} * *16,
             .launched_count = 0,
             .category_cache = undefined,
             .cache_valid = false,
@@ -343,9 +343,9 @@ pub const AppRegistry = struct {
         if (r.getApp(id)) |app| {
             const mut_app = @constCast(app);
             mut_app.launched = true;
-            klog.info("app_manager: launching '%s' (id={d})", .{ app.name, @intFromEnum(id) });
+            klog.info("app_manager: launching '%s' (id={d})", .{ app.name, @backingInt(id) });
         } else {
-            klog.info("app_manager: unknown app id={d}", .{@intFromEnum(id)});
+            klog.info("app_manager: unknown app id={d}", .{@backingInt(id)});
         }
 
         // Execute via builtin_apps.launch()
@@ -387,7 +387,7 @@ pub const AppRegistry = struct {
                     mut_app.launched = false;
                 }
 
-                klog.info("app_manager: closed app id={d}", .{@intFromEnum(id)});
+                klog.info("app_manager: closed app id={d}", .{@backingInt(id)});
                 return;
             }
             i += 1;
@@ -405,7 +405,7 @@ pub const AppRegistry = struct {
                     r.launched_apps[s] = r.launched_apps[s + 1];
                 }
                 r.launched_apps[r.launched_count - 1] = app_id;
-                klog.info("app_manager: bring to front id={d}", .{@intFromEnum(id)});
+                klog.info("app_manager: bring to front id={d}", .{@backingInt(id)});
                 return;
             }
             i += 1;

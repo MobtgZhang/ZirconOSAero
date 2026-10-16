@@ -92,7 +92,7 @@ pub fn handleMessage() void {
             const p = process.findProcess(pid);
             if (p) |proc| {
                 writeU32(&reply_data, proc.pid);
-                reply_data[4] = @intFromEnum(proc.state);
+                reply_data[4] = @backingInt(proc.state);
                 reply_data[5] = if (proc.is_system) 1 else 0;
             }
         },

@@ -66,7 +66,7 @@ pub fn init() void {
     while (i < 256) : (i += 1) {
         if (i == isr.ipi_tlb_flush_vector) {
             idt_entries[i] = makeEntry(isr.ipiTlbFlushStubAddr());
-        } else if (i == 128 and builtin.mode == .Debug) {
+        } else if (i == 128 and builtin.mode == .debug) {
             idt_entries[i] = makeEntry(isr.int80DebugVectorStubAddr());
         } else {
             idt_entries[i] = makeEntry(default_addr);

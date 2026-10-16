@@ -17,6 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 //! D3D10 SamplerState Implementation
+const std = @import("std");
 
 const d3d10_types = @import("d3d10_types.zig");
 const d3d10_errors = @import("d3d10_errors.zig");
@@ -41,7 +42,7 @@ pub const ID3D10SamplerState = extern struct {
 // ============================================================================
 
 pub const MAX_SAMPLERS: usize = 32;
-pub var g_sampler_pool: [MAX_SAMPLERS]?d3d10_types.D3D10_SAMPLER_DESC = [_]?d3d10_types.D3D10_SAMPLER_DESC{null} ** MAX_SAMPLERS;
+pub var g_sampler_pool: [MAX_SAMPLERS]?d3d10_types.D3D10_SAMPLER_DESC = std.mem.zeroes([MAX_SAMPLERS]?d3d10_types.D3D10_SAMPLER_DESC);
 pub var g_sampler_count: usize = 0;
 
 // ============================================================================

@@ -72,12 +72,11 @@ comptime {
 /// 蹦床函数地址获取。
 /// freestanding 目标：使用汇编获取符号地址。
 /// 其他目标：返回 0（不会使用）。
+extern const x86_64_thread_trampoline: u8;
+
 pub fn trampolineAddr() usize {
     if (builtin.target.os.tag == .freestanding) {
-        return asm volatile (
-            \\ lea x86_64_thread_trampoline(%rip), %[o]
-            : [o] "=r" (-> usize),
-        );
+        return @intFromPtr(&x86_64_thread_trampoline);
     }
     return 0;
 }

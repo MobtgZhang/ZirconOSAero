@@ -70,7 +70,7 @@ pub const MessageType = enum(u8) {
 };
 
 /// csrss 同步应答：`subsystem` 在 `get_message` 等路径写入，`port.requestWaitReplyPort` 复制到 `Message.data[4..]`。
-pub var csr_reply_payload: [MSG_DATA_SIZE - 4]u8 = [_]u8{0} ** (MSG_DATA_SIZE - 4);
+pub var csr_reply_payload: [MSG_DATA_SIZE - 4]u8 = std.mem.zeroes([MSG_DATA_SIZE - 4]u8);
 var csr_reply_payload_len: usize = 0;
 
 pub fn csrReplyPayloadReset() void {

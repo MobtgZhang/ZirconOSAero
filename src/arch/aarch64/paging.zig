@@ -172,7 +172,9 @@ pub fn unmapPage(pgd_phys: u64, virt: u64, _: AllocFrameFn, _: ?*anyopaque) bool
 }
 
 pub fn loadCr3(phys: u64) void {
-    asm volatile ("msr ttbr0_el1, %[phys]\ntlbi vmalle1\ndsb sy\nisb"
+    // Single page table: set both TTBR0 (user/lower) and TTBR1 (kernel/upper)
+    // to the same base so identity-mapped kernel code remains accessible.
+    asm volatile ("msr ttbr0_el1, %[phys]\nmsr ttbr1_el1, %[phys]\ntlbi alle1\ndsb sy\nisb"
         :
         : [phys] "r" (phys),
     );

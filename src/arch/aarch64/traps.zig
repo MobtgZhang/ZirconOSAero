@@ -271,12 +271,34 @@ pub fn init() void {
     arch.disableInterrupts();
 
     const vbar = @intFromPtr(&aarch64_exception_vectors);
-    asm volatile ("msr vbar_el1, %[v]" :: [v] "r" (vbar));
+    asm volatile ("msr vbar_el1, %[v]"
+        :
+        : [v] "r" (vbar),
+    );
 
     // MAIR_EL1: Attr0 = Normal WB (0xFF), Attr1 = Device-nGnRnE (0x00)
     const mair: u64 = 0x00000000000000FF;
-    asm volatile ("msr mair_el1, %[m]" :: [m] "r" (mair));
+    asm volatile ("msr mair_el1, %[m]"
+        :
+        : [m] "r" (mair),
+    );
     asm volatile ("isb");
 
-    klog.info("AArch64 traps: VBAR_EL1=0x%x MAIR=0x%x", .{ vbar, mair });
+    // TCR_EL1: 4KB granule, 48-bit VA, 44-bit PA, inner shareable.
+    const tcr: u64 =
+        (16 << 0) | // T0SZ = 16 (48-bit VA lower range)
+        (0b00 << 14) | // TG0 = 4KB
+        (16 << 16) | // T1SZ = 16 (48-bit VA upper range)
+        (0b10 << 30) | // TG1 = 4KB
+        (0b010 << 32) | // IPS = 44-bit PA
+        (0b01 << 36) | // TBI0 = no top-byte-ignore
+        (0b01 << 38) | // TBI1 = no top-byte-ignore
+        (0b11 << 24); // SH1+SH0 = inner shareable
+    asm volatile ("msr tcr_el1, %[t]"
+        :
+        : [t] "r" (tcr),
+    );
+    asm volatile ("isb");
+
+    klog.info("AArch64 traps: VBAR_EL1=0x%x MAIR=0x%x TCR=0x%x", .{ vbar, mair, tcr });
 }

@@ -76,7 +76,7 @@ pub const Texture2DState = struct {
 };
 
 pub const MAX_TEXTURES: usize = 256;
-pub var g_texture_pool: [MAX_TEXTURES]?Texture2DState = [_]?Texture2DState{null} ** MAX_TEXTURES;
+pub var g_texture_pool: [MAX_TEXTURES]?Texture2DState = std.mem.zeroes([MAX_TEXTURES]?Texture2DState);
 pub var g_texture_count: usize = 0;
 pub var g_texture_next_id: u32 = 1;
 

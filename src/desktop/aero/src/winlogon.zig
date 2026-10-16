@@ -15,9 +15,9 @@ pub const LoginState = enum {
 };
 
 pub const UserAccount = struct {
-    username: [32]u8 = [_]u8{0} ** 32,
+    username: [32]u8 = std.mem.zeroes([32]u8),
     username_len: u8 = 0,
-    display_name: [64]u8 = [_]u8{0} ** 64,
+    display_name: [64]u8 = std.mem.zeroes([64]u8),
     display_name_len: u8 = 0,
     avatar_id: u16 = 0,
     has_password: bool = true,
@@ -25,7 +25,7 @@ pub const UserAccount = struct {
 };
 
 const MAX_USERS: usize = 8;
-var users: [MAX_USERS]UserAccount = [_]UserAccount{.{}} ** MAX_USERS;
+var users: [MAX_USERS]UserAccount = std.mem.zeroes([MAX_USERS]UserAccount);
 var user_count: usize = 0;
 var selected_user: usize = 0;
 var login_state: LoginState = .welcome;

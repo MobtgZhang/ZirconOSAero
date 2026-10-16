@@ -32,7 +32,7 @@ pub const Adapter = struct {
 
         // Default virtual adapter for VGA
         self.desc = .{
-            .description = [_]u16{0} ** 128,
+            .description = [_]u16{0} * *128,
             .vendor_id = 0x1234,
             .device_id = 0x5678,
             .sub_sys_id = 0x9ABC,
@@ -46,7 +46,7 @@ pub const Adapter = struct {
         // Default output
         self.outputs = try std.heap.page_allocator.alloc(types.DXGI_OUTPUT_DESC, 1);
         self.outputs[0] = .{
-            .device_name = [_]u16{0} ** 32,
+            .device_name = [_]u16{0} * *32,
             .desktop_coordinates = .{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 },
             .attached_to_desktop = true,
             .rotation = .DXGI_MODE_ROTATION_IDENTITY,
@@ -69,7 +69,7 @@ pub const Adapter = struct {
     }
 
     pub fn enumOutputs(self: *Adapter, index: u32, output: **types.DXGI_OUTPUT_DESC) u32 {
-        if (index >= self.outputs.len) return @intFromEnum(@import("dxgi_errors.zig").DXGI_ERROR.DXGI_ERROR_NOT_FOUND);
+        if (index >= self.outputs.len) return @backingInt(@import("dxgi_errors.zig").DXGI_ERROR.DXGI_ERROR_NOT_FOUND);
         output.* = &self.outputs[index];
         return 0; // S_OK
     }

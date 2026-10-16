@@ -50,10 +50,7 @@ const mod = @import("mod.zig");
 /// Actual WDP/HDP uses TIFF-like EXIF headers with the HD Photo codec ID.
 /// The format signature is typically: 49 49 88 3F ... but the most reliable
 /// detection is by the MFHDR chunk at the beginning.
-
-const WDP_SIGNATURE = [8]u8{
-    0x00, 0x00, 0x00, 0x00, 0x48, 0x44, 0x50, 0x4C
-};
+const WDP_SIGNATURE = [8]u8{ 0x00, 0x00, 0x00, 0x00, 0x48, 0x44, 0x50, 0x4C };
 
 /// HD Photo signature inside TIFF header.
 const HD_PHOTO_CODEC_SIGNATURE = [4]u8{ 0x49, 0x49, 0x88, 0x3F };
@@ -61,12 +58,12 @@ const HD_PHOTO_CODEC_SIGNATURE = [4]u8{ 0x49, 0x49, 0x88, 0x3F };
 /// WDP chunk types.
 const ChunkType = enum {
     MFHDR, // Main file header
-    MHDR,  // Image header
-    MHIF,  // Image information header
-    FTYP,  // File type
-    STAT,  // Statistics
-    TILE,  // Tile data
-    PROP,  // Properties
+    MHDR, // Image header
+    MHIF, // Image information header
+    FTYP, // File type
+    STAT, // Statistics
+    TILE, // Tile data
+    PROP, // Properties
     DICOM, // DICOM attributes
     UNKN,
 };
@@ -76,12 +73,12 @@ fn chunkTypeFromFourCC(data: []const u8) ChunkType {
     const fourcc = (std.mem.readIntLittle(u32, data[0..4]) & 0xFFFFFFFF);
     return switch (fourcc) {
         0x5246484D => .MFHDR, // 'MFHR'
-        0x5244484D => .MHDR,  // 'MHDR'
-        0x4649484D => .MHIF,  // 'MHIF'
-        0x54595046 => .FTYP,  // 'FTYP'
-        0x54415453 => .STAT,  // 'STAT'
-        0x454C4954 => .TILE,  // 'TILE'
-        0x504F5250 => .PROP,  // 'PROP'
+        0x5244484D => .MHDR, // 'MHDR'
+        0x4649484D => .MHIF, // 'MHIF'
+        0x54595046 => .FTYP, // 'FTYP'
+        0x54415453 => .STAT, // 'STAT'
+        0x454C4954 => .TILE, // 'TILE'
+        0x504F5250 => .PROP, // 'PROP'
         else => .UNKN,
     };
 }
@@ -160,11 +157,11 @@ fn parseWdpHeader(data: []const u8) mod.ImageError!WdpHeader {
     };
 
     while (pos + 8 < data.len) {
-        const chunk_fcc = std.mem.readIntLittle(u32, data[pos..pos + 4]);
-        const chunk_size = std.mem.readIntLittle(u32, data[pos + 4..pos + 8]);
+        const chunk_fcc = std.mem.readIntLittle(u32, data[pos .. pos + 4]);
+        const chunk_size = std.mem.readIntLittle(u32, data[pos + 4 .. pos + 8]);
         _ = chunk_fcc;
 
-        const ct = chunkTypeFromFourCC(data[pos..pos + 4]);
+        const ct = chunkTypeFromFourCC(data[pos .. pos + 4]);
         const chunk_data_start = pos + 8;
         const chunk_data_end = @min(chunk_data_start + @as(usize, chunk_size), data.len);
         const chunk_data = data[chunk_data_start..chunk_data_end];
@@ -242,9 +239,9 @@ fn parseTiffBasedWdp(data: []const u8) mod.ImageError!WdpHeader {
         if (@as(u64, entry_offset) + 12 > data.len) break;
 
         const tag = std.mem.readIntLittle(u16, data[@as(usize, entry_offset)..][0..2]);
-        const type_tag = std.mem.readIntLittle(u16, data[@as(usize, entry_offset) + 2..][0..2]);
-        const count = std.mem.readIntLittle(u32, data[@as(usize, entry_offset) + 4..][0..4]);
-        const value_or_offset = std.mem.readIntLittle(u32, data[@as(usize, entry_offset) + 8..][0..4]);
+        const type_tag = std.mem.readIntLittle(u16, data[@as(usize, entry_offset) + 2 ..][0..2]);
+        const count = std.mem.readIntLittle(u32, data[@as(usize, entry_offset) + 4 ..][0..4]);
+        const value_or_offset = std.mem.readIntLittle(u32, data[@as(usize, entry_offset) + 8 ..][0..4]);
         _ = type_tag;
         _ = count;
 
@@ -304,14 +301,14 @@ fn decodeWdpTiles(data: []const u8, header: *const WdpHeader, allocator: std.mem
     var tile_index: u32 = 0;
 
     while (pos + 8 < data.len) {
-        const chunk_size = std.mem.readIntLittle(u32, data[pos + 4..pos + 8]);
-        const ct = chunkTypeFromFourCC(data[pos..pos + 4]);
+        const chunk_size = std.mem.readIntLittle(u32, data[pos + 4 .. pos + 8]);
+        const ct = chunkTypeFromFourCC(data[pos .. pos + 4]);
         _ = ct;
 
         const chunk_data_start = pos + 8;
         const chunk_data = data[chunk_data_start..@min(chunk_data_start + @as(usize, chunk_size), data.len)];
 
-        if (std.mem.readIntLittle(u32, data[pos..pos + 4]) == 0x454C4954) { // 'TILE'
+        if (std.mem.readIntLittle(u32, data[pos .. pos + 4]) == 0x454C4954) { // 'TILE'
             // Decode tile data into RGBA
             const tile_x = tile_index % tiles_x;
             const tile_y = tile_index / tiles_x;
@@ -378,7 +375,7 @@ fn decodeTileToRgba(
 
         const pixel_idx = i * @as(usize, bytes_per_pixel);
         const dc_val: u8 = if (pixel_idx < tile_data.len) tile_data[pixel_idx] else 128;
-        output[out_idx..out_idx + 4].* = .{ dc_val, dc_val, dc_val, 0xFF };
+        output[out_idx .. out_idx + 4].* = .{ dc_val, dc_val, dc_val, 0xFF };
     }
 }
 
@@ -402,7 +399,7 @@ fn decodeDcCoefficientsFallback(
 
         const dc_idx = i * @as(usize, bytes_per_dc);
         const dc_val: u8 = if (dc_idx < data.len) data[dc_idx] else 128;
-        output[out_idx..out_idx + 4].* = .{ dc_val, dc_val, dc_val, 0xFF };
+        output[out_idx .. out_idx + 4].* = .{ dc_val, dc_val, dc_val, 0xFF };
     }
 }
 

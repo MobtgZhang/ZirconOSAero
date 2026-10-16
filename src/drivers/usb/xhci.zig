@@ -23,7 +23,6 @@
 //! `-device usb-hub,bus=xhci.0` 下挂设备；EHCI 回退见 `ehci.zig`。
 //! 真机需 MSI/线 IRQ；当前为 **事件环轮询**（`poll()`）。
 
-const builtin = @import("builtin");
 const std = @import("std");
 const pcie = @import("../bus/pcie.zig");
 const vm = @import("../../mm/vm.zig");
@@ -76,10 +75,7 @@ const TRB_IOC: u32 = 1 << 5;
 const TRB_DIR_IN: u32 = 1 << 16;
 
 fn mfence() void {
-    switch (builtin.target.cpu.arch) {
-        .x86_64 => asm volatile ("mfence" ::: .{ .memory = true }),
-        else => asm volatile ("" ::: .{ .memory = true }),
-    }
+    @import("../../arch.zig").memoryBarrier();
 }
 
 fn r8(base: usize, off: usize) u8 {
@@ -134,22 +130,22 @@ var g_dev_ctx: [16][2048]u8 align(4096) = undefined;
 var g_input_ctx: [4096]u8 align(4096) = undefined;
 
 var g_ep0_ring: [4][EP0_RING_SZ]Trb align(64) = undefined;
-var g_ep0_enq: [4]u16 = .{0} ** 4;
-var g_ep0_cyc: [4]bool = .{true} ** 4;
+var g_ep0_enq: [4]u16 = std.mem.zeroes([4]u16);
+var g_ep0_cyc: [4]bool = std.mem.zeroes([4]bool);
 
 var g_intr_ring: [4][INTR_RING_SZ]Trb align(64) = undefined;
-var g_intr_enq: [4]u16 = .{0} ** 4;
-var g_intr_cyc: [4]bool = .{true} ** 4;
+var g_intr_enq: [4]u16 = std.mem.zeroes([4]u16);
+var g_intr_cyc: [4]bool = std.mem.zeroes([4]bool);
 var g_intr_buf: [4][64]u8 align(64) = undefined;
 
-var g_slot_port: [4]u8 = .{0} ** 4;
-var g_slot_valid: [4]bool = .{false} ** 4;
-var g_hid_ep_id: [4]u8 = .{0} ** 4;
-var g_hid_mps: [4]u16 = .{0} ** 4;
+var g_slot_port: [4]u8 = std.mem.zeroes([4]u8);
+var g_slot_valid: [4]bool = std.mem.zeroes([4]bool);
+var g_hid_ep_id: [4]u8 = std.mem.zeroes([4]u8);
+var g_hid_mps: [4]u16 = std.mem.zeroes([4]u16);
 /// USB HID：`bInterfaceProtocol` 1=Boot Keyboard，2=Boot Mouse。
-var g_hid_boot_proto: [4]u8 = .{0} ** 4;
-var g_hid_ready: [4]bool = .{false} ** 4;
-var g_hid_await: [4]bool = .{false} ** 4;
+var g_hid_boot_proto: [4]u8 = std.mem.zeroes([4]u8);
+var g_hid_ready: [4]bool = std.mem.zeroes([4]bool);
+var g_hid_await: [4]bool = std.mem.zeroes([4]bool);
 
 var g_last_cmd_cc: u8 = 0;
 var g_last_cmd_slot: u8 = 0;

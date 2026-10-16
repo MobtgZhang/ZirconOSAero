@@ -20,12 +20,13 @@
 //! 现代 VirtIO 1.0 传输 + 事件队列轮询；支持最多 MAX_INST 个 PCI 实例（键鼠/平板等）。
 //! 参考：VirtIO 1.2 §5.4 Input、§4.1.4 Virtio PCI。
 
-const builtin = @import("builtin");
+const hal = @import("../../hal.zig");
 const std = @import("std");
 const pcie = @import("../bus/pcie.zig");
 const vm = @import("../../mm/vm.zig");
 const klog = @import("../../rtl/klog.zig");
 const mouse = @import("mouse.zig");
+const mouse_debug = @import("mouse_debug.zig");
 const evdev = @import("evdev_virtio_bridge.zig");
 
 const VIRTIO_VENDOR: u16 = 0x1AF4;
@@ -60,6 +61,7 @@ const STATUS_DRIVER: u8 = 2;
 const STATUS_DRIVER_OK: u8 = 4;
 const STATUS_FEATURES_OK: u8 = 8;
 const STATUS_FAILED: u8 = 128;
+
 
 const VirtqDesc = extern struct {
     addr: u64,
@@ -105,16 +107,10 @@ const VirtioInputInst = struct {
     has_pointer_ev: bool = false,
 };
 
-var instances: [MAX_INST]VirtioInputInst = [_]VirtioInputInst{.{}} ** MAX_INST;
+var instances: [MAX_INST]VirtioInputInst = std.mem.zeroes([MAX_INST]VirtioInputInst);
 
 fn fullMemoryFence() void {
-    switch (builtin.target.cpu.arch) {
-        .x86_64 => asm volatile ("mfence" ::: .{ .memory = true }),
-        .aarch64 => asm volatile ("dsb sy" ::: .{ .memory = true }),
-        .riscv64 => asm volatile ("fence rw, rw" ::: .{ .memory = true }),
-        .loongarch64 => asm volatile ("dbar 0" ::: .{ .memory = true }),
-        else => asm volatile ("" ::: .{ .memory = true }),
-    }
+    @import("../../arch.zig").memoryBarrier();
 }
 
 fn mmio_w8(base: usize, off: usize, v: u8) void {
@@ -169,9 +165,9 @@ fn mapBarIfNeeded(phys: u64) bool {
     return vm.mapDeviceMmioIdentity(phys, 0x10000);
 }
 
-/// LoongArch：VA≠GPA 时须非缓存 + 正确 GPA（H7）。x86_64 等：部分 QEMU/TCG 路径下 PCI DMA 回填的 used 环与 CPU D-cache 可能不一致，读 used.idx 长期停滞则鼠标无位移（与 H6 同类）。
+/// 平台特定 DMA 缓存策略：部分 QEMU/TCG 路径下 PCI DMA 回填的 used 环与 CPU D-cache 可能不一致，读 used.idx 长期停滞则鼠标无位移。
 fn remapInstQueueDmaUncached(inst: *VirtioInputInst) void {
-    const need_uncached = builtin.target.cpu.arch == .loongarch64 or builtin.target.cpu.arch == .x86_64;
+    const need_uncached = hal.hasLoongsonIGPU or hal.hasLegacyPCDevices;
     if (!need_uncached) return;
     const ps: usize = @import("../../arch.zig").impl.paging.page_size;
     const r0 = @intFromPtr(&inst.ring_page);
@@ -231,7 +227,6 @@ fn mapAbsToPixel(abs_val: i32, extent_px: i32) i32 {
 
 fn kickQueue0(inst: *VirtioInputInst) void {
     if (inst.notify_base == 0) return;
-    // 部分实现以 common_cfg.queue_select 解释门铃；notify 前固定选中队列 0（evt）。
     mmio_w16(inst.common_base, 0x16, 0);
     fullMemoryFence();
     // VirtIO 1.x PCI：notify_off_multiplier==0 时所有队列共用 notifications 区起始地址（不得乘 queue_notify_off）。
@@ -244,14 +239,15 @@ fn kickQueue0(inst: *VirtioInputInst) void {
 }
 
 fn syncDeliver(inst: *VirtioInputInst) void {
+    const has_abs_frame = inst.abs_frame_dirty;
     if (inst.abs_frame_dirty) {
         if (inst.tab_have_x and inst.tab_have_y) {
-            const sw = mouse.getScreenWidth();
-            const sh = mouse.getScreenHeight();
-            if (sw > 0 and sh > 0) {
-                const px = mapAbsToPixel(inst.tab_x, sw);
-                const py = mapAbsToPixel(inst.tab_y, sh);
-                const adx = @as(i64, px) - @as(i64, mouse.getX());
+		const sw = mouse.getScreenWidth();
+			const sh = mouse.getScreenHeight();
+			if (sw > 0 and sh > 0) {
+				const px = mapAbsToPixel(inst.tab_x, sw);
+				const py = mapAbsToPixel(inst.tab_y, sh);
+				const adx = @as(i64, px) - @as(i64, mouse.getX());
                 const ady = @as(i64, py) - @as(i64, mouse.getY());
                 const sx = @as(i64, inst.acc_dx) + adx;
                 const sy = @as(i64, inst.acc_dy) + ady;
@@ -265,16 +261,18 @@ fn syncDeliver(inst: *VirtioInputInst) void {
     const idle = inst.acc_dx == 0 and inst.acc_dy == 0 and inst.acc_scroll == 0 and inst.hid_buttons == 0;
     if (idle and !inst.has_pointer_ev) return;
 
-    if (@import("build_options").mouse_debug) {
-        @import("mouse_debug.zig").noteVirtioSyncDeliver();
-    }
     const ev = mouse.MouseEvent{
         .dx = @truncate(std.math.clamp(inst.acc_dx, -32768, 32767)),
         .dy = @truncate(std.math.clamp(inst.acc_dy, -32768, 32767)),
         .buttons = inst.hid_buttons,
         .scroll = @truncate(std.math.clamp(inst.acc_scroll, -128, 127)),
     };
-    mouse.deliverMouseEvent(ev);
+    if (has_abs_frame) {
+        mouse.deliverAbsoluteMotionEvent(ev);
+    } else {
+        mouse.deliverMouseEvent(ev);
+    }
+    mouse_debug.noteVirtioSyncDeliver();
     inst.acc_dx = 0;
     inst.acc_dy = 0;
     inst.acc_scroll = 0;
@@ -377,6 +375,7 @@ fn pollOne(inst: *VirtioInputInst, inst_i: u8) void {
     if (!inst.active) return;
     const qs: u32 = inst.queue_size;
     if (qs == 0) return;
+    mouse_debug.snapshotVirtio(inst_i, inst.active, readUsedIdx(inst), inst.last_used_idx);
 
     if (inst.isr_base != 0) {
         _ = mmio_r8(inst.isr_base, 0);
@@ -391,9 +390,6 @@ fn pollOne(inst: *VirtioInputInst, inst_i: u8) void {
     while (iter < max_iters) : (iter += 1) {
         fullMemoryFence();
         const used_idx = readUsedIdx(inst);
-        if (@import("build_options").mouse_debug and iter == 0) {
-            @import("mouse_debug.zig").snapshotVirtio(inst_i, true, used_idx, inst.last_used_idx);
-        }
         if (inst.last_used_idx == used_idx) break;
 
         fullMemoryFence();
@@ -497,7 +493,7 @@ fn virtioAttachModern(inst: *VirtioInputInst, loc: pcie.PciLoc) bool {
     mmio_w32(inst.common_base, 0x0, 1);
     const dev_hi = mmio_r32(inst.common_base, 0x4);
     if ((dev_hi & VIRTIO_F_VERSION_1) != 0) {
-        mmio_w32(inst.common_base, 0x8, 1);
+        mmio_w32(inst.common_base, 0x8, 0);
         mmio_w32(inst.common_base, 0xc, VIRTIO_F_VERSION_1);
     }
 
@@ -509,10 +505,6 @@ fn virtioAttachModern(inst: *VirtioInputInst, loc: pcie.PciLoc) bool {
     }
 
     mmio_w16(inst.common_base, 0x16, 0);
-    // 勿向 queue_enable(0x1c) 写 0：QEMU hw/virtio/virtio-pci.c 仅接受写 1，写 0 会 virtio_error
-    //（串口可见 "wrong value for queue_enable 0"），并可能把设备置于错误态。冷启动队列本为未启用，
-    // 与 Linux setup_vq 一致：直接读 max queue_size、写 ring、再 queue_enable=1。若遇残留已启用，
-    // 应协商 VIRTIO_F_RING_RESET 后写 queue_reset(0x3a)，而非写 enable=0。
     fullMemoryFence();
     const qs = mmio_r16(inst.common_base, 0x18);
     if (qs < 2 or qs > 256) {
@@ -604,13 +596,13 @@ pub fn init() void {
     if (!pcie.supports_pci_config) return;
 
     var locs: [MAX_INST + 4]pcie.PciLoc = undefined;
-    // x86_64：默认 QEMU `pc` 在 bus0；若用户挂 pci-bridge 或换机型，VirtIO Input 可能落在 bus1–2。
-    const max_bus: u8 = if (builtin.target.cpu.arch == .x86_64) 2 else 7;
+    // PC 平台：默认 QEMU `pc` 在 bus0；若用户挂 pci-bridge 或换机型，VirtIO Input 可能落在 bus1–2。
+    const max_bus: u8 = if (hal.hasLegacyPCDevices) 2 else 7;
     const n = pcie.collectVirtioInputDevices(locs[0..], max_bus);
 
     if (n == 0) {
-        if (builtin.target.cpu.arch != .x86_64) {
-            klog.warn("VirtIO-Input PCI: no 1af4:1052 on non-x86 — 指针依赖 VirtIO；QEMU 请加 virtio-mouse-pci（Makefile 与 docs/cn/AeroDesktopRuntime.md）", .{});
+        if (!hal.hasLegacyPCDevices) {
+            klog.warn("VirtIO-Input PCI: no 1af4:1052 on non-PC — 指针依赖 VirtIO；QEMU 请加 virtio-mouse-pci（Makefile 与 docs/cn/AeroDesktopRuntime.md）", .{});
         } else {
             klog.info("VirtIO-Input PCI: no 1af4:1052 (optional: -device virtio-mouse-pci,virtio-keyboard-pci)", .{});
         }

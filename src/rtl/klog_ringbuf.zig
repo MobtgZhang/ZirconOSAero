@@ -37,7 +37,7 @@ pub const LogEntry = packed struct {
 
 const ENTRY_HDR_SIZE: usize = @sizeOf(LogEntry);
 
-var ring: [RING_SIZE]u8 = .{0} ** RING_SIZE;
+var ring: [RING_SIZE]u8 = std.mem.zeroes([RING_SIZE]u8);
 var write_pos: usize = 0;
 var entry_count: u64 = 0;
 /// 溢出标志：环形缓冲区被覆盖时置 true，直到被查询并清除
@@ -76,7 +76,7 @@ pub fn push(level: klog_mod.LogLevel, text: []const u8) void {
 
     const hdr = LogEntry{
         .timestamp_us = ts,
-        .level = @intFromEnum(level),
+        .level = @backingInt(level),
         .text_len = tlen,
     };
 

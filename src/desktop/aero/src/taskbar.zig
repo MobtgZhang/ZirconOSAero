@@ -18,7 +18,7 @@ pub const TaskbarConfig = struct {
 };
 
 pub const TaskButton = struct {
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: u8 = 0,
     icon_id: u16 = 0,
     active: bool = false,
@@ -26,7 +26,7 @@ pub const TaskButton = struct {
 };
 
 const MAX_TASK_BUTTONS: usize = 32;
-var buttons: [MAX_TASK_BUTTONS]TaskButton = [_]TaskButton{.{}} ** MAX_TASK_BUTTONS;
+var buttons: [MAX_TASK_BUTTONS]TaskButton = std.mem.zeroes([MAX_TASK_BUTTONS]TaskButton);
 var button_count: usize = 0;
 var cfg: TaskbarConfig = .{};
 var initialized_flag: bool = false;

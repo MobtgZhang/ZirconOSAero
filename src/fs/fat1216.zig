@@ -45,7 +45,7 @@ pub const FAT_BAD: u16 = 0x0FF7;
 /// FAT12/16 共享的 BPB 结构（前 36 字节相同）。
 pub const BPB_Fat1216 = extern struct {
     jmp_boot: [3]u8 align(1) = .{ 0, 0, 0 },
-    oem_name: [8]u8 align(1) = [_]u8{0} ** 8,
+    oem_name: [8]u8 align(1) = std.mem.zeroes([8]u8),
     bytes_per_sector: u16 align(1) = 0,
     sectors_per_cluster: u8 align(1) = 0,
     reserved_sectors: u16 align(1) = 0,
@@ -66,14 +66,14 @@ pub const EBPB_Fat1216 = extern struct {
     reserved1: u8 align(1) = 0,
     boot_sig: u8 align(1) = 0,
     volume_id: u32 align(1) = 0,
-    volume_label: [11]u8 align(1) = [_]u8{0} ** 11,
-    fs_type: [8]u8 align(1) = [_]u8{0} ** 8,
+    volume_label: [11]u8 align(1) = std.mem.zeroes([11]u8),
+    fs_type: [8]u8 align(1) = std.mem.zeroes([8]u8),
 };
 
 /// 标准 8.3 目录条目（与 FAT32 共用结构）。
 pub const DirEntry83 = extern struct {
-    name: [8]u8 align(1) = [_]u8{0} ** 8,
-    ext: [3]u8 align(1) = [_]u8{0} ** 3,
+    name: [8]u8 align(1) = std.mem.zeroes([8]u8),
+    ext: [3]u8 align(1) = std.mem.zeroes([3]u8),
     attr: u8 align(1) = 0,
     nt_reserved: u8 align(1) = 0,
     create_time_tenth: u8 align(1) = 0,
@@ -130,7 +130,7 @@ pub const Fat1216Volume = struct {
     total_data_clusters: u16 = 0,
     next_free_cluster: u16 = 2,
     is_mounted: bool = false,
-    label: [11]u8 = [_]u8{0} ** 11,
+    label: [11]u8 = std.mem.zeroes([11]u8),
     label_len: usize = 0,
 
     pub fn detectFatType(self: *const Fat1216Volume) FatType {
@@ -340,7 +340,7 @@ pub fn mountFromBlockDev(dev: *block_common.BlockDevVTable) bool {
             klog.warn("FAT12/16: failed to read FAT sector %u", .{s});
             return false;
         }
-        @memcpy(fat[@as(usize, s) * SECTOR_SIZE..][0..SECTOR_SIZE], &fat_buf);
+        @memcpy(fat[@as(usize, s) * SECTOR_SIZE ..][0..SECTOR_SIZE], &fat_buf);
     }
     volume.fat = fat;
     volume.fat_capacity = fat_bytes;
@@ -376,7 +376,6 @@ pub fn mountFromBlockDev(dev: *block_common.BlockDevVTable) bool {
 }
 
 /// VFS 操作函数。
-
 fn fat12Open(f: *vfs.FileObject, path: []const u8, _: vfs.FileAccessMode) vfs.FileStatus {
     if (!volume.is_mounted) return .not_mounted;
     var name_start: usize = 0;

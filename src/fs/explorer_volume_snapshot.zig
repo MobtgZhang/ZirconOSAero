@@ -110,7 +110,7 @@ pub fn refreshVolumes(out: []ExplorerVolume) usize {
             total_mb = @intCast(@min(total / (1024 * 1024), @as(u64, 0xFFFF_FFFF)));
             free_mb = @intCast(@min(free / (1024 * 1024), @as(u64, 0xFFFF_FFFF)));
         }
-        var lab: [16]u8 = [_]u8{0} ** 16;
+        var lab: [16]u8 = std.mem.zeroes([16]u8);
         const lab_len = @min(mi.label.len, lab.len);
         @memcpy(lab[0..lab_len], mi.label[0..lab_len]);
         out[o] = .{

@@ -20,27 +20,15 @@
 //! IRQ12 / i8042 aux port; absolute/relative state and event queue for the shell/DWM.
 //! Registers `\\Driver\\Mouse` / `\\Device\\Mouse0`. Reference: OSDev PS/2 mouse.
 
-const builtin = @import("builtin");
 const std = @import("std");
 const io = @import("../../io/io.zig");
 const klog = @import("../../rtl/klog.zig");
-const portio = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/portio.zig")
-else
-    struct {
-        pub fn outb(_: u16, _: u8) void {}
-        pub fn inb(_: u16) u8 {
-            return 0;
-        }
-        pub fn ioWait() void {}
-    };
+const mouse_debug = @import("mouse_debug.zig");
+const hal_input = @import("../../hal/input.zig");
+const hal = @import("../../hal.zig");
+const portio = hal_input.portio;
 
-const hal_kbd = if (builtin.target.cpu.arch == .x86_64)
-    @import("../../hal/x86_64/keyboard.zig")
-else
-    struct {
-        pub fn handleScancodeByte(_: u8) void {}
-    };
+const hal_kbd = hal_input.keyboard;
 
 const KB_DATA_PORT: u16 = 0x60;
 const KB_STATUS_PORT: u16 = 0x64;
@@ -96,11 +84,11 @@ pub const MouseState = struct {
 };
 
 const EVENT_QUEUE_SIZE: usize = 64;
-var event_queue: [EVENT_QUEUE_SIZE]MouseEvent = [_]MouseEvent{.{}} ** EVENT_QUEUE_SIZE;
+var event_queue: [EVENT_QUEUE_SIZE]MouseEvent = std.mem.zeroes([EVENT_QUEUE_SIZE]MouseEvent);
 var queue_head: usize = 0;
 var queue_tail: usize = 0;
 
-var packet_buf: [4]u8 = [_]u8{0} ** 4;
+var packet_buf: [4]u8 = std.mem.zeroes([4]u8);
 var packet_idx: usize = 0;
 var has_scroll_wheel: bool = false;
 /// 当前半包起始 tick；超时则丢弃半包，避免永远等不到第 2/3/4 字节。
@@ -131,7 +119,9 @@ pub const IOCTL_MOUSE_RESET: u32 = 0x000B000C;
 fn waitForInput() bool {
     var timeout: u32 = 500_000;
     while (timeout > 0) : (timeout -= 1) {
-        if (portio.inb(KB_STATUS_PORT) & 0x01 != 0) return true;
+        const st = portio.inb(KB_STATUS_PORT);
+        if (st == 0xFF) return false; // i8042 不存在
+        if (st & 0x01 != 0) return true;
         if (timeout & 0x3FF == 0) portio.ioWait();
     }
     return false;
@@ -140,7 +130,9 @@ fn waitForInput() bool {
 fn waitForOutput() void {
     var timeout: u32 = 500_000;
     while (timeout > 0) : (timeout -= 1) {
-        if (portio.inb(KB_STATUS_PORT) & 0x02 == 0) return;
+        const st = portio.inb(KB_STATUS_PORT);
+        if (st == 0xFF) return; // i8042 不存在
+        if (st & 0x02 == 0) return;
         if (timeout & 0x3FF == 0) portio.ioWait();
     }
 }
@@ -212,7 +204,7 @@ fn resetPartialIfStale() void {
 
 /// 空闲时轮询 8042 输出缓冲：按 aux 位、半包续包、首字节 PS/2 同步位路由鼠标/键盘。
 pub fn poll() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal.hasLegacyPCDevices) return;
     poll_invocations +%= 1;
     // #region agent log
     if (@import("build_options").agent_ndjson) {
@@ -225,6 +217,7 @@ pub fn poll() void {
     resetPartialIfStale();
     while (true) {
         const status = portio.inb(KB_STATUS_PORT);
+        if (status == 0xFF) return; // i8042 不存在（QEMU -M q35,i8042=off）
         if (status & 0x01 == 0) return;
         const data = portio.inb(KB_DATA_PORT);
         const aux = (status & 0x20) != 0;
@@ -336,6 +329,31 @@ pub fn deliverMouseEvent(event: MouseEvent) void {
     deliverMouseEventUncoalesced(event);
 }
 
+/// Absolute HID reports must not be merged with relative deltas: each report
+/// is a position target computed against the current cursor.
+pub fn deliverAbsoluteMotionEvent(event: MouseEvent) void {
+    if (motion_coalesce_active) {
+        flushMotionCoalesce();
+    }
+    mouse_state.buttons = event.buttons;
+    mouse_state.left_pressed = (event.buttons & 0x01) != 0;
+    mouse_state.right_pressed = (event.buttons & 0x02) != 0;
+    mouse_state.middle_pressed = (event.buttons & 0x04) != 0;
+
+    mouse_state.x = clampedAddI32(mouse_state.x, event.dx);
+    mouse_state.y = clampedAddI32(mouse_state.y, event.dy);
+    clampPosition();
+    mouse_state.raw_x = mouse_state.x;
+    mouse_state.raw_y = mouse_state.y;
+    mouse_state.interpolation_idx = 0;
+    mouse_state.sub_x = 0;
+    mouse_state.sub_y = 0;
+    mouse_state.prev_dx = 0;
+    mouse_state.prev_dy = 0;
+    mouse_state.cursor_moved = true;
+    pushEvent(event);
+}
+
 fn deliverMouseEventUncoalesced(event: MouseEvent) void {
     // 丢弃完全重复的报告（常见于 VirtIO SYN），减轻事件队列与主循环负担。
     if (event.dx == 0 and event.dy == 0 and event.scroll == 0 and event.buttons == mouse_state.buttons) {
@@ -407,10 +425,6 @@ fn deliverMouseEventUncoalesced(event: MouseEvent) void {
     }
 
     mouse_state.cursor_moved = true;
-    if (@import("build_options").mouse_debug) {
-        const md = @import("mouse_debug.zig");
-        md.traceAfterDeliver(mouse_state.x, mouse_state.y, event.dx, event.dy, mouse_state.buttons);
-    }
     pushEvent(event);
 }
 
@@ -629,8 +643,9 @@ pub fn isHardwareInitialized() bool {
 
 /// 图形桌面就绪后再次打开数据流（长时间引导后部分固件/模拟器需重使能）。
 pub fn reassertStreamEnable() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal.hasLegacyPCDevices) return;
     if (!hw_initialized) return;
+    if (portio.inb(KB_STATUS_PORT) == 0xFF) return; // i8042 不存在
     packet_idx = 0;
     _ = mouseWrite(0xF4);
 }
@@ -677,8 +692,17 @@ fn probeIntelliMouseId() u8 {
 
 /// 8042 + PS/2 鼠标硬件初始化（须在 PIC 解掩码 / sti 之前调用）。可早于 `io.init()`。
 pub fn initHardware() void {
-    if (builtin.target.cpu.arch != .x86_64) return;
+    if (!hal.hasLegacyPCDevices) return;
     if (hw_initialized) return;
+
+    // QEMU -M q35,i8042=off：0x64 状态口恒读 0xFF（所有位均置位）。
+    // 早期检测到控制器不存在时跳过 PS/2，避免 waitFor* 超时循环阻塞启动数分钟。
+    const status0 = portio.inb(KB_STATUS_PORT);
+    if (status0 == 0xFF) {
+        hw_initialized = true;
+        has_scroll_wheel = false;
+        return;
+    }
 
     packet_idx = 0;
     flush8042Output();
@@ -750,7 +774,7 @@ pub fn initHardware() void {
 }
 
 /// 在 `io.init()` 之后登记 \\Driver\\Mouse（`io.init()` 会清空驱动表，须晚于硬件 init 再注册）。
-/// 非 x86 无 PS/2 包，但 VirtIO-Input 仍通过本驱动的状态与事件队列上报指针运动。
+/// 非 PC 平台无 PS/2 包，但 VirtIO-Input 仍通过本驱动的状态与事件队列上报指针运动。
 pub fn registerWithIo() void {
     if (driver_initialized) return;
 

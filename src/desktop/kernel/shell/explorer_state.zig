@@ -74,8 +74,7 @@ var explorer_nav_forward_count: usize = 0;
 fn explorerPushNavHistory() void {
     if (explorer_nav_back_count < MAX_NAV_HISTORY) {
         const subpath = if (explorer_has_subdir) explorer_subdir.path[0..explorer_subdir.path_len] else null;
-        explorer_nav_back_stack[explorer_nav_back_count] = ExplorerNavEntry.init(
-            explorer_current_location, subpath);
+        explorer_nav_back_stack[explorer_nav_back_count] = ExplorerNavEntry.init(explorer_current_location, subpath);
         explorer_nav_back_count += 1;
     }
     explorer_nav_forward_count = 0;
@@ -98,8 +97,7 @@ pub fn explorerNavigateBack() void {
 
     if (explorer_nav_forward_count < MAX_NAV_HISTORY) {
         const subpath = if (explorer_has_subdir) explorer_subdir.path[0..explorer_subdir.path_len] else null;
-        explorer_nav_forward_stack[explorer_nav_forward_count] = ExplorerNavEntry.init(
-            explorer_current_location, subpath);
+        explorer_nav_forward_stack[explorer_nav_forward_count] = ExplorerNavEntry.init(explorer_current_location, subpath);
         explorer_nav_forward_count += 1;
     }
 
@@ -114,8 +112,7 @@ pub fn explorerNavigateForward() void {
 
     if (explorer_nav_back_count < MAX_NAV_HISTORY) {
         const subpath = if (explorer_has_subdir) explorer_subdir.path[0..explorer_subdir.path_len] else null;
-        explorer_nav_back_stack[explorer_nav_back_count] = ExplorerNavEntry.init(
-            explorer_current_location, subpath);
+        explorer_nav_back_stack[explorer_nav_back_count] = ExplorerNavEntry.init(explorer_current_location, subpath);
         explorer_nav_back_count += 1;
     }
 
@@ -211,15 +208,15 @@ pub fn explorerNavigateToSubdirectory(letter: u8, entry_name: []const u8) void {
 /// Navigate to an arbitrary path (e.g., "Users\\Administrator\\Documents")
 pub fn explorerNavigateToPath(letter: u8, subpath: []const u8) void {
     explorerPushNavHistory();
-    
+
     explorer_has_subdir = true;
     explorer_subdir.letter = letter;
-    
+
     // Copy the full subpath
     const copy_len = @min(subpath.len, explorer_subdir.path.len);
     @memcpy(explorer_subdir.path[0..copy_len], subpath[0..copy_len]);
     explorer_subdir.path_len = copy_len;
-    
+
     // Parse path into parts for depth tracking
     explorer_subdir.depth = 0;
     var remaining = subpath[0..copy_len];
@@ -229,18 +226,18 @@ pub fn explorerNavigateToPath(letter: u8, subpath: []const u8) void {
             remaining = remaining[1..];
         }
         if (remaining.len == 0) break;
-        
+
         // Find next backslash
         var end: usize = 0;
         while (end < remaining.len and remaining[end] != '\\' and remaining[end] != '/') {
             end += 1;
         }
-        
+
         explorer_subdir.path_parts[explorer_subdir.depth] = remaining[0..end];
         explorer_subdir.depth += 1;
-        remaining = if (end < remaining.len) remaining[end + 1..] else "";
+        remaining = if (end < remaining.len) remaining[end + 1 ..] else "";
     }
-    
+
     setExplorerView(.computer);
     explorer_current_location = .{ .drive_root = letter };
     explorer_list_selected = EXPLORER_LIST_SEL_NONE;

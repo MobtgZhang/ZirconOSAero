@@ -19,7 +19,6 @@
 //! Kernel Timer Module
 //! Wraps architecture-specific timer hardware and provides kernel timing services
 
-const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const scheduler = @import("scheduler.zig");
 const timekeeping = @import("../ke/timekeeping.zig");
@@ -35,11 +34,8 @@ pub fn init() void {
     arch.unmaskIrq(0);
     timekeeping.noteArchTimerInitialized();
     timer_initialized = true;
-    switch (builtin.target.cpu.arch) {
-        .x86_64 => klog.info("Timer: PIT at %uHz, PIC initialized", .{TIMER_HZ}),
-        .loongarch64 => klog.info("Timer: LoongArch CSR timer ~%uHz, PCH+ECFG.IM", .{TIMER_HZ}),
-        else => klog.info("Timer: arch tick ~%uHz (see arch.initTimer)", .{TIMER_HZ}),
-    }
+    const hal = @import("../hal.zig");
+    klog.info("Timer: %s timer ~%uHz initialized", .{ hal.platformTimerDescription(), TIMER_HZ });
 }
 
 pub fn getTicks() u64 {

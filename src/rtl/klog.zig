@@ -26,7 +26,7 @@
 //   `[seconds.microseconds] component: message`             — info/notice/debug/trace
 //   `[seconds.microseconds] LEVEL: component: message`      — emerg/alert/crit/err/warning
 //
-// 时间戳：自启动后单调微秒（x86_64 优先 HPET，回退 PIT tick×10000us）。
+// 时间戳：自启动后单调微秒（优先 HAL 高分辨率计数器，回退调度 tick）。
 // Release：仅输出 ERROR 及以上；`mouseDbg` 仍独立开关。
 
 const std = @import("std");
@@ -67,13 +67,24 @@ pub fn setDesktopMinLevel(level: LogLevel) void {
     desktop_min_level = level;
 }
 
-pub fn shouldLog(level: LogLevel) bool {
-    if (DEBUG_MODE) return true;
-    // 桌面模式下使用更严格的日志级别
+/// Serial remains the full audit sink for every log level, including after DWM starts.
+pub fn shouldSerialLog(level: LogLevel) bool {
+    _ = level;
+    return true;
+}
+
+/// The framebuffer console is only active during the BootVID startup stage.  After the
+/// desktop owns the screen, only WARNING and above may reach the framebuffer console.
+pub fn shouldScreenLog(level: LogLevel) bool {
     if (desktop_mode) {
-        return @intFromEnum(level) <= @intFromEnum(desktop_min_level);
+        return @backingInt(level) <= @backingInt(desktop_min_level);
     }
-    return @intFromEnum(level) <= @intFromEnum(RELEASE_MIN_LEVEL);
+    if (DEBUG_MODE) return true;
+    return @backingInt(level) <= @backingInt(RELEASE_MIN_LEVEL);
+}
+
+pub fn shouldLog(level: LogLevel) bool {
+    return shouldSerialLog(level);
 }
 
 /// Kept for backward compatibility — still 19, but no longer used for padding.
@@ -90,26 +101,24 @@ pub fn notifyTimerTick() void {
 
 // ── Ticket spinlock ──────────────────────────────────────────────────
 // 所有架构统一的 ticket spinlock 实现：
-// - x86_64: 使用 pause 指令退让（Intel SDM 建议）
+// - PC 平台: 使用 pause 指令退让（Intel SDM 建议）
 // - 其他架构: 使用通用退让提示（dbar/yield 等）
 
-var ticket_next: std.atomic.Value(u32) = .init(0);
-var ticket_owner: std.atomic.Value(u32) = .init(0);
+var log_locked: std.atomic.Value(bool) = .init(false);
 
 fn ticketLock() void {
-    const my = ticket_next.fetchAdd(1, .monotonic);
-    while (ticket_owner.load(.acquire) != my) {
+    while (log_locked.swap(true, .acquire)) {
         arch.spinCpuRelax();
     }
 }
 
 fn ticketUnlock() void {
-    _ = ticket_owner.fetchAdd(1, .release);
+    log_locked.store(false, .release);
 }
 
 // ── Per-arch lock guard ───────────────────────────────────────────────
 // freestanding 内核在所有支持的架构上都使用 ticket lock 保护日志输出
-//（x86_64 用 pause、LoongArch64 用 dbar 0、AArch64 用 yield、退让）。
+//（平台相关的退让指令由 arch 层提供）。
 
 fn acquireLogLock() void {
     if (builtin.os.tag == .freestanding) {
@@ -125,8 +134,11 @@ fn releaseLogLock() void {
 
 // ── Output ───────────────────────────────────────────────────────────
 
-fn output(s: []const u8) void {
-    arch.consoleWrite(s);
+fn output(s: []const u8, level: LogLevel) void {
+    arch.serialWrite(s);
+    if (shouldScreenLog(level)) {
+        arch.consoleWriteScreen(s);
+    }
 }
 
 // ── Timestamp: boot-relative microseconds ────────────────────────────
@@ -244,6 +256,8 @@ fn writeLogPrefix(buf: []u8, level: LogLevel, component: []const u8) usize {
 fn klogEmit(level: LogLevel, component: []const u8, comptime fmt: []const u8, args: anytype) void {
     if (!shouldLog(level)) return;
 
+    const irq_were_on = arch.saveAndDisableInterrupts();
+    defer arch.restoreInterrupts(irq_were_on);
     acquireLogLock();
     defer releaseLogLock();
 
@@ -260,7 +274,7 @@ fn klogEmit(level: LogLevel, component: []const u8, comptime fmt: []const u8, ar
 
     const line = line_buf[0..@min(pos, line_buf.len)];
     ringbuf.push(level, line);
-    output(line);
+    output(line, level);
 }
 
 // ── Backward-compatible internal API: padded component → trimmed slice ──
@@ -280,7 +294,7 @@ fn klogWithComponent(level: LogLevel, component: *const [COMPONENT_FIELD_WIDTH]u
 fn padComponentComptime(comptime s: []const u8) [COMPONENT_FIELD_WIDTH]u8 {
     comptime {
         if (s.len > COMPONENT_FIELD_WIDTH) @compileError("klog scoped component max " ++ std.fmt.comptimePrint("{}", .{COMPONENT_FIELD_WIDTH}) ++ " bytes");
-        var out: [COMPONENT_FIELD_WIDTH]u8 = .{' '} ** COMPONENT_FIELD_WIDTH;
+        var out: [COMPONENT_FIELD_WIDTH]u8 = std.mem.zeroes([COMPONENT_FIELD_WIDTH]u8);
         for (s, 0..) |c, i| out[i] = c;
         return out;
     }
@@ -338,7 +352,7 @@ fn formatToBuf(buf: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
     const Args = @TypeOf(args);
     const args_info = @typeInfo(Args);
     if (args_info != .@"struct") return fmt;
-    const fields = args_info.@"struct".fields;
+    const fields = @typeInfo(Args).@"struct".field_names;
 
     var pos: usize = 0;
     var arg_idx: usize = 0;
@@ -381,17 +395,17 @@ fn formatToBuf(buf: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
             i += 1;
 
             if (spec == 's') {
-                pos +|= formatArgStr(buf[pos..], args, fields, arg_idx, width);
+                pos +|= formatArgStr(buf[pos..], args, arg_idx, width);
             } else if (spec == 'p') {
                 if (pos < buf.len) buf[pos] = '0';
                 pos +|= 1;
                 if (pos < buf.len) buf[pos] = 'x';
                 pos +|= 1;
-                pos +|= formatArgInt(buf[pos..], args, fields, arg_idx, 16, false, 0, false);
+                pos +|= formatArgInt(buf[pos..], args, arg_idx, 16, false, 0, false);
             } else {
                 const base: u8 = if (spec == 'x' or spec == 'X') 16 else 10;
                 const signed = (spec == 'd' or spec == 'i');
-                pos +|= formatArgInt(buf[pos..], args, fields, arg_idx, base, signed, width, zero_pad);
+                pos +|= formatArgInt(buf[pos..], args, arg_idx, base, signed, width, zero_pad);
             }
             arg_idx += 1;
         } else {
@@ -403,10 +417,10 @@ fn formatToBuf(buf: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
     return buf[0..@min(pos, buf.len)];
 }
 
-fn formatArgStr(buf: []u8, args: anytype, fields: anytype, arg_idx: usize, max_len: usize) usize {
-    inline for (fields, 0..) |f, idx| {
+fn formatArgStr(buf: []u8, args: anytype, arg_idx: usize, max_len: usize) usize {
+    inline for (@typeInfo(@TypeOf(args)).@"struct".field_names, 0..) |f, idx| {
         if (idx == arg_idx) {
-            const arg = @field(args, f.name);
+            const arg = @field(args, f);
             if (@TypeOf(arg) == []const u8) {
                 const limit = if (max_len > 0) @min(arg.len, max_len) else arg.len;
                 var j: usize = 0;
@@ -421,10 +435,10 @@ fn formatArgStr(buf: []u8, args: anytype, fields: anytype, arg_idx: usize, max_l
     return 0;
 }
 
-fn formatArgInt(buf: []u8, args: anytype, fields: anytype, arg_idx: usize, base: u8, signed: bool, width: usize, zero_pad: bool) usize {
-    inline for (fields, 0..) |f, idx| {
+fn formatArgInt(buf: []u8, args: anytype, arg_idx: usize, base: u8, signed: bool, width: usize, zero_pad: bool) usize {
+    inline for (@typeInfo(@TypeOf(args)).@"struct".field_names, 0..) |f, idx| {
         if (idx == arg_idx) {
-            const arg = @field(args, f.name);
+            const arg = @field(args, f);
             return formatIntWidthPad(buf, arg, base, signed, width, zero_pad);
         }
     }
@@ -515,6 +529,8 @@ const mouse_component = padComponentComptime("Input.MouseDbg");
 
 pub fn mouseDbg(comptime fmt: []const u8, args: anytype) void {
     if (!@import("build_options").mouse_debug) return;
+    const irq_were_on = arch.saveAndDisableInterrupts();
+    defer arch.restoreInterrupts(irq_were_on);
     acquireLogLock();
     defer releaseLogLock();
     var line_buf: [LINE_BUF_SIZE]u8 = undefined;
@@ -532,7 +548,7 @@ pub fn mouseDbg(comptime fmt: []const u8, args: anytype) void {
 
     const line = line_buf[0..@min(pos, line_buf.len)];
     ringbuf.push(.debug, line);
-    output(line);
+    output(line, .debug);
 }
 
 // ── Top-level convenience wrappers ───────────────────────────────────

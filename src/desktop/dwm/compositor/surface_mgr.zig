@@ -97,7 +97,7 @@ pub const Surface = struct {
     height: u32 = 0,
     flags: SurfaceFlags = .{},
     dirty: bool = true,
-    damage_rects: [MAX_DAMAGE_RECTS]Rect = [_]Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** MAX_DAMAGE_RECTS,
+    damage_rects: [MAX_DAMAGE_RECTS]Rect = std.mem.zeroes([MAX_DAMAGE_RECTS]Rect),
     damage_count: usize = 0,
     z_order: i32 = 0,
     x: i32 = 0,
@@ -173,7 +173,7 @@ pub const MARGINS = extern struct {
 // ============================================================================
 
 pub const SurfaceManager = struct {
-    surfaces: [MAX_SURFACES]Surface = [_]Surface{.{}} ** MAX_SURFACES,
+    surfaces: [MAX_SURFACES]Surface = std.mem.zeroes([MAX_SURFACES]Surface),
     surface_count: usize = 0,
     next_surface_id: u32 = 1,
     initialized: bool = false,
@@ -409,7 +409,7 @@ pub const SurfaceTextureBinding = struct {
     bound: bool,
 };
 
-var g_surface_bindings: [MAX_SURFACES]SurfaceTextureBinding = [_]SurfaceTextureBinding{.{.texture_id = 0, .rtv_id = 0, .bound = false}} ** MAX_SURFACES;
+var g_surface_bindings: [MAX_SURFACES]SurfaceTextureBinding = std.mem.zeroes([MAX_SURFACES]SurfaceTextureBinding);
 
 pub fn bindSurfaceTexture(surface_id: u32, texture_id: u32, rtv_id: u32) void {
     if (surface_id == INVALID_SURFACE or surface_id > MAX_SURFACES) return;

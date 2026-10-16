@@ -57,8 +57,8 @@ pub const Visualizer = struct {
     pub fn create() Visualizer {
         return .{
             .mode = .bars,
-            .bars = [_]f32{0} ** 32,
-            .wave_data = [_]f32{0} ** 128,
+            .bars = [_]f32{0} * *32,
+            .wave_data = [_]f32{0} * *128,
             .time_offset = 0,
             .color_scheme = .blue,
         };

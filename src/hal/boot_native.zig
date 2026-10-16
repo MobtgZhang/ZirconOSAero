@@ -23,7 +23,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const arch = @import("../arch.zig");
 const klog = @import("../rtl/klog.zig");
-const desktop_session = @import("desktop_session.zig");
+const desktop_session = @import("../kernel/desktop_session.zig");
 const mouse = @import("../drivers/input/mouse.zig");
 const kbd = @import("../drivers/input/kbd.zig");
 
@@ -62,6 +62,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     const wow64_mod = @import("../subsystems/win32/wow64.zig");
     const sys_config = @import("../config/config.zig");
     const drivers = @import("../drivers/mod.zig");
+    const bootvid = @import("../drivers/video/bootvid.zig");
     const audio = @import("../drivers/audio/audio.zig");
     const registry = @import("../registry/registry.zig");
     const virtio_blk_scratch_fs = @import("../drivers/storage/virtio_blk_scratch_fs.zig");
@@ -146,6 +147,13 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
             });
             if (fb_i.fb_type != 2 and fb_i.width > 0 and fb_i.height > 0 and fb_i.bpp > 0) {
                 has_gfx_fb = true;
+                bootvid.init(
+                    @as(usize, @truncate(fb_i.addr)),
+                    fb_i.width,
+                    fb_i.height,
+                    fb_i.pitch,
+                    fb_i.bpp,
+                );
             }
         }
     }
@@ -281,7 +289,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     panic_ctx_vm.setPhase(0);
     klog.info("VM: Identity 0-%uMB OK (huge2m=%u leaf=%u)", .{
         identity_pages * paging.page_size / (1024 * 1024),
-        id_st.x86_huge_2m,
+        id_st.huge_pages,
         id_st.leaf_pages,
     });
 

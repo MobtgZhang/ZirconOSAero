@@ -180,9 +180,7 @@ pub const DiskDefragWindow = struct {
 
             const bg = if (selected) rgb(0xE8, 0xF0, 0xFF) else rgb(0xF8, 0xFC, 0xFF);
             fb.fillRect(cx, by, dd.width - 32, 46, bg);
-            fb.draw3DRect(cx, by, dd.width - 32, 46,
-                if (selected) rgb(0x3D, 0x7E, 0xCB) else rgb(0xC0, 0xC8, 0xD8),
-                if (selected) rgb(0x5A, 0x9E, 0xEB) else rgb(0xFF, 0xFF, 0xFF));
+            fb.draw3DRect(cx, by, dd.width - 32, 46, if (selected) rgb(0x3D, 0x7E, 0xCB) else rgb(0xC0, 0xC8, 0xD8), if (selected) rgb(0x5A, 0x9E, 0xEB) else rgb(0xFF, 0xFF, 0xFF));
 
             const letter_str = [_]u8{vol.drive_letter};
             fb.drawTextTransparent(cx + 8, by + 8, &letter_str, rgb(0x10, 0x10, 0x50));
@@ -230,9 +228,7 @@ pub const DiskDefragWindow = struct {
             const is_fragmented = (frag_seed < dd.fragments_found / 2);
             const is_used = (frag_seed < @as(u32, @intFromFloat(used_ratio * 100.0)));
 
-            const block_color: u32 = if (!is_used) rgb(0xE0, 0xE8, 0xF0)
-                else if (is_fragmented) rgb(0xCC, 0x40, 0x00)
-                else rgb(0x3D, 0x7E, 0xCB);
+            const block_color: u32 = if (!is_used) rgb(0xE0, 0xE8, 0xF0) else if (is_fragmented) rgb(0xCC, 0x40, 0x00) else rgb(0x3D, 0x7E, 0xCB);
             fb.fillRect(bx, by, block_w - 1, bh, block_color);
         }
 

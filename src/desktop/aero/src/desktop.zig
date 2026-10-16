@@ -5,7 +5,7 @@
 const theme = @import("theme.zig");
 
 pub const DesktopIcon = struct {
-    name: [64]u8 = [_]u8{0} ** 64,
+    name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: u8 = 0,
     grid_x: i32 = 0,
     grid_y: i32 = 0,
@@ -17,7 +17,7 @@ pub const DesktopIcon = struct {
 };
 
 const MAX_ICONS: usize = 128;
-var icons: [MAX_ICONS]DesktopIcon = [_]DesktopIcon{.{}} ** MAX_ICONS;
+var icons: [MAX_ICONS]DesktopIcon = std.mem.zeroes([MAX_ICONS]DesktopIcon);
 var icon_count: usize = 0;
 
 var context_menu_visible: bool = false;

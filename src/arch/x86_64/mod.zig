@@ -23,6 +23,7 @@ const pic = @import("../../hal/x86_64/pic.zig");
 const pit = @import("../../hal/x86_64/pit.zig");
 pub const gdt = @import("../../hal/x86_64/gdt.zig");
 pub const lapic_tick = @import("../../hal/x86_64/lapic_timer_tick.zig");
+const bootvid_console = @import("../../rtl/bootvid_console.zig");
 
 pub const name: []const u8 = "x86_64";
 pub const PAGE_SIZE: usize = 4096;
@@ -44,7 +45,7 @@ pub fn consoleWrite(s: []const u8) void {
     const framebuffer = @import("../../hal/x86_64/framebuffer.zig");
     const vga = @import("../../hal/x86_64/vga.zig");
     const serial = @import("../../hal/x86_64/serial.zig");
-    if (debug_mode) {
+    if (debug_mode and bootvid_console.isActive()) {
         if (framebuffer.isReady()) {
             framebuffer.write(s);
         } else {
@@ -53,6 +54,18 @@ pub fn consoleWrite(s: []const u8) void {
     }
     if (serial.isReady()) {
         serial.write(s);
+    }
+}
+
+pub fn consoleWriteScreen(s: []const u8) void {
+    const framebuffer = @import("../../hal/x86_64/framebuffer.zig");
+    const vga = @import("../../hal/x86_64/vga.zig");
+    if (debug_mode and bootvid_console.isActive()) {
+        if (framebuffer.isReady()) {
+            framebuffer.write(s);
+        } else {
+            vga.write(s);
+        }
     }
 }
 

@@ -20,8 +20,8 @@
 """
 ZirconOS Build Configuration Verification Tests
 
-Validates that build.conf is well-formed, all referenced files exist,
-ZBM/ISO helper scripts are present, and the Makefile reads the configuration.
+Validates the Makefile-owned configuration, all referenced files exist,
+and the architecture-specific UEFI helper scripts are present.
 
 Usage:
     python3 tests/test_build_config.py [--project-root PATH] [--output-dir DIR]
@@ -73,8 +73,13 @@ VALID_BOOT_METHODS = {"mbr", "uefi"}
 VALID_BOOTLOADERS = {"zbm"}
 VALID_DESKTOPS = {"aero", "none"}
 VALID_OPTIMIZES = {"Debug", "ReleaseSafe", "ReleaseFast", "ReleaseSmall"}
-def parse_build_conf(path):
-    """Parse build.conf into a dict, ignoring comments and blank lines."""
+def parse_makefile_defaults(path):
+    """Parse simple Makefile defaults into a dict.
+
+    The project intentionally no longer has a persistent build.conf.  Keep
+    this parser limited to literal assignments because expanded Make values
+    are validated by invoking make below.
+    """
     values = {}
     if not os.path.exists(path):
         return None
@@ -83,34 +88,34 @@ def parse_build_conf(path):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            m = re.match(r"^(\w+)\s*=\s*(.+)$", line)
+            m = re.match(r"^(\w+)\s*\?=\s*(.+)$", line)
             if m:
                 values[m.group(1)] = m.group(2).strip()
     return values
 
 
 def test_build_conf_exists(project_root, result):
-    """Check build.conf exists."""
-    print("\n=== build.conf Existence ===")
-    conf_path = os.path.join(project_root, "build.conf")
-    if os.path.exists(conf_path):
-        result.ok(f"build.conf exists: {conf_path}")
-        return conf_path
+    """Check the Makefile-owned configuration source exists."""
+    print("\n=== Makefile Configuration Source ===")
+    makefile = os.path.join(project_root, "Makefile")
+    if os.path.exists(makefile):
+        result.ok(f"Makefile exists: {makefile}")
+        return makefile
     else:
-        result.fail("build.conf not found", f"expected at {conf_path}")
+        result.fail("Makefile not found", f"expected at {makefile}")
         return None
 
 
-def test_build_conf_parse(conf_path, result):
-    """Parse build.conf and validate all keys."""
-    print("\n=== build.conf Parsing ===")
-    if conf_path is None:
-        result.fail("Skipped: build.conf not found")
+def test_build_conf_parse(makefile, result):
+    """Parse Makefile defaults and validate the required settings."""
+    print("\n=== Makefile Configuration Parsing ===")
+    if makefile is None:
+        result.fail("Skipped: Makefile not found")
         return None
 
-    values = parse_build_conf(conf_path)
+    values = parse_makefile_defaults(makefile)
     if values is None:
-        result.fail("Failed to parse build.conf")
+        result.fail("Failed to parse Makefile")
         return None
 
     result.ok(f"Parsed {len(values)} key-value pairs")
@@ -120,14 +125,14 @@ def test_build_conf_parse(conf_path, result):
         if key in values:
             result.ok(f"Key '{key}' present: {values[key]}")
         else:
-            result.fail(f"Required key '{key}' missing from build.conf")
+            result.fail(f"Required default '{key}' missing from Makefile")
 
     return values
 
 
 def test_build_conf_values(values, result):
-    """Validate build.conf values against allowed sets."""
-    print("\n=== build.conf Value Validation ===")
+    """Validate Makefile defaults against allowed sets."""
+    print("\n=== Makefile Configuration Value Validation ===")
     if values is None:
         result.fail("Skipped: no parsed values")
         return
@@ -205,17 +210,24 @@ def test_theme_directories(project_root, values, result):
 
 
 def test_zbm_iso_script(project_root, result):
-    """UEFI ISO helper script is present."""
-    print("\n=== ZBM ISO Script ===")
-    script = os.path.join(project_root, "scripts", "build", "mkiso-uefi-zbm.sh")
-    if os.path.isfile(script):
-        result.ok("scripts/build/mkiso-uefi-zbm.sh exists")
-    else:
-        result.fail("mkiso-uefi-zbm.sh not found", script)
+    """Architecture-specific UEFI ESP helper scripts are present."""
+    print("\n=== ZBM UEFI ESP Scripts ===")
+    scripts = {
+        "x86_64": "mkesp-x86_64.sh",
+        "aarch64": "mkesp-aarch64.sh",
+        "riscv64": "mkesp-riscv64.sh",
+        "loongarch64": "mkesp-loongarch64.sh",
+    }
+    for arch, name in scripts.items():
+        path = os.path.join(project_root, "scripts", "build", name)
+        if os.path.isfile(path) and os.access(path, os.R_OK):
+            result.ok(f"{arch}: scripts/build/{name} exists")
+        else:
+            result.fail(f"{arch}: UEFI ESP helper missing or unreadable", path)
 
 
 def test_makefile_reads_config(project_root, result):
-    """Verify Makefile can parse build.conf by running 'make show-config'."""
+    """Verify Makefile defaults and command-line overrides are effective."""
     print("\n=== Makefile Config Integration ===")
 
     makefile = os.path.join(project_root, "Makefile")
@@ -235,6 +247,16 @@ def test_makefile_reads_config(project_root, result):
             result.ok("'make -n show-config' succeeds (dry run)")
         else:
             result.fail("'make -n show-config' failed", proc.stderr[:200])
+
+        proc_override = subprocess.run(
+            ["make", "-s", "show-config", "ARCH=aarch64", "DESKTOP=none"],
+            capture_output=True, text=True, timeout=10,
+            cwd=project_root,
+        )
+        if proc_override.returncode == 0 and "ARCH         = aarch64" in proc_override.stdout and "DESKTOP      = none" in proc_override.stdout:
+            result.ok("Makefile command-line overrides are effective")
+        else:
+            result.fail("Makefile command-line overrides are not reflected", proc_override.stderr[:200])
     except FileNotFoundError:
         result.fail("make not installed")
     except subprocess.TimeoutExpired:
@@ -297,15 +319,15 @@ def main():
 
     results = []
 
-    r = TestResult("build_conf_exists")
+    r = TestResult("build_config_source_exists")
     conf_path = test_build_conf_exists(project_root, r)
     results.append(r)
 
-    r = TestResult("build_conf_parse")
+    r = TestResult("build_config_parse")
     values = test_build_conf_parse(conf_path, r)
     results.append(r)
 
-    r = TestResult("build_conf_values")
+    r = TestResult("build_config_values")
     test_build_conf_values(values, r)
     results.append(r)
 

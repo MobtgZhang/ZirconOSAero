@@ -60,8 +60,10 @@ pub const TaskManager = struct {
 
     pub fn create(x_pos: i32, y_pos: i32) TaskManager {
         return .{
-            .x = x_pos, .y = y_pos,
-            .width = 600, .height = 500,
+            .x = x_pos,
+            .y = y_pos,
+            .width = 600,
+            .height = 500,
             .visible = true,
             .focused = false,
             .current_tab = .applications,
@@ -266,7 +268,7 @@ pub const TaskManager = struct {
         const tabs = [_][]const u8{ "Applications", "Processes", "Performance", "Networking", "Users" };
         var tab_x = tx + 8;
         for (tabs, 0..) |tab, idx| {
-            const is_active = @as(TaskManagerTab, @enumFromInt(idx)) == tm.current_tab;
+            const is_active = @as(TaskManagerTab, @fromBackingInt(@intCast(idx))) == tm.current_tab;
             const tab_w: i32 = @as(i32, @intCast(tab.len)) * 7 + 16;
 
             if (is_active) {

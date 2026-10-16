@@ -51,13 +51,13 @@ const CacheState = enum(u2) {
 /// 缓存条目。
 const CacheEntry = struct {
     lba: u64 = 0,
-    data: [SECTOR_SIZE]u8 = .{0} ** SECTOR_SIZE,
+    data: [SECTOR_SIZE]u8 = std.mem.zeroes([SECTOR_SIZE]u8),
     state: CacheState = .clean,
     access_time: u64 = 0,
     in_use: bool = false,
 };
 
-var cache: [CACHE_SIZE]CacheEntry = .{.{}} ** CACHE_SIZE;
+var cache: [CACHE_SIZE]CacheEntry = std.mem.zeroes([CACHE_SIZE]CacheEntry);
 var cache_hits: u64 = 0;
 var cache_misses: u64 = 0;
 var cache_initialized: bool = false;
@@ -136,7 +136,7 @@ pub fn setBackend(dev: *block_common.BlockDevVTable) void {
 }
 
 pub fn init() void {
-    cache = .{.{}} ** CACHE_SIZE;
+    cache = .{.{}} * *CACHE_SIZE;
     cache_hits = 0;
     cache_misses = 0;
     g_timestamp = 0;

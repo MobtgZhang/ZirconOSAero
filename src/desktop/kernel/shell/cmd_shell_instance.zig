@@ -19,7 +19,7 @@
 //! CMD Shell Window Instance Manager (Kernel Path)
 //! Manages multiple CMD shell window instances with full GUI support.
 //! This module operates in the kernel framebuffer rendering path.
-//! 
+//!
 //! Architecture:
 //! - This module manages CMD window state and rendering data
 //! - Rendering uses kernel framebuffer directly (fb)
@@ -102,7 +102,7 @@ fn initCmdInstances() void {
 /// Create a new CMD window and return the instance index
 pub fn createCmdWindow() ?usize {
     initCmdInstances();
-    
+
     if (cmd_instance_count >= MAX_CMD_INSTANCES) {
         // Find and close the first visible instance
         for (0..cmd_instance_count) |i| {
@@ -112,12 +112,12 @@ pub fn createCmdWindow() ?usize {
             }
         }
     }
-    
+
     if (cmd_instance_count >= MAX_CMD_INSTANCES) return null;
-    
+
     const idx = cmd_instance_count;
     const inst = &cmd_instances[idx];
-    
+
     // Calculate position (cascade)
     const offset = @as(i32, @intCast(idx)) * 30;
     inst.x = 100 + offset;
@@ -132,36 +132,36 @@ pub fn createCmdWindow() ?usize {
     inst.prev_y = inst.y;
     inst.prev_w = inst.width;
     inst.prev_h = inst.height;
-    
+
     // Create the CmdShell instance
     inst.shell = cmd_shell.CmdShell.create(inst.x, inst.y);
-    
+
     // Update focus
     if (focused_cmd_index) |old_idx| {
         cmd_instances[old_idx].focused = false;
     }
     focused_cmd_index = idx;
-    
+
     cmd_instance_count += 1;
     klog.info("CMD: Created window instance {}", .{idx});
-    
+
     return idx;
 }
 
 /// Destroy a CMD window by instance index
 pub fn destroyCmdWindow(idx: usize) void {
     if (idx >= cmd_instance_count) return;
-    
+
     const inst = &cmd_instances[idx];
     inst.visible = false;
     inst.focused = false;
-    
+
     // Shift instances
     var i: usize = idx;
     while (i < cmd_instance_count - 1) : (i += 1) {
         cmd_instances[i] = cmd_instances[i + 1];
     }
-    
+
     // Clear last slot
     cmd_instances[cmd_instance_count - 1] = .{
         .shell = undefined,
@@ -172,9 +172,9 @@ pub fn destroyCmdWindow(idx: usize) void {
         .visible = false,
         .focused = false,
     };
-    
+
     cmd_instance_count -= 1;
-    
+
     // Update focus
     if (focused_cmd_index) |old_idx| {
         if (old_idx == idx) {
@@ -188,7 +188,7 @@ pub fn destroyCmdWindow(idx: usize) void {
             focused_cmd_index = old_idx - 1;
         }
     }
-    
+
     klog.info("CMD: Destroyed window instance {}", .{idx});
 }
 
@@ -197,7 +197,7 @@ pub fn closeCmdWindowAtPosition(x: i32, y: i32) bool {
     for (0..cmd_instance_count) |i| {
         if (!cmd_instances[i].visible) continue;
         if (cmd_instances[i].state == .minimized) continue;
-        
+
         const inst = &cmd_instances[i];
         if (x >= inst.x and x < inst.x + inst.width and
             y >= inst.y and y < inst.y + inst.caption_height)
@@ -207,7 +207,7 @@ pub fn closeCmdWindowAtPosition(x: i32, y: i32) bool {
             const btn_w_close: i32 = 48;
             const close_x = inst.x + inst.width - btn_w_close;
             const btn_y = inst.y + @divTrunc(inst.caption_height - btn_h, 2);
-            
+
             if (x >= close_x and x < inst.x + inst.width and
                 y >= btn_y and y < btn_y + btn_h)
             {
@@ -224,7 +224,7 @@ pub fn hitTestCmdCloseButton(x: i32, y: i32) ?usize {
     for (0..cmd_instance_count) |i| {
         if (!cmd_instances[i].visible) continue;
         if (cmd_instances[i].state == .minimized) continue;
-        
+
         const inst = &cmd_instances[i];
         if (x >= inst.x and x < inst.x + inst.width and
             y >= inst.y and y < inst.y + inst.caption_height)
@@ -233,7 +233,7 @@ pub fn hitTestCmdCloseButton(x: i32, y: i32) ?usize {
             const btn_w_close: i32 = 48;
             const close_x = inst.x + inst.width - btn_w_close;
             const btn_y = inst.y + @divTrunc(inst.caption_height - btn_h, 2);
-            
+
             if (x >= close_x and x < inst.x + inst.width and
                 y >= btn_y and y < btn_y + btn_h)
             {
@@ -249,7 +249,7 @@ pub fn hitTestCmdCaption(x: i32, y: i32) ?usize {
     for (0..cmd_instance_count) |i| {
         if (!cmd_instances[i].visible) continue;
         if (cmd_instances[i].state == .minimized) continue;
-        
+
         const inst = &cmd_instances[i];
         if (x >= inst.x and x < inst.x + inst.width and
             y >= inst.y and y < inst.y + inst.caption_height)
@@ -265,7 +265,7 @@ pub fn hitTestCmdWindow(x: i32, y: i32) ?usize {
     for (0..cmd_instance_count) |i| {
         if (!cmd_instances[i].visible) continue;
         if (cmd_instances[i].state == .minimized) continue;
-        
+
         const inst = &cmd_instances[i];
         if (x >= inst.x and x < inst.x + inst.width and
             y >= inst.y and y < inst.y + inst.height)
@@ -284,7 +284,7 @@ pub fn getCmdInstanceAtPosition(x: i32, y: i32) ?usize {
         const idx = @as(usize, @intCast(i));
         if (!cmd_instances[idx].visible) continue;
         if (cmd_instances[idx].state == .minimized) continue;
-        
+
         const inst = &cmd_instances[idx];
         if (x >= inst.x and x < inst.x + inst.width and
             y >= inst.y and y < inst.y + inst.height)
@@ -303,11 +303,11 @@ pub fn getFocusedCmdIndex() ?usize {
 /// Set focus to a CMD instance
 pub fn setFocusedCmdIndex(idx: usize) void {
     if (idx >= cmd_instance_count) return;
-    
+
     if (focused_cmd_index) |old_idx| {
         cmd_instances[old_idx].focused = false;
     }
-    
+
     cmd_instances[idx].focused = true;
     focused_cmd_index = idx;
 }
@@ -329,10 +329,10 @@ pub fn focusCmdWindowAtPosition(x: i32, y: i32) void {
 /// Minimize CMD window
 pub fn minimizeCmdWindow(idx: usize) void {
     if (idx >= cmd_instance_count) return;
-    
+
     const inst = &cmd_instances[idx];
     if (inst.state == .minimized) return;
-    
+
     inst.prev_state = inst.state;
     if (inst.state == .normal) {
         inst.prev_x = inst.x;
@@ -340,7 +340,7 @@ pub fn minimizeCmdWindow(idx: usize) void {
         inst.prev_w = inst.width;
         inst.prev_h = inst.height;
     }
-    
+
     inst.state = .minimized;
     klog.info("CMD: Minimized instance {}", .{idx});
 }
@@ -348,7 +348,7 @@ pub fn minimizeCmdWindow(idx: usize) void {
 /// Maximize/Restore CMD window
 pub fn maximizeCmdWindow(idx: usize) void {
     if (idx >= cmd_instance_count) return;
-    
+
     const inst = &cmd_instances[idx];
     if (inst.state == .maximized) {
         // Restore
@@ -370,29 +370,29 @@ pub fn maximizeCmdWindow(idx: usize) void {
             inst.prev_w = inst.width;
             inst.prev_h = inst.height;
         }
-        
+
         inst.state = .maximized;
         inst.x = 0;
         inst.y = 0;
         inst.width = 800;
         inst.height = 600;
-        
+
         inst.shell.x = inst.x;
         inst.shell.y = inst.y;
         inst.shell.width = inst.width;
         inst.shell.height = inst.height;
     }
-    
-    klog.info("CMD: Toggle maximize instance {}, state={}", .{idx, @tagName(inst.state)});
+
+    klog.info("CMD: Toggle maximize instance {}, state={}", .{ idx, @tagName(inst.state) });
 }
 
 /// Restore CMD window from minimized state
 pub fn restoreCmdWindow(idx: usize) void {
     if (idx >= cmd_instance_count) return;
-    
+
     const inst = &cmd_instances[idx];
     if (inst.state != .minimized) return;
-    
+
     inst.state = inst.prev_state;
     klog.info("CMD: Restored instance {}", .{idx});
 }
@@ -402,28 +402,28 @@ pub fn updateCmdCaptionHover(x: i32, y: i32) void {
     for (0..cmd_instance_count) |i| {
         cmd_instances[i].caption_hover = .none;
     }
-    
+
     if (hitTestCmdCaption(x, y)) |idx| {
         const inst = &cmd_instances[idx];
         const btn_h: i32 = 18;
         const btn_w: i32 = 40;
         const btn_w_close: i32 = 48;
         const btn_y = inst.y + @divTrunc(inst.caption_height - btn_h, 2);
-        
+
         // Check minimize button
         const min_x = inst.x + inst.width - btn_w_close - btn_w * 2 - 4;
         if (x >= min_x and x < min_x + btn_w and y >= btn_y and y < btn_y + btn_h) {
             cmd_instances[idx].caption_hover = .minimize;
             return;
         }
-        
+
         // Check maximize button
         const max_x = inst.x + inst.width - btn_w_close - btn_w - 2;
         if (x >= max_x and x < max_x + btn_w and y >= btn_y and y < btn_y + btn_h) {
             cmd_instances[idx].caption_hover = .maximize;
             return;
         }
-        
+
         // Check close button
         const close_x = inst.x + inst.width - btn_w_close;
         if (x >= close_x and x < inst.x + inst.width and y >= btn_y and y < btn_y + btn_h) {
@@ -442,7 +442,7 @@ pub fn handleCaptionClick(idx: usize) CaptionButtonType {
 /// Move CMD window
 pub fn moveCmdWindow(idx: usize, x: i32, y: i32) void {
     if (idx >= cmd_instance_count) return;
-    
+
     const inst = &cmd_instances[idx];
     inst.x = x;
     inst.y = y;
@@ -453,7 +453,7 @@ pub fn moveCmdWindow(idx: usize, x: i32, y: i32) void {
 /// Resize CMD window
 pub fn resizeCmdWindow(idx: usize, width: i32, height: i32) void {
     if (idx >= cmd_instance_count) return;
-    
+
     const inst = &cmd_instances[idx];
     inst.width = width;
     inst.height = height;
@@ -468,12 +468,12 @@ var cmd_drag_off_y: i32 = 0;
 
 pub fn startCmdWindowDrag(idx: usize, x: i32, y: i32) void {
     if (idx >= cmd_instance_count) return;
-    
+
     const inst = &cmd_instances[idx];
     cmd_drag_index = idx;
     cmd_drag_off_x = x - inst.x;
     cmd_drag_off_y = y - inst.y;
-    
+
     // If maximized, restore first
     if (inst.state == .maximized) {
         maximizeCmdWindow(idx);
@@ -533,6 +533,9 @@ pub fn cmdExecuteCommand() void {
         const input = inst.shell.input_buffer[0..inst.shell.input_len];
         inst.shell.executeCommand(input);
         inst.shell.clearInput();
+        if (inst.shell.exit_requested) {
+            destroyCmdWindow(idx);
+        }
     }
 }
 
@@ -568,7 +571,7 @@ pub fn renderAllCmdInstances(t: *const theme.ThemeColors) void {
         const inst = &cmd_instances[i];
         if (!inst.visible) continue;
         if (inst.state == .minimized) continue;
-        
+
         drawCmdWindowFrame(inst, t);
         drawCmdContent(inst);
     }
@@ -581,27 +584,27 @@ fn drawCmdWindowFrame(inst: *const CmdWindowInstance, t: *const theme.ThemeColor
     const ww = inst.width;
     const wh = inst.height;
     const ch = inst.caption_height;
-    
+
     // Draw window background (black for CMD)
     fb.fillRect(wx, wy + ch, ww, wh - ch, rgb(0x00, 0x00, 0x00));
-    
+
     // Draw border
     fb.draw3DRect(wx, wy, ww, wh, rgb(0xE8, 0xF0, 0xF8), rgb(0x50, 0x60, 0x70));
-    
+
     // Draw caption background
     const caption_bg = if (inst.focused) rgb(0x00, 0x3C, 0x80) else rgb(0x80, 0x80, 0x80);
     fb.fillRect(wx + 1, wy + 1, ww - 2, ch - 1, caption_bg);
-    
+
     // Draw title text
     const title = "Administrator: C:\\Windows\\system32\\cmd.exe";
     fb.drawTextTransparent(wx + 8, wy + @divTrunc(ch - 14, 2), title, rgb(0xFF, 0xFF, 0xFF));
-    
+
     // Draw caption buttons
     const btn_h: i32 = 18;
     const btn_y = wy + @divTrunc(ch - btn_h, 2);
     const btn_w: i32 = 40;
     const btn_w_close: i32 = 48;
-    
+
     // Minimize button
     const min_x = wx + ww - btn_w_close - btn_w * 2 - 4;
     if (inst.caption_hover == .minimize) {
@@ -613,7 +616,7 @@ fn drawCmdWindowFrame(inst: *const CmdWindowInstance, t: *const theme.ThemeColor
     fb.drawVLine(min_x + btn_w - 1, btn_y, btn_h, rgb(0x40, 0x50, 0x60));
     // Minimize glyph (underscore)
     fb.fillRect(min_x + btn_w / 2 - 4, btn_y + btn_h / 2 + 1, 8, 2, rgb(0xE8, 0xF2, 0xFA));
-    
+
     // Maximize button
     const max_x = wx + ww - btn_w_close - btn_w - 2;
     if (inst.caption_hover == .maximize) {
@@ -625,7 +628,7 @@ fn drawCmdWindowFrame(inst: *const CmdWindowInstance, t: *const theme.ThemeColor
     fb.drawVLine(max_x + btn_w - 1, btn_y, btn_h, rgb(0x40, 0x50, 0x60));
     // Maximize glyph (square)
     fb.drawRect(max_x + btn_w / 2 - 4, btn_y + btn_h / 2 - 4, 8, 8, rgb(0xE8, 0xF2, 0xFA));
-    
+
     // Close button
     const close_x = wx + ww - btn_w_close;
     if (inst.caption_hover == .close) {
@@ -644,7 +647,7 @@ fn drawCmdWindowFrame(inst: *const CmdWindowInstance, t: *const theme.ThemeColor
         fb.putPixel32(@intCast(cx + d), @intCast(cy + d), close_color);
         fb.putPixel32(@intCast(cx + d), @intCast(cy - d), close_color);
     }
-    
+
     _ = t;
 }
 
@@ -654,25 +657,25 @@ fn drawCmdContent(inst: *const CmdWindowInstance) void {
     const start_y = inst.y + inst.caption_height + 4;
     const content_x = inst.x + 8;
     const content_bottom = inst.y + inst.height - 30;
-    
+
     // Draw history lines
     var y_offset: i32 = start_y;
     var line_idx: usize = if (inst.shell.scroll_offset > 0) @as(usize, @intCast(inst.shell.scroll_offset)) else 0;
-    
+
     while (line_idx < inst.shell.line_count and y_offset < content_bottom) {
         const cmdline = inst.shell.lines[line_idx];
-        
+
         // Draw output (before prompt/command for cmd style)
-        if (cmdline.output.len > 0) {
+        if (cmdline.output_len > 0) {
             const max_chars = @divTrunc(inst.width - 16, 8);
             var out_idx: usize = 0;
-            while (out_idx < cmdline.output.len and y_offset < content_bottom) {
+            while (out_idx < cmdline.output_len and y_offset < content_bottom) {
                 var line_end = out_idx;
                 var chars: usize = 0;
-                while (line_end < cmdline.output.len and chars < @as(usize, @intCast(max_chars))) {
+                while (line_end < cmdline.output_len and chars < @as(usize, @intCast(max_chars))) {
                     if (cmdline.output[line_end] == '\n' or cmdline.output[line_end] == '\r') {
                         line_end += 1;
-                        if (line_end < cmdline.output.len and cmdline.output[line_end] == '\n') {
+                        if (line_end < cmdline.output_len and cmdline.output[line_end] == '\n') {
                             line_end += 1;
                         }
                         break;
@@ -685,32 +688,32 @@ fn drawCmdContent(inst: *const CmdWindowInstance) void {
                 out_idx = line_end;
             }
         }
-        
+
         // Draw prompt
-        if (cmdline.prompt.len > 0) {
-            fb.drawTextTransparent(content_x, y_offset, cmdline.prompt, rgb(0xFF, 0xFF, 0xFF));
+        if (cmdline.prompt_len > 0) {
+            fb.drawTextTransparent(content_x, y_offset, cmdline.prompt[0..cmdline.prompt_len], rgb(0xFF, 0xFF, 0xFF));
         }
-        
+
         // Draw command
-        if (cmdline.command.len > 0) {
-            fb.drawTextTransparent(content_x + @as(i32, @intCast(cmdline.prompt.len * 8)), y_offset, cmdline.command, rgb(0xFF, 0xFF, 0xFF));
+        if (cmdline.command_len > 0) {
+            fb.drawTextTransparent(content_x + @as(i32, @intCast(cmdline.prompt_len * 8)), y_offset, cmdline.command[0..cmdline.command_len], rgb(0xFF, 0xFF, 0xFF));
         }
-        
+
         y_offset += line_height;
         line_idx += 1;
     }
-    
+
     // Draw current prompt line
     const prompt = inst.shell.getPrompt();
     const prompt_y = inst.y + inst.height - 24;
     fb.drawTextTransparent(content_x, prompt_y, prompt, rgb(0xCC, 0xCC, 0xCC));
-    
+
     // Draw input
     if (inst.shell.input_len > 0) {
         const input_x = content_x + @as(i32, @intCast(prompt.len * 8));
         fb.drawTextTransparent(input_x, prompt_y, inst.shell.input_buffer[0..inst.shell.input_len], rgb(0xFF, 0xFF, 0xFF));
     }
-    
+
     // Draw cursor
     if (inst.focused and inst.shell.cursor_blink) {
         const input_x = content_x + @as(i32, @intCast(prompt.len * 8)) + inst.shell.cursor_x * 8;

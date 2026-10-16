@@ -16,18 +16,11 @@
 // License along with this library; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
-//! 中断分发入口：x86_64 走 IDT；其它架构由各自 trap/空实现承担。
+//! 中断分发入口：由 HAL 分发层统一调度，不直接引用架构。
 
-const builtin = @import("builtin");
+const hal_dispatch = @import("../hal/interrupt_dispatch.zig");
 
-pub const InterruptFrame = switch (builtin.target.cpu.arch) {
-    .x86_64 => @import("interrupt_x86.zig").InterruptFrame,
-    else => @import("interrupt_stub.zig").InterruptFrame,
-};
-
+pub const InterruptFrame = hal_dispatch.Dispatch.InterruptFrame;
 pub fn handle(frame: *InterruptFrame) void {
-    switch (builtin.target.cpu.arch) {
-        .x86_64 => @import("interrupt_x86.zig").handle(@ptrCast(frame)),
-        else => @import("interrupt_stub.zig").handle(frame),
-    }
+    hal_dispatch.Dispatch.handle(@ptrCast(frame));
 }

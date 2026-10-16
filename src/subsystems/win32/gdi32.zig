@@ -30,6 +30,7 @@
 //!
 //! **句柄与窗口寿命**：简化实现中 `CreateCompatibleDC` 等返回的 `HDC` 与 `user32` 的 `HWND` 同源占位；
 //! `DestroyWindow` 之后不得再对该 `hwnd` 调用 `GetDC`/`BitBlt`；跨进程 GDI 句柄表为路线图项（矩阵 §5.1）。
+const std = @import("std");
 
 const klog = @import("../../rtl/klog.zig");
 const kernel32 = @import("../../libs/kernel32.zig");
@@ -162,7 +163,7 @@ pub const LOGFONTA = struct {
     clip_precision: u32 = 0,
     quality: u32 = 0,
     pitch_and_family: u32 = 0,
-    face_name: [32]u8 = [_]u8{0} ** 32,
+    face_name: [32]u8 = std.mem.zeroes([32]u8),
     face_name_len: usize = 0,
 };
 
@@ -242,7 +243,7 @@ const GdiObject = struct {
     width: i32 = 1,
     weight: u32 = FW_NORMAL,
     height: i32 = 0,
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
 };
 
@@ -272,11 +273,11 @@ const DeviceContext = struct {
     clip_bottom: i32 = 0,
 };
 
-var device_contexts: [MAX_DCS]DeviceContext = [_]DeviceContext{.{}} ** MAX_DCS;
+var device_contexts: [MAX_DCS]DeviceContext = std.mem.zeroes([MAX_DCS]DeviceContext);
 var dc_count: usize = 0;
 var next_dc_handle: HDC = 0x20000;
 
-var gdi_objects: [MAX_GDI_OBJECTS]GdiObject = [_]GdiObject{.{}} ** MAX_GDI_OBJECTS;
+var gdi_objects: [MAX_GDI_OBJECTS]GdiObject = std.mem.zeroes([MAX_GDI_OBJECTS]GdiObject);
 var gdi_obj_count: usize = 0;
 var next_gdi_handle: HGDIOBJ = 0x30000;
 
@@ -386,7 +387,7 @@ pub fn DeleteObject(obj: HGDIOBJ) BOOL {
 
 pub fn GetObjectType(obj: HGDIOBJ) u32 {
     const gdi = findGdiObj(obj) orelse return 0;
-    return @intFromEnum(gdi.obj_type);
+    return @backingInt(gdi.obj_type);
 }
 
 // ── Pen/Brush/Font Creation ──

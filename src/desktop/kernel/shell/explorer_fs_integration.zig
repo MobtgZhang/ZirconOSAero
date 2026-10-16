@@ -52,7 +52,7 @@ pub const KNOWN_EXTENSIONS = struct {
 
 pub fn detectFileCategory(extension: []const u8) FileCategory {
     const ext_lower = std.ascii.lowerString(&[16]u8{}, extension);
-    
+
     for (KNOWN_EXTENSIONS.documents) |ext| {
         if (std.mem.eql(u8, ext_lower[0..extension.len], ext)) {
             return .document;
@@ -88,7 +88,7 @@ pub fn detectFileCategory(extension: []const u8) FileCategory {
             return .shortcut;
         }
     }
-    
+
     return .unknown;
 }
 
@@ -96,9 +96,9 @@ pub fn getFileTypeDescription(extension: []const u8, is_directory: bool) []const
     if (is_directory) {
         return "File folder";
     }
-    
+
     const category = detectFileCategory(extension);
-    
+
     return switch (category) {
         .document => "Document",
         .image => "Image",
@@ -116,7 +116,7 @@ pub fn getFileTypeFromName(name: []const u8) []const u8 {
     // Extract extension
     for (name, 0..) |c, idx| {
         if (c == '.') {
-            return name[idx + 1..];
+            return name[idx + 1 ..];
         }
     }
     return "";
@@ -134,7 +134,7 @@ pub fn calculateFolderSize(letter: u8, subpath: ?[]const u8) u64 {
 
 fn calculateFolderSizeRecursive(letter: u8, subpath: ?[]const u8, depth: usize, total_size: *u64) void {
     if (depth >= MAX_RECURSE_DEPTH) return;
-    
+
     var entries: [64]explorer_vol_snap.ExplorerListEntry = undefined;
     const count = explorer_vol_snap.readDirectoryGeneric(
         letter,
@@ -143,7 +143,7 @@ fn calculateFolderSizeRecursive(letter: u8, subpath: ?[]const u8, depth: usize, 
         .name,
         true,
     );
-    
+
     for (entries[0..count]) |entry| {
         if (entry.is_directory) {
             // Recurse into subdirectory
@@ -158,7 +158,7 @@ fn calculateFolderSizeRecursive(letter: u8, subpath: ?[]const u8, depth: usize, 
 fn buildSubpath(parent: ?[]const u8, child: []const u8) []u8 {
     var buf: [256]u8 = undefined;
     var offset: usize = 0;
-    
+
     if (parent) |p| {
         @memcpy(buf[0..p.len], p);
         offset = p.len;
@@ -167,11 +167,11 @@ fn buildSubpath(parent: ?[]const u8, child: []const u8) []u8 {
             offset += 1;
         }
     }
-    
+
     const copy_len = @min(child.len, buf.len - offset);
     @memcpy(buf[offset..][0..copy_len], child[0..copy_len]);
     offset += copy_len;
-    
+
     return buf[0..offset];
 }
 
@@ -199,9 +199,9 @@ pub fn traverseDirectory(letter: u8, root_path: []const u8, max_depth: usize) Tr
     var entries: [MAX_TRAVERSAL_ENTRIES]TraversalEntry = undefined;
     var count: usize = 0;
     var total_size: u64 = 0;
-    
+
     traverseRecursive(letter, root_path, 0, max_depth, &entries, &count, &total_size);
-    
+
     return .{
         .entries = entries[0..count],
         .count = count,
@@ -221,14 +221,14 @@ fn traverseRecursive(
     total_size: *u64,
 ) void {
     if (depth >= max_depth or count.* >= MAX_TRAVERSAL_ENTRIES) return;
-    
+
     var dir_entries: [64]explorer_vol_snap.ExplorerListEntry = undefined;
     const subpath = if (current_path.len > 0) current_path else null;
     const n = explorer_vol_snap.readDirectoryGeneric(letter, subpath, dir_entries[0..], .name, true);
-    
+
     for (dir_entries[0..n]) |entry| {
         if (count.* >= MAX_TRAVERSAL_ENTRIES) break;
-        
+
         entries[count.*] = .{
             .name = entry.name[0..entry.name_len],
             .path = current_path,
@@ -238,7 +238,7 @@ fn traverseRecursive(
         };
         count.* += 1;
         total_size.* += entry.file_size;
-        
+
         if (entry.is_directory) {
             const new_path = buildSubpath(current_path, entry.name[0..entry.name_len]);
             traverseRecursive(letter, new_path, depth + 1, max_depth, entries, count, total_size);
@@ -361,7 +361,7 @@ pub fn formatAttributesString(attrs: FileAttributes) []const u8 {
     // Windows-style attribute string (e.g., "A" for Archive, "RH" for Read-only Hidden)
     var buf: [8]u8 = undefined;
     var len: usize = 0;
-    
+
     if (attrs.directory) {
         buf[len] = 'D';
         len += 1;
@@ -382,11 +382,11 @@ pub fn formatAttributesString(attrs: FileAttributes) []const u8 {
         buf[len] = 'A';
         len += 1;
     }
-    
+
     if (len == 0) {
         return "";
     }
-    
+
     return buf[0..len];
 }
 

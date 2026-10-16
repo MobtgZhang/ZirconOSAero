@@ -91,7 +91,7 @@ pub fn main() noreturn {
 
     puts(out, "\r\n");
     puts(out, "  [!!] Failed to load kernel image.\r\n");
-    puts(out, "  [!!] Verify ESP:\\EFI\\BOOT\\BOOT*.EFI and \\boot\\kernel.elf on the FAT volume.\r\n");
+    puts(out, "  [!!] Verify ESP:\\EFI\\Microsoft\\Boot\\bootmgfw.efi and \\Windows\\System32\\winload.efi on the FAT volume.\r\n");
     puts(out, "  [!!] System halted.\r\n");
     halt();
 }
@@ -368,7 +368,7 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
 }
 
 fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
-    // ── Step 1: Open kernel.elf from ESP ──
+    // ── Step 1: Open winload.efi from ESP ──
     puts(out, "    [*] Opening kernel from ESP...\r\n");
 
     const loaded_image = bs.openProtocol(
@@ -410,11 +410,11 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
         .read,
         .{},
     ) catch {
-        puts(out, "    [!!] kernel.elf not found on ESP\r\n");
+        puts(out, "    [!!] winload.efi not found on ESP\r\n");
         return;
     };
 
-    puts(out, "    [*] kernel.elf opened\r\n");
+    puts(out, "    [*] winload.efi opened\r\n");
 
     // ── Step 2: Read kernel file into memory ──
     var info_buf: [256]u8 align(8) = undefined;

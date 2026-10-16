@@ -45,10 +45,8 @@ pub fn keBugCheckEx(
     param3: usize,
     param4: usize,
 ) noreturn {
-    if (@import("builtin").cpu.arch == .x86_64) {
-        asm volatile ("cli" ::: .{ .memory = true });
-    }
-    klog.crit("*** STOP 0x{X:0>8} (0x{X:0>16} 0x{X:0>16} 0x{X:0>16} 0x{X:0>16})", .{ @intFromEnum(code), param1, param2, param3, param4 });
+    arch.disableInterrupts();
+    klog.crit("*** STOP 0x{X:0>8} (0x{X:0>16} 0x{X:0>16} 0x{X:0>16} 0x{X:0>16})", .{ @backingInt(code), param1, param2, param3, param4 });
     while (true) {
         arch.halt();
     }

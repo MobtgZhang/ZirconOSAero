@@ -32,7 +32,7 @@ const klog = @import("../../../rtl/klog.zig");
 pub const VK = struct {
     pub const SHIFT: u8 = 0x10;
     pub const CONTROL: u8 = 0x11;
-    pub const MENU: u8 = 0x12;  // Alt key
+    pub const MENU: u8 = 0x12; // Alt key
     pub const SPACE: u8 = 0x20;
     pub const BACK: u8 = 0x08;
     pub const RETURN: u8 = 0x0D;
@@ -43,8 +43,8 @@ pub const VK = struct {
     pub const DOWN: u8 = 0x28;
     pub const HOME: u8 = 0x24;
     pub const END: u8 = 0x23;
-    pub const PRIOR: u8 = 0x21;  // Page Up
-    pub const NEXT: u8 = 0x22;   // Page Down
+    pub const PRIOR: u8 = 0x21; // Page Up
+    pub const NEXT: u8 = 0x22; // Page Down
 };
 
 /// IMM Bridge - bridges IME with Win32 message system
@@ -68,13 +68,13 @@ pub const ImmBridge = struct {
     /// Initialize IMM bridge
     pub fn init() ImmBridge {
         return .{
-            .output_buffer = [_]u8{0} ** 64,
+            .output_buffer = [_]u8{0} * *64,
             .output_len = 0,
             .shift_pressed = false,
             .ctrl_pressed = false,
             .alt_pressed = false,
             .output_ready = false,
-            .composition = [_]u8{0} ** 64,
+            .composition = [_]u8{0} * *64,
             .composition_len = 0,
         };
     }
@@ -114,7 +114,7 @@ pub const ImmBridge = struct {
         bridge.output_buffer[len] = 0;
         bridge.output_ready = true;
 
-        klog.info("ime: committed '{}'", .{ text });
+        klog.info("ime: committed '{}'", .{text});
     }
 
     /// Get committed string

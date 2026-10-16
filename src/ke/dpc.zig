@@ -1,3 +1,4 @@
+const std = @import("std");
 // Copyright (c) 2024 Mobtgzhang <mobtgzhang@outlook.com>
 //
 // ZirconOS
@@ -35,8 +36,9 @@
 // - **PnP/Power**：`IRP_MJ_PNP` / `IRP_MJ_POWER` 完成路径亦须遵守上述 IRQL 约束（K4.3/K4.4）；见 `src/io/io.zig` 与 [DriverMilestones_NT61.md](../../docs/cn/DriverMilestones_NT61.md)。
 // Milestone: [docs/cn/NT61_KERNEL_TODO.md](../../docs/cn/NT61_KERNEL_TODO.md) Phase K4.4（完整 IRQL 状态机为长期项）。
 
-const builtin = @import("builtin");
+const hal = @import("../hal.zig");
 const irql_mod = @import("irql.zig");
+const spinlock_mod = @import("spinlock.zig");
 
 const dpc_fifo_cap: usize = 128;
 
@@ -46,20 +48,21 @@ const DpcSlot = struct {
 };
 
 const DpcFifo = struct {
+    lock: spinlock_mod.IrqSpinLock = .{},
     fifo: [dpc_fifo_cap]DpcSlot = undefined,
     head: usize = 0,
     tail: usize = 0,
     count: usize = 0,
 };
 
-var dpc_state: [irql_mod.MAX_IRQL_CPUS]DpcFifo = [_]DpcFifo{.{}} ** irql_mod.MAX_IRQL_CPUS;
+var dpc_state: [irql_mod.MAX_IRQL_CPUS]DpcFifo = @splat(.{ .fifo = undefined });
 
 /// 由鼠标/键盘等 ISR 路径调用：以 DPC 延后 `input_hub.pollAll`。
 var input_flush_pending: [irql_mod.MAX_IRQL_CPUS]bool = @splat(false);
 
 fn runInputFlushDpc(ctx: ?*anyopaque) void {
     _ = ctx;
-    if (builtin.target.cpu.arch == .x86_64) {
+    if (hal.hasLegacyPCDevices) {
         @import("../drivers/input/input_hub.zig").pollAll();
     }
 }
@@ -67,8 +70,14 @@ fn runInputFlushDpc(ctx: ?*anyopaque) void {
 /// 由鼠标/键盘等 ISR 路径调用：以 DPC 延后 `input_hub.pollAll`。
 pub fn requestInputFlushDeferred() void {
     const slot = irql_mod.currentCpuSlot();
-    if (!queueDpc(runInputFlushDpc, null)) {
-        input_flush_pending[slot] = true;
+    const q = &dpc_state[slot];
+    q.lock.lock();
+    defer q.lock.unlock();
+    if (q.count >= dpc_fifo_cap) input_flush_pending[slot] = true;
+    if (q.count < dpc_fifo_cap) {
+        q.fifo[q.tail] = .{ .func = runInputFlushDpc, .ctx = null };
+        q.tail = (q.tail + 1) % dpc_fifo_cap;
+        q.count += 1;
     }
 }
 
@@ -76,6 +85,8 @@ pub fn requestInputFlushDeferred() void {
 pub fn queueDpc(func: *const fn (?*anyopaque) void, ctx: ?*anyopaque) bool {
     const slot = irql_mod.currentCpuSlot();
     const q = &dpc_state[slot];
+    q.lock.lock();
+    defer q.lock.unlock();
     if (q.count >= dpc_fifo_cap) return false;
     q.fifo[q.tail] = .{ .func = func, .ctx = ctx };
     q.tail = (q.tail + 1) % dpc_fifo_cap;
@@ -88,17 +99,22 @@ pub fn drainAtDispatchLevel() void {
     if (irql_mod.getCurrentIrql() < irql_mod.DISPATCH_LEVEL) return;
     const slot = irql_mod.currentCpuSlot();
     const q = &dpc_state[slot];
-    while (q.count > 0) {
+
+    while (true) {
+        q.lock.lock();
+        if (q.count == 0) break;
         const s = q.fifo[q.head];
         q.head = (q.head + 1) % dpc_fifo_cap;
         q.count -= 1;
+        q.lock.unlock();
         s.func(s.ctx);
     }
-    if (input_flush_pending[slot]) {
-        input_flush_pending[slot] = false;
-        if (builtin.target.cpu.arch == .x86_64) {
-            @import("../drivers/input/input_hub.zig").pollAll();
-        }
+
+    const flush_pending = input_flush_pending[slot];
+    input_flush_pending[slot] = false;
+    q.lock.unlock();
+    if (flush_pending and hal.hasLegacyPCDevices) {
+        @import("../drivers/input/input_hub.zig").pollAll();
     }
 }
 

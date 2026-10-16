@@ -162,21 +162,21 @@ const STATUS_BAR_DIVIDER: i32 = 100;
 
 pub fn renderStatusBar(x: i32, y: i32, width: i32) void {
     const h = STATUS_BAR_H;
-    
+
     // Background
     fb.fillRect(x, y, width, h, rgb(0xF0, 0xF0, 0xF0));
-    
+
     // Top border
     fb.drawHLine(x, y, width, rgb(0xAA, 0xAA, 0xAA));
-    
+
     // Left section: item count
     var count_buf: [64]u8 = undefined;
     const count_text = generateStatusText(&count_buf);
     fb.drawTextTransparent(x + STATUS_BAR_PADDING, y + (h - 14) / 2, count_text, rgb(0x18, 0x18, 0x18));
-    
+
     // Divider
     fb.drawVLine(x + width - STATUS_BAR_DIVIDER - STATUS_BAR_PADDING, y + 4, h - 8, rgb(0xCC, 0xCC, 0xCC));
-    
+
     // Right section: space info (for drive views)
     if (space_known) {
         var space_buf: [64]u8 = undefined;
@@ -188,7 +188,7 @@ pub fn renderStatusBar(x: i32, y: i32, width: i32) void {
             rgb(0x18, 0x18, 0x18),
         );
     }
-    
+
     // Loading animation
     if (status_bar_mode == .loading or status_bar_mode == .searching) {
         renderLoadingIndicator(x + width - 60, y + (h - 14) / 2);
@@ -231,14 +231,14 @@ pub fn hideProgress() void {
 
 pub fn renderStatusBarWithProgress(x: i32, y: i32, width: i32) void {
     renderStatusBar(x, y, width);
-    
+
     if (progress_shown) {
         const progress_y = y + STATUS_BAR_H - 4;
         const progress_w = @as(i32, @intCast(@as(u16, width) * @as(u16, progress_percent) / 100));
-        
+
         // Progress bar background
         fb.fillRect(x, progress_y, width, 4, rgb(0xDD, 0xDD, 0xDD));
-        
+
         // Progress bar fill
         fb.fillRect(x, progress_y, progress_w, 4, rgb(0x00, 0x51, 0x9E));
     }

@@ -63,7 +63,7 @@ pub fn checkFatVolume(fat_entries: []const u32, total_clusters: u32) FatCheckRes
     }
 
     // 检测孤儿链和交叉链接
-    var cluster_refs: []u32 = &[_]u32{0} ** 65536;
+    var cluster_refs: []u32 = std.mem.zeroes([]u32);
     c = 2;
     while (c < total_clusters + 2) : (c += 1) {
         const entry = fat_entries[c];

@@ -102,7 +102,7 @@ const MAX_WINDOW_STATIONS: usize = 4;
 const MAX_DESKTOPS: usize = 8;
 
 pub const Desktop = struct {
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
     is_active: bool = false,
     station_id: u32 = 0,
@@ -112,11 +112,11 @@ pub const Desktop = struct {
 
 pub const WindowStation = struct {
     header: ob.ObjectHeader = .{ .obj_type = .device },
-    name: [32]u8 = [_]u8{0} ** 32,
+    name: [32]u8 = std.mem.zeroes([32]u8),
     name_len: usize = 0,
     is_active: bool = false,
     session_id: u32 = 0,
-    desktops: [MAX_DESKTOPS]Desktop = [_]Desktop{.{}} ** MAX_DESKTOPS,
+    desktops: [MAX_DESKTOPS]Desktop = std.mem.zeroes([MAX_DESKTOPS]Desktop),
     desktop_count: usize = 0,
 
     pub fn createDesktop(self: *WindowStation, name: []const u8) ?*Desktop {
@@ -145,7 +145,7 @@ pub const Win32Process = struct {
     window_station_id: u32 = 0,
     desktop_id: u32 = 0,
     parent_pid: u32 = 0,
-    image_name: [64]u8 = [_]u8{0} ** 64,
+    image_name: [64]u8 = std.mem.zeroes([64]u8),
     image_name_len: usize = 0,
     creation_flags: u32 = 0,
     exit_code: u32 = 0,
@@ -158,14 +158,14 @@ pub const Win32Process = struct {
 
 // ── Global State ──
 
-var window_stations: [MAX_WINDOW_STATIONS]WindowStation = [_]WindowStation{.{}} ** MAX_WINDOW_STATIONS;
+var window_stations: [MAX_WINDOW_STATIONS]WindowStation = std.mem.zeroes([MAX_WINDOW_STATIONS]WindowStation);
 var station_count: usize = 0;
 
 /// 交互会话默认 `WinSta0`；见 `docs/cn/DesktopManagerSpec.md`
 var active_window_station_idx: usize = 0;
 var active_desktop_idx: usize = 0;
 
-var win32_processes: [MAX_WIN32_PROCESSES]Win32Process = [_]Win32Process{.{}} ** MAX_WIN32_PROCESSES;
+var win32_processes: [MAX_WIN32_PROCESSES]Win32Process = std.mem.zeroes([MAX_WIN32_PROCESSES]Win32Process);
 var win32_process_count: usize = 0;
 
 var subsystem_state: SessionState = .inactive;
@@ -212,7 +212,7 @@ pub fn registerProcess(pid: u32, subsystem: SubsystemType, image_name: []const u
     api_call_count += 1;
 
     klog.debug("csrss: Registered Win32 process PID=%u '%s' (subsystem=%u)", .{
-        pid, image_name, @intFromEnum(subsystem),
+        pid, image_name, @backingInt(subsystem),
     });
 
     return wp;
@@ -338,13 +338,13 @@ pub fn setProcessDesktop(pid: u32, desktop_index: u32) bool {
 pub fn queueKernelDwmNotifyLpc(kind: compositor_sync_nt61.KernelDwmNotifyKind, wp: u32, lp: i64) void {
     var buf: [ipc.MSG_DATA_SIZE]u8 = undefined;
     compositor_sync_nt61.encodeKernelDwmNotifyV1(&buf, kind, wp, lp);
-    _ = ipc.send(0, kernel_dwm_lpc_inbox_pid, @intFromEnum(CsrApiNumber.kernel_dwm_notify), &buf);
+    _ = ipc.send(0, kernel_dwm_lpc_inbox_pid, @backingInt(CsrApiNumber.kernel_dwm_notify), &buf);
 }
 
 pub fn queueCompositorTreeSyncLpc(generation: u32, entries: []const compositor_sync_nt61.TreeSurfaceEntryV1) void {
     var buf: [ipc.MSG_DATA_SIZE]u8 = undefined;
     compositor_sync_nt61.encodeCompositorTreeSyncV1(&buf, generation, entries);
-    _ = ipc.send(0, kernel_dwm_lpc_inbox_pid, @intFromEnum(CsrApiNumber.compositor_tree_sync), &buf);
+    _ = ipc.send(0, kernel_dwm_lpc_inbox_pid, @backingInt(CsrApiNumber.compositor_tree_sync), &buf);
 }
 
 /// 排空 PID 62 inbox；须在主循环或 DWM 通知路径上调用，以免积压。
@@ -353,10 +353,10 @@ pub fn drainKernelDwmLpcInbox(max_messages: u32) void {
     while (n < max_messages) : (n += 1) {
         const m = ipc.receive(kernel_dwm_lpc_inbox_pid) orelse break;
         switch (m.opcode) {
-            @intFromEnum(CsrApiNumber.kernel_dwm_notify) => {
+            @backingInt(CsrApiNumber.kernel_dwm_notify) => {
                 _ = handleApiCall(.kernel_dwm_notify, m.sender, &m.data);
             },
-            @intFromEnum(CsrApiNumber.compositor_tree_sync) => {
+            @backingInt(CsrApiNumber.compositor_tree_sync) => {
                 _ = handleApiCall(.compositor_tree_sync, m.sender, &m.data);
             },
             else => {},
@@ -610,7 +610,7 @@ pub fn getTotalDesktopCount() usize {
 // ── Initialization ──
 
 fn lpcCsrInlineHandler(client_pid: u32, opcode: u32, data: ?*const [ipc.MSG_DATA_SIZE]u8) i32 {
-    const api = std.meta.intToEnum(CsrApiNumber, opcode) catch return -1;
+    const api: CsrApiNumber = @fromBackingInt(@intCast(opcode));
     return handleApiCall(api, client_pid, data);
 }
 

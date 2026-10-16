@@ -281,17 +281,17 @@ pub const FormatName = struct {
 // Standard Extensions
 
 pub const StdExtensions = struct {
-    pub const png = &.{ ".png" };
+    pub const png = &.{".png"};
     pub const jpeg = &.{ ".jpg", ".jpeg", ".jpe", ".jfif" };
     pub const bmp = &.{ ".bmp", ".dib", ".rle" };
-    pub const gif = &.{ ".gif" };
+    pub const gif = &.{".gif"};
     pub const tiff = &.{ ".tif", ".tiff" };
     pub const wdp = &.{ ".wdp", ".hdp" };
-    pub const ico = &.{ ".ico" };
-    pub const cur = &.{ ".cur" };
-    pub const ani = &.{ ".ani" };
-    pub const wmf = &.{ ".wmf" };
-    pub const emf = &.{ ".emf" };
+    pub const ico = &.{".ico"};
+    pub const cur = &.{".cur"};
+    pub const ani = &.{".ani"};
+    pub const wmf = &.{".wmf"};
+    pub const emf = &.{".emf"};
 };
 
 // ============================================================================
@@ -312,7 +312,7 @@ pub fn copyWithRowPitch(
     for (0..@as(usize, height)) |y| {
         const src_row = @as(usize, y) * @as(usize, src_row_pitch);
         const dst_row = @as(usize, y) * @as(usize, dst_row_pitch);
-        @memcpy(dst[dst_row..dst_row + @as(usize, width) * bpp], src[src_row..src_row + @as(usize, width) * bpp]);
+        @memcpy(dst[dst_row .. dst_row + @as(usize, width) * bpp], src[src_row .. src_row + @as(usize, width) * bpp]);
     }
     return dst;
 }
@@ -321,7 +321,7 @@ pub fn copyWithRowPitch(
 pub fn fillPixel(buf: *PixelBuffer, x: u32, y: u32, color: [4]u8) void {
     if (buf.bytes_per_pixel < 4) return;
     const offset = @as(usize, y) * @as(usize, buf.row_pitch) + @as(usize, x) * @as(usize, buf.bytes_per_pixel);
-    @memcpy(buf.data[offset..offset + 4], &color);
+    @memcpy(buf.data[offset .. offset + 4], &color);
 }
 
 /// Returns a vertically flipped copy of `buf`.
@@ -332,7 +332,7 @@ pub fn flipVertically(buf: *PixelBuffer, allocator: std.mem.Allocator) !PixelBuf
     for (0..h) |y| {
         const src_row = y * rp;
         const dst_row = (h - 1 - y) * rp;
-        @memcpy(new_data[dst_row..dst_row + rp], buf.data[src_row..src_row + rp]);
+        @memcpy(new_data[dst_row .. dst_row + rp], buf.data[src_row .. src_row + rp]);
     }
     return PixelBuffer{
         .width = buf.width,

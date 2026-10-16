@@ -187,7 +187,8 @@ pub fn hitTestCaption(window_handle: u32, px: i32, py: i32) ?enum { client, capt
 
         // 检查是否在窗口范围内
         if (px < chrome.x or px >= chrome.x + @as(i32, @intCast(chrome.width)) or
-            py < chrome.y or py >= chrome.y + @as(i32, @intCast(chrome.height))) {
+            py < chrome.y or py >= chrome.y + @as(i32, @intCast(chrome.height)))
+        {
             continue;
         }
 
@@ -199,19 +200,22 @@ pub fn hitTestCaption(window_handle: u32, px: i32, py: i32) ?enum { client, capt
 
         // 关闭按钮
         if (local_x >= button_start_x + BUTTON_SIZE * 2 and local_x < button_start_x + BUTTON_SIZE * 3 and
-            local_y >= BUTTON_MARGIN and local_y < BUTTON_MARGIN + BUTTON_SIZE) {
+            local_y >= BUTTON_MARGIN and local_y < BUTTON_MARGIN + BUTTON_SIZE)
+        {
             return .close;
         }
 
         // 最大化按钮
         if (local_x >= button_start_x + BUTTON_SIZE and local_x < button_start_x + BUTTON_SIZE * 2 and
-            local_y >= BUTTON_MARGIN and local_y < BUTTON_MARGIN + BUTTON_SIZE) {
+            local_y >= BUTTON_MARGIN and local_y < BUTTON_MARGIN + BUTTON_SIZE)
+        {
             return .maximize;
         }
 
         // 最小化按钮
         if (local_x >= button_start_x and local_x < button_start_x + BUTTON_SIZE and
-            local_y >= BUTTON_MARGIN and local_y < BUTTON_MARGIN + BUTTON_SIZE) {
+            local_y >= BUTTON_MARGIN and local_y < BUTTON_MARGIN + BUTTON_SIZE)
+        {
             return .minimize;
         }
 
@@ -224,7 +228,8 @@ pub fn hitTestCaption(window_handle: u32, px: i32, py: i32) ?enum { client, capt
         if (local_y >= TITLEBAR_HEIGHT and
             local_y < @as(i32, @intCast(chrome.height)) - resize_border and
             local_x >= resize_border and
-            local_x < @as(i32, @intCast(chrome.width)) - resize_border) {
+            local_x < @as(i32, @intCast(chrome.width)) - resize_border)
+        {
             return .client;
         }
 

@@ -92,8 +92,9 @@ export fn mips_tlb_refill_fastpath(badvaddr: u64) callconv(.c) u64 {
         \\ ehb
         \\ tlbp
         \\ ehb
-    :
-    : [hi] "r" (entry_hi), [lo] "r" (entry_lo),
+        :
+        : [hi] "r" (entry_hi),
+          [lo] "r" (entry_lo),
     );
 
     const idx: i32 = asm ("dmfc0 %[o], $0"

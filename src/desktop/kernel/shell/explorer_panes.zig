@@ -74,25 +74,25 @@ pub fn renderPreviewPane(
 ) void {
     // Background
     fb.fillRect(x, y, w, h, rgb(0xF5, 0xF5, 0xF5));
-    
+
     // Border
     fb.drawRect(x, y, w, h, rgb(0xCC, 0xCC, 0xCC));
-    
+
     // Preview title
     const title = "Preview";
     fb.drawTextTransparent(x + 8, y + 8, title, rgb(0x18, 0x18, 0x18));
     fb.drawHLine(x, y + 28, w, rgb(0xDD, 0xDD, 0xDD));
-    
+
     // Content area
     const content_x = x + 8;
     const content_y = y + 36;
     const content_w = w - 16;
     const content_h = h - 44;
-    
+
     // Try to render preview based on file type
     const name = entry.name[0..entry.name_len];
     const ext = getExtension(name);
-    
+
     if (entry.is_directory) {
         renderFolderPreview(content_x, content_y, content_w, content_h);
     } else if (isImageExtension(ext)) {
@@ -155,26 +155,26 @@ pub fn renderDetailsPane(
 ) void {
     // Background
     fb.fillRect(x, y, w, h, rgb(0xF5, 0xF5, 0xF5));
-    
+
     // Border
     fb.drawRect(x, y, w, h, rgb(0xCC, 0xCC, 0xCC));
-    
+
     // Details title
     const title = "Details";
     fb.drawTextTransparent(x + 8, y + 8, title, rgb(0x18, 0x18, 0x18));
     fb.drawHLine(x, y + 28, w, rgb(0xDD, 0xDD, 0xDD));
-    
+
     // Content area
     const label_x = x + 8;
     const value_x = x + 100;
     var row_y = y + 36;
     const row_h: i32 = 18;
-    
+
     // File name
     fb.drawTextTransparent(label_x, row_y, "Name:", rgb(0x60, 0x60, 0x60));
     fb.drawTextTransparent(value_x, row_y, entry.name[0..entry.name_len], rgb(0x18, 0x18, 0x18));
     row_y += row_h;
-    
+
     // Size
     fb.drawTextTransparent(label_x, row_y, "Size:", rgb(0x60, 0x60, 0x60));
     if (entry.is_directory) {
@@ -183,7 +183,7 @@ pub fn renderDetailsPane(
         fb.drawTextTransparent(value_x, row_y, entry.size[0..entry.size_len], rgb(0x18, 0x18, 0x18));
     }
     row_y += row_h;
-    
+
     // Item type
     fb.drawTextTransparent(label_x, row_y, "Type:", rgb(0x60, 0x60, 0x60));
     const name = entry.name[0..entry.name_len];
@@ -196,17 +196,17 @@ pub fn renderDetailsPane(
         fb.drawTextTransparent(value_x, row_y, type_str, rgb(0x18, 0x18, 0x18));
     }
     row_y += row_h;
-    
+
     // Date modified
     fb.drawTextTransparent(label_x, row_y, "Modified:", rgb(0x60, 0x60, 0x60));
     fb.drawTextTransparent(value_x, row_y, entry.date[0..entry.date_len], rgb(0x18, 0x18, 0x18));
     row_y += row_h;
-    
+
     // Date created (if available)
     fb.drawTextTransparent(label_x, row_y, "Created:", rgb(0x60, 0x60, 0x60));
     fb.drawTextTransparent(value_x, row_y, "--", rgb(0x18, 0x18, 0x18));
     row_y += row_h;
-    
+
     // Attributes
     fb.drawTextTransparent(label_x, row_y, "Attributes:", rgb(0x60, 0x60, 0x60));
     const attr_str = if (entry.is_directory) "D" else "";
@@ -218,7 +218,7 @@ pub fn renderDetailsPane(
 fn getExtension(name: []const u8) []const u8 {
     for (name, 0..) |c, idx| {
         if (c == '.') {
-            return name[idx + 1..];
+            return name[idx + 1 ..];
         }
     }
     return "";

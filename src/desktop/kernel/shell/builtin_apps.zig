@@ -59,24 +59,24 @@ pub const AeroCaptionBtnHover = enum { none, minimize, maximize, close };
 
 /// 与截图工具一致：BGRA 紧密行，最大 320×200（内核占位，非完整 CF_DIB）。
 pub const clip_dib_cap_bytes: usize = 320 * 200 * 4;
-var g_clip_dib: [clip_dib_cap_bytes]u8 = [_]u8{0} ** clip_dib_cap_bytes;
+var g_clip_dib: [clip_dib_cap_bytes]u8 = std.mem.zeroes([clip_dib_cap_bytes]u8);
 
 /// 剪贴板格式常量（与 Windows 格式 ID 对齐）
-pub const CF_TEXT: u32 = 1;      // ANSI 文本
-pub const CF_BITMAP: u32 = 2;    // 位图
+pub const CF_TEXT: u32 = 1; // ANSI 文本
+pub const CF_BITMAP: u32 = 2; // 位图
 pub const CF_METAFILEPICT: u32 = 3;
 pub const CF_SYLK: u32 = 4;
 pub const CF_DIF: u32 = 5;
 pub const CF_TIFF: u32 = 6;
-pub const CF_OEMTEXT: u32 = 7;   // OEM 文本
-pub const CF_DIB: u32 = 8;      // DIB (BMP)
+pub const CF_OEMTEXT: u32 = 7; // OEM 文本
+pub const CF_DIB: u32 = 8; // DIB (BMP)
 pub const CF_PALETTE: u32 = 9;
 pub const CF_PENDATA: u32 = 10;
 pub const CF_RIFF: u32 = 11;
 pub const CF_WAVE: u32 = 12;
 pub const CF_UNICODETEXT: u32 = 13; // UTF-16LE Unicode 文本
 pub const CF_ENHMETAFILE: u32 = 14;
-pub const CF_HDROP: u32 = 15;    // 文件列表
+pub const CF_HDROP: u32 = 15; // 文件列表
 pub const CF_LOCALE: u32 = 16;
 pub const CF_DIBV5: u32 = 17;
 pub const CF_OWNERDISPLAY: u32 = 0x0080;
@@ -90,24 +90,24 @@ pub const ClipboardPrimary = enum { none, text, unicode_text, dib_bgr32, oem_tex
 
 /// 剪贴板格式项结构
 pub const ClipboardFormat = struct {
-    format: u32 = 0,           // CF_* 格式 ID
-    data_offset: usize = 0,    // 相对于全局缓冲区的偏移
-    data_len: usize = 0,       // 数据长度
-    width: u32 = 0,           // 位图宽度（如果有）
-    height: u32 = 0,          // 位图高度（如果有）
+    format: u32 = 0, // CF_* 格式 ID
+    data_offset: usize = 0, // 相对于全局缓冲区的偏移
+    data_len: usize = 0, // 数据长度
+    width: u32 = 0, // 位图宽度（如果有）
+    height: u32 = 0, // 位图高度（如果有）
 };
 
 /// 最大支持的剪贴板格式数量
 const MAX_CLIPBOARD_FORMATS: usize = 8;
 /// 剪贴板全局数据缓冲区大小
 pub const clip_global_cap_bytes: usize = 64 * 1024; // 64KB 全局缓冲区
-var g_clip_global_buf: [clip_global_cap_bytes]u8 = [_]u8{0} ** clip_global_cap_bytes;
+var g_clip_global_buf: [clip_global_cap_bytes]u8 = std.mem.zeroes([clip_global_cap_bytes]u8);
 
 /// 增强的剪贴板结构：支持多格式
 pub const Clipboard = struct {
     primary: ClipboardPrimary = .none,
-    primary_format: u32 = 0,   // 主格式的 CF_* ID
-    formats: [MAX_CLIPBOARD_FORMATS]ClipboardFormat = [_]ClipboardFormat{.{}} ** MAX_CLIPBOARD_FORMATS,
+    primary_format: u32 = 0, // 主格式的 CF_* ID
+    formats: [MAX_CLIPBOARD_FORMATS]ClipboardFormat = std.mem.zeroes([MAX_CLIPBOARD_FORMATS]ClipboardFormat),
     format_count: usize = 0,
 
     // 快速访问缓冲区（用于小数据）
@@ -251,7 +251,7 @@ pub const Clipboard = struct {
 
     /// 返回 Unicode 文本（UTF-16LE）
     pub fn unicodeText(c: *const Clipboard) []const u8 {
-        return c.unicode_buf[0..c.unicode_len * 2];
+        return c.unicode_buf[0 .. c.unicode_len * 2];
     }
 
     pub fn dibBytes(c: *const Clipboard) []const u8 {
@@ -422,11 +422,10 @@ pub const BuiltinAppId = enum(u16) {
 
 /// 侧栏高度有限；条目数变更时请同步 `docs/*/BuiltinApps_NT61_Roadmap.md`「与代码对齐」。
 pub const ALL_PROGRAMS: []const BuiltinAppId = &.{
-    .notepad,           .wordpad,   .paint,            .calculator,
-    .minesweeper,       .solitaire, .spider_solitaire, .freecell,
-    .hearts,            .osk,       .charmap,          .cmd_shell,
-    .sticky_notes_window,
-    .dotnet_shell_host,
+    .notepad,             .wordpad,           .paint,            .calculator,
+    .minesweeper,         .solitaire,         .spider_solitaire, .freecell,
+    .hearts,              .osk,               .charmap,          .cmd_shell,
+    .sticky_notes_window, .dotnet_shell_host,
 };
 
 pub fn allProgramsCount() usize {
@@ -683,13 +682,13 @@ const CalcOp = enum { none, add, sub, mul, div };
 var calc_acc: i64 = 0;
 var calc_cur: i64 = 0;
 var calc_op: CalcOp = .none;
-var calc_display: [24]u8 = [_]u8{0} ** 24;
+var calc_display: [24]u8 = std.mem.zeroes([24]u8);
 var calc_display_len: usize = 1;
 
-var notepad_buf: [4096]u8 = [_]u8{' '} ** 4096;
+var notepad_buf: [4096]u8 = std.mem.zeroes([4096]u8);
 var notepad_len: usize = 0;
 
-var wordpad_buf: [8192]u8 = [_]u8{' '} ** 8192;
+var wordpad_buf: [8192]u8 = std.mem.zeroes([8192]u8);
 var wordpad_len: usize = 0;
 
 var snip_have_a: bool = false;
@@ -755,12 +754,12 @@ fn spiderReset() void {
 
 const PAINT_W: i32 = 200;
 const PAINT_H: i32 = 120;
-var paint_pix: [(@as(usize, @intCast(PAINT_W)) * @as(usize, @intCast(PAINT_H)))]u8 = [_]u8{0xFF} ** (@as(usize, @intCast(PAINT_W)) * @as(usize, @intCast(PAINT_H)));
+var paint_pix: [(@as(usize, @intCast(PAINT_W)) * @as(usize, @intCast(PAINT_H)))]u8 = @splat(0xFF);
 var paint_down: bool = false;
 
 const MS_GRID: usize = 8;
-var ms_mine: [MS_GRID * MS_GRID]bool = [_]bool{false} ** (MS_GRID * MS_GRID);
-var ms_open: [MS_GRID * MS_GRID]bool = [_]bool{false} ** (MS_GRID * MS_GRID);
+var ms_mine: [MS_GRID * MS_GRID]bool = @splat(false);
+var ms_open: [MS_GRID * MS_GRID]bool = @splat(false);
 var ms_dead: bool = false;
 var ms_inited: bool = false;
 
@@ -859,7 +858,7 @@ pub const WinState = enum(u8) {
     maximized = 2,
 };
 
-var slots: [MAX_SLOTS]WinSlot = [_]WinSlot{.{}} ** MAX_SLOTS;
+var slots: [MAX_SLOTS]WinSlot = std.mem.zeroes([MAX_SLOTS]WinSlot);
 var drag_slot: ?usize = null;
 var drag_off_x: i32 = 0;
 var drag_off_y: i32 = 0;
@@ -972,7 +971,7 @@ pub fn captionHoverForTopmost(px: i32, py: i32) AeroCaptionBtnHover {
 pub fn minimizeWindow(slot_idx: usize) void {
     if (slot_idx >= slots.len or !slots[slot_idx].open) return;
     slots[slot_idx].state = .minimized;
-    process_table.setTaskbarAppMinimized(@intFromEnum(slots[slot_idx].app), slots[slot_idx].pid, true);
+    process_table.setTaskbarAppMinimized(@backingInt(slots[slot_idx].app), slots[slot_idx].pid, true);
     klog.info("builtin: minimize %s", .{titleOf(slots[slot_idx].app)});
 }
 
@@ -996,8 +995,8 @@ pub fn maximizeWindow(slot_idx: usize) void {
         w.state = .maximized;
         w.x = 0;
         w.y = 0;
-        w.w = 800;  // 默认屏幕宽度
-        w.h = 600;  // 默认屏幕高度
+        w.w = 800; // 默认屏幕宽度
+        w.h = 600; // 默认屏幕高度
     }
     klog.info("builtin: maximize/minimize %s state=%s", .{ titleOf(w.app), @tagName(w.state) });
 }
@@ -1010,7 +1009,7 @@ pub fn closeWindow(slot_idx: usize) void {
     slots[slot_idx].open = false;
     if (pid != 0) {
         process_table.unregisterDesktopProcess(pid);
-        process_table.removeTaskbarApp(@intFromEnum(app), pid);
+        process_table.removeTaskbarApp(@backingInt(app), pid);
     }
     refocusAfterClosedSlot(slot_idx);
     klog.info("builtin: close %s", .{titleOf(app)});
@@ -1047,7 +1046,7 @@ pub fn handleClick(px: i32, py: i32, scr_w: i32, scr_h: i32, tb_h: i32) bool {
         focused_slot = si;
         narrOnFocus(slots[si].app);
         // 更新任务栏活动状态
-        process_table.activateTaskbarApp(@intFromEnum(slots[si].app), slots[si].pid);
+        process_table.activateTaskbarApp(@backingInt(slots[si].app), slots[si].pid);
 
         if (@as(i64, py) < @as(i64, w.y) + @as(i64, CAPTION_H)) {
             const h = hitTestCaption(px, py, w.x, w.y, w.w, CAPTION_H);
@@ -1353,7 +1352,7 @@ fn charmapClick(cx: i32, cy: i32, px: i32, py: i32) void {
 /// Handle Explorer navigation apps - opens Explorer window at specific location
 fn handleExplorerNavigation(id: BuiltinAppId) bool {
     const explorer_state = @import("explorer_state.zig");
-    
+
     switch (id) {
         .shell_documents => {
             explorer_state.explorerNavigateToPath('C', "Users\\Administrator\\Documents");
@@ -1418,12 +1417,12 @@ fn encodeUtf8Char(cp: u21, out: *[4]u8) usize {
 pub fn launch(id: BuiltinAppId) void {
     // Handle Explorer navigation apps (open Explorer window at specific location)
     if (handleExplorerNavigation(id)) return;
-    
+
     if (id == .taskmgr_focus) {
         klog.info("builtin: Task Manager — Ctrl+Shift+Esc or tray", .{});
         return;
     }
-    
+
     // Handle CMD Shell - create a full GUI CMD window
     if (id == .cmd_shell) {
         const cmd_module = @import("cmd_shell_instance.zig");
@@ -1434,7 +1433,7 @@ pub fn launch(id: BuiltinAppId) void {
         }
         return;
     }
-    
+
     var free: ?usize = null;
     for (&slots, 0..) |*sl, i| {
         if (!sl.open) {
@@ -1446,7 +1445,7 @@ pub fn launch(id: BuiltinAppId) void {
         // 关闭最早的窗口
         if (slots[0].pid != 0) {
             process_table.unregisterDesktopProcess(slots[0].pid);
-            process_table.removeTaskbarApp(@intFromEnum(slots[0].app), slots[0].pid);
+            process_table.removeTaskbarApp(@backingInt(slots[0].app), slots[0].pid);
         }
         slots[0].open = false;
         break :blk 0;
@@ -1473,10 +1472,10 @@ pub fn launch(id: BuiltinAppId) void {
 
     // 注册到进程表
     const app_title = titleOf(id);
-    _ = process_table.registerDesktopProcess(sim_pid, app_title, @intFromEnum(id), app_title);
+    _ = process_table.registerDesktopProcess(sim_pid, app_title, @backingInt(id), app_title);
     // 添加到任务栏
     const icon_id = iconOf(id) orelse .info;
-    _ = process_table.addTaskbarApp(@intFromEnum(id), sim_pid, app_title, @intFromEnum(icon_id));
+    _ = process_table.addTaskbarApp(@backingInt(id), sim_pid, app_title, @backingInt(icon_id));
 
     focused_slot = si;
     if (id == .calculator) {
@@ -1511,7 +1510,7 @@ pub fn launch(id: BuiltinAppId) void {
 pub fn pollKeyboardToFocused() bool {
     const arch_mod = @import("../../../arch.zig");
     var dirty = false;
-    
+
     // 首先检查是否有 CMD 窗口聚焦，如果有则优先处理 CMD 输入
     const cmd_module = @import("cmd_shell_instance.zig");
     while (arch_mod.readInputChar()) |c| {
@@ -1532,7 +1531,7 @@ pub fn pollKeyboardToFocused() bool {
             }
             continue;
         }
-        
+
         // 记事本/WordPad 键盘输入处理
         if (focused_slot >= slots.len or !slots[focused_slot].open) continue;
         const app = slots[focused_slot].app;

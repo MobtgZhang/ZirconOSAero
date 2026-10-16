@@ -71,11 +71,11 @@ var nav_pane_width: i32 = 180;
 
 pub fn buildNavigationTree() void {
     nav_node_count = 0;
-    
+
     // Favorites section
     var fav_label: [32]u8 = undefined;
     const fav_text = shell_mui.loadString(.ex_lib_nav_fav, &fav_label);
-    
+
     nav_nodes[nav_node_count] = .{
         .kind = .heading,
         .label = fav_text,
@@ -85,7 +85,7 @@ pub fn buildNavigationTree() void {
         .child_count = 3,
     };
     nav_node_count += 1;
-    
+
     var desktop_label: [32]u8 = undefined;
     const desktop_text = shell_mui.loadString(.ex_lib_desktop, &desktop_label);
     nav_nodes[nav_node_count] = .{
@@ -97,7 +97,7 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     var dl_label: [32]u8 = undefined;
     const dl_text = shell_mui.loadString(.ex_lib_downloads, &dl_label);
     nav_nodes[nav_node_count] = .{
@@ -109,7 +109,7 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     var recent_label: [32]u8 = undefined;
     const recent_text = shell_mui.loadString(.ex_lib_recent, &recent_label);
     nav_nodes[nav_node_count] = .{
@@ -121,7 +121,7 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     // Libraries section
     var lib_label: [32]u8 = undefined;
     const lib_text = shell_mui.loadString(.ex_lib_nav_lib, &lib_label);
@@ -134,7 +134,7 @@ pub fn buildNavigationTree() void {
         .child_count = 4,
     };
     nav_node_count += 1;
-    
+
     var doc_label: [32]u8 = undefined;
     const doc_text = shell_mui.loadString(.ex_lib_documents, &doc_label);
     nav_nodes[nav_node_count] = .{
@@ -146,7 +146,7 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     var pic_label: [32]u8 = undefined;
     const pic_text = shell_mui.loadString(.ex_lib_pictures, &pic_label);
     nav_nodes[nav_node_count] = .{
@@ -158,7 +158,7 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     var vid_label: [32]u8 = undefined;
     const vid_text = shell_mui.loadString(.ex_lib_videos, &vid_label);
     nav_nodes[nav_node_count] = .{
@@ -170,7 +170,7 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     var mus_label: [32]u8 = undefined;
     const mus_text = shell_mui.loadString(.ex_lib_music, &mus_label);
     nav_nodes[nav_node_count] = .{
@@ -182,7 +182,7 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     // Computer section
     var comp_label: [32]u8 = undefined;
     const comp_text = shell_mui.loadString(.ex_lib_nav_comp, &comp_label);
@@ -195,18 +195,18 @@ pub fn buildNavigationTree() void {
         .child_count = 0,
     };
     nav_node_count += 1;
-    
+
     // Add drive nodes
     explorer_state.explorerEnsureVolumeSnapshot();
     const vols = explorer_state.explorerVolumes();
-    
+
     var drive_count: usize = 0;
     for (vols) |v| {
         if (nav_node_count >= MAX_NAV_NODES) break;
-        
+
         var vol_label_buf: [48]u8 = undefined;
         const vol_label = explorer_format.formatDriveNavLabel(&vol_label_buf, v.letter);
-        
+
         nav_nodes[nav_node_count] = .{
             .kind = .drive,
             .label = vol_label,
@@ -218,14 +218,14 @@ pub fn buildNavigationTree() void {
         nav_node_count += 1;
         drive_count += 1;
     }
-    
+
     // Update computer node child count
     for (0..nav_node_count) |i| {
         if (nav_nodes[i].kind == .computer) {
             nav_nodes[i].child_count = drive_count;
         }
     }
-    
+
     // Network section
     var net_label: [32]u8 = undefined;
     const net_text = shell_mui.loadString(.ex_lib_nav_net, &net_label);
@@ -285,46 +285,46 @@ const NAV_ICON_SIZE: i32 = 16;
 
 pub fn renderNavigationPane(x: i32, y: i32, width: i32, height: i32) void {
     buildNavigationTree();
-    
+
     // Background
     fb.fillRect(x, y, width, height, rgb(0xFC, 0xFC, 0xFE));
-    
+
     var iy: i32 = y + 4;
     const end_y = y + height;
-    
+
     for (0..nav_node_count) |i| {
         if (iy + NAV_ITEM_H > end_y) break;
-        
+
         const node = nav_nodes[i];
         const is_heading = node.kind == .heading;
         const row_h: i32 = if (is_heading) 18 else NAV_ITEM_H;
-        
+
         const is_hover = (@as(i32, @intCast(i)) == nav_hover_index);
         const is_selected = isNodeSelected(node.kind, node.label);
-        
+
         // Highlight background
         if (is_hover and !is_heading) {
             fb.fillRect(x + 2, iy, width - 4, row_h, rgb(0xD8, 0xE8, 0xF8));
         }
-        
+
         if (is_selected and !is_heading) {
             fb.fillRect(x + 2, iy, width - 4, row_h, rgb(0xC8, 0xE0, 0xF0));
             fb.drawRect(x + 2, iy, width - 4, row_h, rgb(0xA0, 0xC0, 0xE0));
         }
-        
+
         const text_x = x + 4 + node.indent + NAV_ICON_SIZE + 4;
         const icon_x = x + 4 + node.indent;
         const icon_y = iy + (row_h - NAV_ICON_SIZE) / 2;
-        
+
         // Chevron for expandable nodes
         if (node.child_count > 0 and !is_heading) {
             const chevron = if (node.expanded) "▼" else "▶";
             fb.drawTextTransparent(x + 4 + node.indent - NAV_CHEVRON_W, iy + (row_h - 14) / 2, chevron, rgb(0x50, 0x50, 0x50));
         }
-        
+
         // Icon
         icons.drawThemedIcon(node.icon, icon_x, icon_y, 1, .aero, is_selected);
-        
+
         // Text
         const text_color: u32 = if (is_heading)
             rgb(0x50, 0x58, 0x60)
@@ -332,9 +332,9 @@ pub fn renderNavigationPane(x: i32, y: i32, width: i32, height: i32) void {
             rgb(0x00, 0x3C, 0x80)
         else
             rgb(0x18, 0x18, 0x18);
-        
+
         fb.drawTextTransparent(text_x, iy + (row_h - 14) / 2, node.label, text_color);
-        
+
         iy += row_h;
     }
 }
@@ -342,7 +342,7 @@ pub fn renderNavigationPane(x: i32, y: i32, width: i32, height: i32) void {
 fn isNodeSelected(kind: NavNodeKind, label: []const u8) bool {
     const view = explorer_state.getExplorerView();
     const loc = explorer_state.getExplorerLocation();
-    
+
     switch (view) {
         .libraries => {
             switch (kind) {
@@ -390,25 +390,25 @@ pub fn hitTestNavigationPane(px: i32, py: i32, nav_x: i32, nav_y: i32, nav_w: i3
     if (px < nav_x or px >= nav_x + nav_w or py < nav_y or py >= nav_y + nav_h) {
         return null;
     }
-    
+
     buildNavigationTree();
-    
+
     var iy: i32 = nav_y + 4;
     const end_y = nav_y + nav_h;
-    
+
     for (0..nav_node_count) |i| {
         const node = nav_nodes[i];
         const is_heading = node.kind == .heading;
         const row_h: i32 = if (is_heading) 18 else NAV_ITEM_H;
-        
+
         if (py >= iy and py < iy + row_h) {
             return i;
         }
-        
+
         iy += row_h;
         if (iy >= end_y) break;
     }
-    
+
     return null;
 }
 
@@ -420,9 +420,9 @@ pub fn getNavNodeAtPoint(index: usize) ?NavNode {
 
 pub fn handleNavNodeClick(index: usize) void {
     if (index >= nav_node_count) return;
-    
+
     const node = nav_nodes[index];
-    
+
     switch (node.kind) {
         .heading => {},
         .favorites, .desktop, .downloads, .recent => {
@@ -449,7 +449,7 @@ pub fn handleNavNodeClick(index: usize) void {
         .drive => {
             const label = node.label;
             var letter: u8 = 'C';
-            
+
             // Parse drive letter from label
             for (label, 0..) |c, idx| {
                 if (c == ':' and idx > 0) {
@@ -460,7 +460,7 @@ pub fn handleNavNodeClick(index: usize) void {
                     break;
                 }
             }
-            
+
             explorer_state.setExplorerView(.computer);
             explorer_state.setExplorerComputerDriveSelected(letter);
         },

@@ -60,7 +60,7 @@ pub fn stats() struct { allocs: usize, frees: usize, live: usize } {
 }
 
 pub fn freeListDebug() struct { nodes: usize, bytes: usize } {
-    if (builtin.mode != .Debug) return .{ .nodes = 0, .bytes = 0 };
+    if (builtin.mode != .debug) return .{ .nodes = 0, .bytes = 0 };
     lockHeap();
     defer unlockHeap();
     var nodes: usize = 0;
@@ -137,7 +137,7 @@ pub const GrowOptions = struct {
     capacity: usize,
     /// 须为页大小整数倍且 ≤ capacity。
     initial_commit: usize,
-    /// 与 `map_range` 映射粒度一致（x86_64 常见 4096，LoongArch 可能为 16KiB）。
+    /// 与 `map_range` 映射粒度一致（平台相关：通常 4096 或更大）。
     page_size: usize,
     map_ctx: *anyopaque,
     map_range: *const fn (*anyopaque, usize, usize) bool,
@@ -176,7 +176,7 @@ pub fn isGrowableBacked() bool {
 }
 
 pub fn heap_check() bool {
-    if (builtin.mode != .Debug) return true;
+    if (builtin.mode != .debug) return true;
     lockHeap();
     defer unlockHeap();
     const hdr = blockOverhead();
@@ -445,9 +445,42 @@ test "heap adjacent free coalesces" {
     try std.testing.expectEqual(@as(usize, 1), st.nodes);
 }
 
+test "heap coalesces adjacent block behind prev merge" {
+    init();
+    const a = alloc(32, 8) orelse return error.Oom;
+    const b = alloc(32, 8) orelse return error.Oom;
+    const c = alloc(32, 8) orelse return error.Oom;
+    kfree(b, 32, 8);
+    kfree(a, 32, 8);
+    kfree(c, 32, 8);
+    const st = freeListDebug();
+    try std.testing.expectEqual(@as(usize, 1), st.nodes);
+}
+
+test "heap previous merge preserves earlier free nodes" {
+    init();
+    free_head = null;
+    const base = @intFromPtr(&heap_storage);
+    const first: *FreeBlock = @ptrFromInt(base);
+    const middle: *FreeBlock = @ptrFromInt(base + 512);
+    const tail: *FreeBlock = @ptrFromInt(base + 1024);
+    const incoming: *FreeBlock = @ptrFromInt(base + 960);
+    first.* = .{ .size = 64, .next = middle };
+    middle.* = .{ .size = 64, .next = tail };
+    tail.* = .{ .size = 64, .next = null };
+    incoming.* = .{ .size = 64, .next = undefined };
+    free_head = first;
+
+    insertFreeBlock(incoming);
+
+    try std.testing.expectEqual(@intFromPtr(first), @intFromPtr(free_head.?));
+    try std.testing.expectEqual(@as(usize, 128), incoming.size);
+    try std.testing.expectEqual(@as(?*FreeBlock, null), incoming.next);
+}
+
 test "heap interleaved alloc free reuses bump region" {
     init();
-    var ptrs: [24]?[*]u8 = .{null} ** 24;
+    var ptrs: [24]?[*]u8 = std.mem.zeroes([24]?[*]u8);
     for (0..24) |i| {
         ptrs[i] = alloc(48, 16);
         try std.testing.expect(ptrs[i] != null);

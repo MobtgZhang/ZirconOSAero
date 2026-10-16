@@ -24,6 +24,18 @@ const std = @import("std");
 const SID = @import("sid.zig").SID;
 const ACCESS_MASK = u32;
 
+/// 默认 DACL 为模块级常量，避免 `SECURITY_DESCRIPTOR.initDefault()` 返回指向函数局部值的悬垂指针。
+const DEFAULT_DACL: ACL = blk: {
+    var acl: ACL = .{};
+    const sid_mod = @import("sid.zig");
+    acl.aces[0] = ACE.initAllowed(0xFFFF_FFFF, sid_mod.SYSTEM_SID);
+    acl.aces[1] = ACE.initAllowed(0xFFFF_FFFF, sid_mod.ADMIN_SID);
+    acl.aces[2] = ACE.initAllowed(0x001F_FFF1, sid_mod.USER_SID);
+    acl.ace_count = 3;
+    acl.size = @sizeOf(ACL);
+    break :blk acl;
+};
+
 /// ACE (Access Control Entry) structure
 /// Compatible with NT61 ACE format
 pub const ACE = struct {
@@ -104,21 +116,16 @@ pub const ACL = struct {
     }
 
     /// Find all ACEs matching the specified SID
-    pub fn findAcesForSid(self: *const ACL, sid: SID) []const ACE {
+    pub fn findAcesForSid(self: *const ACL, sid: SID, result: []ACE) usize {
         var count: usize = 0;
         for (self.aces[0..self.ace_count]) |ace| {
-            if (ace.sid.eql(sid)) count += 1;
-        }
-        if (count == 0) return &.{};
-        var result = std.heap.page_allocator.alloc(ACE, count) catch return &.{};
-        var idx: usize = 0;
-        for (self.aces[0..self.ace_count]) |ace| {
+            if (count >= result.len) break;
             if (ace.sid.eql(sid)) {
-                result[idx] = ace;
-                idx += 1;
+                result[count] = ace;
+                count += 1;
             }
         }
-        return result;
+        return count;
     }
 };
 
@@ -148,8 +155,8 @@ pub const SECURITY_DESCRIPTOR = struct {
     control: Control = .{},
     owner: ?*SID = null,
     group: ?*SID = null,
-    dacl: ?*ACL = null,
-    sacl: ?*ACL = null,
+    dacl: ?*const ACL = null,
+    sacl: ?*const ACL = null,
 
     /// Create a default security descriptor with full access for SYSTEM and administrators
     pub fn initDefault() SECURITY_DESCRIPTOR {
@@ -159,20 +166,10 @@ pub const SECURITY_DESCRIPTOR = struct {
             .group = undefined,
         };
 
-        const dacl = std.heap.page_allocator.create(ACL) catch return sd;
-        dacl.* = .{};
-
         const sid_mod = @import("sid.zig");
-        // Full access for SYSTEM
-        _ = dacl.addAce(ACE.initAllowed(0xFFFF_FFFF, sid_mod.SYSTEM_SID));
-        // Full access for administrators
-        _ = dacl.addAce(ACE.initAllowed(0xFFFF_FFFF, sid_mod.ADMIN_SID));
-        // Read/execute access for regular users
-        _ = dacl.addAce(ACE.initAllowed(0x001F_FFF1, sid_mod.USER_SID));
-
         sd.owner = @constCast(&sid_mod.SYSTEM_SID);
         sd.group = @constCast(&sid_mod.SYSTEM_SID);
-        sd.dacl = dacl;
+        sd.dacl = &DEFAULT_DACL;
         return sd;
     }
 
@@ -260,6 +257,16 @@ test "SECURITY_DESCRIPTOR default allows SYSTEM full access" {
     try std.testing.expect(sd.checkAccess(&sys_token, 0xFFFF_FFFF));
 }
 
+test "SECURITY_DESCRIPTOR default DACL is stable and non-null" {
+    const first = SECURITY_DESCRIPTOR.initDefault();
+    const second = SECURITY_DESCRIPTOR.initDefault();
+
+    try std.testing.expect(first.control.dacl_present);
+    try std.testing.expect(first.dacl != null);
+    try std.testing.expectEqual(first.dacl, second.dacl);
+    try std.testing.expect(first.dacl.?.ace_count >= 3);
+}
+
 test "SECURITY_DESCRIPTOR default allows admin full access" {
     const token_mod = @import("token.zig");
     const sd = SECURITY_DESCRIPTOR.initDefault();
@@ -274,8 +281,8 @@ test "SECURITY_DESCRIPTOR default allows user read access but denies write" {
     const user_token = token_mod.createUserToken(0);
     // Read access should be allowed
     try std.testing.expect(sd.checkAccess(&user_token, 0x0000_0001));
-    // Write/delete access should be denied
-    try std.testing.expect(!sd.checkAccess(&user_token, 0x0001_0000));
+    // Generic write access should be denied
+    try std.testing.expect(!sd.checkAccess(&user_token, 0x4000_0000));
 }
 
 test "Null DACL allows all access" {

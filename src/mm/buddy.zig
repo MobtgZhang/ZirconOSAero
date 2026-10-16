@@ -34,11 +34,11 @@ pub fn Buddy(comptime max_order: u5) type {
         const Self = @This();
 
         /// 各阶空闲链头（块起始下标）。
-        heads: [max_order + 1]?usize = .{null} ** (max_order + 1),
+        heads: [max_order + 1]?usize = std.mem.zeroes([max_order + 1]?usize),
         /// 空闲链下一节点；仅 `free_order[i] != null` 的槽位参与链表。
-        next: [num_blocks]?usize = .{null} ** num_blocks,
+        next: [num_blocks]?usize = std.mem.zeroes([num_blocks]?usize),
         /// 若 `free_order[i] == o`，则 `i` 是某块的起始且大小为 `2^o`。
-        free_order: [num_blocks]?u5 = .{null} ** num_blocks,
+        free_order: [num_blocks]?u5 = std.mem.zeroes([num_blocks]?u5),
 
         pub fn init() Self {
             var s: Self = .{};

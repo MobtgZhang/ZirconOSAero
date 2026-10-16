@@ -83,7 +83,7 @@ pub const MftRecord = struct {
     flags: u16 = 0,
     sequence_number: u16 = 0,
     base_record: u32 = 0,
-    file_name: [64]u8 = [_]u8{0} ** 64,
+    file_name: [64]u8 = std.mem.zeroes([64]u8),
     file_name_len: usize = 0,
     file_size: u64 = 0,
     attributes: u32 = 0,
@@ -120,14 +120,14 @@ const MAX_DATA_SIZE: usize = 256 * 1024;
 
 pub const NtfsVolume = struct {
     boot: NtfsBootSector = .{},
-    mft: [MAX_MFT_RECORDS]MftRecord = [_]MftRecord{.{}} ** MAX_MFT_RECORDS,
+    mft: [MAX_MFT_RECORDS]MftRecord = std.mem.zeroes([MAX_MFT_RECORDS]MftRecord),
     mft_count: usize = 0,
-    data_area: [MAX_DATA_SIZE]u8 = [_]u8{0} ** MAX_DATA_SIZE,
+    data_area: [MAX_DATA_SIZE]u8 = std.mem.zeroes([MAX_DATA_SIZE]u8),
     next_record: u32 = 0,
     next_data_cluster: u32 = 0,
     is_mounted: bool = false,
     is_disk_backed: bool = false,
-    label: [32]u8 = [_]u8{0} ** 32,
+    label: [32]u8 = std.mem.zeroes([32]u8),
     label_len: usize = 0,
     /// 块设备后端（用于真实磁盘 I/O）。
     backend: ?*block_common.BlockDevVTable = null,
@@ -448,7 +448,7 @@ fn readFromDataRuns(vol: *NtfsVolume, runs: []const u8, file_offset: u64, buf: [
 
                 const copy_start = if (read_pos == 0) byte_offset_in_cluster else 0;
                 const copy_len = @min(buf.len - read_pos, @as(usize, @intCast(vol.cluster_size - copy_start)));
-                @memcpy(buf[read_pos..read_pos + copy_len], sector_buf[@as(usize, @intCast(copy_start))..][0..copy_len]);
+                @memcpy(buf[read_pos .. read_pos + copy_len], sector_buf[@as(usize, @intCast(copy_start))..][0..copy_len]);
                 read_pos += copy_len;
                 bytes_read += copy_len;
 

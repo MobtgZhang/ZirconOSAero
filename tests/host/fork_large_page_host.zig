@@ -62,7 +62,7 @@ test "fork duplicateUserMappingsForFork rejects non-empty child address space" {
     defer vm.releaseProcessAddressSpace(&child);
 
     // 在 child 中预留一些空间，使其非空
-    const user_va: u64 = vm.USER_VA_MIN_X64_NT;
+    const user_va: u64 = vm.USER_VA_MIN_NT61;
     _ = child.vad.insert(user_va, user_va + 0x1000, .reserved, vm.PAGE_READWRITE, false);
 
     // duplicateUserMappingsForFork 应拒绝非空地址空间
@@ -101,7 +101,7 @@ test "fork tryCowWriteFault returns false when no mapping exists" {
     defer vm.releaseProcessAddressSpace(&space);
 
     // 尝试对不存在的 VA 进行 CoW
-    const result = vm.tryCowWriteFault(&space, vm.USER_VA_MIN_X64_NT);
+    const result = vm.tryCowWriteFault(&space, vm.USER_VA_MIN_NT61);
     try std.testing.expect(!result);
 }
 
@@ -118,7 +118,7 @@ test "fork tryCowWriteFault returns false for unmapped page without share count"
     try std.testing.expect(vm.initAddressSpaceInPlace(&space, &fa));
     defer vm.releaseProcessAddressSpace(&space);
 
-    const user_va: u64 = vm.USER_VA_MIN_X64_NT;
+    const user_va: u64 = vm.USER_VA_MIN_NT61;
     const phys = space.mapPageAlloc(user_va, .{ .writable = true, .user = true, .executable = false }) orelse
         return error.MapFail;
     vm.recordCommittedVadRange(&space, user_va, 1, vm.PAGE_READWRITE);
@@ -143,7 +143,7 @@ test "fork tryCowWriteFault works after notePageShared sets share count" {
     try std.testing.expect(vm.initAddressSpaceInPlace(&parent, &fa));
     defer vm.releaseProcessAddressSpace(&parent);
 
-    const user_va: u64 = vm.USER_VA_MIN_X64_NT;
+    const user_va: u64 = vm.USER_VA_MIN_NT61;
     const phys = parent.mapPageAlloc(user_va, .{ .writable = true, .user = true, .executable = false }) orelse
         return error.MapFail;
     vm.recordCommittedVadRange(&parent, user_va, 1, vm.PAGE_READWRITE);
@@ -193,7 +193,7 @@ test "fork multiple children share same parent page" {
     try std.testing.expect(vm.initAddressSpaceInPlace(&parent, &fa));
     defer vm.releaseProcessAddressSpace(&parent);
 
-    const user_va: u64 = vm.USER_VA_MIN_X64_NT;
+    const user_va: u64 = vm.USER_VA_MIN_NT61;
     const phys = parent.mapPageAlloc(user_va, .{ .writable = true, .user = true, .executable = false }) orelse
         return error.MapFail;
     vm.recordCommittedVadRange(&parent, user_va, 1, vm.PAGE_READWRITE);

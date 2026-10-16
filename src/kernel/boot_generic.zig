@@ -17,7 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Non-x86_64 and generic bring-up (split from main.zig).
+//! Generic platform bring-up (split from main.zig; arch-specific logic is in HAL).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -51,7 +51,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     const kernel32 = @import("../libs/kernel32.zig");
     const console_mod = @import("../subsystems/win32/console.zig");
     const cmd_mod = @import("../subsystems/win32/cmd.zig");
-    const subsys = @import("../subsystems/win32/subsystem.zig");
+    const subsys_cmd = @import("../subsystems/win32/subsystem.zig");
     const exec = @import("../subsystems/win32/exec.zig");
     const user32_mod = @import("../subsystems/win32/user32.zig");
     const gdi32_mod = @import("../subsystems/win32/gdi32.zig");
@@ -65,19 +65,9 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     arch.initSerial();
 
     // 极早 handoff 诊断（UEFI→内核）：区分「未进内核」与「进内核后崩溃」；与 ZBM 写入的 mb2_phys 对照。
-    switch (builtin.target.cpu.arch) {
-        .aarch64 => {
-            klog.info("HandoffDiag(a64): multiboot_magic=0x%x reg_x1=0x%x vec_mb2_phys=0x%x", .{
-                magic, info_addr, boot.uefiVectorMb2PhysForDiag(),
-            });
-        },
-        .riscv64 => {
-            klog.info("HandoffDiag(rv): multiboot_magic=0x%x reg_a1=0x%x vec_mb2_phys=0x%x (UART MMIO 0x10000000)", .{
-                magic, info_addr, boot.uefiVectorMb2PhysForDiag(),
-            });
-        },
-        else => {},
-    }
+    klog.info("HandoffDiag: multiboot_magic=0x%x info_addr=0x%x vec_mb2_phys=0x%x", .{
+        magic, info_addr, boot.uefiVectorMb2PhysForDiag(),
+    });
 
     klog.info("========================================", .{});
     klog.info("  ZirconOSAero (NT 6.1 hybrid kernel)", .{});
@@ -98,366 +88,46 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
 
     var boot_info = boot.parse(magic, info_addr);
 
-    if (builtin.target.cpu.arch == .aarch64) {
-        if (boot_info) |bi| {
-            klog.info("BootHandoff(a64): mmap_entries=%u mem_upper_kb=%u multiboot_fb=%s", .{
-                bi.mmap_entry_count,
-                bi.mem_upper_kb,
-                if (bi.fb_info != null) "yes" else "no",
-            });
-        } else {
-            klog.warn("BootHandoff(a64): boot.parse returned null", .{});
-        }
-    }
-    if (builtin.target.cpu.arch == .riscv64) {
-        if (boot_info) |bi| {
-            klog.info("BootHandoff(rv): mmap_entries=%u mem_upper_kb=%u multiboot_fb=%s", .{
-                bi.mmap_entry_count,
-                bi.mem_upper_kb,
-                if (bi.fb_info != null) "yes" else "no",
-            });
-        } else {
-            klog.warn("BootHandoff(rv): boot.parse returned null", .{});
-        }
+    if (boot_info) |bi| {
+        klog.info("BootHandoff: mmap_entries=%u mem_upper_kb=%u multiboot_fb=%s", .{
+            bi.mmap_entry_count,
+            bi.mem_upper_kb,
+            if (bi.fb_info != null) "yes" else "no",
+        });
+    } else {
+        klog.warn("BootHandoff: boot.parse returned null", .{});
     }
 
-    // LoongArch：尽早初始化帧分配器 + VM，map 2GB 以覆盖 GOP framebuffer（可能 >512MB）
-    if (builtin.target.cpu.arch == .loongarch64) {
-        // 首选分辨率：`sys_config` 嵌入的 desktop.conf `[resolution]`（由 sync_resolution_config 与 build.conf 对齐）；无效时回退 build_options。
-        const bo_w = @import("build_options").kernel_preferred_fb_width;
-        const bo_h = @import("build_options").kernel_preferred_fb_height;
-        const cw64 = sys_config.getResolutionWidth();
-        const ch64 = sys_config.getResolutionHeight();
-        var pref_w: u32 = if (cw64 >= 320 and cw64 <= 16384) @truncate(cw64) else bo_w;
-        var pref_h: u32 = if (ch64 >= 240 and ch64 <= 16384) @truncate(ch64) else bo_h;
-        if (pref_w == 0) pref_w = if (bo_w != 0) bo_w else 1024;
-        if (pref_h == 0) pref_h = if (bo_h != 0) bo_h else 768;
+    const hal = @import("../hal.zig");
 
-        var loong_discarded_gop: ?boot.FramebufferInfo = null;
-
-        // QEMU GTK 往往只扫「固件 GOP」窗口；若 ZBM 已将 GOP SetMode 到 ≥1024×768，handoff 与该窗口同源，应直接使用。
-        // 否则丢弃过小/非线性 GOP，由 ramfb.setupWithDims 写 0xF000000（部分 QEMU 配置下窗口仍不跟 ramfb，见文档）。
-        if (boot_info) |bi_in| {
-            var bi_mut = bi_in;
-            const gop_ok = if (bi_mut.fb_info) |fb| blk: {
-                if (fb.addr == 0 or fb.bpp != 32) break :blk false;
-                if (fb.width < 1024 or fb.height < 768) break :blk false;
-                // 与 build.conf / ZBM 首选一致：固件 GOP 常仅为 1024×768；低于首选则改用 ramfb+fw_cfg（常为 1920×1080）
-                if (pref_w != 0 and pref_h != 0 and (fb.width < pref_w or fb.height < pref_h)) {
-                    klog.info("Display: GOP %ux%u below build preferred %ux%u; ramfb @ RAMFB_PHYS", .{
-                        fb.width, fb.height, pref_w, pref_h,
-                    });
-                    break :blk false;
-                }
-                break :blk true;
-            } else false;
-            if (!gop_ok) {
-                if (bi_mut.fb_info) |fb| {
-                    const skipped_as_below_pref = pref_w != 0 and pref_h != 0 and
-                        (fb.width < pref_w or fb.height < pref_h);
-                    if (!skipped_as_below_pref) {
-                        klog.info("Display: GOP %ux%u not used (min/resolution/bpp); ramfb @ RAMFB_PHYS", .{
-                            fb.width, fb.height,
-                        });
-                    }
-                }
-                loong_discarded_gop = bi_mut.fb_info;
-                bi_mut.fb_info = null;
-            } else {
-                klog.info("Display: using UEFI GOP %ux%u (meets preferred %ux%u)", .{
-                    bi_mut.fb_info.?.width, bi_mut.fb_info.?.height, pref_w, pref_h,
-                });
-            }
-            boot_info = bi_mut;
-        }
-        // 勿用固定 0x400000：链接脚本下映像+BSS+1MiB 栈后 _kernel_end 常 >4MiB，否则页表帧会分配到内核/栈物理页，identity map 约在 8MiB 处失败。
-        // `_kernel_end` 为零尺寸链接器符号：勿用 @intFromPtr(&_)（LoongArch 上可能为 0）；见 arch/loongarch64/mod.zig `linkerKernelEndExclusive`。
-        const la_k_end = (arch.impl.linkerKernelEndExclusive() + frame.FRAME_SIZE - 1) & ~@as(usize, frame.FRAME_SIZE - 1);
-        klog.info("Memory: LoongArch kernel_end=0x%x (_kernel_end aligned)", .{la_k_end});
-        frame.initGlobalKernelFrames(boot_info, la_k_end);
-
-        const ramfb = @import("../hal/loongarch64/ramfb.zig");
-        // QEMU ramfb 扫描使用固定 GPA 0x0F000000..；若在此之后才对 `markPhysRangeUsed`，
-        // `createAddressSpace` 的页表帧可能已分配到该区间，与屏缓冲重叠 → 缺页/花屏/「无法进桌面」。
-        // 仅 1024×768 等与 GOP 一致时保留 handoff、不走 ramfb，故以往不易触发。
-        const need_ramfb_scanout = if (boot_info) |b|
-            (b.fb_info == null or b.fb_info.?.addr == 0)
-        else
-            true;
-        if (need_ramfb_scanout) {
-            const ramfb_rsv = ramfb.framebufferReservedBytesDims(pref_w, pref_h);
-            const ramfb_cap = ramfb.maxStandardScanoutReservedBytes();
-            const mark_rsv = @max(ramfb_rsv, ramfb_cap);
-            if (mark_rsv > 0) {
-                frame.kernelFrameAllocatorPtr().markPhysRangeUsed(ramfb.RAMFB_PHYS, mark_rsv);
-                ramfb.noteGuestReservedScanout(mark_rsv);
-                klog.info("LoongArch: ramfb scanout reserved %u bytes @0x%x (cap %u for runtime IOCTL; before page tables)", .{
-                    @as(u32, @truncate(mark_rsv)), ramfb.RAMFB_PHYS, @as(u32, @truncate(ramfb_cap)),
-                });
-            }
-        }
-
-        const paging = arch.impl.paging;
-        if (vm.createAddressSpace(frame.kernelFrameAllocatorPtr())) |ks| {
-            loong_kernel_space = ks;
-            const kernel_space = &loong_kernel_space.?;
-            // 0–2GiB：GOP/ramfb；GPU MMIO 若落在 2–4GiB，`vm.mapDeviceMmioIdentity` 会按需建 identity 非缓存映射
-            const identity_pages: usize = (2 * 1024 * 1024 * 1024) / paging.page_size;
-            const id_limit: usize = identity_pages * paging.page_size;
-            const id_bytes_la: u64 = @as(u64, @intCast(id_limit));
-            const la_id_st = vm.mapIdentityByteRange(kernel_space, 0, id_bytes_la, .{ .writable = true, .executable = true }) orelse {
-                klog.err("LoongArch: identity map failed (mapIdentityByteRange)", .{});
-                arch.halt();
-            };
-            klog.info("VM: LoongArch identity stats la32m=%u leaf=%u", .{
-                la_id_st.la_blocks_32m, la_id_st.leaf_pages,
-            });
-            // virtio-gpu / 部分固件 GOP 帧缓冲落在 PCI BAR（物理地址 ≥2GiB）；仅 map 低 2GiB 时访问桌面会缺页
-            if (boot_info) |binfo| {
-                if (binfo.fb_info) |fb_i| {
-                    if (fb_i.addr != 0 and fb_i.height > 0 and fb_i.pitch > 0) {
-                        const fb_base = @as(usize, @truncate(fb_i.addr)) & ~@as(usize, paging.page_size - 1);
-                        const fb_bytes = @as(usize, fb_i.pitch) * @as(usize, fb_i.height);
-                        if (fb_bytes != 0) {
-                            const fb_end = fb_base + fb_bytes;
-                            const va_limit = (fb_end + paging.page_size - 1) & ~@as(usize, paging.page_size - 1);
-                            const map_lo = @max(fb_base, id_limit);
-                            if (map_lo < va_limit) {
-                                const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = true };
-                                const spill_len = @as(u64, @intCast(va_limit - map_lo));
-                                _ = vm.mapIdentityByteRange(kernel_space, @as(u64, @intCast(map_lo)), spill_len, fb_flags) orelse {
-                                    klog.err("LoongArch: framebuffer spill map failed 0x%x", .{map_lo});
-                                    arch.halt();
-                                };
-                            }
-                            if (fb_base >= id_limit or fb_end > id_limit) {
-                                klog.info("VM: LoongArch scanout FB 0x%x..0x%x (touched ≥2GiB; extra uncached PTEs)", .{
-                                    fb_base, fb_end,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            kernel_space.activate();
-            vm.bindKernelAddressSpace(kernel_space);
-            vm.setSectionLazyCommitFillHook(@import("../mm/section.zig").onLazyCommitFillPage);
-            klog.info("VM: LoongArch identity map 0-2GB (covers GOP fb; BAR>2G via mapDeviceMmioIdentity)", .{});
-        }
-        const has_gop_fb = if (boot_info) |b| (b.fb_info != null and b.fb_info.?.addr != 0) else false;
-        if (!has_gop_fb) {
-            if (ramfb.setupWithDims(pref_w, pref_h)) |fb_i| {
-                var bi = boot_info orelse boot.BootInfo{};
-                bi.fb_info = .{
-                    .addr = fb_i.addr,
-                    .pitch = fb_i.pitch,
-                    .width = fb_i.width,
-                    .height = fb_i.height,
-                    .bpp = fb_i.bpp,
-                    .fb_type = fb_i.fb_type,
-                };
-                boot_info = bi;
-                const rsv = ramfb.framebufferReservedBytesDims(fb_i.width, fb_i.height);
-                if (rsv > 0) {
-                    frame.kernelFrameAllocatorPtr().markPhysRangeUsed(@as(usize, @truncate(fb_i.addr)), rsv);
-                }
-                klog.info("ramfb: %ux%u@%u addr=0x%x", .{
-                    fb_i.width,                       fb_i.height, fb_i.bpp,
-                    @as(usize, @truncate(fb_i.addr)),
-                });
-            } else {
-                klog.warn("ramfb: setupWithDims failed — no framebuffer (check QEMU -device ramfb and fw_cfg etc/ramfb; see docs/cn/AeroDesktopRuntime.md LoongArch GOP vs ramfb)", .{});
-                if (loong_discarded_gop) |dg| {
-                    if (dg.addr != 0 and dg.bpp == 32 and dg.width >= 1024 and dg.height >= 768) {
-                        var bi = boot_info orelse boot.BootInfo{};
-                        bi.fb_info = dg;
-                        boot_info = bi;
-                        const gop_bytes = @as(usize, dg.pitch) * @as(usize, dg.height);
-                        if (gop_bytes > 0) {
-                            frame.kernelFrameAllocatorPtr().markPhysRangeUsed(@as(usize, @truncate(dg.addr)), gop_bytes);
-                        }
-                        klog.warn("LoongArch: restored UEFI GOP %ux%u (ramfb/fw_cfg failed; desktop at firmware res); fb_reserve updated", .{
-                            dg.width, dg.height,
-                        });
-                    }
-                }
-            }
-        } else {
-            klog.info("Display: using GOP framebuffer from handoff (same surface as firmware)", .{});
-        }
+    // LoongArch：尽早初始化帧分配器 + VM（HAL 封装，boot_generic 不再引用架构）
+    if (hal.hasLoongsonIGPU) {
+        const hal_boot_la = @import("../hal/boot_setup.zig");
+        hal_boot_la.setupLoongarchEarlyBoot(&boot_info, &loong_kernel_space, sys_config, @import("build_options"));
     }
 
     // LoongArch -kernel 直启无 EFI handoff 时显示 ZBM 风格操作系统选择菜单（串口）
     const zircon_magic: u32 = 0x6372697A;
     const has_handoff = (magic == zircon_magic and info_addr != 0);
-    if (builtin.target.cpu.arch == .loongarch64 and !has_handoff) {
+    if (hal.requiresSerialBootMenuWithoutHandoff() and !has_handoff) {
         desktop_session.showZbmStyleBootMenu();
     }
 
-    if (builtin.target.cpu.arch != .loongarch64) {
+    if (hal.requiresEarlyKernelFrameReservation()) {
         const k_reserved = (@intFromPtr(&_kernel_end) + 4095) & ~@as(usize, 4095);
         frame.initGlobalKernelFrames(boot_info, k_reserved);
     }
 
     // QEMU virt：启用自有页表并 identity map，否则 ExitBootServices 后 VirtIO PCI / ECAM 访问不可靠
-    var virt_qemu_kernel_space: ?vm.AddressSpace = null;
-    if (builtin.target.cpu.arch == .aarch64) {
-        const paging = arch.impl.paging;
-        if (vm.createAddressSpace(frame.kernelFrameAllocatorPtr())) |ks| {
-            virt_qemu_kernel_space = ks;
-            const ksp = &virt_qemu_kernel_space.?;
-            const id_limit: usize = 2 * 1024 * 1024 * 1024;
-            const id_bytes: u64 = @as(u64, @intCast(id_limit));
-            const id_st = vm.mapIdentityByteRange(ksp, 0, id_bytes, .{ .writable = true, .executable = true }) orelse {
-                klog.err("AArch64: identity map 0-2GiB failed", .{});
-                arch.halt();
-            };
-            klog.info("VM: AArch64 identity stats huge_2m=%u leaf=%u", .{
-                id_st.x86_huge_2m, id_st.leaf_pages,
-            });
-            if (boot_info) |binfo| {
-                if (binfo.fb_info) |fb_i| {
-                    if (fb_i.addr != 0 and fb_i.height > 0 and fb_i.pitch > 0) {
-                        const fb_base = @as(usize, @truncate(fb_i.addr)) & ~@as(usize, paging.page_size - 1);
-                        const fb_bytes = @as(usize, fb_i.pitch) * @as(usize, fb_i.height);
-                        if (fb_bytes != 0) {
-                            const fb_end = fb_base + fb_bytes;
-                            const va_limit = (fb_end + paging.page_size - 1) & ~@as(usize, paging.page_size - 1);
-                            const map_lo = @max(fb_base, id_limit);
-                            if (map_lo < va_limit) {
-                                const spill_len = @as(u64, @intCast(va_limit - map_lo));
-                                const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = false };
-                                _ = vm.mapIdentityByteRange(ksp, @as(u64, @intCast(map_lo)), spill_len, fb_flags) orelse {
-                                    klog.err("AArch64: framebuffer spill map failed 0x%x", .{map_lo});
-                                    arch.halt();
-                                };
-                            }
-                            if (fb_base >= id_limit or fb_end > id_limit) {
-                                klog.info("VM: AArch64 scanout FB spill 0x%x..0x%x", .{ fb_base, fb_end });
-                            }
-                        }
-                    }
-                }
-            }
-            ksp.activate();
-            vm.bindKernelAddressSpace(ksp);
-            vm.setSectionLazyCommitFillHook(@import("../mm/section.zig").onLazyCommitFillPage);
-            klog.info("VM: AArch64 identity map 0-2GiB (PCI ECAM / VirtIO / RAM; 2MiB blocks where aligned)", .{});
-        }
-        // UEFI GOP 在 QEMU AArch64+virtio-gpu 上常为 BLT-only，ZBM 不传 FB tag → 桌面永不启动；用 ramfb 补全。
-        if (boot_info) |*bi| {
-            const fb_ok = if (bi.fb_info) |fb|
-                (fb.addr != 0 and fb.width >= 640 and fb.height >= 480 and fb.pitch > 0 and fb.bpp == 32)
-            else
-                false;
-            if (!fb_ok) {
-                const a64_ramfb = @import("../hal/aarch64/ramfb.zig");
-                if (a64_ramfb.setup()) |rf| {
-                    bi.fb_info = .{
-                        .addr = rf.addr,
-                        .pitch = rf.pitch,
-                        .width = rf.width,
-                        .height = rf.height,
-                        .bpp = rf.bpp,
-                        .fb_type = rf.fb_type,
-                        .pixel_bgr = 1,
-                    };
-                    const rsv = a64_ramfb.framebufferReservedBytes();
-                    if (rsv > 0) {
-                        frame.kernelFrameAllocatorPtr().markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
-                    }
-                    klog.info("Display: AArch64 ramfb %ux%u @0x%x (no linear UEFI GOP from boot loader)", .{
-                        rf.width, rf.height, @as(usize, @truncate(rf.addr)),
-                    });
-                } else {
-                    klog.warn("ramfb(a64): no linear FB and fw_cfg ramfb missing — Aero needs QEMU -device ramfb (see Makefile QEMU_AARCH64_DEVICES)", .{});
-                }
-            }
-        }
-    } else if (builtin.target.cpu.arch == .riscv64) {
-        const paging = arch.impl.paging;
-        if (vm.createAddressSpace(frame.kernelFrameAllocatorPtr())) |ks| {
-            virt_qemu_kernel_space = ks;
-            const ksp = &virt_qemu_kernel_space.?;
-            const flags = vm.MapFlags{ .writable = true, .executable = true };
-            const n_low = (2 * 1024 * 1024 * 1024) / paging.page_size;
-            const id_limit: usize = n_low * paging.page_size;
-            var ip: usize = 0;
-            while (ip < n_low) : (ip += 1) {
-                const v = ip * paging.page_size;
-                _ = ksp.mapPage(v, v, flags);
-            }
-            const ram_pages = (512 * 1024 * 1024) / paging.page_size;
-            ip = 0;
-            while (ip < ram_pages) : (ip += 1) {
-                const v = 0x80000000 + ip * paging.page_size;
-                _ = ksp.mapPage(v, v, flags);
-            }
-            if (boot_info) |binfo| {
-                if (binfo.fb_info) |fb_i| {
-                    if (fb_i.addr != 0 and fb_i.height > 0 and fb_i.pitch > 0) {
-                        const fb_base = @as(usize, @truncate(fb_i.addr)) & ~@as(usize, paging.page_size - 1);
-                        const fb_bytes = @as(usize, fb_i.pitch) * @as(usize, fb_i.height);
-                        if (fb_bytes != 0) {
-                            const fb_end = fb_base + fb_bytes;
-                            const va_limit = (fb_end + paging.page_size - 1) & ~@as(usize, paging.page_size - 1);
-                            const map_lo = @max(fb_base, id_limit);
-                            if (map_lo < va_limit) {
-                                const spill_len = @as(u64, @intCast(va_limit - map_lo));
-                                const fb_flags = vm.MapFlags{ .writable = true, .executable = false, .no_cache = false };
-                                _ = vm.mapIdentityByteRange(ksp, @as(u64, @intCast(map_lo)), spill_len, fb_flags) orelse {
-                                    klog.err("RISC-V64: framebuffer spill map failed 0x%x", .{map_lo});
-                                    arch.halt();
-                                };
-                            }
-                            if (fb_base >= id_limit or fb_end > id_limit) {
-                                klog.info("VM: RISC-V64 scanout FB spill 0x%x..0x%x", .{ fb_base, fb_end });
-                            }
-                        }
-                    }
-                }
-            }
-            ksp.activate();
-            vm.bindKernelAddressSpace(ksp);
-            vm.setSectionLazyCommitFillHook(@import("../mm/section.zig").onLazyCommitFillPage);
-            klog.info("VM: RISC-V64 identity map low 2GiB + RAM@0x80000000 (512MiB); fw_cfg for ramfb @0x10100000 mapped in low 2GiB", .{});
-        }
-        if (boot_info) |*bi| {
-            const fb_ok = if (bi.fb_info) |fb|
-                (fb.addr != 0 and fb.width >= 640 and fb.height >= 480 and fb.pitch > 0 and fb.bpp == 32)
-            else
-                false;
-            if (!fb_ok) {
-                const rv_ramfb = @import("../hal/riscv64/ramfb.zig");
-                if (rv_ramfb.setup()) |rf| {
-                    bi.fb_info = .{
-                        .addr = rf.addr,
-                        .pitch = rf.pitch,
-                        .width = rf.width,
-                        .height = rf.height,
-                        .bpp = rf.bpp,
-                        .fb_type = rf.fb_type,
-                        .pixel_bgr = 1,
-                    };
-                    const rsv = rv_ramfb.framebufferReservedBytes();
-                    if (rsv > 0) {
-                        frame.kernelFrameAllocatorPtr().markPhysRangeUsed(@as(usize, @truncate(rf.addr)), rsv);
-                    }
-                    klog.info("Display: RISC-V64 ramfb %ux%u @0x%x (no linear UEFI GOP from boot loader)", .{
-                        rf.width, rf.height, @as(usize, @truncate(rf.addr)),
-                    });
-                } else {
-                    klog.warn("ramfb(rv): no linear FB and fw_cfg ramfb missing — add -device ramfb (see Makefile QEMU_RISCV64_EXTRA)", .{});
-                }
-            }
-        }
-    }
+    const hal_boot = @import("../hal/boot_setup.zig");
+    const virt_qemu_kernel_space: ?*vm.AddressSpace = hal_boot.setupVirtQemuKernelSpace(&boot_info);
+    _ = virt_qemu_kernel_space;
     if (boot_info) |info| {
         klog.info("Memory: upper=%u KB, mmap_entries=%u", .{
             info.mem_upper_kb, info.mmap_entry_count,
         });
         klog.info("Boot: mode=%u desktop_theme=%u (EFI handoff if magic matches)", .{
-            @intFromEnum(info.boot_mode), @intFromEnum(info.desktop_theme),
+            @backingInt(info.boot_mode), @backingInt(info.desktop_theme),
         });
     }
 
@@ -495,28 +165,9 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     klog.info("--- Phase 2: Scheduler + Timer ---", .{});
     scheduler.init();
     @import("../ke/apc.zig").init();
-    if (builtin.target.cpu.arch == .loongarch64) {
-        arch.impl.traps.init();
-    }
-    if (builtin.target.cpu.arch == .riscv64) {
-        arch.impl.traps.init();
-    }
-    if (builtin.target.cpu.arch == .aarch64) {
-        arch.impl.traps.init();
-    }
+    arch.initTraps();
     timer.init();
-    if (builtin.target.cpu.arch == .loongarch64) {
-        arch.enableInterrupts();
-        klog.info("LoongArch: CRMD.IE enabled (timer + HWI)", .{});
-    }
-    if (builtin.target.cpu.arch == .riscv64) {
-        arch.enableInterrupts();
-        klog.info("RISC-V64: sstatus.SIE enabled (timer + PLIC)", .{});
-    }
-    if (builtin.target.cpu.arch == .aarch64) {
-        arch.enableInterrupts();
-        klog.info("AArch64: DAIF.IRQ enabled (GIC timer + peripherals)", .{});
-    }
+    @import("../hal.zig").enableBringupInterrupts();
 
     klog.info("--- Phase 4: Object / Handle / Process Core ---", .{});
     ob.init();
@@ -550,11 +201,11 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
         klog.warn("InitFS: Failed to mount C: drive", .{});
     }
 
-    if (builtin.target.cpu.arch == .x86_64) {
+    if (comptime @import("../hal.zig").supportsBootStorageProbe()) {
         drivers_generic.storage.boot_probe.mountBootProbeIfReady();
     }
     virtio_blk_scratch_fs.mountIfVirtioBlkDetected();
-    if (builtin.target.cpu.arch == .x86_64) {
+    if (comptime @import("../hal.zig").supportsBootStorageProbe()) {
         const virtio_blk = drivers_generic.storage.virtio_blk_pci;
         if (virtio_blk.isVirtioBlkPciPresent()) {
             var head: [32]u8 = undefined;
@@ -580,14 +231,14 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     cmd_mod.init();
 
     klog.info("--- Phase 9: Win32 Subsystem ---", .{});
-    subsys.init();
+    subsys_cmd.init();
     exec.init();
 
     klog.info("--- Phase 10: Graphical Subsystem ---", .{});
     user32_mod.init();
     gdi32_mod.init();
     dwmapi_mod.ensureLinked();
-    subsys.initGuiSubsystem();
+    subsys_cmd.initGuiSubsystem();
 
     klog.info("--- Phase 11: WOW64 + Audio ---", .{});
     wow64_mod.init();
@@ -633,7 +284,17 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
         );
     }
 
-    cmd_mod.runBootSequence();
+    // CMD.EXE 是用户空间进程（目标 §6-8）：注册到进程表并在其上下文中运行。
+    const ps_proc = @import("../ps/process.zig");
+    const cmd_alloc = frame.kernelFrameAllocatorPtr();
+
+    if (ps_proc.createSystemProcess(cmd_alloc, "cmd.exe")) |cmd_proc| {
+        ps_proc.setCurrentProcess(cmd_proc.pid);
+        _ = subsys_cmd.registerProcess(cmd_proc.pid, .win32_cui, "cmd.exe", 0);
+        cmd_mod.runBootSequence();
+    } else {
+        cmd_mod.runBootSequence();
+    }
     exec.runDemoApps();
     gdi32_mod.runGdiDemo();
     user32_mod.runGuiDemo();
@@ -643,5 +304,6 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     klog.info("=== System Ready ===", .{});
     klog.info("", .{});
 
+    // 交互式 shell 运行在 cmd.exe 进程上下文中（用户空间命令提示符）。
     cmd_mod.runInteractiveShell();
 }

@@ -387,12 +387,12 @@ fn handleIoctl(irp: *io.Irp) io.NTSTATUS {
             return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_QUERY_CURRENT_MODE => {
-            irp.complete(io.STATUS_SUCCESS, @intFromEnum(current_mode));
+            irp.complete(io.STATUS_SUCCESS, @backingInt(current_mode));
             return io.STATUS_SUCCESS;
         },
         IOCTL_VIDEO_SET_MODE => {
             const mode_byte: u8 = @truncate(irp.buffer_ptr & 0xFF);
-            const mode: VideoMode = @enumFromInt(mode_byte);
+            const mode: VideoMode = @fromBackingInt(@intCast(mode_byte));
             switch (mode) {
                 .text_80x25 => setTextMode(),
                 .gfx_320x200_256 => setMode13h(),
@@ -489,6 +489,6 @@ pub fn init() void {
     driver_initialized = true;
 
     klog.info("VGA Driver: initialized (mode=0x%x, %ux%u, device=\\Device\\Video0)", .{
-        @intFromEnum(current_mode), current_width, current_height,
+        @backingInt(current_mode), current_width, current_height,
     });
 }

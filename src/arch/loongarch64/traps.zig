@@ -19,7 +19,7 @@
 //! 安装 CSR.EENTRY 向量区、ECFG 向量间距；与 `exc_vec.S` 中 `loongarch_exc_vectors` 配套。
 
 const klog = @import("../../rtl/klog.zig");
-const interrupt_la = @import("../../ke/interrupt_loongarch.zig");
+const interrupt_la = @import("./interrupt.zig");
 const syscall_la = @import("syscall_la.zig");
 
 /// `exc_vec.S` 中全局符号；勿用 `@intFromPtr(&extern …)` —— 与 `_kernel_end` 相同，部分 Zig 版本在 LoongArch 上会得到 0，CSR.EENTRY=0 会导致定时器/中断入口跳转到空地址，桌面刚起来即崩溃或 QEMU 退出。

@@ -71,10 +71,10 @@ pub const convertHandle64to32 = thunk.convertHandle64to32;
 pub const shouldRedirectSystem32ToSyswow64 = redirect.shouldRedirectSystem32ToSyswow64;
 pub const noteRegistryWow64Node = redirect.noteRegistryWow64Node;
 
-var wow64_processes: [types.MAX_WOW64_PROCESSES]Wow64Process = [_]Wow64Process{.{}} ** types.MAX_WOW64_PROCESSES;
+var wow64_processes: [types.MAX_WOW64_PROCESSES]Wow64Process = std.mem.zeroes([types.MAX_WOW64_PROCESSES]Wow64Process);
 var wow64_process_count: usize = 0;
 
-var thunk_table: [types.MAX_THUNK_ENTRIES]ThunkEntry = [_]ThunkEntry{.{}} ** types.MAX_THUNK_ENTRIES;
+var thunk_table: [types.MAX_THUNK_ENTRIES]ThunkEntry = std.mem.zeroes([types.MAX_THUNK_ENTRIES]ThunkEntry);
 var thunk_count: usize = 0;
 
 var wow64_state: Wow64State = .inactive;

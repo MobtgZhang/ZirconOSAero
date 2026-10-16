@@ -77,12 +77,13 @@ pub const SectionObject = struct {
 };
 
 var g_sections: [MAX_SECTIONS]SectionObject = undefined;
-var g_section_used: [MAX_SECTIONS]bool = [_]bool{false} ** MAX_SECTIONS;
+var g_section_used: [MAX_SECTIONS]bool = std.mem.zeroes([MAX_SECTIONS]bool);
 
 var section_va_salt: u32 = 0xA5A5_5A5A;
 
-fn pageAlignUp(size: u64) u64 {
+fn pageAlignUpChecked(size: u64) ?u64 {
     const ps: u64 = @intCast(paging.page_size);
+    if (size > std.math.maxInt(u64) - (ps - 1)) return null;
     return (size + ps - 1) & ~(ps - 1);
 }
 
@@ -91,9 +92,9 @@ pub fn createAnonymousSection(max_size: u64, page_protection: u32) ?*SectionObje
     var i: usize = 0;
     while (i < MAX_SECTIONS) : (i += 1) {
         if (!g_section_used[i]) {
+            const aligned = if (max_size == 0) @as(u64, @intCast(paging.page_size)) else pageAlignUpChecked(max_size) orelse return null;
             g_section_used[i] = true;
             const s = &g_sections[i];
-            const aligned = if (max_size == 0) @as(u64, @intCast(paging.page_size)) else pageAlignUp(max_size);
             const cow = (page_protection & 0x88) != 0; // WRITECOPY / EXECUTE_WRITECOPY
             s.* = .{
                 .header = .{ .obj_type = .section, .ref_count = 0, .handle_count = 0 },
@@ -114,10 +115,10 @@ pub fn createFileBackedSection(max_size: u64, page_protection: u32, file: *vfs.F
     var i: usize = 0;
     while (i < MAX_SECTIONS) : (i += 1) {
         if (!g_section_used[i]) {
+            const from_file = if (max_size == 0) file.file_size else @min(max_size, file.file_size);
+            const aligned = pageAlignUpChecked(from_file) orelse return null;
             g_section_used[i] = true;
             const s = &g_sections[i];
-            const from_file = if (max_size == 0) file.file_size else @min(max_size, file.file_size);
-            const aligned = pageAlignUp(from_file);
             const cow = (page_protection & 0x88) != 0; // WRITECOPY / EXECUTE_WRITECOPY
             s.* = .{
                 .header = .{ .obj_type = .section, .ref_count = 0, .handle_count = 0 },
@@ -136,6 +137,7 @@ pub fn createFileBackedSection(max_size: u64, page_protection: u32, file: *vfs.F
 }
 
 pub fn releaseSectionObject(sec: *SectionObject) void {
+    if (sec.active_view_count != 0) return;
     const base = @intFromPtr(sec);
     var idx: usize = 0;
     while (idx < MAX_SECTIONS) : (idx += 1) {
@@ -157,12 +159,12 @@ fn pickUserBase(space: *vm.AddressSpace, num_pages: u32) ?u64 {
     const ps: u64 = @intCast(paging.page_size);
     if (ps != 0 and @as(u64, num_pages) > std.math.maxInt(u64) / ps) return null;
     const vs = @as(u64, num_pages) * ps;
-    if (!vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_X64_NT, vs)) return null;
+    if (!vm.userVaRangeAllowedNt61(vm.USER_VA_MIN_NT61, vs)) return null;
     section_va_salt = section_va_salt *% 1664525 +% 1013904223;
     const slide: u64 = @as(u64, section_va_salt % 512);
-    var base: u64 = std.mem.alignForward(u64, vm.USER_VA_MIN_X64_NT + slide * ps, ps);
+    var base: u64 = std.mem.alignForward(u64, vm.USER_VA_MIN_NT61 + slide * ps, ps);
     if (!vm.userVaRangeAllowedNt61(base, vs)) {
-        base = std.mem.alignForward(u64, vm.USER_VA_MIN_X64_NT, ps);
+        base = std.mem.alignForward(u64, vm.USER_VA_MIN_NT61, ps);
         if (!vm.userVaRangeAllowedNt61(base, vs)) return null;
     }
     while (vm.userVaRangeAllowedNt61(base, vs)) : (base += ps) {
@@ -226,11 +228,13 @@ pub fn mapViewIntoProcess(
     view_size: *u64,
 ) i32 {
     if (section_offset >= sec.maximum_size) return STATUS_INVALID_PARAMETER;
+    if (section_offset & (@as(u64, @intCast(paging.page_size)) - 1) != 0) return STATUS_INVALID_PARAMETER;
     const ps: u64 = @intCast(paging.page_size);
     const vs: u64 = if (view_size.* == 0)
         sec.maximum_size - section_offset
     else
-        pageAlignUp(view_size.*);
+        pageAlignUpChecked(view_size.*) orelse return STATUS_INVALID_PARAMETER;
+    if (section_offset > std.math.maxInt(u64) - vs) return STATUS_INVALID_PARAMETER;
     if (section_offset + vs > sec.maximum_size) return STATUS_INVALID_PARAMETER;
 
     const space = proc.address_space orelse return STATUS_NO_MEMORY;
@@ -254,7 +258,9 @@ pub fn mapViewIntoProcess(
             _ = space.vad.removeExact(base, num_pages);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        sec.active_view_count +%= 1;
+        if (sec.active_view_count == std.math.maxInt(u32)) return STATUS_INSUFFICIENT_RESOURCES;
+        sec.header.addRef();
+        sec.active_view_count += 1;
         base_address.* = base;
         view_size.* = vs;
         return STATUS_SUCCESS;
@@ -279,7 +285,16 @@ pub fn mapViewIntoProcess(
         }
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    sec.active_view_count +%= 1;
+    if (sec.active_view_count == std.math.maxInt(u32)) {
+        var j: u32 = 0;
+        while (j < num_pages) : (j += 1) {
+            _ = space.unmapAndFree(base + @as(u64, j) * ps);
+        }
+        _ = space.takeSectionView(base);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    sec.header.addRef();
+    sec.active_view_count += 1;
     vm.recordCommittedVadRange(space, base, num_pages, sec.page_protection);
     base_address.* = base;
     view_size.* = vs;
@@ -335,6 +350,9 @@ pub fn unmapViewInProcess(proc: *process.Process, base: u64) i32 {
     const pages = space.takeSectionView(base) orelse return STATUS_INVALID_PARAMETER;
     if (sec_opt) |sec| {
         if (sec.active_view_count > 0) sec.active_view_count -= 1;
+        if (sec.header.release()) {
+            releaseSectionObject(sec);
+        }
     }
     vm.unmapRange(space, base, pages);
     return STATUS_SUCCESS;
@@ -387,4 +405,19 @@ test "SectionObject is backed by object header type section" {
 
 test "MAX_SECTIONS is bounded for static pool" {
     try std.testing.expect(MAX_SECTIONS > 0 and MAX_SECTIONS <= 256);
+}
+
+test "Section size alignment rejects overflow" {
+    try std.testing.expect(createAnonymousSection(std.math.maxInt(u64), 0x04) == null);
+}
+
+test "Section release is deferred while views remain" {
+    const sec = createAnonymousSection(0x1000, 0x04) orelse return error.NoSection;
+    sec.header.addRef();
+    sec.active_view_count = 1;
+    releaseSectionObject(sec);
+    try std.testing.expectEqual(@as(u32, 1), sec.header.refCount());
+    sec.active_view_count = 0;
+    _ = sec.header.release();
+    releaseSectionObject(sec);
 }

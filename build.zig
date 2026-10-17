@@ -421,6 +421,13 @@ pub fn build(b: *std.Build) void {
     // - std/heap.zig:56 requires page_size_max for freestanding targets
     // - std/posix.zig:69+ missing system.* members for freestanding/other OS
 
+    const hal_capabilities_mod = b.createModule(.{
+        .root_source_file = b.path("src/hal/capabilities.zig"),
+        .target = target,
+        .optimize = kernel_optimize,
+    });
+    root_mod.addImport("hal_capabilities", hal_capabilities_mod);
+
     root_mod.addOptions("build_options", build_opts);
     root_mod.addImport("wallpaper_data", wallpaper_data_mod);
     root_mod.addImport("svg_data", svg_data_mod);
@@ -807,10 +814,18 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const arch_user_syscall_mod = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/user_syscall.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
     const ntdll_syscall_stub_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/ntdll_syscall_win64.zig"),
         .target = b.graph.host,
         .optimize = .debug,
+        .imports = &.{
+            .{ .name = "arch_user_syscall", .module = arch_user_syscall_mod },
+        },
     });
     const ssdt_stub_parity_mod = b.createModule(.{
         .root_source_file = b.path("tests/ssdt_stub_parity.zig"),
@@ -1212,10 +1227,18 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .debug,
     });
+    const hal_capabilities_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/hal/capabilities.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
     const peb_nt61_x64_host_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/peb_nt61_x64.zig"),
         .target = b.graph.host,
         .optimize = .debug,
+        .imports = &.{
+            .{ .name = "hal_capabilities", .module = hal_capabilities_host_mod },
+        },
     });
     const kuser_shared_nt61_mod = b.createModule(.{
         .root_source_file = b.path("src/sdk/kuser_shared_nt61.zig"),
@@ -2374,6 +2397,13 @@ fn buildUefi(
     });
     uefi_mod.addOptions("build_options", uefi_opts);
 
+    const winload_mod = b.createModule(.{
+        .root_source_file = b.path("boot/zbm/uefi/winload.zig"),
+        .target = uefi_target,
+        .optimize = optimize,
+    });
+    winload_mod.addOptions("build_options", uefi_opts);
+
     const efi_stem = switch (cpu_arch) {
         .x86_64 => "BOOTX64",
         .aarch64 => "BOOTAA64",
@@ -2385,10 +2415,17 @@ fn buildUefi(
         .root_module = uefi_mod,
     });
 
+    const winload_exe = b.addExecutable(.{
+        .name = "winload",
+        .root_module = winload_mod,
+    });
+
     const install_uefi = b.addInstallArtifact(uefi_exe, .{});
+    const install_winload = b.addInstallArtifact(winload_exe, .{});
 
     const uefi_step = b.step("uefi", "Build ZBM UEFI boot application (.efi; x86_64 / aarch64; riscv64 → zbm-riscv64-uefi)");
     uefi_step.dependOn(&install_uefi.step);
+    uefi_step.dependOn(&install_winload.step);
 }
 
 /// LoongArch64 ZBM: Zig → `zbm_loongarch64.o` (freestanding), then GNU-EFI crt0 + objcopy → `.efi`.

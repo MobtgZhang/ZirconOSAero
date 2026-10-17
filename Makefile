@@ -4,7 +4,7 @@
 #
 # Requires: zig, qemu-system-* (per ARCH), OVMF/EDK2 firmware, xorriso, mtools, dosfstools
 
-.PHONY: all build build-release run run-debug iso iso-debug iso-release \
+.PHONY: all build build-release run run-gui run-vnc run-debug iso iso-debug iso-release \
 	build-zbm build-esp build-desktop fetch-assets fetch-firmware \
 	win7fs \
 	test clean help show-config sync-resolution
@@ -76,11 +76,13 @@ AARCH64_PFLASH_MB ?= 64
 RISCV64_QEMU_VIRTIO_GPU ?= 0
 AARCH64_QEMU_VIRTIO_GPU ?= 0
 # gtk：默认桌面窗口（已知 QEMU 10.x GTK 宿主鼠标→VirtIO 路由受限，见 reports/051）。
-# vnc：`-display none -vnc $(QEMU_VNC_DISPLAY)`，宿主鼠标事件可正确路由到 VirtIO 输入设备。
+# gtk：默认弹出本机 QEMU 图形窗口；vnc 保留为指针验证路径。
 # sdl：SDL2 窗口。
-QEMU_DISPLAY_BACKEND ?= vnc
+QEMU_DISPLAY_BACKEND ?= gtk
 QEMU_VNC_DISPLAY ?= :1
+QEMU_VNC_HOST ?= 127.0.0.1
 QEMU_GTK_EXTRA ?= ,grab-on-hover=on
+QEMU_EXTRA ?=
 
 # 配置验证
 VALID_DESKTOPS := aero none
@@ -213,7 +215,8 @@ QEMU_COMMON_X86_UEFI := -machine $(QEMU_X86_UEFI_MACHINE),accel=$(QEMU_X86_UEFI_
 	$(QEMU_X86_VIDEO_FLAGS) \
 	$(QEMU_X86_UEFI_GPU_FLAGS) \
 	$(QEMU_X86_UEFI_INPUT) \
-	$(QEMU_X86_UEFI_NETDEV)
+	$(QEMU_X86_UEFI_NETDEV) \
+	$(QEMU_EXTRA)
 
 QEMU_COMMON_AARCH64 := -M virt,highmem-ecam=off -cpu cortex-a72 -m $(QEMU_MEM) -serial stdio \
 	-no-reboot -no-shutdown -display gtk,$(QEMU_GTK_ZOOM)$(QEMU_GTK_EXTRA)
@@ -321,6 +324,9 @@ endif
 	@echo "║  ENABLE_IDT   = $(ENABLE_IDT)"
 	@echo "║  DEBUG_LOG    = $(DEBUG_LOG)"
 	@echo "╚══════════════════════════════════════════════╝"
+ifeq ($(QEMU_DISPLAY_BACKEND),vnc)
+	@echo "QEMU VNC mode: connect to $(QEMU_VNC_HOST):590$(lastword $(subst :, ,$(QEMU_VNC_DISPLAY))) for the graphical console."
+endif
 
 sync-resolution:
 	@mkdir -p $(TMP_DIR)
@@ -533,6 +539,12 @@ run: build build-esp
 		echo "Unsupported ARCH: $(ARCH)"; \
 		exit 1; \
 	fi
+
+run-gui:
+	@$(MAKE) run QEMU_DISPLAY_BACKEND=gtk
+
+run-vnc:
+	@$(MAKE) run QEMU_DISPLAY_BACKEND=vnc
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CLEANUP

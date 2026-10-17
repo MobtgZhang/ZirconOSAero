@@ -275,8 +275,10 @@ export fn __extendxftf2(a: f80) f128 {
 }
 export fn memset(dest: ?[*]u8, c: u8, len: usize) ?[*]u8 {
     if (dest) |d| {
-        for (d[0..len]) |*p| {
-            p.* = c;
+        const volatile_dest: [*]volatile u8 = @ptrCast(d);
+        var index: usize = 0;
+        while (index < len) : (index += 1) {
+            volatile_dest[index] = c;
         }
     }
     return dest;
@@ -285,8 +287,11 @@ export fn memcpy(dest: ?[*]u8, src: ?[*]const u8, len: usize) ?[*]u8 {
     if (dest == null or src == null) return dest;
     const d = dest.?;
     const s = src.?;
-    for (0..len) |i| {
-        d[i] = s[i];
+    const volatile_dest: [*]volatile u8 = @ptrCast(d);
+    const volatile_src: [*]const volatile u8 = @ptrCast(s);
+    var index: usize = 0;
+    while (index < len) : (index += 1) {
+        volatile_dest[index] = volatile_src[index];
     }
     return dest;
 }
@@ -306,15 +311,18 @@ export fn memmove(dest: ?[*]u8, src: ?[*]const u8, len: usize) ?[*]u8 {
     if (dest == null or src == null) return dest;
     const d = dest.?;
     const s = src.?;
+    const volatile_dest: [*]volatile u8 = @ptrCast(d);
+    const volatile_src: [*]const volatile u8 = @ptrCast(s);
     if (@intFromPtr(d) < @intFromPtr(s)) {
-        for (0..len) |i| {
-            d[i] = s[i];
+        var index: usize = 0;
+        while (index < len) : (index += 1) {
+            volatile_dest[index] = volatile_src[index];
         }
     } else {
         var i = len;
         while (i > 0) {
             i -= 1;
-            d[i] = s[i];
+            volatile_dest[i] = volatile_src[i];
         }
     }
     return dest;

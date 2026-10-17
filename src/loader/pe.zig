@@ -28,6 +28,7 @@
 
 const std = @import("std");
 const ob = @import("../ob/object.zig");
+const hal = @import("../hal.zig");
 const klog = @import("../rtl/klog.zig");
 const process_mod = @import("../ps/process.zig");
 const section_mm = @import("../mm/section.zig");
@@ -696,6 +697,23 @@ pub fn loadDll(name: []const u8, base: u64) LoadResult {
         img.is_dll = true;
         img.characteristics |= IMAGE_FILE_DLL;
     }
+    return result;
+}
+
+/// Registers an image already loaded and mapped by winload.
+/// The image is validated from its mapped header; section bytes are not copied again.
+pub fn registerMappedImage(name: []const u8, base: u64, size: u64, is_dll: bool) LoadResult {
+    const data = @as([*]const u8, @ptrFromInt(base))[0..@min(size, 4096)];
+    const validation = validatePeHeader(data);
+    if (validation != .success) return .{ .status = validation };
+
+    const result = if (is_dll) loadDll(name, base) else loadImage(name, base);
+    if (result.status != .success or result.image == null) return result;
+
+    const img = result.image.?;
+    img.size_of_image = @truncate(size);
+    img.is_mapped = true;
+    img.subsystem = readSubsystemFromPeBytes(data) orelse IMAGE_SUBSYSTEM_WINDOWS_CUI;
     return result;
 }
 
@@ -1397,14 +1415,7 @@ pub fn isLoongArch64Image(img: *const LoadedImage) bool {
 
 /// 当前构建目标对应的 PE 机器类型。
 pub fn nativeMachineType() u16 {
-    const builtin = @import("builtin");
-    return switch (builtin.cpu.arch) {
-        .x86_64 => IMAGE_FILE_MACHINE_AMD64,
-        .loongarch64 => IMAGE_FILE_MACHINE_LOONGARCH64,
-        .aarch64 => IMAGE_FILE_MACHINE_ARM64,
-        .riscv64 => IMAGE_FILE_MACHINE_RISCV64,
-        else => IMAGE_FILE_MACHINE_AMD64,
-    };
+    return hal.nativePeMachineType();
 }
 
 pub fn createSection(name: []const u8, base: u64, size: u32, characteristics: u32) ?*LoadedImage {

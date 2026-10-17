@@ -65,6 +65,10 @@ pub const Process = struct {
     priority_class: u8 = 2,
     /// NT 6.1 里程碑：主模块首选基址（PE `OptionalHeader.ImageBase`）；未加载 PE 时为 0。
     image_base_address: u64 = 0,
+    /// NT 6.1 主模块映像大小（`OptionalHeader.SizeOfImage`）；未加载 PE 时为 0。
+    image_size: u64 = 0,
+    /// NT 6.1 主线程入口（`image_base + AddressOfEntryPoint`）；纯内核进程为 0。
+    image_entry_point: u64 = 0,
     /// NT 6.1 里程碑：进程环境块用户 VA；由加载器/Nt 路径填写，供 syscall 与用户异常对齐。
     peb_address: u64 = 0,
     /// WOW64：32 位子系统进程；影响注册表/路径重定向与 `ProcessWow64Information`。
@@ -296,64 +300,125 @@ pub fn createProcessFromPe(
     image_base: u64,
     entry_point: u64,
 ) ?struct { proc: *Process, tid: u32 } {
-    _ = entry_point; // TODO: 用于设置线程入口点
-    // 1. 创建进程
-    const proc = createProcess(frame_alloc) orelse return null;
-    proc.image_base_address = image_base;
-
-    // 2. 验证 PE 格式
     const pe = @import("../loader/pe.zig");
+    klog.info("Process: createProcessFromPe enter len=%u", .{pe_data.len});
+    if (pe_data.len < (@sizeOf(pe.DosHeader) + 4 + @sizeOf(pe.FileHeader) + @sizeOf(pe.OptionalHeader64))) {
+        klog.err("Process: PE too small (%u)", .{pe_data.len});
+        return null;
+    }
+
+    const proc = createProcess(frame_alloc) orelse return null;
     if (pe.validatePeHeader(pe_data) != .success) {
         klog.err("Process: invalid PE format for process PID=%u", .{proc.pid});
         _ = terminateProcess(proc.pid, 0);
         return null;
     }
 
-    // 3. 映射 PE 节到进程地址空间
+    const dos = @as(*const pe.DosHeader, @ptrFromInt(@intFromPtr(pe_data.ptr)));
+    const pe_offset: usize = @intCast(dos.e_lfanew);
+    const optional_offset = pe_offset + 4 + @sizeOf(pe.FileHeader);
+    const opt = @as(*const pe.OptionalHeader64, @ptrFromInt(@intFromPtr(pe_data.ptr + optional_offset)));
+    const resolved_image_base = if (image_base != 0) image_base else opt.image_base;
+    const resolved_entry = if (entry_point != 0) entry_point else resolved_image_base + @as(u64, opt.address_of_entry_point);
+    klog.info("Process: PE base=0x%x entry=0x%x", .{ resolved_image_base, resolved_entry });
+
+    proc.image_base_address = resolved_image_base;
+    proc.image_size = opt.size_of_image;
+    proc.image_entry_point = resolved_entry;
+
     const asp = proc.address_space orelse return null;
-    if (!mapPeSectionsToAddressSpace(asp, pe_data, image_base)) {
-        klog.err("Process: failed to map PE sections for PID=%u", .{proc.pid});
+    const user_stack_base: u64 = 0x0000_0000_7FC0_0000;
+    const user_stack_pages: usize = 16;
+    const page_size: u64 = 4096;
+    const user_stack_top = user_stack_base + @as(u64, @intCast(user_stack_pages)) * page_size - 8;
+    var stack_page: usize = 0;
+    var stack_mapped = true;
+    while (stack_page < user_stack_pages) : (stack_page += 1) {
+        if (asp.mapPageForceAlloc(user_stack_base + @as(u64, @intCast(stack_page)) * page_size, .{
+            .user = true,
+            .writable = true,
+            .executable = true,
+        }) == null) {
+            stack_mapped = false;
+            break;
+        }
+    }
+    if (!stack_mapped) {
+        klog.err("Process: failed to map user stack for PID=%u", .{proc.pid});
+        _ = terminateProcess(proc.pid, 1);
+        return null;
+    }
+
+    if (!mapPeSectionsToAddressSpace(asp, pe_data, resolved_image_base)) {
+        klog.err("Process: failed to map PE sections PID=%u base=0x%x len=%u", .{ proc.pid, resolved_image_base, pe_data.len });
         _ = terminateProcess(proc.pid, 0);
         return null;
     }
 
-    // 4. 设置 PEB
-    proc.peb_address = image_base + 0x1000; // 简化：PEB 在固定偏移
-    klog.info("Process: PE loaded at 0x{x} for PID=%u", .{ image_base, proc.pid });
+    const peb_stub = @import("../sdk/peb_nt61_x64.zig");
+    proc.peb_address = peb_stub.stubUserPebPageVa(proc.pid);
+    if (asp.mapPageForceAlloc(proc.peb_address, .{ .user = true, .writable = true, .executable = false })) |peb_phys| {
+        peb_stub.writePebToPhysicalPage(peb_phys, resolved_image_base, 0, 0);
+    }
 
-    // 5. TODO: 创建初始线程
-    // 完整实现需要创建线程并设置 context
-    return .{ .proc = proc, .tid = 0 };
+    const scheduler = @import("../ke/scheduler.zig");
+    const tid = scheduler.createUserThread(resolved_entry, user_stack_top, proc.pid) orelse {
+        klog.err("Process: createUserThread failed PID=%u entry=0x%x", .{ proc.pid, resolved_entry });
+        _ = terminateProcess(proc.pid, 1);
+        return null;
+    };
+
+    const teb_va = peb_stub.stubUserTebPageVa(tid);
+    if (asp.mapPageForceAlloc(teb_va, .{ .user = true, .writable = true, .executable = false })) |teb_phys| {
+        var teb = @import("../sdk/teb_nt61_x64.zig").TebNt61X64{};
+        teb.NtTib.Self = teb_va;
+        teb.ClientIdUniqueProcess = proc.pid;
+        teb.ClientIdUniqueThread = tid;
+        teb.ProcessEnvironmentBlock = proc.peb_address;
+        peb_stub.writeBytesToPhysicalPage(teb_phys, std.mem.asBytes(&teb));
+        scheduler.setTebUserVaForSchedIndex(tid, teb_va);
+    }
+
+    klog.info("Process: PE loaded at %x entry=%x PID=%u TID=%u", .{ resolved_image_base, resolved_entry, proc.pid, tid });
+    return .{ .proc = proc, .tid = @intCast(tid) };
 }
 
 /// 将 PE 节映射到进程的地址空间
 fn mapPeSectionsToAddressSpace(asp: *vm.AddressSpace, pe_data: []const u8, image_base: u64) bool {
-    _ = asp; // TODO: 使用 asp 将节数据映射到地址空间
     const pe = @import("../loader/pe.zig");
+    if (pe_data.len < (@sizeOf(pe.DosHeader) + 4 + @sizeOf(pe.FileHeader))) return false;
 
-    // 读取节头
     const dos = @as(*const pe.DosHeader, @ptrFromInt(@intFromPtr(pe_data.ptr)));
-    const pe_offset = dos.e_lfanew;
-    const fh = @as(*const pe.FileHeader, @ptrFromInt(pe_data.ptr + pe_offset + 4));
+    const pe_offset: usize = @intCast(dos.e_lfanew);
+    const fh_offset = pe_offset + 4;
+    const fh = @as(*const pe.FileHeader, @ptrFromInt(@intFromPtr(pe_data.ptr + fh_offset)));
+    const section_offset = fh_offset + @sizeOf(pe.FileHeader) + @as(usize, fh.size_of_optional_header);
+    const flags = vm.MapFlags{ .user = true, .writable = true, .executable = true };
+    const page_size: usize = 4096;
 
-    const num_sections = fh.number_of_sections;
-    const opt_size = fh.size_of_optional_header;
-    const sections_ptr = pe_data.ptr + pe_offset + 4 + @sizeOf(pe.FileHeader) + opt_size;
+    if (asp.mapPageForceAlloc(image_base, flags)) |phys| {
+        const header_copy_len = @min(page_size, pe_data.len);
+        @memcpy(@as([*]u8, @ptrFromInt(@as(usize, @intCast(phys))))[0..header_copy_len], pe_data[0..header_copy_len]);
+    } else return false;
 
-    // 遍历每个节并映射
-    var i: u16 = 0;
-    while (i < num_sections) : (i += 1) {
-        const sh = @as(*const pe.SectionHeader, @ptrFromInt(sections_ptr + @as(usize, i) * @sizeOf(pe.SectionHeader)));
+    var section_index: u16 = 0;
+    while (section_index < fh.number_of_sections) : (section_index += 1) {
+        const sh_ptr = pe_data.ptr + section_offset + @as(usize, section_index) * @sizeOf(pe.SectionHeader);
+        const sh = @as(*const pe.SectionHeader, @ptrFromInt(@intFromPtr(sh_ptr)));
+        const mapped_size = @max(sh.virtual_size, sh.size_of_raw_data);
+        if (mapped_size == 0) continue;
 
-        if (sh.size_of_raw_data == 0) continue;
-
-        const sec_va = image_base + @as(u64, sh.virtual_address);
-        const sec_size = @as(u64, sh.virtual_size);
-
-        // TODO: 使用 vm.mapPage* 将节数据映射到地址空间
-        klog.debug("Process: mapping section '%s' to VA=0x{x} size={}", .{
-            sh.name[0..8], sec_va, sec_size,
-        });
+        const first_va = image_base + @as(u64, sh.virtual_address);
+        var page_offset: usize = 0;
+        while (page_offset < mapped_size) : (page_offset += page_size) {
+            const phys = asp.mapPageForceAlloc(first_va + page_offset, flags) orelse return false;
+            if (page_offset >= sh.size_of_raw_data) continue;
+            const raw_start: usize = @as(usize, sh.pointer_to_raw_data) + page_offset;
+            const raw_len = @min(page_size, @as(usize, sh.size_of_raw_data) -| page_offset);
+            if (raw_start + raw_len > pe_data.len) return false;
+            const dest = @as([*]u8, @ptrFromInt(@as(usize, @intCast(phys))));
+            @memcpy(dest[0..raw_len], pe_data[raw_start..][0..raw_len]);
+        }
     }
 
     return true;
@@ -362,7 +427,7 @@ fn mapPeSectionsToAddressSpace(asp: *vm.AddressSpace, pe_data: []const u8, image
 /// 获取进程的主模块信息
 pub fn getProcessMainModule(proc: *const Process) ?struct { base: u64, size: u32 } {
     if (proc.image_base_address == 0) return null;
-    return .{ .base = proc.image_base_address, .size = 0 }; // size 待从 PE 获取
+    return .{ .base = proc.image_base_address, .size = @intCast(proc.image_size) };
 }
 
 pub fn terminateProcess(pid: u32, exit_code: u32) bool {
@@ -401,6 +466,14 @@ pub fn findProcess(pid: u32) ?*Process {
     return null;
 }
 
+pub fn findProcessByName(name: []const u8) ?*Process {
+    for (processes[0..process_count]) |*proc| {
+        const stored = proc.name[0..proc.name_len];
+        if (std.mem.eql(u8, stored, name)) return proc;
+    }
+    return null;
+}
+
 pub fn setCurrentProcess(pid: u32) void {
     current_pid = pid;
 }
@@ -419,7 +492,7 @@ pub fn checkProcessAccess(proc: *const Process, desired_access: ob.ACCESS_MASK) 
 pub fn openProcess(pid: u32, desired_access: ob.ACCESS_MASK) ?*Process {
     const proc = findProcess(pid) orelse return null;
     if (!checkProcessAccess(proc, desired_access)) {
-        klog.debug("Process: access denied for PID=%u (desired_access=0x{x})", .{ pid, desired_access });
+        klog.debug("Process: access denied for PID=%u (desired_access=%x)", .{ pid, desired_access });
         return null;
     }
     proc.header.addRef();

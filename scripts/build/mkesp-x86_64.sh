@@ -88,6 +88,8 @@ run_mtools() {
 }
 
 _NT61_TREE="$(mktemp -d)"
+WINLOAD_EFI="${ZIRCON_WINLOAD_EFI:-${_ROOT}/zig-out/bin/winload.efi}"
+export WINLOAD_EFI
 bash "${_SCRIPT_DIR}/populate-nt61-esp.sh" \
     "${_NT61_TREE}" "${BOOT_EFI}" "${KERNEL}" "X64"
 

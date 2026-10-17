@@ -59,10 +59,10 @@ syscall_lstar_entry:
     addq $16, %rsp
 
     popq %rcx
-    addq $8, %rsp
+    popq %rdx
     popq %r11
-    popq %rsi
+    popq %r10
     addq $8, %rsp
-    movq %rsi, %rsp
+    movq %r10, %rsp
     swapgs
     sysretq

@@ -126,6 +126,7 @@ _start:
     # Enable PAE (CR4 bit 5)
     mov %cr4, %eax
     or  $(1 << 5), %eax
+    and $~(1 << 7), %eax
     mov %eax, %cr4
 
     # Enable Long Mode (IA32_EFER MSR bit 8)

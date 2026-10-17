@@ -53,6 +53,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     const cmd_mod = @import("../subsystems/win32/cmd.zig");
     const subsys_cmd = @import("../subsystems/win32/subsystem.zig");
     const exec = @import("../subsystems/win32/exec.zig");
+    const system_startup = @import("system_startup.zig");
     const user32_mod = @import("../subsystems/win32/user32.zig");
     const gdi32_mod = @import("../subsystems/win32/gdi32.zig");
     const dwmapi_mod = @import("../subsystems/win32/dwmapi.zig");
@@ -94,9 +95,15 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
             bi.mem_upper_kb,
             if (bi.fb_info != null) "yes" else "no",
         });
+        klog.info("WinloadHandoff: loaded_images=%u kernel=0x%x%x", .{
+            bi.boot_image_count,
+            if (bi.boot_image_count > 0) @truncate(bi.boot_images[0].base >> 32) else 0,
+            if (bi.boot_image_count > 0) @truncate(bi.boot_images[0].base) else 0,
+        });
     } else {
         klog.warn("BootHandoff: boot.parse returned null", .{});
     }
+    klog.info("BootHandoff: magic=0x%x info_addr=0x%x", .{ magic, info_addr });
 
     const hal = @import("../hal.zig");
 
@@ -233,6 +240,11 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     klog.info("--- Phase 9: Win32 Subsystem ---", .{});
     subsys_cmd.init();
     exec.init();
+    system_startup.createSubsystemProcesses(
+        frame.kernelFrameAllocatorPtr(),
+        if (boot_info) |bi| bi.boot_images[0..bi.boot_image_count] else &.{},
+    );
+    scheduler.yield();
 
     klog.info("--- Phase 10: Graphical Subsystem ---", .{});
     user32_mod.init();
@@ -286,15 +298,10 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
 
     // CMD.EXE 是用户空间进程（目标 §6-8）：注册到进程表并在其上下文中运行。
     const ps_proc = @import("../ps/process.zig");
-    const cmd_alloc = frame.kernelFrameAllocatorPtr();
-
-    if (ps_proc.createSystemProcess(cmd_alloc, "cmd.exe")) |cmd_proc| {
+    if (ps_proc.findProcessByName("cmd.exe")) |cmd_proc| {
         ps_proc.setCurrentProcess(cmd_proc.pid);
-        _ = subsys_cmd.registerProcess(cmd_proc.pid, .win32_cui, "cmd.exe", 0);
-        cmd_mod.runBootSequence();
-    } else {
-        cmd_mod.runBootSequence();
     }
+    cmd_mod.runBootSequence();
     exec.runDemoApps();
     gdi32_mod.runGdiDemo();
     user32_mod.runGuiDemo();

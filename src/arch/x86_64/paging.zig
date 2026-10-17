@@ -179,7 +179,10 @@ pub fn split2MiBIdentityPageIfNeeded(
         const p = huge_base + off;
         pt.entries[i] = PageTableEntry.fromFrame(p, pte_flags);
     }
-    pde.* = PageTableEntry.fromFrame(pt_frame, Present | Write);
+    pde.* = PageTableEntry.fromFrame(
+        pt_frame,
+        Present | Write | (if ((praw & User) != 0) User else 0),
+    );
     pde.accessed = true;
     invlpg(huge_base);
     return true;
@@ -203,6 +206,8 @@ pub fn mapPage(
     var p = PhysAddr{ .value = phys };
     p.alignDown();
 
+    const wants_user = (flags & User) != 0;
+
     // 需要将 pml4_phys 转为可访问的虚拟地址
     // 在启用分页前，我们使用 identity mapping，故物理地址即虚拟地址
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
@@ -211,20 +216,30 @@ pub fn mapPage(
     var pml4e = &pml4.entries[pml4e_idx];
     if (!pml4e.isPresent()) {
         const frame = alloc_frame(alloc_ctx) orelse return false;
-        pml4e.* = PageTableEntry.fromFrame(frame, Present | Write);
+        pml4e.* = PageTableEntry.fromFrame(
+            frame,
+            Present | Write | (if (wants_user) User else 0),
+        );
         pml4e.accessed = true;
         const pdpt = @as(*PageTable, @ptrFromInt(frame));
         pdpt.zero();
+    } else if (wants_user and !pml4e.user) {
+        pml4e.user = true;
     }
     const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
     const pdpte_idx = v.pdptIndex();
     var pdpte = &pdpt.entries[pdpte_idx];
     if (!pdpte.isPresent()) {
         const frame = alloc_frame(alloc_ctx) orelse return false;
-        pdpte.* = PageTableEntry.fromFrame(frame, Present | Write);
+        pdpte.* = PageTableEntry.fromFrame(
+            frame,
+            Present | Write | (if (wants_user) User else 0),
+        );
         pdpte.accessed = true;
         const pd = @as(*PageTable, @ptrFromInt(frame));
         pd.zero();
+    } else if (wants_user and !pdpte.user) {
+        pdpte.user = true;
     }
     const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
     const pde_idx = v.pdIndex();
@@ -238,10 +253,15 @@ pub fn mapPage(
     }
     if (!pde.isPresent()) {
         const frame = alloc_frame(alloc_ctx) orelse return false;
-        pde.* = PageTableEntry.fromFrame(frame, Present | Write);
+        pde.* = PageTableEntry.fromFrame(
+            frame,
+            Present | Write | (if (wants_user) User else 0),
+        );
         pde.accessed = true;
         const pt = @as(*PageTable, @ptrFromInt(frame));
         pt.zero();
+    } else if (wants_user and !pde.user) {
+        pde.user = true;
     }
     const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
     const pte_idx = v.ptIndex();
@@ -256,6 +276,47 @@ pub fn mapPage(
     }
     pte.* = PageTableEntry.fromFrame(p.value, flags | Present);
     pte.accessed = true;
+    return true;
+}
+
+/// 强制写入 4K 叶映射：先拆分覆盖该 VA 的 2MB 大页（如有），再替换既有 PTE。
+/// 仅供进程地址空间的 **KUSER_SHARED_DATA** 特殊页使用；不得用于一般映射，避免破坏共享内核恒等映射。
+pub fn forceMapLeafPage(
+    pml4_phys: u64,
+    virt: u64,
+    phys: u64,
+    flags: u64,
+    alloc_frame: AllocFrameFn,
+    alloc_ctx: ?*anyopaque,
+) bool {
+    const v = VirtAddr{ .value = virt };
+    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
+    const pml4e = &pml4.entries[v.pml4Index()];
+    if (!pml4e.isPresent()) return false;
+    const pdpt = @as(*PageTable, @ptrFromInt(pml4e.toFrame()));
+    const pdpte = &pdpt.entries[v.pdptIndex()];
+    if (!pdpte.isPresent()) return false;
+    if ((@as(u64, @bitCast(pdpte.*)) & LargePage) != 0) return false;
+    if ((flags & User) != 0) {
+        if (!pml4e.user) pml4e.user = true;
+        if (!pdpte.user) pdpte.user = true;
+    }
+    const pd = @as(*PageTable, @ptrFromInt(pdpte.toFrame()));
+    const pde = &pd.entries[v.pdIndex()];
+    if (!pde.isPresent()) return false;
+    const praw = @as(u64, @bitCast(pde.*));
+    if ((praw & LargePage) != 0) {
+        if (!split2MiBIdentityPageIfNeeded(pml4_phys, virt, alloc_frame, alloc_ctx)) return false;
+    }
+    if ((flags & User) != 0 and !pde.user) {
+        pde.user = true;
+    }
+    const pt = @as(*PageTable, @ptrFromInt(pde.toFrame()));
+    var p = PhysAddr{ .value = phys };
+    p.alignDown();
+    pt.entries[v.ptIndex()] = PageTableEntry.fromFrame(p.value, flags | Present);
+    pt.entries[v.ptIndex()].accessed = true;
+    invlpg(virt);
     return true;
 }
 
@@ -447,14 +508,37 @@ pub fn readCr3() u64 {
 
 /// 刷新 TLB 中单页。Zig 0.15+ LLVM 对内联 `invlpg` 内存操作数约束过严，此处退化为全 TLB 刷新（与 `mov cr3` 等价）。
 pub fn invlpg(virt: u64) void {
-    _ = virt;
-    flushTlb();
+    if (builtin.os.tag != .freestanding) return;
+    asm volatile ("movq %[virt], %%rdi\n\tinvlpg (%%rdi)"
+        :
+        : [virt] "r" (virt),
+        : .{ .rdi = true, .memory = true });
 }
 
 /// 刷新整个 TLB
 pub fn flushTlb() void {
     if (builtin.os.tag != .freestanding) return;
     loadCr3(readCr3());
+}
+
+/// Reload CR3 does **not** invalidate global TLB entries.  Toggling CR4.PGE
+/// is the portable way to flush them before entering a fresh user CR3.
+pub fn flushGlobalTlbStrict() void {
+    if (builtin.os.tag != .freestanding) return;
+    var cr4: u64 = 0;
+    asm volatile ("mov %%cr4, %[cr4]"
+        : [cr4] "=r" (cr4),
+    );
+    const pge: u64 = 1 << 7;
+    if ((cr4 & pge) == 0) return;
+    asm volatile ("mov %[cr4], %%cr4"
+        :
+        : [cr4] "r" (cr4 & ~pge),
+        : .{ .memory = true });
+    asm volatile ("mov %[cr4], %%cr4"
+        :
+        : [cr4] "r" (cr4),
+        : .{ .memory = true });
 }
 
 /// 释放回调：`phys` 为 4KiB 对齐物理地址（含页表页与匿名数据页）。
@@ -598,9 +682,23 @@ pub fn forEachUser2MiPresentLeaf(
 /// 用户态应仅通过 **User** 位置位的叶映射访问低半区；高半区内核映射由各进程页表共享副本提供（与 `docs/cn/VM_ISOLATION.md` 一致）。
 /// 调用后须由调用方释放顶层 `pml4_phys` 页本身（若专属于该进程）。
 pub fn releaseUserHalfAddressSpace(pml4_phys: u64, free_frame: FreeFrameFn, ctx: ?*anyopaque) void {
+    releaseUserHalfAddressSpaceSkip(pml4_phys, free_frame, ctx, null);
+}
+
+/// 与 `releaseUserHalfAddressSpace` 相同，但跳过调用方标记为 **内核低半区共享** 的 PML4 子树。
+/// 这些子树与内核页表共享物理页表帧，进程退出时绝不释放（与高半区共享规则一致）。
+pub fn releaseUserHalfAddressSpaceSkip(
+    pml4_phys: u64,
+    free_frame: FreeFrameFn,
+    ctx: ?*anyopaque,
+    skip_indices: ?*const [256]bool,
+) void {
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
     var i: usize = 0;
     while (i < 256) : (i += 1) {
+        if (skip_indices) |skip| {
+            if (skip[i]) continue;
+        }
         var pml4e = &pml4.entries[i];
         if (!pml4e.isPresent()) continue;
         const pdpt_phys = pml4e.toFrame();

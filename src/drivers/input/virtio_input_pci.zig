@@ -62,7 +62,6 @@ const STATUS_DRIVER_OK: u8 = 4;
 const STATUS_FEATURES_OK: u8 = 8;
 const STATUS_FAILED: u8 = 128;
 
-
 const VirtqDesc = extern struct {
     addr: u64,
     len: u32,
@@ -242,12 +241,12 @@ fn syncDeliver(inst: *VirtioInputInst) void {
     const has_abs_frame = inst.abs_frame_dirty;
     if (inst.abs_frame_dirty) {
         if (inst.tab_have_x and inst.tab_have_y) {
-		const sw = mouse.getScreenWidth();
-			const sh = mouse.getScreenHeight();
-			if (sw > 0 and sh > 0) {
-				const px = mapAbsToPixel(inst.tab_x, sw);
-				const py = mapAbsToPixel(inst.tab_y, sh);
-				const adx = @as(i64, px) - @as(i64, mouse.getX());
+            const sw = mouse.getScreenWidth();
+            const sh = mouse.getScreenHeight();
+            if (sw > 0 and sh > 0) {
+                const px = mapAbsToPixel(inst.tab_x, sw);
+                const py = mapAbsToPixel(inst.tab_y, sh);
+                const adx = @as(i64, px) - @as(i64, mouse.getX());
                 const ady = @as(i64, py) - @as(i64, mouse.getY());
                 const sx = @as(i64, inst.acc_dx) + adx;
                 const sy = @as(i64, inst.acc_dy) + ady;

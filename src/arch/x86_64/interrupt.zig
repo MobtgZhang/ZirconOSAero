@@ -131,13 +131,82 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
                         return;
                     }
                     const pid = proc.pid;
+                    {
+                        const paging = @import("paging.zig");
+                        var cr0_diag: u64 = 0;
+                        var cr4_diag: u64 = 0;
+                        var efer_diag: u64 = 0;
+                        var cr3_diag: u64 = 0;
+                        var cs_diag: u16 = 0;
+                        var ss_diag: u16 = 0;
+                        asm volatile ("mov %%cr0, %[cr0]"
+                            : [cr0] "=r" (cr0_diag),
+                        );
+                        asm volatile ("mov %%cr4, %[cr4]"
+                            : [cr4] "=r" (cr4_diag),
+                        );
+                        asm volatile ("mov %%cr3, %[cr3]"
+                            : [cr3] "=r" (cr3_diag),
+                        );
+                        asm volatile ("mov $0xc0000080, %%ecx; rdmsr; shl $32, %%rdx; or %%rdx, %[efer]"
+                            : [efer] "=r" (efer_diag),
+                            :
+                            : .{ .rcx = true, .rax = true, .rdx = true });
+                        asm volatile ("movw %%cs, %[cs]; movw %%ss, %[ss]"
+                            : [cs] "=r" (cs_diag),
+                              [ss] "=r" (ss_diag),
+                        );
+                        klog.err("PF cpu CR0=0x%x CR3=0x%x target_cr3=0x%x CR4=0x%x EFER=0x%x CS=0x%x SS=0x%x", .{ cr0_diag, cr3_diag, asp.pml4_phys, cr4_diag, efer_diag, cs_diag, ss_diag });
+                        const v = paging.VirtAddr{ .value = cr2 };
+                        const pml4 = @as(*paging.PageTable, @ptrFromInt(asp.pml4_phys));
+                        const pml4e = pml4.entries[v.pml4Index()];
+                        if (pml4e.isPresent()) {
+                            const pdpt = @as(*paging.PageTable, @ptrFromInt(pml4e.toFrame()));
+                            const pdpte = pdpt.entries[v.pdptIndex()];
+                            if (pdpte.isPresent()) {
+                                const pd = @as(*paging.PageTable, @ptrFromInt(pdpte.toFrame()));
+                                const pde = pd.entries[v.pdIndex()];
+                                klog.err("PF walk CR2=0x%x RIP=0x%x PML4E=0x%x PDPT=0x%x PD=0x%x", .{
+                                    cr2,
+                                    frame.rip,
+                                    @as(u64, @bitCast(pml4e)),
+                                    @as(u64, @bitCast(pdpte)),
+                                    @as(u64, @bitCast(pde)),
+                                });
+                                if (pde.isPresent() and !pde.large) {
+                                    const pt = @as(*paging.PageTable, @ptrFromInt(pde.toFrame()));
+                                    const pte = pt.entries[v.ptIndex()];
+                                    klog.err("PF walk PTE=0x%x", .{@as(u64, @bitCast(pte))});
+                                    if (pte.isPresent()) {
+                                        const code_page = @as([*]const volatile u8, @ptrFromInt(pte.toFrame() | (cr2 & 0xFFF)));
+                                        klog.err("PF code bytes=0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x", .{
+                                            code_page[0], code_page[1], code_page[2], code_page[3],
+                                            code_page[4], code_page[5], code_page[6], code_page[7],
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ = process.terminateProcess(pid, 0xC0000005);
-                    klog.err("User page fault: ACCESS_VIOLATION (addr=0x%x) PID=%u — process terminated", .{
-                        cr2, pid,
+                    klog.err("User page fault: ACCESS_VIOLATION (addr=0x%x RIP=0x%x rsp=0x%x code=0x%x) PID=%u — process terminated", .{
+                        cr2, frame.rip, frame.rsp, frame.error_code, pid,
                     });
                     arch.halt();
                 }
             }
+        }
+        klog.err("Kernel PF frame rsp=0x%x cs=0x%x ss=0x%x rflags=0x%x", .{
+            frame.rsp, frame.cs, frame.ss, frame.rflags,
+        });
+        if (scheduler.getCurrentThread()) |th| {
+            klog.err("Kernel PF thread tid=%u pid=%u state=%u rsp0_stack_top=0x%x ctx_rsp=0x%x", .{
+                th.id,
+                th.process_id,
+                @as(u32, @backingInt(th.state)),
+                th.stack_top,
+                th.context_storage.x86.rsp,
+            });
         }
         const bc = @import("../../ke/bugcheck.zig");
         bc.keBugCheckEx(.page_fault_in_nonpaged_area, cr2, frame.rip, frame.error_code, 0);
@@ -146,6 +215,14 @@ fn handleException(frame: *InterruptFrame, vector: u8) void {
     klog.err("Exception %u error_code=0x%x RIP=0x%x", .{
         vector, frame.error_code, frame.rip,
     });
+
+    if (vector == 6 and (frame.cs & 3) != 0) {
+        if (scheduler.getCurrentThread()) |thread| {
+            _ = process.terminateProcess(thread.process_id, 0xC000001D);
+            klog.err("User invalid opcode: RIP=0x%x PID=%u — process terminated", .{ frame.rip, thread.process_id });
+            arch.halt();
+        }
+    }
 
     if (vector == 8 or vector == 13) {
         arch.halt();
@@ -169,6 +246,9 @@ fn handleIrq(frame: *InterruptFrame, irq: u8) void {
                     klog.notifyTimerTick();
                 } else {
                     scheduler.tick();
+                    if (scheduler.getTicks() % 100 == 0) {
+                        arch.serialWrite("T");
+                    }
                     klog.notifyTimerTick();
                 }
             } else {

@@ -86,11 +86,11 @@ pub fn trampolineAddr() usize {
 /// 其他目标：提供桩函数。
 pub const x86_64_switch_context = if (builtin.target.os.tag == .freestanding)
     struct {
-        pub extern fn x86_64_switch_context(from: *X86ThreadContext, to: *X86ThreadContext) callconv(.c) noreturn;
+        pub extern fn x86_64_switch_context(from: *X86ThreadContext, to: *X86ThreadContext, cr3: u64) callconv(.c) noreturn;
     }.x86_64_switch_context
 else
     struct {
-        pub fn x86_64_switch_context(_: *X86ThreadContext, _: *X86ThreadContext) noreturn {
+        pub fn x86_64_switch_context(_: *X86ThreadContext, _: *X86ThreadContext, _: u64) noreturn {
             while (true) {}
         }
     }.x86_64_switch_context;

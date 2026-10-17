@@ -313,7 +313,11 @@ pub fn enterDesktopSession(
     const ps_proc_cmd = @import("../ps/process.zig");
     const cmd_mod = @import("../subsystems/win32/cmd.zig");
     const subsys_cmd = @import("../subsystems/win32/subsystem.zig");
-    if (ps_proc_cmd.createSystemProcess(alloc, "cmd.exe")) |cmd_proc| {
+    const existing_cmd = ps_proc_cmd.findProcessByName("cmd.exe");
+    if (existing_cmd) |cmd_proc| {
+        ps_proc_cmd.setCurrentProcess(cmd_proc.pid);
+        klog.info("Desktop: reusing cmd.exe (PID=%u)", .{cmd_proc.pid});
+    } else if (ps_proc_cmd.createSystemProcess(alloc, "cmd.exe")) |cmd_proc| {
         ps_proc_cmd.setCurrentProcess(cmd_proc.pid);
         _ = subsys_cmd.registerProcess(cmd_proc.pid, .win32_cui, "cmd.exe", 0);
         if (!cmd_mod.isInitialized()) {

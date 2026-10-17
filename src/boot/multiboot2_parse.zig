@@ -56,6 +56,7 @@ pub const TagType = enum(u32) {
     efi32_ih = 19,
     efi64_ih = 20,
     load_base_addr = 21,
+    zircon_boot_images = 0x5A494E31,
 };
 
 pub const BasicMemInfoTag = struct {
@@ -159,12 +160,20 @@ pub const BootInfo = struct {
     multiboot_handoff_end_exclusive: usize = 0,
     /// Multiboot2 ACPI 标签（type 14/15）内嵌 RSDP 的**物理地址**（与恒等映射一致）；无标签时为 `0`。
     acpi_rsdp_phys: usize = 0,
+    boot_images: [16]BootImage = std.mem.zeroes([16]BootImage),
+    boot_image_count: usize = 0,
 
     pub fn getMmapEntry(self: BootInfo, i: usize) ?MmapEntry {
         if (i >= self.mmap_entry_count or self.mmap_entry_size < 24) return null;
         const ptr = self.mmap_ptr + i * self.mmap_entry_size;
         return @as(*const MmapEntry, @ptrCast(@alignCast(ptr))).*;
     }
+};
+
+pub const BootImage = struct {
+    base: u64,
+    size: u64,
+    kind: u32,
 };
 
 /// 解析位于 `phys_addr` 的 Multiboot2 信息结构（8 字节对齐）。
@@ -249,6 +258,25 @@ pub fn parseMultiboot2(phys_addr: usize) ?BootInfo {
                         info.acpi_rsdp_phys = body;
                     }
                 }
+            },
+            0x5A494E31 => {
+                const body = addr + offset + 8;
+                const body_len = tag_size -| 8;
+                const entries = body_len / 24;
+                for (0..@min(entries, info.boot_images.len)) |i| {
+                    const entry = @as([*]const u8, @ptrFromInt(body + i * 24));
+                    const base_lo = @as(*const u32, @ptrCast(@alignCast(entry))).*;
+                    const base_hi = @as(*const u32, @ptrCast(@alignCast(entry + 4))).*;
+                    const size_lo = @as(*const u32, @ptrCast(@alignCast(entry + 8))).*;
+                    const size_hi = @as(*const u32, @ptrCast(@alignCast(entry + 12))).*;
+                    const kind = @as(*const u32, @ptrCast(@alignCast(entry + 16))).*;
+                    info.boot_images[i] = .{
+                        .base = @as(u64, base_hi) << 32 | base_lo,
+                        .size = @as(u64, size_hi) << 32 | size_lo,
+                        .kind = kind,
+                    };
+                }
+                info.boot_image_count = @min(entries, info.boot_images.len);
             },
             else => {},
         }

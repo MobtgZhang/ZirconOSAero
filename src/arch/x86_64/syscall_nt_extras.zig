@@ -109,6 +109,40 @@ pub fn dispatchNtDeviceIoControlFile(frame: *InterruptFrame) i64 {
     if (out_len > 0 and !probe.probeUserMemory(asp, out_buf, out_len, true))
         return syscall_abi.ntStatusAsI64(ntdll.STATUS_ACCESS_VIOLATION);
 
+    const console_read_ioctl: u32 = 0x8000_0001;
+    const console_write_ioctl: u32 = 0x8000_0002;
+    const console_execute_ioctl: u32 = 0x8000_0003;
+    const ioctl: u32 = @truncate(ioctl_code);
+    if (ioctl == console_read_ioctl or ioctl == console_write_ioctl or ioctl == console_execute_ioctl) {
+        var ios_local: ntdll.IO_STATUS_BLOCK = .{ .status = ntdll.STATUS_SUCCESS, .information = 0 };
+        if (ioctl == console_read_ioctl) {
+            if (out_len < 1) {
+                ios_local.status = ntdll.STATUS_BUFFER_TOO_SMALL;
+            } else {
+                const ch = @import("../../arch.zig").readInputChar();
+                @as(*volatile u8, @ptrFromInt(out_buf)).* = ch orelse 0;
+                ios_local.information = if (ch == null) 0 else 1;
+            }
+        } else if (in_len > 0) {
+            var text_buf: [256]u8 = undefined;
+            const copy_len = @min(in_len, text_buf.len);
+            const input_bytes = @as([*]const u8, @ptrFromInt(in_buf))[0..copy_len];
+            @memcpy(text_buf[0..copy_len], input_bytes);
+            if (ioctl == console_write_ioctl) {
+                @import("../../arch.zig").consoleWrite(text_buf[0..copy_len]);
+                ios_local.information = copy_len;
+            } else {
+                @import("../../subsystems/win32/cmd.zig").getShell().executeCommand(text_buf[0..copy_len]);
+                ios_local.information = copy_len;
+            }
+        } else {
+            ios_local.status = ntdll.STATUS_INVALID_PARAMETER;
+        }
+
+        @as(*volatile ntdll.IO_STATUS_BLOCK, @ptrFromInt(io_user)).* = ios_local;
+        return syscall_abi.ntStatusAsI64(ios_local.status);
+    }
+
     var ios_local: ntdll.IO_STATUS_BLOCK = undefined;
     const st = ntdll.NtDeviceIoControlFile(
         frame.r10,

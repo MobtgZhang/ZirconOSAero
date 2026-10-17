@@ -47,10 +47,25 @@ x86_64_switch_context:
     movq %rsi, 104(%rdi)
     movq %rdi, 112(%rdi)
 
+    # Preserve the target CR3 in R8.  R8 is restored from the target context
+    # after CR3 has been activated, so it is safe to use as a scratch register.
+    movq %rdx, %r8
+
     # reserved 字段保持为 0
 
     # 保存 rsp（栈指针必须保存以便恢复）
     movq %rsp, 128(%rdi)
+
+    # 先切换到目标栈；此时 %rsi 仍指向目标上下文
+    movq 128(%rsi), %rsp
+
+    # Activate the target address space only after the target kernel stack is
+    # current.  This removes the window where the old thread's stack is accessed
+    # under the new CR3.
+    testq %r8, %r8
+    jz 1f
+    movq %r8, %cr3
+1:
 
     # 从目标线程结构恢复寄存器
     movq 112(%rsi), %rdi
@@ -69,12 +84,8 @@ x86_64_switch_context:
     movq   8(%rsi), %r14
     movq   (%rsi), %r15
 
-    # 恢复 rsp
-    movq 128(%rsi), %rsp
-
-    # 跳转到目标线程的入口点
-    # rip 指向蹦床函数或线程入口
-    jmp *136(%rsi)
+    # 切换到目标栈后，栈顶已由 initNewThread 存放入口地址
+    jmp *(%rsp)
 
 .size x86_64_switch_context, .-x86_64_switch_context
 

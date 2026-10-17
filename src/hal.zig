@@ -12,6 +12,7 @@
 
 const builtin = @import("builtin");
 pub const platform = @import("hal/platform.zig");
+pub const capabilities = platform.capabilities;
 
 // ---- Port I/O ----
 pub const portio = if (builtin.target.cpu.arch == .x86_64)
@@ -56,6 +57,7 @@ pub const remapFramebufferUncached = platform.remapFramebufferUncached;
 pub const fenceScanoutVisibleWrites = platform.fenceScanoutVisibleWrites;
 
 // ---- Platform capabilities ----
+pub const nativePeMachineType = platform.nativePeMachineType;
 pub const hasLegacyPCDevices = platform.hasLegacyPCDevices;
 pub const hasPS2Keyboard = platform.hasPS2Keyboard;
 pub const hasPS2Mouse = platform.hasPS2Mouse;
@@ -65,6 +67,12 @@ pub const hasIntelIGPU = platform.hasIntelIGPU;
 pub const hasLoongsonIGPU = platform.hasLoongsonIGPU;
 pub const hasLegacyPCIBus = platform.hasLegacyPCIBus;
 pub const hasStandardPebTeb = platform.hasStandardPebTeb;
+pub const supportsUserPebTebStubVa = platform.supportsUserPebTebStubVa;
+pub const wow64UsesNativeAddressSpace = platform.wow64UsesNativeAddressSpace;
+pub const wow64UsesLoongArchTranslation = platform.wow64UsesLoongArchTranslation;
+pub const wow64UsesRiscVTranslation = platform.wow64UsesRiscVTranslation;
+pub const wow64UsesArmTranslation = platform.wow64UsesArmTranslation;
+pub const wow64UsesMipsTranslation = platform.wow64UsesMipsTranslation;
 pub const supportsKuserShared = platform.supportsKuserShared;
 pub const supportsBootStorageProbe = platform.supportsBootStorageProbe;
 pub const requiresSerialBootMenuWithoutHandoff = platform.requiresSerialBootMenuWithoutHandoff;

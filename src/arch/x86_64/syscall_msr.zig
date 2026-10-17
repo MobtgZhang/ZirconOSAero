@@ -94,6 +94,9 @@ pub fn initSyscallInstructionPath() void {
 
     var efer = rdmsr(IA32_EFER);
     efer |= 1; // SCE
+    if ((feat & (1 << 20)) != 0) {
+        efer |= 1 << 11; // NXE: PTE/PDE NX bits are architectural, not reserved.
+    }
     wrmsr(IA32_EFER, efer);
 
     // STAR[47:32]=syscall 时内核 CS；STAR[63:48]=SYSRET 基址，须满足 SS=基+8、CS=基+16（见 gdt.IA32_STAR_SYSRET_BASE）。

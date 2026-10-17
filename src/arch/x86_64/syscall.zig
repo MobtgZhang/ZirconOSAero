@@ -34,6 +34,8 @@ const InterruptFrame = @import("../../ke/interrupt.zig").InterruptFrame;
 const user32 = @import("../../subsystems/win32/user32.zig");
 const wow64_redirect = @import("../../subsystems/win32/wow64/redirect.zig");
 
+var wait_diag_count: u32 = 0;
+
 fn ntResult(s: ntdll.NTSTATUS) i64 {
     return syscall_abi.ntStatusAsI64(s);
 }
@@ -184,6 +186,10 @@ fn dispatchNtSsdt(frame: *InterruptFrame, idx: u32) i64 {
 
     return switch (idx) {
         ssdt.NtWaitForSingleObject => blk: {
+            if (wait_diag_count < 100) {
+                wait_diag_count += 1;
+                @import("../../arch.zig").serialWrite("W");
+            }
             const alertable = p2 != 0;
             const timeout_ptr: ?*const i64 = if (p3 == 0) null else @ptrFromInt(p3);
             const st = ntdll.NtWaitForSingleObject(p1, alertable, timeout_ptr);

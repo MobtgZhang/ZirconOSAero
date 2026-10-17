@@ -118,7 +118,9 @@ pub const Console = struct {
 
     pub fn setTitle(self: *Console, title: []const u8) void {
         const copy_len = @min(title.len, self.title.len);
-        @memcpy(self.title[0..copy_len], title[0..copy_len]);
+        for (title[0..copy_len], 0..) |byte, index| {
+            self.title[index] = byte;
+        }
         self.title_len = copy_len;
     }
 

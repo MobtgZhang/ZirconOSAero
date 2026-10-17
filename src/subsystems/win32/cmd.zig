@@ -584,6 +584,8 @@ pub const CmdShell = struct {
             self.cmdSigverif(args);
         } else if (strEqlI(cmd_name, "wuauclt")) {
             self.cmdWuauclt(args);
+        } else if (systemToolByName(cmd_name)) |tool| {
+            self.cmdSystemTool(tool, args);
         } else if (cmd_name.len > 0) {
             const con = console.getConsole(self.console_id) orelse return;
             _ = con.writeOutput(cmd_name);
@@ -695,6 +697,17 @@ pub const CmdShell = struct {
         _ = con.writeOutput("               ");
         _ = con.writeOutput(dir_str);
         con.writeLine(" Dir(s)");
+    }
+
+    fn cmdSystemTool(self: *CmdShell, tool: SystemTool, args: []const u8) void {
+        const con = console.getConsole(self.console_id) orelse return;
+        _ = con.writeOutput(tool.display_name);
+        _ = con.writeOutput(": ");
+        if (trim(args).len == 0) {
+            con.writeLine("type 'command /?' for the Windows 7 syntax reference.");
+            return;
+        }
+        con.writeLine("operation is not available in this NT 6.1 compatibility profile.");
     }
 
     fn cmdCd(self: *CmdShell, args: []const u8) void {
@@ -2934,8 +2947,8 @@ pub fn runInteractiveShell() noreturn {
                         cmd_shell.executeCommand(line_buf[0..line_len]);
                     }
                     if (cmd_shell.state == .exiting) {
-                        klog.info("CMD: Shell exited", .{});
-                        break;
+                        cmd_shell.state = .running;
+                        klog.info("CMD: Restarting shell after exit", .{});
                     }
                     cmd_shell.showPrompt();
                     line_len = 0;
@@ -2994,6 +3007,105 @@ fn strEqlI(a: []const u8, b: []const u8) bool {
 fn findFirstSpace(s: []const u8) ?usize {
     for (s, 0..) |c, i| {
         if (c == ' ' or c == '\t') return i;
+    }
+    return null;
+}
+
+const SystemTool = struct {
+    name: []const u8,
+    display_name: []const u8,
+};
+
+const system_tools = [_]SystemTool{
+    .{ .name = "adprep", .display_name = "ADPREP" },
+    .{ .name = "append", .display_name = "APPEND" },
+    .{ .name = "atmadm", .display_name = "ATMADM" },
+    .{ .name = "audtipol", .display_name = "AUDTIPOL" },
+    .{ .name = "autochk", .display_name = "AUTOCHK" },
+    .{ .name = "autoconv", .display_name = "AUTOCONV" },
+    .{ .name = "autofmt", .display_name = "AUTOFMT" },
+    .{ .name = "automount", .display_name = "AUTOMOUNT" },
+    .{ .name = "bcdboot", .display_name = "BCDBOOT" },
+    .{ .name = "chglogon", .display_name = "CHGLOGON" },
+    .{ .name = "clean", .display_name = "CLEAN" },
+    .{ .name = "cluster", .display_name = "CLUSTER" },
+    .{ .name = "cprofile", .display_name = "CPROFILE" },
+    .{ .name = "csvde", .display_name = "CSVDE" },
+    .{ .name = "dcdiag", .display_name = "DCDIAG" },
+    .{ .name = "dcpromo", .display_name = "DCPROMO" },
+    .{ .name = "dfscmd", .display_name = "DFSCMD" },
+    .{ .name = "dirquota", .display_name = "DIRQUOTA" },
+    .{ .name = "diskcomp", .display_name = "DISKCOMP" },
+    .{ .name = "diskcopy", .display_name = "DISKCOPY" },
+    .{ .name = "diskedit", .display_name = "DISKEDIT" },
+    .{ .name = "diskraid", .display_name = "DISKRAID" },
+    .{ .name = "diskshadow", .display_name = "DISKSHADOW" },
+    .{ .name = "djoin", .display_name = "DJOIN" },
+    .{ .name = "dnscmd", .display_name = "DNSCMD" },
+    .{ .name = "ds", .display_name = "DS" },
+    .{ .name = "dsamain", .display_name = "DSAMAIN" },
+    .{ .name = "dsdbutil", .display_name = "DSDBUTIL" },
+    .{ .name = "dsmgmt", .display_name = "DSMGMT" },
+    .{ .name = "dsrm", .display_name = "DSRM" },
+    .{ .name = "filescrn", .display_name = "FILESCRN" },
+    .{ .name = "filesystems", .display_name = "FILESYSTEMS" },
+    .{ .name = "finger", .display_name = "FINGER" },
+    .{ .name = "ftp", .display_name = "FTP" },
+    .{ .name = "gettype", .display_name = "GETTYPE" },
+    .{ .name = "helpctr", .display_name = "HELPCTR" },
+    .{ .name = "ifm", .display_name = "IFM" },
+    .{ .name = "irftp", .display_name = "IRFTP" },
+    .{ .name = "ismserv", .display_name = "ISMSERV" },
+    .{ .name = "ktmutil", .display_name = "KTMUTIL" },
+    .{ .name = "ktpass", .display_name = "KTPASS" },
+    .{ .name = "ldap", .display_name = "LDAP" },
+    .{ .name = "ldifde", .display_name = "LDIFDE" },
+    .{ .name = "ldp", .display_name = "LDP" },
+    .{ .name = "macfile", .display_name = "MACFILE" },
+    .{ .name = "mount", .display_name = "MOUNT" },
+    .{ .name = "netdiag", .display_name = "NETDIAG" },
+    .{ .name = "netdom", .display_name = "NETDOM" },
+    .{ .name = "nfsshare", .display_name = "NFSSHARE" },
+    .{ .name = "nfsstat", .display_name = "NFSSTAT" },
+    .{ .name = "nlb", .display_name = "NLB" },
+    .{ .name = "ntdsutil", .display_name = "NTDSUTIL" },
+    .{ .name = "pagefileconfig.vbs", .display_name = "PAGEFILECONFIG" },
+    .{ .name = "pnputil", .display_name = "PNPUTIL" },
+    .{ .name = "pubprn.vbs", .display_name = "PUBPRN" },
+    .{ .name = "rdpsign", .display_name = "RDPSIGN" },
+    .{ .name = "reagentc", .display_name = "REAGENTC" },
+    .{ .name = "redircmp", .display_name = "REDIRCMP" },
+    .{ .name = "redirusr", .display_name = "REDIRUSR" },
+    .{ .name = "repadmin", .display_name = "REPADMIN" },
+    .{ .name = "rescan", .display_name = "RESCAN" },
+    .{ .name = "retain", .display_name = "RETAIN" },
+    .{ .name = "rpcinfo", .display_name = "RPCINFO" },
+    .{ .name = "services", .display_name = "SERVICES" },
+    .{ .name = "setid", .display_name = "SETID" },
+    .{ .name = "setspn", .display_name = "SETSPN" },
+    .{ .name = "shadow", .display_name = "SHADOW" },
+    .{ .name = "showmount", .display_name = "SHOWMOUNT" },
+    .{ .name = "shrink", .display_name = "SHRINK" },
+    .{ .name = "storrept", .display_name = "STORREPT" },
+    .{ .name = "sysocmgr", .display_name = "SYSOCMGR" },
+    .{ .name = "tapicfg", .display_name = "TAPICFG" },
+    .{ .name = "tlntadmn", .display_name = "TLNTADMN" },
+    .{ .name = "tsecimp", .display_name = "TSECIMP" },
+    .{ .name = "tsprof", .display_name = "TSPROF" },
+    .{ .name = "uddiconfig", .display_name = "UDDICONFIG" },
+    .{ .name = "umount", .display_name = "UMOUNT" },
+    .{ .name = "uniqueid", .display_name = "UNIQUEID" },
+    .{ .name = "wbadmin", .display_name = "WBADMIN" },
+    .{ .name = "wdsutil", .display_name = "WDSUTIL" },
+    .{ .name = "wecutil", .display_name = "WECUTIL" },
+    .{ .name = "wevtutil", .display_name = "WEVTUTIL" },
+    .{ .name = "winnt", .display_name = "WINNT" },
+    .{ .name = "winpop", .display_name = "WINPOP" },
+};
+
+fn systemToolByName(input: []const u8) ?SystemTool {
+    for (system_tools) |tool| {
+        if (strEqlI(input, tool.name)) return tool;
     }
     return null;
 }

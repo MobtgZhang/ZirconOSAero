@@ -368,6 +368,92 @@ fn queryGopFramebuffer(out: anytype, bs: *uefi.tables.BootServices) ?GopFbInfo {
 }
 
 fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
+    puts(out, "    [*] Loading winload.efi...\r\n");
+
+    const loaded_image = bs.openProtocol(
+        uefi.protocol.LoadedImage,
+        uefi.handle,
+        .{ .by_handle_protocol = .{} },
+    ) catch {
+        puts(out, "    [!!] Failed to get LoadedImage protocol\r\n");
+        return;
+    } orelse {
+        puts(out, "    [!!] LoadedImage protocol is null\r\n");
+        return;
+    };
+
+    const device_handle = loaded_image.device_handle orelse {
+        puts(out, "    [!!] No boot device handle\r\n");
+        return;
+    };
+
+    const sfs = bs.openProtocol(
+        uefi.protocol.SimpleFileSystem,
+        device_handle,
+        .{ .by_handle_protocol = .{} },
+    ) catch {
+        puts(out, "    [!!] Failed to get SimpleFileSystem\r\n");
+        return;
+    } orelse {
+        puts(out, "    [!!] SimpleFileSystem is null\r\n");
+        return;
+    };
+
+    const root = sfs.openVolume() catch {
+        puts(out, "    [!!] Failed to open ESP volume\r\n");
+        return;
+    };
+
+    const winload_file = root.open(
+        unicode.utf8ToUtf16LeStringLiteral(menu.KERNEL_PATH),
+        .read,
+        .{},
+    ) catch {
+        puts(out, "    [!!] winload.efi not found on ESP\r\n");
+        return;
+    };
+
+    var info_buf: [256]u8 align(8) = undefined;
+    const file_info = winload_file.getInfo(.file, @as([]align(8) u8, &info_buf)) catch {
+        puts(out, "    [!!] Failed to get winload.efi file info\r\n");
+        return;
+    };
+    const file_size: usize = @intCast(file_info.file_size);
+
+    const file_data = bs.allocatePool(.loader_data, file_size) catch {
+        puts(out, "    [!!] Failed to allocate memory for winload.efi\r\n");
+        return;
+    };
+
+    var total_read: usize = 0;
+    while (total_read < file_size) {
+        const n = winload_file.read(file_data[total_read..]) catch {
+            puts(out, "    [!!] Failed to read winload.efi\r\n");
+            return;
+        };
+        if (n == 0) break;
+        total_read += n;
+    }
+    _ = winload_file.close() catch {};
+
+    const winload_handle = bs.loadImage(
+        false,
+        uefi.handle,
+        .{ .buffer = @as([*]const u8, @ptrCast(file_data))[0..file_size] },
+    ) catch {
+        puts(out, "    [!!] UEFI LoadImage failed for winload.efi\r\n");
+        return;
+    };
+
+    _ = bs.startImage(winload_handle) catch {
+        puts(out, "    [!!] UEFI StartImage failed for winload.efi\r\n");
+        return;
+    };
+
+    puts(out, "    [!!] winload.efi returned unexpectedly\r\n");
+}
+
+fn loadAndBootKernelLegacy(out: anytype, bs: *uefi.tables.BootServices) void {
     // ── Step 1: Open winload.efi from ESP ──
     puts(out, "    [*] Opening kernel from ESP...\r\n");
 
@@ -445,6 +531,23 @@ fn loadAndBootKernel(out: anytype, bs: *uefi.tables.BootServices) void {
     _ = kernel_file.close() catch {};
 
     puts(out, "    [*] Kernel file read into buffer\r\n");
+
+    // Windows NT 6.1 boot chain: the boot manager does not parse the kernel
+    // image itself.  It transfers control to winload.efi, which owns PE loading,
+    // boot parameters, driver handoff and ExitBootServices.
+    const winload_handle = bs.loadImage(
+        false,
+        uefi.handle,
+        .{ .buffer = @as([*]const u8, @ptrCast(file_data))[0..file_size] },
+    ) catch {
+        puts(out, "    [!!] UEFI LoadImage failed for winload.efi\r\n");
+        return;
+    };
+    const winload_started: ?uefi.tables.BootServices.ImageExitData = bs.startImage(winload_handle) catch null;
+    if (winload_started == null) {
+        puts(out, "    [!!] UEFI StartImage failed for winload.efi\r\n");
+        return;
+    }
 
     // ── Step 3: Parse ELF64 header ──
     if (file_size < @sizeOf(Elf64_Ehdr)) {

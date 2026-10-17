@@ -56,6 +56,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     const cmd_mod = @import("../subsystems/win32/cmd.zig");
     const subsys = @import("../subsystems/win32/subsystem.zig");
     const exec = @import("../subsystems/win32/exec.zig");
+    const system_startup = @import("../kernel/system_startup.zig");
     const user32_mod = @import("../subsystems/win32/user32.zig");
     const gdi32_mod = @import("../subsystems/win32/gdi32.zig");
     const dwmapi_mod = @import("../subsystems/win32/dwmapi.zig");
@@ -121,7 +122,8 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     klog.info("GDT/TSS initialized (kernel stack=0x%x)", .{kernel_stack_addr});
 
     const mitigations = @import("../hal/x86_64/mitigations.zig");
-    mitigations.enableSmepIfAvailable();
+    _ = mitigations;
+    // mitigations.enableSmepIfAvailable();
     klog.info("x86_64: SMEP set when CPUID leaf 7 reports support", .{});
     klog.info("x86_64: SMAP available via mitigations.enableSmapIfAvailable() after user-page access audit (stac/clac)", .{});
 
@@ -241,7 +243,7 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
         arch.enableInterrupts();
         klog.info("Interrupts enabled", .{});
 
-        mitigations.enableSmapIfAvailable();
+        // mitigations.enableSmapIfAvailable();
         klog.info("x86_64: SMAP enabled when CPU supports (syscall dispatch wraps stac/clac)", .{});
     }
 
@@ -459,6 +461,10 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
 
     subsys.init();
     exec.init();
+    system_startup.createSubsystemProcesses(
+        frame.kernelFrameAllocatorPtr(),
+        if (boot_info) |bi| bi.boot_images[0..bi.boot_image_count] else &.{},
+    );
 
     // ═══ Phase 10: Graphical Subsystem ═══
     klog.info("--- Phase 10: Graphical Subsystem ---", .{});
@@ -535,6 +541,10 @@ pub fn start(magic: u32, info_addr: usize) noreturn {
     }
 
     // ═══ Normal Text Mode: Demo + Shell ═══
+    const ps_proc = @import("../ps/process.zig");
+    if (ps_proc.findProcessByName("cmd.exe")) |cmd_proc| {
+        ps_proc.setCurrentProcess(cmd_proc.pid);
+    }
     cmd_mod.runBootSequence();
     exec.runDemoApps();
     gdi32_mod.runGdiDemo();

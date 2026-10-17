@@ -31,7 +31,10 @@ pub const PerCpu = extern struct {
     kernel_rsp0: u64 align(8) = 0,
     processor_number: u32 align(8) = 0,
     current_thread_index: i32 = -1,
-    _pad: u32 = 0,
+    kernel_sp: u64 = 0,
+    self_pointer: u64 = 0,
+    current_asid: u8 = 0,
+    _pad: [7]u8 = @splat(0),
 };
 
 /// BSP 块；AP 使用 `ap_percpu_blocks` 中对应项。
@@ -43,6 +46,7 @@ pub export var zircon_x86_64_percpu: PerCpu = .{};
 pub var ap_percpu_blocks: [7]PerCpu align(16) = @splat(.{});
 
 const IA32_KERNEL_GS_BASE: u32 = 0xC0000102;
+const IA32_GS_BASE: u32 = 0xC0000101;
 
 fn wrmsr(msr: u32, value: u64) void {
     const eax: u32 = @truncate(value);
@@ -60,10 +64,14 @@ pub fn syncKernelRsp0(rsp0: u64) void {
     zircon_x86_64_percpu.kernel_rsp0 = rsp0;
     zircon_x86_64_percpu.processor_number = 0;
     zircon_x86_64_percpu.current_thread_index = -1;
+    zircon_x86_64_percpu.self_pointer = @intFromPtr(&zircon_x86_64_percpu);
     wrmsr(IA32_KERNEL_GS_BASE, @intFromPtr(&zircon_x86_64_percpu));
+    wrmsr(IA32_GS_BASE, @intFromPtr(&zircon_x86_64_percpu));
 }
 
 /// AP：绑定独立 `PerCpu` 与 `IA32_KERNEL_GS_BASE`（须在已设置 RSP 与 TSS.RSP0 之后调用）。
 pub fn publishApPerCpuBlock(block: *PerCpu) void {
+    block.self_pointer = @intFromPtr(block);
     wrmsr(IA32_KERNEL_GS_BASE, @intFromPtr(block));
+    wrmsr(IA32_GS_BASE, @intFromPtr(block));
 }

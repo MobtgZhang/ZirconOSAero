@@ -25,7 +25,7 @@ fn readTlsPointer() u64 {
     switch (builtin.cpu.arch) {
         .x86_64 => {
             if (builtin.os.tag != .freestanding) return 0;
-            return asm volatile ("movq %%gs:8, %[out]"
+            return asm volatile ("movq %%gs:24, %[out]"
                 : [out] "=r" (-> u64),
             );
         },

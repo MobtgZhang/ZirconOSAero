@@ -46,7 +46,7 @@ pub fn keBugCheckEx(
     param4: usize,
 ) noreturn {
     arch.disableInterrupts();
-    klog.crit("*** STOP 0x{X:0>8} (0x{X:0>16} 0x{X:0>16} 0x{X:0>16} 0x{X:0>16})", .{ @backingInt(code), param1, param2, param3, param4 });
+    klog.crit("*** STOP 0x%08x (0x%016x 0x%016x 0x%016x 0x%016x)", .{ @backingInt(code), param1, param2, param3, param4 });
     while (true) {
         arch.halt();
     }

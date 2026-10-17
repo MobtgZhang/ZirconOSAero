@@ -116,7 +116,60 @@ pub fn kernelAddressSpace() ?*AddressSpace {
 /// LoongArch64：复制 PGD **[kernel_linked_l0_begin, 2048)**（见 `docs/specs/MemoryManagement_NT61_LoongArch64_NewWorld.md`）。
 pub fn linkKernelHalfMappings(dst: *AddressSpace) bool {
     const ks = kernelAddressSpace() orelse return false;
-    return hal_memory.linkKernelHalfMappings(dst, ks);
+    if (!hal_memory.linkKernelHalfMappings(dst, ks)) return false;
+    if (comptime builtin.cpu.arch == .x86_64) {
+        if (!deepCopyKernelLowHalf(dst, ks)) return false;
+    }
+    return true;
+}
+
+fn deepCopyKernelLowHalf(dst: *AddressSpace, ks: *AddressSpace) bool {
+    const dst_root: *paging.PageTable = @ptrFromInt(dst.pml4_phys);
+    const src_root: *paging.PageTable = @ptrFromInt(ks.pml4_phys);
+    var pml4_index: usize = 0;
+    while (pml4_index < 256) : (pml4_index += 1) {
+        const src_pml4e = src_root.entries[pml4_index];
+        if (!src_pml4e.isPresent()) continue;
+        const dst_pdpt_phys = allocFrameCb(@ptrCast(dst.allocator)) orelse return false;
+        const dst_pdpt: *paging.PageTable = @ptrFromInt(dst_pdpt_phys);
+        dst_pdpt.zero();
+        const src_pdpt: *paging.PageTable = @ptrFromInt(src_pml4e.toFrame());
+        var pdpt_index: usize = 0;
+        while (pdpt_index < 512) : (pdpt_index += 1) {
+            const src_pdpte = src_pdpt.entries[pdpt_index];
+            if (!src_pdpte.isPresent()) continue;
+            if (src_pdpte.large) {
+                dst_pdpt.entries[pdpt_index] = src_pdpte;
+                continue;
+            }
+            const dst_pd_phys = allocFrameCb(@ptrCast(dst.allocator)) orelse return false;
+            const dst_pd: *paging.PageTable = @ptrFromInt(dst_pd_phys);
+            dst_pd.zero();
+            const src_pd: *paging.PageTable = @ptrFromInt(src_pdpte.toFrame());
+            var pd_index: usize = 0;
+            while (pd_index < 512) : (pd_index += 1) {
+                const src_pde = src_pd.entries[pd_index];
+                if (!src_pde.isPresent()) continue;
+                if (src_pde.large) {
+                    dst_pd.entries[pd_index] = src_pde;
+                    continue;
+                }
+                const dst_pt_phys = allocFrameCb(@ptrCast(dst.allocator)) orelse return false;
+                const dst_pt: *paging.PageTable = @ptrFromInt(dst_pt_phys);
+                dst_pt.zero();
+                const src_pt: *paging.PageTable = @ptrFromInt(src_pde.toFrame());
+                @memcpy(&dst_pt.entries, &src_pt.entries);
+                dst_pd.entries[pd_index] = src_pde;
+                dst_pd.entries[pd_index].frame = @intCast(dst_pt_phys >> 12);
+            }
+            dst_pdpt.entries[pdpt_index] = src_pdpte;
+            dst_pdpt.entries[pdpt_index].frame = @intCast(dst_pd_phys >> 12);
+        }
+        dst_root.entries[pml4_index] = src_pml4e;
+        dst_root.entries[pml4_index].frame = @intCast(dst_pdpt_phys >> 12);
+        dst.kernel_linked_low[pml4_index] = true;
+    }
+    return true;
 }
 
 fn freeFrameForRelease(ctx: ?*anyopaque, phys: u64) void {
@@ -174,7 +227,16 @@ pub fn releaseProcessAddressSpace(space: *AddressSpace) void {
     @memset(&space.vma_user, false);
     @memset(&space.vma_writable, false);
     if (@hasDecl(paging, "releaseUserHalfAddressSpace")) {
-        paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, space.allocator);
+        if (@hasDecl(paging, "releaseUserHalfAddressSpaceSkip")) {
+            paging.releaseUserHalfAddressSpaceSkip(
+                space.pml4_phys,
+                freeFrameForRelease,
+                space.allocator,
+                &space.kernel_linked_low,
+            );
+        } else {
+            paging.releaseUserHalfAddressSpace(space.pml4_phys, freeFrameForRelease, space.allocator);
+        }
     }
     space.allocator.free(space.pml4_phys);
     // Note: TLB flush operations are architecture-specific and handled in the kernel build
@@ -455,6 +517,8 @@ pub const AddressSpace = struct {
     vma_pages: [max_vma]u32 = @splat(0),
     vma_user: [max_vma]bool = @splat(false),
     vma_writable: [max_vma]bool = @splat(false),
+    /// 内核低半区共享 PML4 项标记：释放用户半区时必须跳过这些共享子树。
+    kernel_linked_low: [256]bool = @splat(false),
 
     pub fn reserveVirtualRange(self: *AddressSpace, virt_base: u64, num_pages: u32, nt_protect: u32) bool {
         if (self.reserved_count >= max_reserved_regions) return false;
@@ -570,6 +634,30 @@ pub const AddressSpace = struct {
             return null;
         };
         if (!self.mapPage(virt, phys, flags)) {
+            self.allocator.free(phys);
+            return null;
+        }
+        return phys;
+    }
+
+    pub fn mapPageForceAlloc(self: *AddressSpace, virt: u64, flags: MapFlags) ?u64 {
+        if (flags.user) {
+            const ps: u64 = @intCast(paging.page_size);
+            if (!userVaRangeAllowedNt61(virt, ps)) return null;
+        }
+        const phys = self.allocator.allocZeroed() orelse {
+            klog.err("VM: mapPageForceAlloc alloc failed va=0x%x", .{virt});
+            return null;
+        };
+        if (!paging.forceMapLeafPage(
+            self.pml4_phys,
+            virt,
+            phys,
+            flags.toPagingFlags(),
+            allocFrameCb,
+            self.allocator,
+        )) {
+            klog.err("VM: mapPageForceAlloc map failed va=0x%x phys=0x%x", .{ virt, phys });
             self.allocator.free(phys);
             return null;
         }

@@ -140,7 +140,6 @@ pub fn memsetPhysicalPage(phys: u64) void {
         }
     }
     if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
-        klog.info("memsetPhysicalPage: about to zero GPA 0x%x", .{phys});
         arch.flushDebugSerialOutput();
     }
     // Zig 循环：所有优化模式下都安全，debug 下可 GDB 单步。
@@ -800,7 +799,6 @@ pub const FrameAllocator = struct {
 
     pub fn allocZeroed(self: *FrameAllocator) ?u64 {
         if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
-            klog.info("PFN allocZeroed: calling (ceiling=%any)", .{g_alloc_phys_ceiling_exclusive});
             arch.flushDebugSerialOutput();
         }
         const zorder = [_]MemoryZone{ .normal, .high, .dma };
@@ -830,7 +828,6 @@ pub const FrameAllocator = struct {
             }
         }
         if (klog.DEBUG_MODE and builtin.os.tag == .freestanding) {
-            klog.debug("PFN: allocZeroed zero-fill GPA 0x%x (before memsetPhysicalPage)", .{phys});
             flushDebugSerialIfPossible();
         }
         self.debugAssertPhysSafeBeforeKernelZeroFill(phys);

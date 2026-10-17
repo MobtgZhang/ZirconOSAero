@@ -140,6 +140,12 @@ pub fn setKernelStack(stack: u64) void {
     percpu_mod.syncKernelRsp0(stack);
 }
 
+pub fn setKernelRsp0(stack: u64) void {
+    tss_by_cpu[0].rsp0 = stack;
+    zircon_x86_64_kernel_rsp0 = stack;
+    percpu_mod.zircon_x86_64_percpu.kernel_rsp0 = stack;
+}
+
 /// AP 在 SIPI 前设置 `tss_by_cpu[cpu_index].rsp0`（须 `cpu_index < MAX_GDT_TSS_CPUS`）。
 pub fn setApKernelRsp0(cpu_index: u32, stack: u64) void {
     const i: usize = @intCast(cpu_index);

@@ -58,14 +58,43 @@ pub fn installInProcessAddressSpace(space: *vm.AddressSpace) bool {
     panic_ctx.setPhase(0x0005_0120);
     const va = kuser_sdk.KUSER_SHARED_DATA_VA_X64;
     panic_ctx.setPhase(0x0005_0121);
-    const phys = space.mapPageAlloc(va, .{
-        .writable = false,
-        .user = true,
-        .executable = false,
-    }) orelse {
-        panic_ctx.setPhase(0);
-        return false;
-    };
+    const pg = arch.impl.paging;
+    var phys: u64 = 0;
+    if (space.getPhysical(va) != null) {
+        // 内核低半区共享后该 VA 可能已被恒等映射覆盖：分配新页并强制替换 4K 叶项。
+        phys = space.allocator.allocZeroed() orelse {
+            panic_ctx.setPhase(0);
+            return false;
+        };
+        const flags: u64 = pg.User;
+        if (@hasDecl(pg, "forceMapLeafPage")) {
+            if (!pg.forceMapLeafPage(
+                space.pml4_phys,
+                va,
+                phys,
+                flags,
+                allocKuserFrame,
+                space.allocator,
+            )) {
+                space.allocator.free(phys);
+                panic_ctx.setPhase(0);
+                return false;
+            }
+        } else {
+            space.allocator.free(phys);
+            panic_ctx.setPhase(0);
+            return false;
+        }
+    } else {
+        phys = space.mapPageAlloc(va, .{
+            .writable = false,
+            .user = true,
+            .executable = false,
+        }) orelse {
+            panic_ctx.setPhase(0);
+            return false;
+        };
+    }
 
     // `mapPageAlloc` 内 `allocZeroed` 已用 `memsetPhysicalPage` 清零；勿再 `page[0..4096]`（Debug 下末端地址溢出断言）。
     panic_ctx.setPhase(0x0005_0122);
@@ -90,4 +119,9 @@ fn writeU32(page: [*]align(4096) u8, offset: usize, value: u32) void {
     const p: [*]u8 = @ptrCast(page);
     const dst: *[4]u8 = @ptrCast(p + offset);
     std.mem.writeInt(u32, dst, value, .little);
+}
+
+fn allocKuserFrame(ctx: ?*anyopaque) ?u64 {
+    const allocator = @as(*vm.FrameAllocator, @ptrCast(@alignCast(ctx orelse return null)));
+    return allocator.allocZeroed();
 }

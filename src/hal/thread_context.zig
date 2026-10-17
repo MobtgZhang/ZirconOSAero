@@ -97,9 +97,15 @@ pub fn switchContext(from: *ContextStorage, to: *ContextStorage) bool {
             @import("../arch/x86_64/thread_switch.zig").x86_64_switch_context(
                 @ptrCast(from),
                 @ptrCast(to),
+                next_address_space_cr3,
             );
             unreachable;
         },
         else => @compileError("switchContext: unsupported architecture"),
     }
 }
+
+/// CR3 to activate after the target stack has become current.  Only x86_64
+/// freestanding context switches consume this value; zero keeps the current
+/// address space.
+pub var next_address_space_cr3: u64 = 0;

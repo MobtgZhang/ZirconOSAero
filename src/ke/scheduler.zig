@@ -27,6 +27,7 @@
 // Reference: MS Learn — scheduling (conceptual); OS textbook MLQ; Intel SDM for syscall path elsewhere.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 const peb_stub_va = @import("../sdk/peb_nt61_x64.zig");
 const klog = @import("../rtl/klog.zig");
@@ -34,6 +35,7 @@ const vm_mod = @import("../mm/vm.zig");
 const process_mod = @import("../ps/process.zig");
 const spinlock_mod = @import("spinlock.zig");
 const percpu_sched = @import("percpu_sched.zig");
+const x86_gdt = @import("../hal/x86_64/gdt.zig");
 const kpcr = @import("kpcr.zig");
 const hal_context = @import("../hal/thread_context.zig");
 const ob = @import("../ob/object.zig");
@@ -57,6 +59,7 @@ const foreground_quantum_bonus_ticks: u32 = 4;
 /// 激活指定进程的页表（CR3/PGDL/ASID）
 /// 架构特定实现由 AddressSpace.activate() 提供
 fn activateCr3ForProcessId(pid: u32) void {
+    process_mod.setCurrentProcess(pid);
     if (pid == 0) {
         if (vm_mod.kernelAddressSpace()) |ks| {
             ks.activate();
@@ -72,6 +75,18 @@ fn activateCr3ForProcessId(pid: u32) void {
     if (vm_mod.kernelAddressSpace()) |ks| {
         ks.activate();
     }
+}
+
+fn addressSpaceCr3ForProcessId(pid: u32) u64 {
+    if (pid == 0) {
+        if (vm_mod.kernelAddressSpace()) |ks| return ks.pml4_phys;
+        return 0;
+    }
+    if (process_mod.findProcess(pid)) |proc| {
+        if (proc.address_space) |space| return space.pml4_phys;
+    }
+    if (vm_mod.kernelAddressSpace()) |ks| return ks.pml4_phys;
+    return 0;
 }
 
 pub const ThreadState = enum {
@@ -96,7 +111,7 @@ const MAX_THREADS: usize = blk: {
     const v = build_options.max_scheduler_threads;
     break :blk @max(8, @min(256, @as(usize, v)));
 };
-const STACK_SIZE: usize = 8192;
+const STACK_SIZE: usize = 32768;
 /// 就绪队列 **CPU 槽** 上限；`schedNumCpus()` 将 MADT `logical_cpu_count` 截断到 `[1..@min(n, MAX_SCHED_CPUS)]`。
 const MAX_SCHED_CPUS: usize = 8;
 const NUM_PRI: usize = 32;
@@ -250,6 +265,11 @@ fn enqueueReadyLocked(tid: usize) void {
 fn performContextSwitchLocked(from_idx: usize, to_idx: usize, released_for_switch: *bool) void {
     const saved_interrupts = sched_irq_lock.unlockKeepingInterruptsDisabled();
     released_for_switch.* = true;
+
+    if (builtin.target.cpu.arch == .x86_64) {
+        x86_gdt.setKernelRsp0(threads[to_idx].stack_top);
+    }
+    hal_context.next_address_space_cr3 = addressSpaceCr3ForProcessId(threads[to_idx].process_id);
 
     _ = hal_context.switchContext(&threads[from_idx].context_storage, &threads[to_idx].context_storage);
 
@@ -554,6 +574,10 @@ pub const Thread = struct {
     is_wow64: bool = false,
     /// Opaque, platform-owned context storage; upper kernel never reads registers directly.
     context_storage: hal_context.ContextStorage = undefined,
+
+    /// x86_64 user-mode transition arguments. Kernel threads keep these zero.
+    user_entry: u64 = 0,
+    user_stack_top: u64 = 0,
 };
 
 fn effectivePriority(t: *const Thread) u8 {
@@ -621,6 +645,7 @@ pub fn completeObjectWait(tid: usize, status: i32) void {
 
 fn processBlockedObjectWaitsLocked() void {
     if (!scheduling_enabled) return;
+
     const status_timeout: i32 = 258;
     const status_user_apc: i32 = @bitCast(@as(u32, 0xC0000012));
     var i: usize = 0;
@@ -726,6 +751,42 @@ fn createIdleThread() ?usize {
     return idx;
 }
 
+fn x86UserModeEntry() noreturn {
+    if (builtin.target.cpu.arch != .x86_64) unreachable;
+    arch_mod.serialWrite("UserModeEntry\n");
+
+    const thread = &threads[current_thread];
+    const user_entry = thread.user_entry;
+    const user_stack = thread.user_stack_top;
+    const cr3_phys: u64 = if (process_mod.findProcess(thread.process_id)) |proc|
+        (if (proc.address_space) |space| space.pml4_phys else 0)
+    else
+        0;
+    process_mod.setCurrentProcess(thread.process_id);
+
+    klog.info("UserMode: tid=%u rip_lo=%u rip_hi=%u rsp_lo=%u rsp_hi=%u cr3_lo=%u cr3_hi=%u", .{
+        thread.id,
+        @as(u32, @truncate(user_entry)),
+        @as(u32, @truncate(user_entry >> 32)),
+        @as(u32, @truncate(user_stack)),
+        @as(u32, @truncate(user_stack >> 32)),
+        @as(u32, @truncate(cr3_phys)),
+        @as(u32, @truncate(cr3_phys >> 32)),
+    });
+    @import("../arch/x86_64/user_transition.zig").enterUserMode(user_entry, user_stack, cr3_phys);
+}
+
+pub fn createUserThread(user_entry: u64, user_stack_top: u64, process_id: u32) ?usize {
+    const tid = createThread(@intFromPtr(&x86UserModeEntry), process_id) orelse return null;
+    if (builtin.target.cpu.arch == .x86_64) {
+        threads[tid].user_entry = user_entry;
+        threads[tid].user_stack_top = user_stack_top;
+        threads[tid].context_storage.x86.rdi = user_entry;
+        threads[tid].context_storage.x86.rsi = user_stack_top;
+    }
+    return tid;
+}
+
 pub fn createThread(entry: u64, process_id: u32) ?usize {
     if (!initialized or thread_count >= MAX_THREADS) return null;
 
@@ -761,7 +822,6 @@ pub fn createThread(entry: u64, process_id: u32) ?usize {
 
 pub fn enableScheduling() void {
     scheduling_enabled = true;
-    klog.info("Scheduler: preemptive scheduling enabled", .{});
 }
 
 pub fn tick() void {
@@ -837,7 +897,8 @@ pub fn tick() void {
         threads[next_blk].slice_remaining = quantumTicksForThread(&threads[next_blk]);
         current_thread = next_blk;
         kpcr.setCurrentThreadIndex(@intCast(next_blk));
-        activateCr3ForProcessId(threads[next_blk].process_id);
+        process_mod.setCurrentProcess(threads[next_blk].process_id);
+        hal_context.next_address_space_cr3 = addressSpaceCr3ForProcessId(threads[next_blk].process_id);
         performContextSwitchLocked(cur_for_decay, next_blk, &released_for_switch);
         return;
     }
@@ -848,6 +909,7 @@ pub fn tick() void {
 
     const cur_ep = effectivePriority(&threads[cur_for_decay]);
     const max_ready_pri = maxNonemptyPriAcrossCpus() orelse 0;
+    if (max_ready_pri >= NUM_PRI) klog.info("Scheduler: bad max=%u", .{max_ready_pri});
     const higher = max_ready_pri > cur_ep;
     const slice_done = threads[cur_for_decay].slice_remaining == 0;
     const rr = !higher and slice_done and max_ready_pri == cur_ep and
@@ -872,12 +934,47 @@ pub fn tick() void {
     threads[next].slice_remaining = quantumTicksForThread(&threads[next]);
     current_thread = next;
     kpcr.setCurrentThreadIndex(@intCast(next));
-    activateCr3ForProcessId(threads[next].process_id);
+    process_mod.setCurrentProcess(threads[next].process_id);
+    hal_context.next_address_space_cr3 = addressSpaceCr3ForProcessId(threads[next].process_id);
     performContextSwitchLocked(cur_for_decay, next, &released_for_switch);
 }
 
 pub fn yield() void {
-    tick();
+    @import("../arch.zig").serialWrite("Y");
+    sched_irq_lock.lock();
+    scheduling_enabled = true;
+
+    const cur = current_thread;
+    if (cur >= thread_count or threads[cur].state != .running) {
+        sched_irq_lock.unlock();
+        return;
+    }
+
+    threads[cur].state = .ready;
+    threads[cur].slice_remaining = 0;
+    enqueueReadyLocked(cur);
+
+    const next = popHeadHighestGlobal() orelse blk: {
+        threads[cur].state = .running;
+        threads[cur].slice_remaining = quantumTicksForThread(&threads[cur]);
+        break :blk cur;
+    };
+    if (next == cur or threads[next].state == .terminated) {
+        threads[cur].state = .running;
+        threads[cur].slice_remaining = quantumTicksForThread(&threads[cur]);
+        sched_irq_lock.unlock();
+        return;
+    }
+
+    threads[next].state = .running;
+    threads[next].slice_remaining = quantumTicksForThread(&threads[next]);
+    current_thread = next;
+    kpcr.setCurrentThreadIndex(@intCast(next));
+    process_mod.setCurrentProcess(threads[next].process_id);
+    hal_context.next_address_space_cr3 = addressSpaceCr3ForProcessId(threads[next].process_id);
+
+    var released_for_switch = false;
+    performContextSwitchLocked(cur, next, &released_for_switch);
 }
 
 pub fn getThreadByIndex(idx: usize) ?*Thread {

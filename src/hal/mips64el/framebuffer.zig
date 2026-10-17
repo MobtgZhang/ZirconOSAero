@@ -29,6 +29,7 @@ var fb_height: u32 = 0;
 var fb_bpp: u8 = 32;
 var fb_initialized: bool = false;
 var console_enabled: bool = true;
+const bootvidClearColor: u32 = 0x00000000;
 
 pub fn setConsoleEnabled(e: bool) void {
     console_enabled = e;
@@ -67,13 +68,13 @@ pub fn getInfo() struct { addr: u64, pitch: u32, width: u32, height: u32, bpp: u
     };
 }
 
-pub fn clear(color: u32) void {
+pub fn clear() void {
     if (!fb_initialized or !console_enabled) return;
     const base: [*]volatile u32 = @ptrFromInt(fb_addr);
     const pixels = @as(usize, fb_pitch) / 4 * @as(usize, fb_height);
     var i: usize = 0;
     while (i < pixels) : (i += 1) {
-        base[i] = color;
+        base[i] = bootvidClearColor;
     }
 }
 
